@@ -62,6 +62,65 @@ test("joinRoom returns direct candidates with public and lan addresses", () => {
   assert.equal(joined.connectionPlan.directCandidates[1]?.ip, "192.168.1.10");
 });
 
+test("joinRoom can skip version mismatch when configured", () => {
+  const store = new LobbyStore({
+    ...baseConfig,
+    ignoreVersionMismatch: true,
+  });
+  const created = store.createRoom(
+    {
+      roomName: "跨端房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "0.1.0.0",
+      modVersion: "1.0.0.0",
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+      },
+    },
+    "203.0.113.10",
+  );
+
+  const joined = store.joinRoom(created.roomId, {
+    playerName: "Guest",
+    version: "1.0.0.0",
+    modVersion: "1.0.0.0",
+  });
+
+  assert.equal(joined.room.roomId, created.roomId);
+});
+
+test("joinRoom can force relay-only connection plans", () => {
+  const store = new LobbyStore({
+    ...baseConfig,
+    forceRelayOnly: true,
+  });
+  const created = store.createRoom(
+    {
+      roomName: "Relay only 房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.1.0",
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+        localAddresses: ["192.168.1.10"],
+      },
+    },
+    "203.0.113.10",
+  );
+
+  const joined = store.joinRoom(created.roomId, {
+    playerName: "Guest",
+    version: "1.2.3",
+    modVersion: "0.1.0",
+  });
+
+  assert.deepEqual(joined.connectionPlan.directCandidates, []);
+});
+
 test("joinRoom rejects wrong password", () => {
   const store = new LobbyStore(baseConfig);
   const created = store.createRoom(
@@ -117,6 +176,40 @@ test("cleanupExpired deletes rooms after heartbeat timeout", () => {
   const deleted = store.cleanupExpired(new Date(now.getTime() + 40_000));
   assert.deepEqual(deleted, [created.roomId]);
   assert.equal(store.listRooms().length, 0);
+});
+
+test("deleted rooms accept stale heartbeat and delete during tombstone window", () => {
+  const store = new LobbyStore({
+    ...baseConfig,
+    roomTombstoneMs: 60_000,
+  });
+  const created = store.createRoom(
+    {
+      roomName: "删除兜底房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.1.0",
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+      },
+    },
+    "203.0.113.10",
+  );
+
+  store.deleteRoom(created.roomId, created.hostToken);
+
+  const heartbeatRoom = store.heartbeat(created.roomId, {
+    hostToken: created.hostToken,
+    currentPlayers: 1,
+    status: "open",
+  });
+
+  assert.equal(heartbeatRoom, null);
+  assert.doesNotThrow(() => {
+    store.deleteRoom(created.roomId, created.hostToken);
+  });
 });
 
 test("saved run rooms expose slot occupancy and allow selecting an available slot", () => {

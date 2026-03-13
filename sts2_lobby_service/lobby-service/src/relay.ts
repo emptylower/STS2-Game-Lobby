@@ -16,6 +16,7 @@ export interface RelayManagerConfig {
   portEnd: number;
   hostIdleMs: number;
   clientIdleMs: number;
+  portCooldownMs?: number;
 }
 
 export interface RelayLogEvent {
@@ -228,6 +229,7 @@ class RoomRelaySession {
 export class RoomRelayManager {
   private readonly sessions = new Map<string, RoomRelaySession>();
   private readonly portsInUse = new Set<number>();
+  private readonly portsCoolingUntil = new Map<number, number>();
   private readonly cleanupTimer: NodeJS.Timeout;
 
   constructor(
@@ -235,6 +237,13 @@ export class RoomRelayManager {
     private readonly logEvent: (event: RelayLogEvent) => void,
   ) {
     this.cleanupTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [port, coolingUntil] of this.portsCoolingUntil.entries()) {
+        if (coolingUntil <= now) {
+          this.portsCoolingUntil.delete(port);
+        }
+      }
+
       for (const session of this.sessions.values()) {
         session.cleanup();
       }
@@ -315,6 +324,9 @@ export class RoomRelayManager {
     session.close();
     this.sessions.delete(roomId);
     this.portsInUse.delete(session.port);
+    if (this.config.portCooldownMs && this.config.portCooldownMs > 0) {
+      this.portsCoolingUntil.set(session.port, Date.now() + this.config.portCooldownMs);
+    }
     this.logEvent({
       phase: "relay_removed",
       roomId,
@@ -330,11 +342,17 @@ export class RoomRelayManager {
 
     this.sessions.clear();
     this.portsInUse.clear();
+    this.portsCoolingUntil.clear();
   }
 
   private reservePort() {
     for (let port = this.config.portStart; port <= this.config.portEnd; port += 1) {
       if (this.portsInUse.has(port)) {
+        continue;
+      }
+
+      const coolingUntil = this.portsCoolingUntil.get(port);
+      if (coolingUntil && coolingUntil > Date.now()) {
         continue;
       }
 

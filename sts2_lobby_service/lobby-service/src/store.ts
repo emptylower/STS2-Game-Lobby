@@ -124,6 +124,15 @@ export interface HeartbeatInput {
 export interface StoreConfig {
   heartbeatTimeoutMs: number;
   ticketTtlMs: number;
+  roomTombstoneMs?: number;
+  ignoreVersionMismatch?: boolean;
+  forceRelayOnly?: boolean;
+}
+
+interface RoomTombstone {
+  roomId: string;
+  hostToken: string;
+  expiresAt: number;
 }
 
 export interface CreateRoomResult {
@@ -158,6 +167,7 @@ export class LobbyStore {
   private readonly rooms = new Map<string, Room>();
   private readonly tickets = new Map<string, JoinTicket>();
   private readonly hostSessions = new Map<string, HostSession>();
+  private readonly tombstones = new Map<string, RoomTombstone>();
 
   constructor(private readonly config: StoreConfig) {}
 
@@ -230,7 +240,7 @@ export class LobbyStore {
       throw new LobbyStoreError(409, "room_full", "该房间已满。");
     }
 
-    if (room.version !== input.version.trim()) {
+    if (!this.config.ignoreVersionMismatch && room.version !== input.version.trim()) {
       throw new LobbyStoreError(409, "version_mismatch", "游戏版本不匹配。");
     }
 
@@ -264,7 +274,7 @@ export class LobbyStore {
       }
     }
 
-    const connectionPlan = buildConnectionPlan(room, hostSession);
+    const connectionPlan = buildConnectionPlan(room, hostSession, this.config.forceRelayOnly ?? false);
     const ticket: JoinTicket = {
       ticketId: randomUUID(),
       roomId,
@@ -285,6 +295,12 @@ export class LobbyStore {
   }
 
   heartbeat(roomId: string, input: HeartbeatInput, now = new Date()) {
+    this.cleanupExpired(now);
+    const tombstone = this.tombstones.get(roomId);
+    if (tombstone && tombstone.hostToken === input.hostToken) {
+      return null;
+    }
+
     const room = this.requireRoom(roomId);
     const hostSession = this.requireHostSession(roomId);
     this.assertHostToken(hostSession, input.hostToken);
@@ -304,12 +320,27 @@ export class LobbyStore {
   }
 
   deleteRoom(roomId: string, hostToken: string) {
+    const tombstone = this.tombstones.get(roomId);
+    if (tombstone) {
+      if (tombstone.hostToken !== hostToken) {
+        throw new LobbyStoreError(401, "invalid_host_token", "房主令牌无效。");
+      }
+
+      return;
+    }
+
     const hostSession = this.requireHostSession(roomId);
     this.assertHostToken(hostSession, hostToken);
-    this.removeRoom(roomId);
+    this.removeRoom(roomId, hostToken, new Date());
   }
 
   cleanupExpired(now = new Date()) {
+    for (const [roomId, tombstone] of this.tombstones.entries()) {
+      if (tombstone.expiresAt <= now.getTime()) {
+        this.tombstones.delete(roomId);
+      }
+    }
+
     const deletedRoomIds: string[] = [];
     for (const room of this.rooms.values()) {
       const hostSession = this.hostSessions.get(room.roomId);
@@ -318,7 +349,7 @@ export class LobbyStore {
         ? now.getTime() - hostSession.lastSeenAt.getTime() > this.config.heartbeatTimeoutMs
         : true;
       if (roomExpired || hostExpired) {
-        this.removeRoom(room.roomId);
+        this.removeRoom(room.roomId, hostSession?.hostToken, now);
         deletedRoomIds.push(room.roomId);
       }
     }
@@ -417,7 +448,15 @@ export class LobbyStore {
     }
   }
 
-  private removeRoom(roomId: string) {
+  private removeRoom(roomId: string, hostToken?: string, now = new Date()) {
+    if (hostToken && this.config.roomTombstoneMs && this.config.roomTombstoneMs > 0) {
+      this.tombstones.set(roomId, {
+        roomId,
+        hostToken,
+        expiresAt: now.getTime() + this.config.roomTombstoneMs,
+      });
+    }
+
     this.rooms.delete(roomId);
     this.hostSessions.delete(roomId);
     for (const ticket of this.tickets.values()) {
@@ -454,7 +493,7 @@ export class LobbyStore {
   }
 }
 
-function buildConnectionPlan(room: Room, hostSession: HostSession): ConnectionPlan {
+function buildConnectionPlan(room: Room, hostSession: HostSession, forceRelayOnly = false): ConnectionPlan {
   const directCandidates: DirectEndpoint[] = [];
   const seen = new Set<string>();
   const pushCandidate = (label: string, ip: string) => {
@@ -480,7 +519,7 @@ function buildConnectionPlan(room: Room, hostSession: HostSession): ConnectionPl
     strategy: "direct-first",
     relayAllowed: false,
     controlChannelId: hostSession.controlChannelId,
-    directCandidates,
+    directCandidates: forceRelayOnly ? [] : directCandidates,
   };
 }
 
