@@ -22,11 +22,18 @@ const env = {
   relayPortEnd: Number.parseInt(process.env.RELAY_PORT_END ?? "39063", 10),
   relayHostIdleMs: Number.parseInt(process.env.RELAY_HOST_IDLE_SECONDS ?? "20", 10) * 1000,
   relayClientIdleMs: Number.parseInt(process.env.RELAY_CLIENT_IDLE_SECONDS ?? "90", 10) * 1000,
+  relayPortCooldownMs: Number.parseInt(process.env.RELAY_PORT_COOLDOWN_SECONDS ?? "0", 10) * 1000,
+  roomTombstoneMs: Number.parseInt(process.env.ROOM_TOMBSTONE_SECONDS ?? "0", 10) * 1000,
+  ignoreVersionMismatch: process.env.IGNORE_VERSION_MISMATCH === "1",
+  forceRelayOnly: process.env.FORCE_RELAY_ONLY === "1",
 };
 
 const store = new LobbyStore({
   heartbeatTimeoutMs: env.heartbeatTimeoutMs,
   ticketTtlMs: env.ticketTtlMs,
+  roomTombstoneMs: env.roomTombstoneMs,
+  ignoreVersionMismatch: env.ignoreVersionMismatch,
+  forceRelayOnly: env.forceRelayOnly,
 });
 const relayManager = new RoomRelayManager(
   {
@@ -35,6 +42,7 @@ const relayManager = new RoomRelayManager(
     portEnd: env.relayPortEnd,
     hostIdleMs: env.relayHostIdleMs,
     clientIdleMs: env.relayClientIdleMs,
+    portCooldownMs: env.relayPortCooldownMs,
   },
   ({ phase, roomId, detail }) => {
     if (phase === "relay_allocated" || phase === "relay_host_idle") {
