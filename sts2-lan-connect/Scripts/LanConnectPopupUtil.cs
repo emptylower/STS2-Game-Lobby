@@ -6,7 +6,7 @@ internal static class LanConnectPopupUtil
 {
     public static void ShowInfo(string body)
     {
-        NErrorPopup? popup = NErrorPopup.Create("STS2 LAN Connect", body, showReportBugButton: false);
+        NErrorPopup? popup = NErrorPopup.Create("STS2 LAN Connect", LanConnectUiText.NormalizeForDisplay(body), showReportBugButton: false);
         if (popup != null)
         {
             NModalContainer.Instance?.Add(popup);

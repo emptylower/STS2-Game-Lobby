@@ -442,7 +442,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _roomSearchInput = new LineEdit
         {
-            PlaceholderText = "搜索房间 / 房主 / 版本 / 状态",
+            PlaceholderText = UiText("搜索房间 / 房主 / 版本 / 状态"),
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SelectAllOnFocus = true
         };
@@ -451,7 +451,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         searchRow.AddChild(_roomSearchInput);
 
         Button clearButton = CreateInlineButton("清空", ClearRoomSearch);
-        clearButton.TooltipText = "清空当前搜索关键词";
+        clearButton.TooltipText = UiText("清空当前搜索关键词");
         searchRow.AddChild(clearButton);
         container.AddChild(searchRow);
 
@@ -761,7 +761,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         input = new LineEdit
         {
             Text = initialValue,
-            PlaceholderText = placeholder,
+            PlaceholderText = UiText(placeholder),
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SelectAllOnFocus = true
         };
@@ -899,18 +899,22 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             _selectedRoomId = null;
             bool hasSearchOrFilter = HasRoomSearchOrFilter();
-            _roomListSummaryLabel.Text = _rooms.Count == 0
-                ? "大厅当前没有房间。"
-                : $"没有匹配结果 · 当前筛选：{DescribeRoomFilterState()}";
-            _pageSummaryLabel.Text = "第 0 / 0 页";
+            SetLabelText(
+                _roomListSummaryLabel,
+                _rooms.Count == 0
+                    ? "大厅当前没有房间。"
+                    : $"没有匹配结果 · 当前筛选：{DescribeRoomFilterState()}");
+            SetLabelText(_pageSummaryLabel, "第 0 / 0 页");
             if (_rooms.Count == 0)
             {
                 _roomListContainer.AddChild(CreateEmptyRoomCard(
                     "大厅当前没有房间。",
                     "刷新大厅后，你也可以在右侧直接创建一个新的公开房间。"));
-                _roomHintLabel.Text = HasAvailableLobbyEndpoint()
-                    ? "你可以先刷新大厅，或者直接在右侧创建一个新的房间。"
-                    : "当前客户端未绑定内置大厅服务。请在设置里填写 HTTP/WS 覆盖地址。";
+                SetLabelText(
+                    _roomHintLabel,
+                    HasAvailableLobbyEndpoint()
+                        ? "你可以先刷新大厅，或者直接在右侧创建一个新的房间。"
+                        : "当前客户端未绑定内置大厅服务。请在设置里填写 HTTP/WS 覆盖地址。");
                 _roomHintLabel.AddThemeColorOverride("font_color", HasAvailableLobbyEndpoint() ? AccentColor : DangerColor);
             }
             else
@@ -920,9 +924,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                     hasSearchOrFilter
                         ? "尝试缩短关键词，或取消部分筛选后重试。"
                         : "可检索字段包括房间名、房主名、版本和状态。"));
-                _roomHintLabel.Text = hasSearchOrFilter
-                    ? "尝试缩短关键词，或取消部分筛选后重新查看完整房间列表。"
-                    : "尝试刷新大厅后重新查看完整房间列表。";
+                SetLabelText(
+                    _roomHintLabel,
+                    hasSearchOrFilter
+                        ? "尝试缩短关键词，或取消部分筛选后重新查看完整房间列表。"
+                        : "尝试刷新大厅后重新查看完整房间列表。");
                 _roomHintLabel.AddThemeColorOverride("font_color", AccentColor);
             }
 
@@ -946,7 +952,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         LobbyRoomSummary selectedRoom = pageRooms.Find(room => room.RoomId == _selectedRoomId) ?? pageRooms[0];
         bool selectedIsHostRoom = LanConnectLobbyRuntime.Instance?.ActiveRoomId == selectedRoom.RoomId;
 
-        _roomListSummaryLabel.Text = $"房间 {_rooms.Count} → {filteredRooms.Count} · 筛选：{DescribeRoomFilterState()} · 已选：{selectedRoom.RoomName}";
+        SetLabelText(_roomListSummaryLabel, $"房间 {_rooms.Count} → {filteredRooms.Count} · 筛选：{DescribeRoomFilterState()} · 已选：{selectedRoom.RoomName}");
         UpdatePageControls(filteredRooms.Count);
 
         foreach (LobbyRoomSummary room in pageRooms)
@@ -958,30 +964,32 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (selectedIsHostRoom)
         {
-            _roomHintLabel.Text = "当前选中的是你自己托管的房间，无法重复加入；如需重开，请先关闭它。";
+            SetLabelText(_roomHintLabel, "当前选中的是你自己托管的房间，无法重复加入；如需重开，请先关闭它。");
             _roomHintLabel.AddThemeColorOverride("font_color", SuccessColor);
         }
         else if (!CanJoinRoom(selectedRoom, out string? joinDisabledReason))
         {
-            _roomHintLabel.Text = joinDisabledReason ?? "该房间当前不可加入。";
+            SetLabelText(_roomHintLabel, joinDisabledReason ?? "该房间当前不可加入。");
             _roomHintLabel.AddThemeColorOverride("font_color", DangerColor);
         }
         else if (selectedRoom.SavedRun != null)
         {
             int availableSlots = GetAvailableSavedRunSlots(selectedRoom).Count;
-            _roomHintLabel.Text = availableSlots <= 0
-                ? "当前选中的是续局房间，但暂时没有可接管的角色槽位。"
-                : $"当前选中的是续局房间。可接管角色数：{availableSlots}；加入前会先让你选择角色槽位。";
+            SetLabelText(
+                _roomHintLabel,
+                availableSlots <= 0
+                    ? "当前选中的是续局房间，但暂时没有可接管的角色槽位。"
+                    : $"当前选中的是续局房间。可接管角色数：{availableSlots}；加入前会先让你选择角色槽位。");
             _roomHintLabel.AddThemeColorOverride("font_color", availableSlots <= 0 ? DangerColor : AccentColor);
         }
         else if (selectedRoom.RequiresPassword)
         {
-            _roomHintLabel.Text = "当前选中房间需要密码。双击卡片或点击右侧“加入选中房间”后会先弹出密码输入框。";
+            SetLabelText(_roomHintLabel, "当前选中房间需要密码。双击卡片或点击右侧“加入选中房间”后会先弹出密码输入框。");
             _roomHintLabel.AddThemeColorOverride("font_color", AccentColor);
         }
         else
         {
-            _roomHintLabel.Text = "当前选中房间为公开房间。双击卡片可直接加入。";
+            SetLabelText(_roomHintLabel, "当前选中房间为公开房间。双击卡片可直接加入。");
             _roomHintLabel.AddThemeColorOverride("font_color", SuccessColor);
         }
     }
@@ -1550,10 +1558,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (room.RequiresPassword)
         {
             _pendingPasswordJoinRoom = room;
-            if (_joinPasswordDialogTitle != null)
-            {
-                _joinPasswordDialogTitle.Text = $"输入“{room.RoomName}”的房间密码";
-            }
+            SetLabelText(_joinPasswordDialogTitle, $"输入“{room.RoomName}”的房间密码");
 
             if (_joinPasswordInput != null)
             {
@@ -1653,10 +1658,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _pendingResumeJoinRoom = room;
         _pendingResumeJoinPassword = password;
-        if (_resumeSlotDialogTitle != null)
-        {
-            _resumeSlotDialogTitle.Text = $"选择“{room.RoomName}”的可接管角色";
-        }
+        SetLabelText(_resumeSlotDialogTitle, $"选择“{room.RoomName}”的可接管角色");
 
         foreach (Node child in _resumeSlotDialogOptions.GetChildren())
         {
@@ -1767,7 +1769,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (_toggleSensitiveNetworkButton != null)
         {
-            _toggleSensitiveNetworkButton.Text = _networkFieldsRevealed ? "隐藏覆盖地址" : "显示覆盖地址";
+            SetButtonText(_toggleSensitiveNetworkButton, _networkFieldsRevealed ? "隐藏覆盖地址" : "显示覆盖地址");
         }
     }
 
@@ -1794,9 +1796,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         _networkSettingsContainer.Visible = !_networkSettingsContainer.Visible;
-        _toggleNetworkSettingsButton.Text = _networkSettingsContainer.Visible
-            ? "收起开发网络设置"
-            : "展开开发网络设置";
+        SetButtonText(
+            _toggleNetworkSettingsButton,
+            _networkSettingsContainer.Visible
+                ? "收起开发网络设置"
+                : "展开开发网络设置");
         _clearNetworkOverridesButton.Disabled = !LanConnectConfig.HasLobbyServerOverrides && string.IsNullOrWhiteSpace(_serverBaseUrlInput?.Text) && string.IsNullOrWhiteSpace(_serverWsUrlInput?.Text);
     }
 
@@ -1811,10 +1815,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         GD.Print($"sts2_lan_connect overlay: toggle settings -> {nextVisible}");
         _settingsSection.Visible = nextVisible;
         _settingsSeparator.Visible = nextVisible;
-        if (_settingsButton != null)
-        {
-            _settingsButton.Text = nextVisible ? "收起设置" : "设置";
-        }
+        SetButtonText(_settingsButton, nextVisible ? "收起设置" : "设置");
     }
 
     private void SetUnderlyingMenuVisible(bool visible)
@@ -1921,7 +1922,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                 lines.Add("大厅列表刷新中；刷新不会再单独锁死建房按钮。");
             }
 
-            _actionAvailabilityLabel.Text = string.Join("\n", lines);
+            SetLabelText(_actionAvailabilityLabel, string.Join("\n", lines));
             _actionAvailabilityLabel.AddThemeColorOverride(
                 "font_color",
                 createDisabledReason != null || joinDisabledReason != null
@@ -1973,12 +1974,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private void UpdatePageControls(int filteredCount)
     {
         int totalPages = GetTotalPages(filteredCount);
-        if (_pageSummaryLabel != null)
-        {
-            _pageSummaryLabel.Text = totalPages <= 0
+        SetLabelText(
+            _pageSummaryLabel,
+            totalPages <= 0
                 ? "第 0 / 0 页"
-                : $"第 {_currentPageIndex + 1} / {totalPages} 页";
-        }
+                : $"第 {_currentPageIndex + 1} / {totalPages} 页");
 
         if (_pagePreviousButton != null)
         {
@@ -2036,7 +2036,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             color = DangerColor;
         }
 
-        _healthIndicatorLabel.Text = text;
+        SetLabelText(_healthIndicatorLabel, text);
         _healthIndicatorLabel.AddThemeColorOverride("font_color", color);
     }
 
@@ -2078,16 +2078,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             color = DangerColor;
         }
 
-        _networkSummaryLabel.Text = summary;
+        SetLabelText(_networkSummaryLabel, summary);
         _networkSummaryLabel.AddThemeColorOverride("font_color", color);
     }
 
     private void SetStatus(string message)
     {
-        if (_statusLabel != null)
-        {
-            _statusLabel.Text = message;
-        }
+        SetLabelText(_statusLabel, message);
 
         if (_lastStatusMessage != message)
         {
@@ -2157,17 +2154,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void SetProgressDialogContent(string title, string message, string? hint)
     {
-        if (_progressDialogTitle != null)
-        {
-            _progressDialogTitle.Text = title;
-        }
+        SetLabelText(_progressDialogTitle, title);
 
-        if (_progressDialogHint != null)
-        {
-            _progressDialogHint.Text = string.IsNullOrWhiteSpace(hint)
+        SetLabelText(
+            _progressDialogHint,
+            string.IsNullOrWhiteSpace(hint)
                 ? "连接较慢时请稍候，期间不要重复点击按钮或关闭页面。"
-                : hint;
-        }
+                : hint);
 
         _progressDialogBaseMessage = message.Trim();
         _progressDialogTick = 0d;
@@ -2201,7 +2194,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         string suffix = _progressDialogDotCount == 0 ? string.Empty : new string('.', _progressDialogDotCount);
-        _progressDialogMessage.Text = _progressDialogBaseMessage + suffix;
+        SetLabelText(_progressDialogMessage, _progressDialogBaseMessage + suffix);
     }
 
     private void ShowCreateDialogError(string message, bool visible = true)
@@ -2211,7 +2204,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
-        _createDialogErrorLabel.Text = message;
+        SetLabelText(_createDialogErrorLabel, message);
         _createDialogErrorLabel.Visible = visible;
     }
 
@@ -2222,7 +2215,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
-        _joinPasswordDialogErrorLabel.Text = message;
+        SetLabelText(_joinPasswordDialogErrorLabel, message);
         _joinPasswordDialogErrorLabel.Visible = visible;
     }
 
@@ -2233,7 +2226,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
-        _resumeSlotDialogErrorLabel.Text = message;
+        SetLabelText(_resumeSlotDialogErrorLabel, message);
         _resumeSlotDialogErrorLabel.Visible = visible;
     }
 
@@ -2640,8 +2633,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         Button button = new()
         {
-            Text = text,
-            TooltipText = tooltip,
+            Text = UiText(text),
+            TooltipText = UiText(tooltip),
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             CustomMinimumSize = new Vector2(0f, 54f),
             Alignment = HorizontalAlignment.Center
@@ -2659,7 +2652,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         Button button = new()
         {
-            Text = text,
+            Text = UiText(text),
             CustomMinimumSize = new Vector2(0f, 42f)
         };
         ApplyInlineButtonStyle(button, accent);
@@ -2675,8 +2668,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         Button button = new()
         {
-            Text = text,
-            TooltipText = tooltip,
+            Text = UiText(text),
+            TooltipText = UiText(tooltip),
             CustomMinimumSize = new Vector2(0f, 38f)
         };
         ApplyFilterChipStyle(button, active: false);
@@ -2686,6 +2679,24 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             onPressed();
         }));
         return button;
+    }
+
+    private static string UiText(string text) => LanConnectUiText.NormalizeForDisplay(text);
+
+    private static void SetButtonText(Button? button, string text)
+    {
+        if (button != null)
+        {
+            button.Text = UiText(text);
+        }
+    }
+
+    private static void SetLabelText(Label? label, string text)
+    {
+        if (label != null)
+        {
+            label.Text = UiText(text);
+        }
     }
 
     private static PanelContainer CreateSurfacePanel(Color background, Color border, int radius = 18, int borderWidth = 1, int padding = 18)
@@ -2721,7 +2732,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         Label label = new()
         {
-            Text = text,
+            Text = UiText(text),
             SizeFlagsHorizontal = SizeFlags.ExpandFill
         };
         label.AddThemeColorOverride("font_color", TextStrongColor);
@@ -2733,7 +2744,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         Label label = new()
         {
-            Text = text
+            Text = UiText(text)
         };
         label.AddThemeColorOverride("font_color", AccentColor);
         label.AddThemeFontSizeOverride("font_size", 18);
@@ -2744,7 +2755,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         Label label = new()
         {
-            Text = text
+            Text = UiText(text)
         };
         label.AddThemeColorOverride("font_color", TextStrongColor);
         label.AddThemeFontSizeOverride("font_size", 15);
