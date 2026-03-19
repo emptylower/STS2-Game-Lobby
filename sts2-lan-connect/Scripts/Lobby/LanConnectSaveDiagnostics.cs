@@ -48,6 +48,9 @@ internal static class LanConnectSaveDiagnostics
             string effectiveEndpoint = string.IsNullOrWhiteSpace(LanConnectConfig.LobbyServerBaseUrl)
                 ? "<none>"
                 : LanConnectConfig.LobbyServerBaseUrl;
+            string selectedServerId = string.IsNullOrWhiteSpace(LanConnectConfig.SelectedServerId)
+                ? "<none>"
+                : LanConnectConfig.SelectedServerId;
             int profileId = SaveManager.Instance.CurrentProfileId;
             string multiplayerSavePath = SaveManager.Instance.GetProfileScopedPath(Path.Combine("saves", "current_run_mp.save"));
             string multiplayerSaveTimestamp = File.Exists(multiplayerSavePath)
@@ -56,19 +59,19 @@ internal static class LanConnectSaveDiagnostics
 
             if (!hasRunSave)
             {
-                return $"hasRunSave=false, load=no_multiplayer_run_save, profile={profileId}, mpSavePath={multiplayerSavePath}, mpSaveUpdatedAt={multiplayerSaveTimestamp}, activeHostedRoom={hasActiveHostedRoom}, activeRoomId={activeRoomId}, lobby={effectiveEndpoint}";
+                return $"hasRunSave=false, load=no_multiplayer_run_save, profile={profileId}, mpSavePath={multiplayerSavePath}, mpSaveUpdatedAt={multiplayerSaveTimestamp}, activeHostedRoom={hasActiveHostedRoom}, activeRoomId={activeRoomId}, lobby={effectiveEndpoint}, selectedServerId={selectedServerId}";
             }
 
             if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out SerializableRun? run, out string failureReason) || run == null)
             {
-                return $"hasRunSave=true, load={failureReason}, profile={profileId}, mpSavePath={multiplayerSavePath}, mpSaveUpdatedAt={multiplayerSaveTimestamp}, activeHostedRoom={hasActiveHostedRoom}, activeRoomId={activeRoomId}, lobby={effectiveEndpoint}";
+                return $"hasRunSave=true, load={failureReason}, profile={profileId}, mpSavePath={multiplayerSavePath}, mpSaveUpdatedAt={multiplayerSaveTimestamp}, activeHostedRoom={hasActiveHostedRoom}, activeRoomId={activeRoomId}, lobby={effectiveEndpoint}, selectedServerId={selectedServerId}";
             }
 
             string saveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run);
             LanConnectSavedRoomBinding? binding = LanConnectConfig.TryGetSaveRoomBinding(saveKey);
             string playerSignature = LanConnectMultiplayerSaveRoomBinding.GetPlayerSignature(run);
             return
-                $"hasRunSave=true, load=ok, profile={profileId}, mpSavePath={multiplayerSavePath}, mpSaveUpdatedAt={multiplayerSaveTimestamp}, saveKey={saveKey}, gameMode={LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(run)}, players={run.Players.Count}, playerSignature={playerSignature}, startTime={run.StartTime}, binding={(binding == null ? "missing" : "present")}, activeHostedRoom={hasActiveHostedRoom}, activeRoomId={activeRoomId}, lobby={effectiveEndpoint}";
+                $"hasRunSave=true, load=ok, profile={profileId}, mpSavePath={multiplayerSavePath}, mpSaveUpdatedAt={multiplayerSaveTimestamp}, saveKey={saveKey}, gameMode={LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(run)}, players={run.Players.Count}, playerSignature={playerSignature}, startTime={run.StartTime}, binding={(binding == null ? "missing" : "present")}, activeHostedRoom={hasActiveHostedRoom}, activeRoomId={activeRoomId}, lobby={effectiveEndpoint}, selectedServerId={selectedServerId}";
         }
         catch (Exception ex)
         {

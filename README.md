@@ -5,7 +5,7 @@
 - `sts2-lan-connect/`
   游戏内客户端 MOD，负责大厅 UI、建房/加房流程、续局绑定、调试报告和与官方联机流程的桥接。
 - `lobby-service/`
-  `Node.js / TypeScript` 大厅服务，负责房间目录、密码校验、加入票据、房主心跳、控制通道与 relay fallback。
+  `Node.js / TypeScript` 大厅服务，负责房间目录、中心服务器注册表、后台审核、加入票据、房主心跳、控制通道与 relay fallback。
 
 当前公开客户端版本：`0.2.1`
 
@@ -18,6 +18,7 @@
 - 加入失败会细分为版本不一致、MOD 不一致、房间已开局、房间已满等原因
 - 多人续局存档会绑定大厅房间，房主重新进入续局时自动重新发布
 - 大厅内可一键复制本地调试报告，方便和服务端日志对照
+- 大厅侧栏新增“当前线路”，支持查看官方/社区服务器目录、切服和提交社区服务器
 - Windows / macOS 客户端支持一键安装 / 卸载
 - Linux 服务端支持一键部署
 
@@ -107,10 +108,11 @@ sudo ./scripts/install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 
 - `STS2_LOBBY_DEFAULT_BASE_URL`
 - `STS2_LOBBY_DEFAULT_WS_URL`
+- `STS2_LOBBY_REGISTRY_BASE_URL`
 - `STS2_LOBBY_COMPATIBILITY_PROFILE`
 - `STS2_LOBBY_CONNECTION_STRATEGY`
 
-如果只设置了 `STS2_LOBBY_DEFAULT_BASE_URL`，打包脚本会自动推导 WS 地址。
+如果只设置了 `STS2_LOBBY_DEFAULT_BASE_URL`，打包脚本会自动推导 WS 地址。`STS2_LOBBY_REGISTRY_BASE_URL` 留空时，会默认跟随大厅默认地址。
 
 ## 文档
 

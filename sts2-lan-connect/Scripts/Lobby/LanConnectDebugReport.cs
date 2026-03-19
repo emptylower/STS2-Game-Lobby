@@ -61,6 +61,8 @@ internal static class LanConnectDebugReport
         builder.AppendLine($"config_updated_at_utc: {FormatFileTimestamp(configPath)}");
         builder.AppendLine($"lobby_base_url_effective: {effectiveBaseUrl}");
         builder.AppendLine($"lobby_ws_url_effective: {effectiveWsUrl}");
+        builder.AppendLine($"registry_base_url: {LanConnectConstants.DefaultLobbyRegistryBaseUrl}");
+        builder.AppendLine($"selected_server_id: {FormatValue(LanConnectConfig.SelectedServerId)}");
         builder.AppendLine($"has_lobby_overrides: {LanConnectConfig.HasLobbyServerOverrides}");
         builder.AppendLine($"has_bundled_defaults: {LanConnectLobbyEndpointDefaults.HasBundledDefaults()}");
         builder.AppendLine($"compatibility_profile: {LanConnectLobbyEndpointDefaults.GetCompatibilityProfile()}");

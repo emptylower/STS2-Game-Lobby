@@ -35,6 +35,20 @@ RELAY_CLIENT_IDLE_SECONDS="${STS2_LOBBY_RELAY_CLIENT_IDLE_SECONDS:-180}"
 STRICT_GAME_VERSION_CHECK="${STS2_LOBBY_STRICT_GAME_VERSION_CHECK:-false}"
 STRICT_MOD_VERSION_CHECK="${STS2_LOBBY_STRICT_MOD_VERSION_CHECK:-false}"
 CONNECTION_STRATEGY="${STS2_LOBBY_CONNECTION_STRATEGY:-relay-first}"
+REGISTRY_DATA_DIR="${STS2_LOBBY_REGISTRY_DATA_DIR:-$INSTALL_DIR/lobby-service/data}"
+REGISTRY_PROBE_INTERVAL_SECONDS="${STS2_LOBBY_REGISTRY_PROBE_INTERVAL_SECONDS:-180}"
+REGISTRY_PROBE_TIMEOUT_MS="${STS2_LOBBY_REGISTRY_PROBE_TIMEOUT_MS:-5000}"
+REGISTRY_BANDWIDTH_SAMPLE_BYTES="${STS2_LOBBY_REGISTRY_BANDWIDTH_SAMPLE_BYTES:-8388608}"
+REGISTRY_OFFICIAL_SERVER_ID="${STS2_LOBBY_REGISTRY_OFFICIAL_SERVER_ID:-official-default}"
+REGISTRY_OFFICIAL_SERVER_NAME="${STS2_LOBBY_REGISTRY_OFFICIAL_SERVER_NAME:-官方测试服}"
+REGISTRY_OFFICIAL_REGION_LABEL="${STS2_LOBBY_REGISTRY_OFFICIAL_REGION_LABEL:-阿里云测试线路}"
+REGISTRY_OFFICIAL_BASE_URL="${STS2_LOBBY_REGISTRY_OFFICIAL_BASE_URL:-http://127.0.0.1:$PORT}"
+REGISTRY_OFFICIAL_WS_URL="${STS2_LOBBY_REGISTRY_OFFICIAL_WS_URL:-ws://127.0.0.1:$PORT/control}"
+REGISTRY_OFFICIAL_BANDWIDTH_PROBE_URL="${STS2_LOBBY_REGISTRY_OFFICIAL_BANDWIDTH_PROBE_URL:-}"
+ADMIN_USERNAME="${STS2_LOBBY_ADMIN_USERNAME:-admin}"
+ADMIN_PASSWORD_HASH="${STS2_LOBBY_ADMIN_PASSWORD_HASH:-}"
+ADMIN_SESSION_SECRET="${STS2_LOBBY_ADMIN_SESSION_SECRET:-}"
+ADMIN_SESSION_TTL_HOURS="${STS2_LOBBY_ADMIN_SESSION_TTL_HOURS:-168}"
 NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
 NPM_BIN="${NPM_BIN:-$(command -v npm || true)}"
 SKIP_SYSTEMD=0
@@ -66,6 +80,18 @@ Options:
                         STRICT_MOD_VERSION_CHECK written into .env. Default: false
   --connection-strategy <direct-first|relay-first|relay-only>
                         CONNECTION_STRATEGY written into .env. Default: relay-first
+  --registry-data-dir <path>
+                        REGISTRY_DATA_DIR written into .env. Default: <install-dir>/lobby-service/data
+  --registry-official-base-url <url>
+                        REGISTRY_OFFICIAL_BASE_URL written into .env.
+  --registry-official-ws-url <url>
+                        REGISTRY_OFFICIAL_WS_URL written into .env.
+  --admin-username <value>
+                        ADMIN_USERNAME written into .env. Default: admin
+  --admin-password-hash <value>
+                        ADMIN_PASSWORD_HASH written into .env.
+  --admin-session-secret <value>
+                        ADMIN_SESSION_SECRET written into .env.
   --run-user <name>     systemd User value when auto-installing the service.
   --run-group <name>    systemd Group value when auto-installing the service.
   --skip-systemd        Only install files and build the service; do not create/start systemd unit.
@@ -151,6 +177,36 @@ while [[ $# -gt 0 ]]; do
       CONNECTION_STRATEGY="$2"
       shift 2
       ;;
+    --registry-data-dir)
+      [[ $# -ge 2 ]] || die "--registry-data-dir requires a value"
+      REGISTRY_DATA_DIR="$2"
+      shift 2
+      ;;
+    --registry-official-base-url)
+      [[ $# -ge 2 ]] || die "--registry-official-base-url requires a value"
+      REGISTRY_OFFICIAL_BASE_URL="$2"
+      shift 2
+      ;;
+    --registry-official-ws-url)
+      [[ $# -ge 2 ]] || die "--registry-official-ws-url requires a value"
+      REGISTRY_OFFICIAL_WS_URL="$2"
+      shift 2
+      ;;
+    --admin-username)
+      [[ $# -ge 2 ]] || die "--admin-username requires a value"
+      ADMIN_USERNAME="$2"
+      shift 2
+      ;;
+    --admin-password-hash)
+      [[ $# -ge 2 ]] || die "--admin-password-hash requires a value"
+      ADMIN_PASSWORD_HASH="$2"
+      shift 2
+      ;;
+    --admin-session-secret)
+      [[ $# -ge 2 ]] || die "--admin-session-secret requires a value"
+      ADMIN_SESSION_SECRET="$2"
+      shift 2
+      ;;
     --run-user)
       [[ $# -ge 2 ]] || die "--run-user requires a value"
       RUN_AS_USER="$2"
@@ -228,6 +284,20 @@ RELAY_CLIENT_IDLE_SECONDS=$RELAY_CLIENT_IDLE_SECONDS
 STRICT_GAME_VERSION_CHECK=$STRICT_GAME_VERSION_CHECK
 STRICT_MOD_VERSION_CHECK=$STRICT_MOD_VERSION_CHECK
 CONNECTION_STRATEGY=$CONNECTION_STRATEGY
+REGISTRY_DATA_DIR=$REGISTRY_DATA_DIR
+REGISTRY_PROBE_INTERVAL_SECONDS=$REGISTRY_PROBE_INTERVAL_SECONDS
+REGISTRY_PROBE_TIMEOUT_MS=$REGISTRY_PROBE_TIMEOUT_MS
+REGISTRY_BANDWIDTH_SAMPLE_BYTES=$REGISTRY_BANDWIDTH_SAMPLE_BYTES
+REGISTRY_OFFICIAL_SERVER_ID=$REGISTRY_OFFICIAL_SERVER_ID
+REGISTRY_OFFICIAL_SERVER_NAME=$REGISTRY_OFFICIAL_SERVER_NAME
+REGISTRY_OFFICIAL_REGION_LABEL=$REGISTRY_OFFICIAL_REGION_LABEL
+REGISTRY_OFFICIAL_BASE_URL=$REGISTRY_OFFICIAL_BASE_URL
+REGISTRY_OFFICIAL_WS_URL=$REGISTRY_OFFICIAL_WS_URL
+REGISTRY_OFFICIAL_BANDWIDTH_PROBE_URL=$REGISTRY_OFFICIAL_BANDWIDTH_PROBE_URL
+ADMIN_USERNAME=$ADMIN_USERNAME
+ADMIN_PASSWORD_HASH=$ADMIN_PASSWORD_HASH
+ADMIN_SESSION_SECRET=$ADMIN_SESSION_SECRET
+ADMIN_SESSION_TTL_HOURS=$ADMIN_SESSION_TTL_HOURS
 EOF
   log "Created default environment file: $ENV_FILE"
 else

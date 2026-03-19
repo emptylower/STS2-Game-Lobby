@@ -15,6 +15,8 @@ internal sealed class LanConnectConfigData
 
     public string LobbyServerWsUrl { get; set; } = string.Empty;
 
+    public string SelectedServerId { get; set; } = string.Empty;
+
     public string LastRoomName { get; set; } = string.Empty;
 
     public string PlayerDisplayName { get; set; } = string.Empty;
@@ -113,6 +115,24 @@ internal static class LanConnectConfig
             {
                 return _data.LobbyServerWsUrl;
             }
+        }
+    }
+
+    public static string SelectedServerId
+    {
+        get
+        {
+            lock (Sync)
+            {
+                return _data.SelectedServerId;
+            }
+        }
+        set
+        {
+            SetString(
+                static (data, next) => data.SelectedServerId = next,
+                static data => data.SelectedServerId,
+                value.Trim());
         }
     }
 

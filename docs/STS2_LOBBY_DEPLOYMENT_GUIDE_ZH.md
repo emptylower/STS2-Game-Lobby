@@ -8,7 +8,7 @@
 目标结果：
 
 1. 在 Linux 机器上部署并启动 `lobby-service`
-2. 生成带默认大厅绑定的客户端发布包
+2. 生成带默认大厅与中心注册表绑定的客户端发布包
 3. 房主和玩家通过一键安装 / 卸载脚本完成客户端管理
 4. 在公开仓库中同步源码和发布产物
 
@@ -28,6 +28,7 @@ sudo ./scripts/install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 - 执行 `npm run build`
 - 生成启动脚本
 - 在 root + systemd 环境下自动安装并启动 `sts2-lobby.service`
+- 如果传入并行实例的 service 名、端口与注册表变量，也可以直接安装 feature 测试实例
 
 默认需要放行：
 
@@ -58,6 +59,25 @@ curl http://127.0.0.1:8787/probe
 sudo ./install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 ```
 
+### 阿里云 feature 并行实例示例
+
+```bash
+sudo ./scripts/install-lobby-service-linux.sh \
+  --install-dir /home/admin/sts2-lobby-feature \
+  --service-name sts2-lobby-feature \
+  --port 18787 \
+  --relay-port-start 39100 \
+  --relay-port-end 39163 \
+  --registry-data-dir /home/admin/sts2-lobby-feature/lobby-service/data \
+  --registry-official-base-url http://47.111.146.69:18787 \
+  --registry-official-ws-url ws://47.111.146.69:18787/control \
+  --admin-username admin \
+  --admin-password-hash '<your-scrypt-hash>' \
+  --admin-session-secret '<random-secret>'
+```
+
+这套并行实例不会覆盖现有 `sts2-lobby.service`，而是额外安装 `sts2-lobby-feature.service`。
+
 ## 二、客户端打包
 
 ### 1. 生成带默认大厅绑定的客户端包
@@ -65,11 +85,12 @@ sudo ./install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 ```bash
 export STS2_LOBBY_DEFAULT_BASE_URL="http://<your-host-or-domain>:8787"
 export STS2_LOBBY_DEFAULT_WS_URL="ws://<your-host-or-domain>:8787/control"
+export STS2_LOBBY_REGISTRY_BASE_URL="http://<your-host-or-domain>:8787"
 
 ./scripts/package-sts2-lan-connect.sh
 ```
 
-如果不显式设置 `STS2_LOBBY_DEFAULT_WS_URL`，打包脚本会根据 `STS2_LOBBY_DEFAULT_BASE_URL` 自动推导。
+如果不显式设置 `STS2_LOBBY_DEFAULT_WS_URL`，打包脚本会根据 `STS2_LOBBY_DEFAULT_BASE_URL` 自动推导。`STS2_LOBBY_REGISTRY_BASE_URL` 留空时会默认跟随 `STS2_LOBBY_DEFAULT_BASE_URL`。
 
 产物：
 
@@ -133,4 +154,5 @@ git push
 1. 大厅刷新是否正常
 2. 搜索、分页、筛选是否正常
 3. 建房和加入是否正常
-4. `复制本地调试报告` 是否可用
+4. 线路目录切换、提交服务器和恢复官方默认是否正常
+5. `复制本地调试报告` 是否可用

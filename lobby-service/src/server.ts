@@ -1,7 +1,12 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { createServer } from "node:http";
+import { resolve } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
+import { renderAdminPage } from "./admin-ui.js";
+import { verifyAdminPassword, signAdminSession, verifySignedAdminSession } from "./admin-auth.js";
 import { assertRelayCreateReady, assertRelayJoinReady } from "./join-guard.js";
+import { probeRegistryServer } from "./registry-probe.js";
+import { RegistryStore, RegistryStoreError, type RegistryServerUpdateInput, type RegistrySubmissionInput } from "./registry-store.js";
 import { RoomRelayManager } from "./relay.js";
 import { cleanupExpiredRooms } from "./room-cleanup.js";
 import {
@@ -28,6 +33,20 @@ const env = {
   strictGameVersionCheck: parseBooleanEnv(process.env.STRICT_GAME_VERSION_CHECK, true),
   strictModVersionCheck: parseBooleanEnv(process.env.STRICT_MOD_VERSION_CHECK, true),
   connectionStrategy: parseConnectionStrategyEnv(process.env.CONNECTION_STRATEGY),
+  registryDataDir: process.env.REGISTRY_DATA_DIR ?? resolve(process.cwd(), "data"),
+  registryProbeIntervalMs: Number.parseInt(process.env.REGISTRY_PROBE_INTERVAL_SECONDS ?? "180", 10) * 1000,
+  registryProbeTimeoutMs: Number.parseInt(process.env.REGISTRY_PROBE_TIMEOUT_MS ?? "5000", 10),
+  registryBandwidthSampleBytes: Number.parseInt(process.env.REGISTRY_BANDWIDTH_SAMPLE_BYTES ?? String(8 * 1024 * 1024), 10),
+  registryOfficialServerId: process.env.REGISTRY_OFFICIAL_SERVER_ID ?? "official-default",
+  registryOfficialServerName: process.env.REGISTRY_OFFICIAL_SERVER_NAME ?? "官方测试服",
+  registryOfficialRegionLabel: process.env.REGISTRY_OFFICIAL_REGION_LABEL ?? "阿里云测试线路",
+  registryOfficialBaseUrl: process.env.REGISTRY_OFFICIAL_BASE_URL ?? buildPublicBaseUrl(),
+  registryOfficialWsUrl: process.env.REGISTRY_OFFICIAL_WS_URL ?? buildPublicWsUrl(),
+  registryOfficialBandwidthProbeUrl: optionalEnv(process.env.REGISTRY_OFFICIAL_BANDWIDTH_PROBE_URL),
+  adminUsername: process.env.ADMIN_USERNAME ?? "admin",
+  adminPasswordHash: optionalEnv(process.env.ADMIN_PASSWORD_HASH),
+  adminSessionSecret: optionalEnv(process.env.ADMIN_SESSION_SECRET),
+  adminSessionTtlMs: Number.parseInt(process.env.ADMIN_SESSION_TTL_HOURS ?? "168", 10) * 60 * 60 * 1000,
 };
 
 const store = new LobbyStore({
@@ -56,6 +75,18 @@ const relayManager = new RoomRelayManager(
     console.log(`[relay] ${phase} room=${roomId} ${detail}`);
   },
 );
+const registryStore = new RegistryStore({
+  dataFilePath: resolve(env.registryDataDir, "registry-store.json"),
+  officialServer: {
+    id: env.registryOfficialServerId,
+    displayName: env.registryOfficialServerName,
+    regionLabel: env.registryOfficialRegionLabel,
+    baseUrl: env.registryOfficialBaseUrl,
+    wsUrl: env.registryOfficialWsUrl,
+    bandwidthProbeUrl: env.registryOfficialBandwidthProbeUrl,
+  },
+  sessionTtlMs: env.adminSessionTtlMs,
+});
 
 const app = express();
 app.use(express.json({ limit: "32kb" }));
@@ -75,6 +106,8 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     rooms: store.listRooms().length,
+    registryServers: registryStore.listAdminServers().length,
+    pendingRegistrySubmissions: registryStore.listSubmissions().filter((entry) => entry.status === "pending").length,
     strictGameVersionCheck: env.strictGameVersionCheck,
     strictModVersionCheck: env.strictModVersionCheck,
     connectionStrategy: env.connectionStrategy,
@@ -90,6 +123,148 @@ app.get("/probe", (_req, res) => {
 app.get("/rooms", (_req, res) => {
   cleanupExpiredRoomsNow();
   res.json(store.listRooms());
+});
+
+app.get("/registry/servers", (_req, res) => {
+  res.json(registryStore.listPublicServers());
+});
+
+app.post("/registry/submissions", (req, res, next) => {
+  try {
+    const body = req.body as Partial<RegistrySubmissionInput> | undefined;
+    const submission = registryStore.createSubmission({
+      displayName: requiredString(body?.displayName, "displayName"),
+      regionLabel: requiredString(body?.regionLabel, "regionLabel"),
+      baseUrl: requiredString(body?.baseUrl, "baseUrl"),
+      wsUrl: optionalString(body?.wsUrl),
+      bandwidthProbeUrl: optionalString(body?.bandwidthProbeUrl),
+      operatorName: requiredString(body?.operatorName, "operatorName"),
+      contact: requiredString(body?.contact, "contact"),
+      notes: optionalString(body?.notes),
+    }, requestIp(req));
+    res.status(201).json(submission);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/admin", (_req, res) => {
+  res.type("html").send(renderAdminPage());
+});
+
+app.post("/admin/login", (req, res, next) => {
+  try {
+    ensureAdminConfigured();
+    const body = req.body as { username?: string; password?: string } | undefined;
+    const username = requiredString(body?.username, "username");
+    const password = requiredString(body?.password, "password");
+    if (username !== env.adminUsername || !verifyAdminPassword(password, env.adminPasswordHash)) {
+      throw new RegistryStoreError(401, "invalid_admin_credentials", "后台账号或密码错误。");
+    }
+
+    const session = registryStore.createSession(username);
+    setAdminCookie(res, session.id);
+    res.json(session);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/admin/logout", (req, res) => {
+  const session = readAdminSession(req);
+  if (session) {
+    registryStore.deleteSession(session.id, session.username);
+  }
+  clearAdminCookie(res);
+  res.status(204).send();
+});
+
+app.get("/admin/session", (req, res, next) => {
+  try {
+    ensureAdminConfigured();
+    const session = requireAdminSession(req);
+    res.json(session);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/admin/submissions", (req, res, next) => {
+  try {
+    requireAdminSession(req);
+    res.json(registryStore.listSubmissions());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/admin/submissions/:id/approve", async (req, res, next) => {
+  try {
+    const session = requireAdminSession(req);
+    const note = optionalString((req.body as { note?: unknown } | undefined)?.note);
+    const serverEntry = registryStore.approveSubmission(req.params.id, session.username, note);
+    const probed = await runManualServerProbe(serverEntry.id);
+    res.json(probed ?? serverEntry);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/admin/submissions/:id/reject", (req, res, next) => {
+  try {
+    const session = requireAdminSession(req);
+    const note = optionalString((req.body as { note?: unknown } | undefined)?.note);
+    const submission = registryStore.rejectSubmission(req.params.id, session.username, note);
+    res.json(submission);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/admin/servers", (req, res, next) => {
+  try {
+    requireAdminSession(req);
+    res.json(registryStore.listAdminServers());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/admin/servers/:id", (req, res, next) => {
+  try {
+    const session = requireAdminSession(req);
+    const body = req.body as Partial<RegistryServerUpdateInput> | undefined;
+    const updated = registryStore.updateServer(
+      req.params.id,
+      {
+        displayName: optionalString(body?.displayName),
+        regionLabel: optionalString(body?.regionLabel),
+        baseUrl: optionalString(body?.baseUrl),
+        wsUrl: optionalString(body?.wsUrl),
+        bandwidthProbeUrl: optionalString(body?.bandwidthProbeUrl),
+        operatorName: optionalString(body?.operatorName),
+        contact: optionalString(body?.contact),
+        notes: optionalString(body?.notes),
+        listingState: parseListingState(body?.listingState),
+        runtimeState: parseRuntimeState(body?.runtimeState),
+        sortOrder: optionalNumber(body?.sortOrder),
+      },
+      session.username,
+    );
+    res.json(updated);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/admin/servers/:id/probe", async (req, res, next) => {
+  try {
+    requireAdminSession(req);
+    const updated = await runManualServerProbe(req.params.id);
+    res.json(updated);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/rooms", (req, res, next) => {
@@ -259,6 +434,14 @@ app.post("/rooms/:id/connection-events", (req, res, next) => {
 });
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  if (error instanceof RegistryStoreError) {
+    res.status(error.statusCode).json({
+      code: error.code,
+      message: error.message,
+    });
+    return;
+  }
+
   if (error instanceof LobbyStoreError) {
     res.status(error.statusCode).json({
       code: error.code,
@@ -376,6 +559,9 @@ wss.on("connection", (socket, req) => {
 
 const cleanupInterval = setInterval(() => {
   cleanupExpiredRoomsNow();
+  if (registryStore.cleanupExpiredSessions()) {
+    console.log("[registry] expired admin sessions cleaned up");
+  }
 
   const staleThreshold = Date.now() - env.heartbeatTimeoutMs;
   for (const peers of roomPeers.values()) {
@@ -392,12 +578,22 @@ const cleanupInterval = setInterval(() => {
     }
   }
 }, 5000);
+const registryProbeInterval = setInterval(() => {
+  void runRegistryProbeSweep();
+}, env.registryProbeIntervalMs);
 
 server.listen(env.port, env.host, () => {
   console.log(`[lobby] listening on http://${env.host}:${env.port} (ws path ${env.wsPath})`);
   console.log(
     `[relay] enabled udp://${env.relayBindHost}:${env.relayPortStart}-${env.relayPortEnd} publicHost=${env.relayPublicHost || "<request-host>"}`,
   );
+  console.log(`[registry] official server ${env.registryOfficialBaseUrl} -> ${env.registryOfficialWsUrl}`);
+  if (isAdminConfigured()) {
+    console.log(`[registry] admin console enabled for ${env.adminUsername}`);
+  } else {
+    console.log("[registry] admin console disabled until ADMIN_PASSWORD_HASH and ADMIN_SESSION_SECRET are configured");
+  }
+  void runRegistryProbeSweep();
 });
 
 function addPeer(peer: ControlPeer) {
@@ -484,6 +680,53 @@ function requestIp(req: Request) {
   return req.socket.remoteAddress ?? "";
 }
 
+function readAdminSession(req: Request) {
+  ensureAdminConfigured();
+  const cookieToken = parseCookies(req.headers.cookie)["sts2_admin_session"];
+  const sessionId = verifySignedAdminSession(cookieToken, env.adminSessionSecret!);
+  return sessionId ? registryStore.getSession(sessionId) : null;
+}
+
+function requireAdminSession(req: Request) {
+  const session = readAdminSession(req);
+  if (!session) {
+    throw new RegistryStoreError(401, "admin_auth_required", "请先登录后台。");
+  }
+
+  return session;
+}
+
+function setAdminCookie(res: Response, sessionId: string) {
+  const token = signAdminSession(sessionId, env.adminSessionSecret!);
+  res.setHeader("Set-Cookie", `sts2_admin_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(env.adminSessionTtlMs / 1000)}`);
+}
+
+function clearAdminCookie(res: Response) {
+  res.setHeader("Set-Cookie", "sts2_admin_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+}
+
+function parseCookies(header: string | undefined) {
+  const cookies: Record<string, string> = {};
+  if (!header) {
+    return cookies;
+  }
+
+  for (const segment of header.split(";")) {
+    const separatorIndex = segment.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = segment.slice(0, separatorIndex).trim();
+    const value = segment.slice(separatorIndex + 1).trim();
+    if (key) {
+      cookies[key] = value;
+    }
+  }
+
+  return cookies;
+}
+
 function resolveAdvertisedRelayHost(req: Request) {
   if (env.relayPublicHost.trim()) {
     return env.relayPublicHost.trim();
@@ -543,6 +786,11 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean) {
   throw new Error(`Invalid boolean env value: ${value}`);
 }
 
+function optionalEnv(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function parseConnectionStrategyEnv(value: string | undefined): ConnectionStrategy {
   const normalized = value?.trim().toLowerCase() ?? "direct-first";
   if (normalized === "direct-first" || normalized === "relay-first" || normalized === "relay-only") {
@@ -558,6 +806,26 @@ function positiveInt(value: unknown, name: string, min: number, max: number) {
   }
 
   return value;
+}
+
+function optionalNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parseListingState(value: unknown) {
+  if (value === "approved" || value === "disabled") {
+    return value;
+  }
+
+  return undefined;
+}
+
+function parseRuntimeState(value: unknown) {
+  if (value === "online" || value === "degraded" || value === "offline" || value === "maintenance") {
+    return value;
+  }
+
+  return undefined;
 }
 
 function requiredQuery(url: URL, key: string) {
@@ -579,11 +847,77 @@ interface ControlPeer {
   lastSeenAt: number;
 }
 
+function isAdminConfigured() {
+  return Boolean(env.adminPasswordHash && env.adminSessionSecret);
+}
+
+function ensureAdminConfigured() {
+  if (!isAdminConfigured()) {
+    throw new RegistryStoreError(503, "admin_not_configured", "后台账号尚未配置。");
+  }
+}
+
+async function runManualServerProbe(serverId: string) {
+  const target = registryStore.listAdminServers().find((entry) => entry.id === serverId);
+  if (!target) {
+    throw new RegistryStoreError(404, "server_not_found", "目标服务器不存在。");
+  }
+
+  const result = await probeRegistryServer(target, {
+    timeoutMs: env.registryProbeTimeoutMs,
+    bandwidthSampleBytes: env.registryBandwidthSampleBytes,
+  });
+  console.log(
+    `[registry] manual probe serverId=${target.id} state=${result.runtimeState} quality=${result.qualityGrade} rttMs=${result.lastProbeRttMs ?? "<none>"} bandwidthMbps=${result.lastBandwidthMbps ?? "<none>"}`,
+  );
+  return registryStore.recordProbeResult(target.id, result);
+}
+
+async function runRegistryProbeSweep() {
+  const targets = registryStore.listAdminServers()
+    .filter((entry) => entry.listingState === "approved");
+  for (const target of targets) {
+    try {
+      const result = await probeRegistryServer(target, {
+        timeoutMs: env.registryProbeTimeoutMs,
+        bandwidthSampleBytes: env.registryBandwidthSampleBytes,
+      });
+      registryStore.recordProbeResult(target.id, result);
+      console.log(
+        `[registry] probe serverId=${target.id} state=${result.runtimeState} quality=${result.qualityGrade} rttMs=${result.lastProbeRttMs ?? "<none>"} bandwidthMbps=${result.lastBandwidthMbps ?? "<none>"}`,
+      );
+    } catch (error) {
+      console.warn(`[registry] probe failed serverId=${target.id} error=${error instanceof Error ? error.message : "unknown"}`);
+    }
+  }
+}
+
+function buildPublicBaseUrl() {
+  const host = envRelayPublicHost() ?? "127.0.0.1";
+  return `http://${host}:${process.env.PORT ?? "8787"}`;
+}
+
+function buildPublicWsUrl() {
+  const host = envRelayPublicHost() ?? "127.0.0.1";
+  return `ws://${host}:${process.env.PORT ?? "8787"}/control`;
+}
+
+function envRelayPublicHost() {
+  const explicit = optionalEnv(process.env.REGISTRY_PUBLIC_HOST);
+  if (explicit) {
+    return explicit;
+  }
+
+  const relayPublicHost = optionalEnv(process.env.RELAY_PUBLIC_HOST);
+  return relayPublicHost;
+}
+
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 function shutdown() {
   clearInterval(cleanupInterval);
+  clearInterval(registryProbeInterval);
   wss.close();
   relayManager.close();
   server.close(() => {

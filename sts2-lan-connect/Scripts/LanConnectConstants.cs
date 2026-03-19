@@ -12,6 +12,8 @@ internal static class LanConnectConstants
 
     public static readonly string DefaultLobbyServerWsUrl = LanConnectLobbyEndpointDefaults.GetDefaultWsUrl();
 
+    public static readonly string DefaultLobbyRegistryBaseUrl = LanConnectLobbyEndpointDefaults.GetRegistryBaseUrl();
+
     public const string DefaultCompatibilityProfile = "test_relaxed";
 
     public const string DefaultConnectionStrategy = "relay-first";

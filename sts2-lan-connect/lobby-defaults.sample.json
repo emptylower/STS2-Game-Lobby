@@ -1,6 +1,7 @@
 {
   "baseUrl": "https://lobby.example.com",
   "wsUrl": "wss://lobby.example.com/control",
-  "compatibilityProfile": "strict",
-  "connectionStrategy": "direct-first"
+  "registryBaseUrl": "https://registry.example.com",
+  "compatibilityProfile": "test_relaxed",
+  "connectionStrategy": "relay-first"
 }

@@ -14,6 +14,9 @@ internal sealed class LanConnectBundledLobbyDefaults
     [JsonPropertyName("wsUrl")]
     public string WsUrl { get; set; } = string.Empty;
 
+    [JsonPropertyName("registryBaseUrl")]
+    public string RegistryBaseUrl { get; set; } = string.Empty;
+
     [JsonPropertyName("compatibilityProfile")]
     public string CompatibilityProfile { get; set; } = string.Empty;
 
@@ -30,6 +33,7 @@ internal static class LanConnectLobbyEndpointDefaults
     private static bool _loaded;
     private static string _defaultBaseUrl = string.Empty;
     private static string _defaultWsUrl = string.Empty;
+    private static string _registryBaseUrl = string.Empty;
     private static string _compatibilityProfile = LanConnectConstants.DefaultCompatibilityProfile;
     private static string _connectionStrategy = LanConnectConstants.DefaultConnectionStrategy;
 
@@ -43,6 +47,12 @@ internal static class LanConnectLobbyEndpointDefaults
     {
         EnsureLoaded();
         return _defaultWsUrl;
+    }
+
+    public static string GetRegistryBaseUrl()
+    {
+        EnsureLoaded();
+        return _registryBaseUrl;
     }
 
     public static bool HasBundledDefaults()
@@ -143,6 +153,11 @@ internal static class LanConnectLobbyEndpointDefaults
 
             _defaultBaseUrl = baseUrl;
             _defaultWsUrl = NormalizeWsUrl(defaults?.WsUrl, baseUrl);
+            _registryBaseUrl = NormalizeBaseUrl(defaults?.RegistryBaseUrl);
+            if (string.IsNullOrWhiteSpace(_registryBaseUrl))
+            {
+                _registryBaseUrl = baseUrl;
+            }
             _compatibilityProfile = NormalizeCompatibilityProfile(defaults?.CompatibilityProfile);
             _connectionStrategy = NormalizeConnectionStrategy(defaults?.ConnectionStrategy);
         }
@@ -151,6 +166,7 @@ internal static class LanConnectLobbyEndpointDefaults
             Log.Warn($"sts2_lan_connect failed to read bundled lobby defaults: {ex.Message}");
             _defaultBaseUrl = string.Empty;
             _defaultWsUrl = string.Empty;
+            _registryBaseUrl = string.Empty;
             _compatibilityProfile = LanConnectConstants.DefaultCompatibilityProfile;
             _connectionStrategy = LanConnectConstants.DefaultConnectionStrategy;
         }

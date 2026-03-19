@@ -33,6 +33,7 @@ Options:
 Environment:
   STS2_LOBBY_DEFAULT_BASE_URL
   STS2_LOBBY_DEFAULT_WS_URL
+  STS2_LOBBY_REGISTRY_BASE_URL
   STS2_LOBBY_COMPATIBILITY_PROFILE
   STS2_LOBBY_CONNECTION_STRATEGY
 EOF
@@ -103,6 +104,7 @@ write_lobby_defaults() {
   local target_dir="$1"
   local base_url="${STS2_LOBBY_DEFAULT_BASE_URL:-}"
   local ws_url="${STS2_LOBBY_DEFAULT_WS_URL:-}"
+  local registry_base_url="${STS2_LOBBY_REGISTRY_BASE_URL:-}"
   local compatibility_profile="${STS2_LOBBY_COMPATIBILITY_PROFILE:-}"
   local connection_strategy="${STS2_LOBBY_CONNECTION_STRATEGY:-}"
 
@@ -123,6 +125,7 @@ write_lobby_defaults() {
 {
   "baseUrl": "$base_url",
   "wsUrl": "$ws_url",
+  "registryBaseUrl": "${registry_base_url:-$base_url}",
   "compatibilityProfile": "${compatibility_profile:-test_relaxed}",
   "connectionStrategy": "${connection_strategy:-relay-first}"
 }

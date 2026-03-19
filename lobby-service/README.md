@@ -3,6 +3,10 @@
 `STS2 Lobby Service` 是 `STS2 LAN Connect` 的大厅服务端，负责：
 
 - 房间目录
+- 中央服务器注册表
+- 社区服务器提交通道
+- 审核后台与单管理员登录
+- 线路探针、健康检查和质量评级
 - 房间密码校验
 - 房主心跳与僵尸房间清理
 - 控制通道握手与广播
@@ -14,7 +18,7 @@
 它不负责：
 
 - 战斗同步
-- 账号系统
+- 多角色后台权限系统
 - NAT 必成功穿透
 
 当前 relay 的定位是“直连失败时的房间级兜底路径”，不是完整的独立联机协议。
@@ -56,6 +60,7 @@ npm start
 - HTTP: `http://0.0.0.0:8787`
 - WebSocket: `ws://0.0.0.0:8787/control`
 - Relay UDP: `udp://0.0.0.0:39000-39511`
+- 后台页面: `http://0.0.0.0:8787/admin`
 
 公网部署时至少需要放行：
 
@@ -91,6 +96,20 @@ npm start
 - `STRICT_GAME_VERSION_CHECK`
 - `STRICT_MOD_VERSION_CHECK`
 - `CONNECTION_STRATEGY`
+- `REGISTRY_DATA_DIR`
+- `REGISTRY_PROBE_INTERVAL_SECONDS`
+- `REGISTRY_PROBE_TIMEOUT_MS`
+- `REGISTRY_BANDWIDTH_SAMPLE_BYTES`
+- `REGISTRY_OFFICIAL_SERVER_ID`
+- `REGISTRY_OFFICIAL_SERVER_NAME`
+- `REGISTRY_OFFICIAL_REGION_LABEL`
+- `REGISTRY_OFFICIAL_BASE_URL`
+- `REGISTRY_OFFICIAL_WS_URL`
+- `REGISTRY_OFFICIAL_BANDWIDTH_PROBE_URL`
+- `ADMIN_USERNAME`
+- `ADMIN_PASSWORD_HASH`
+- `ADMIN_SESSION_SECRET`
+- `ADMIN_SESSION_TTL_HOURS`
 
 示例见 [`.env.example`](./.env.example)。
 
@@ -101,17 +120,31 @@ npm start
 - 如果客户端和房主都上报了 `modList`，服务端会额外比较双方缺失项，并在 `mod_mismatch` 里返回 `missingModsOnLocal` / `missingModsOnHost`
 - `CONNECTION_STRATEGY` 可选 `direct-first`、`relay-first`、`relay-only`
 - 公开服建议保持严格校验；跨端测试服可以按需放宽并切到 `relay-only`
+- `REGISTRY_OFFICIAL_BASE_URL` / `REGISTRY_OFFICIAL_WS_URL` 决定客户端目录里的官方默认线路
+- `ADMIN_PASSWORD_HASH` 与 `ADMIN_SESSION_SECRET` 配齐后，`/admin` 后台才会开放登录
 
 ## API
 
 - `GET /health`
 - `GET /probe`
 - `GET /rooms`
+- `GET /registry/servers`
+- `POST /registry/submissions`
 - `POST /rooms`
 - `POST /rooms/:id/join`
 - `POST /rooms/:id/heartbeat`
 - `POST /rooms/:id/connection-events`
 - `DELETE /rooms/:id`
+- `GET /admin`
+- `POST /admin/login`
+- `POST /admin/logout`
+- `GET /admin/session`
+- `GET /admin/servers`
+- `GET /admin/submissions`
+- `POST /admin/submissions/:id/approve`
+- `POST /admin/submissions/:id/reject`
+- `PATCH /admin/servers/:id`
+- `POST /admin/servers/:id/probe`
 - `WS /control`
 
 当前和续局联机相关的关键字段：
@@ -156,6 +189,8 @@ npm start
 ```bash
 journalctl -u sts2-lobby.service -n 100 --no-pager
 ```
+
+如果你跑的是并行 feature 实例，把 service 名替换成对应的 `sts2-lobby-feature.service`。
 
 常见日志包括：
 

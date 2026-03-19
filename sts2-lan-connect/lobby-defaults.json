@@ -1,6 +1,7 @@
 {
-  "baseUrl": "http://118.25.157.52:8787",
-  "wsUrl": "ws://118.25.157.52:8787/control",
+  "baseUrl": "http://47.111.146.69:18787",
+  "wsUrl": "ws://47.111.146.69:18787/control",
+  "registryBaseUrl": "http://47.111.146.69:18787",
   "compatibilityProfile": "test_relaxed",
   "connectionStrategy": "relay-first"
 }

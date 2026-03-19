@@ -32,6 +32,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private static readonly Color DangerColor = new(0.94f, 0.46f, 0.43f, 1f);
 
     private readonly List<LobbyRoomSummary> _rooms = new();
+    private readonly List<LobbyDirectoryServerEntry> _directoryServers = new();
+    private readonly Dictionary<string, double?> _directoryLocalProbeRttMs = new();
 
     private NMultiplayerSubmenu? _submenu;
     private NSubmenuStack? _stack;
@@ -39,6 +41,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private HSeparator? _settingsSeparator;
     private VBoxContainer? _settingsSection;
     private Label? _networkSummaryLabel;
+    private Label? _serverDirectorySummaryLabel;
+    private Label? _serverDirectoryHintLabel;
     private LineEdit? _displayNameInput;
     private VBoxContainer? _networkSettingsContainer;
     private Button? _toggleNetworkSettingsButton;
@@ -56,6 +60,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private LineEdit? _roomSearchInput;
     private Label? _actionAvailabilityLabel;
     private Button? _refreshButton;
+    private Button? _openServerDirectoryButton;
+    private Button? _submitServerButton;
+    private Button? _restoreOfficialServerButton;
     private Button? _createButton;
     private Button? _joinButton;
     private Button? _pagePreviousButton;
@@ -77,6 +84,19 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Label? _joinPasswordDialogErrorLabel;
     private LineEdit? _joinPasswordInput;
     private LobbyRoomSummary? _pendingPasswordJoinRoom;
+    private Control? _serverDirectoryDialogContainer;
+    private VBoxContainer? _serverDirectoryDialogList;
+    private Label? _serverDirectoryDialogStatusLabel;
+    private Control? _serverSubmissionDialogContainer;
+    private Label? _serverSubmissionDialogErrorLabel;
+    private LineEdit? _serverSubmissionDisplayNameInput;
+    private LineEdit? _serverSubmissionRegionInput;
+    private LineEdit? _serverSubmissionBaseUrlInput;
+    private LineEdit? _serverSubmissionWsUrlInput;
+    private LineEdit? _serverSubmissionBandwidthUrlInput;
+    private LineEdit? _serverSubmissionOperatorInput;
+    private LineEdit? _serverSubmissionContactInput;
+    private LineEdit? _serverSubmissionNotesInput;
     private Control? _progressDialogContainer;
     private Label? _progressDialogTitle;
     private Label? _progressDialogMessage;
@@ -88,6 +108,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private LobbyRoomSummary? _pendingResumeJoinRoom;
     private string? _pendingResumeJoinPassword;
     private bool _networkFieldsRevealed;
+    private bool _directoryRefreshInFlight;
     private bool _refreshInFlight;
     private bool _actionInFlight;
     private double _timeUntilAutoRefresh;
@@ -100,6 +121,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private string _roomSearchQuery = string.Empty;
     private string _lastActionDebugState = string.Empty;
     private string _lastStatusMessage = string.Empty;
+    private string _lastDirectoryStatusMessage = string.Empty;
     private string _progressDialogBaseMessage = string.Empty;
     private bool _roomListTouchActive;
     private bool _roomListTouchDragging;
@@ -141,8 +163,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         SetUnderlyingMenuVisible(false);
         Visible = true;
         SyncSettingsInputsFromConfig();
+        UpdateServerDirectorySummary();
         RebuildRoomStage();
         UpdateActionButtons();
+        TaskHelper.RunSafely(RefreshServerDirectoryAsync());
         TaskHelper.RunSafely(RefreshRoomsAsync(userInitiated: false));
     }
 
@@ -162,6 +186,16 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_joinPasswordDialogContainer != null)
         {
             _joinPasswordDialogContainer.Visible = false;
+        }
+
+        if (_serverDirectoryDialogContainer != null)
+        {
+            _serverDirectoryDialogContainer.Visible = false;
+        }
+
+        if (_serverSubmissionDialogContainer != null)
+        {
+            _serverSubmissionDialogContainer.Visible = false;
         }
 
         if (_resumeSlotDialogContainer != null)
@@ -223,6 +257,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         AddChild(BuildCreateDialog());
         AddChild(BuildJoinPasswordDialog());
+        AddChild(BuildServerDirectoryDialog());
+        AddChild(BuildServerSubmissionDialog());
         AddChild(BuildProgressDialog());
         AddChild(BuildResumeSlotDialog());
     }
@@ -510,9 +546,39 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         sidebar.AddThemeConstantOverride("separation", 18);
 
+        sidebar.AddChild(BuildServerDirectoryCard());
         sidebar.AddChild(BuildStatusCard());
         sidebar.AddChild(BuildActionCard());
         return sidebar;
+    }
+
+    private Control BuildServerDirectoryCard()
+    {
+        PanelContainer card = CreateSurfacePanel(SurfaceColor, AccentMutedColor, padding: 20);
+        VBoxContainer body = new();
+        body.AddThemeConstantOverride("separation", 12);
+        card.AddChild(body);
+
+        body.AddChild(CreateSectionLabel("当前线路"));
+
+        _serverDirectorySummaryLabel = CreateBodyLabel("正在读取线路状态。");
+        _serverDirectorySummaryLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        body.AddChild(_serverDirectorySummaryLabel);
+
+        _serverDirectoryHintLabel = CreateBodyLabel("中心注册表会固定保留在线，切服只影响房间列表和建房/加房实际目标。");
+        _serverDirectoryHintLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        _serverDirectoryHintLabel.AddThemeColorOverride("font_color", TextMutedColor);
+        body.AddChild(_serverDirectoryHintLabel);
+
+        _openServerDirectoryButton = CreateActionButton("选择线路", "查看官方推荐和社区已审核服务器，并直接切换目标大厅。", OpenServerDirectoryDialog, primary: true);
+        body.AddChild(_openServerDirectoryButton);
+
+        _submitServerButton = CreateActionButton("提交服务器", "提交新的社区服务器信息，等待后台审核后再展示给玩家。", OpenServerSubmissionDialog);
+        body.AddChild(_submitServerButton);
+
+        _restoreOfficialServerButton = CreateActionButton("恢复官方默认", "清除当前选择或手动覆盖，恢复到安装包内置的官方默认线路。", RestoreBundledServerDefaults);
+        body.AddChild(_restoreOfficialServerButton);
+        return card;
     }
 
     private Control BuildStatusCard()
@@ -660,6 +726,102 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return shell;
     }
 
+    private Control BuildServerDirectoryDialog()
+    {
+        Control shell = CreateDialogShell(out VBoxContainer body);
+        _serverDirectoryDialogContainer = shell;
+
+        body.AddChild(CreateSectionLabel("选择线路"));
+
+        Label description = CreateBodyLabel("服务器目录固定从中心注册表读取。切换线路只影响大厅房间列表和建房/加房目标，不会让你失去换回官方线路的入口。");
+        description.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        description.AddThemeColorOverride("font_color", TextMutedColor);
+        body.AddChild(description);
+
+        _serverDirectoryDialogStatusLabel = CreateBodyLabel("正在加载线路目录。");
+        _serverDirectoryDialogStatusLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        body.AddChild(_serverDirectoryDialogStatusLabel);
+
+        PanelContainer listFrame = CreateSurfacePanel(SurfaceMutedColor, AccentMutedColor, padding: 12);
+        listFrame.CustomMinimumSize = new Vector2(0f, 260f);
+        body.AddChild(listFrame);
+
+        ScrollContainer scroll = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill,
+            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled
+        };
+        listFrame.AddChild(scroll);
+
+        _serverDirectoryDialogList = new VBoxContainer
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        _serverDirectoryDialogList.AddThemeConstantOverride("separation", 10);
+        scroll.AddChild(_serverDirectoryDialogList);
+
+        HBoxContainer buttons = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        buttons.AddThemeConstantOverride("separation", 10);
+        body.AddChild(buttons);
+
+        Button close = CreateActionButton("关闭", "返回大厅，不切换线路。", CloseServerDirectoryDialog);
+        close.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        buttons.AddChild(close);
+
+        Button refresh = CreateActionButton("刷新线路目录", "重新向中心注册表拉取官方和社区服务器列表。", () => TaskHelper.RunSafely(RefreshServerDirectoryAsync(userInitiated: true)), primary: true);
+        refresh.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        buttons.AddChild(refresh);
+        return shell;
+    }
+
+    private Control BuildServerSubmissionDialog()
+    {
+        Control shell = CreateDialogShell(out VBoxContainer body);
+        _serverSubmissionDialogContainer = shell;
+
+        body.AddChild(CreateSectionLabel("提交服务器"));
+
+        Label description = CreateBodyLabel("填写社区服务器的基础信息。提交成功后会进入后台审核队列，审核通过后才会展示给普通玩家。");
+        description.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        description.AddThemeColorOverride("font_color", TextMutedColor);
+        body.AddChild(description);
+
+        body.AddChild(BuildLabeledInputRow("服务器名", string.Empty, out _serverSubmissionDisplayNameInput, "例如：华东社区服"));
+        body.AddChild(BuildLabeledInputRow("地区 / 线路", string.Empty, out _serverSubmissionRegionInput, "例如：杭州 / 上海 / 海外"));
+        body.AddChild(BuildLabeledInputRow("HTTP 地址", string.Empty, out _serverSubmissionBaseUrlInput, "例如：http://203.0.113.10:8787"));
+        body.AddChild(BuildLabeledInputRow("WS 地址", string.Empty, out _serverSubmissionWsUrlInput, "留空时按 HTTP 自动推导 /control"));
+        body.AddChild(BuildLabeledInputRow("测速文件地址", string.Empty, out _serverSubmissionBandwidthUrlInput, "例如：http://203.0.113.10:8787/speed.bin"));
+        body.AddChild(BuildLabeledInputRow("运营者", string.Empty, out _serverSubmissionOperatorInput, "例如：群服管理员名"));
+        body.AddChild(BuildLabeledInputRow("联系方式", string.Empty, out _serverSubmissionContactInput, "例如：QQ / Discord / 邮箱"));
+        body.AddChild(BuildLabeledInputRow("备注", string.Empty, out _serverSubmissionNotesInput, "例如：仅晚间开放 / 带宽 100M"));
+
+        _serverSubmissionDialogErrorLabel = CreateBodyLabel(string.Empty);
+        _serverSubmissionDialogErrorLabel.Visible = false;
+        _serverSubmissionDialogErrorLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        _serverSubmissionDialogErrorLabel.AddThemeColorOverride("font_color", DangerColor);
+        body.AddChild(_serverSubmissionDialogErrorLabel);
+
+        HBoxContainer buttons = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        buttons.AddThemeConstantOverride("separation", 10);
+        body.AddChild(buttons);
+
+        Button cancel = CreateActionButton("取消", "返回大厅，不提交服务器信息。", CloseServerSubmissionDialog);
+        cancel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        buttons.AddChild(cancel);
+
+        Button submit = CreateActionButton("提交审核", "把当前服务器信息提交到中心注册表后台。", () => TaskHelper.RunSafely(SubmitServerDirectoryAsync()), primary: true);
+        submit.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        buttons.AddChild(submit);
+        return shell;
+    }
+
     private Control BuildResumeSlotDialog()
     {
         Control shell = CreateDialogShell(out VBoxContainer body);
@@ -690,6 +852,100 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         cancel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         body.AddChild(cancel);
         return shell;
+    }
+
+    private void OpenServerDirectoryDialog()
+    {
+        if (_serverDirectoryDialogContainer == null)
+        {
+            return;
+        }
+
+        _serverDirectoryDialogContainer.Visible = true;
+        RebuildServerDirectoryDialog();
+        TaskHelper.RunSafely(RefreshServerDirectoryAsync(userInitiated: true));
+    }
+
+    private void CloseServerDirectoryDialog()
+    {
+        if (_serverDirectoryDialogContainer != null)
+        {
+            _serverDirectoryDialogContainer.Visible = false;
+        }
+    }
+
+    private void OpenServerSubmissionDialog()
+    {
+        if (_serverSubmissionDialogContainer == null)
+        {
+            return;
+        }
+
+        ShowServerSubmissionError(string.Empty, visible: false);
+        ClearServerSubmissionInputs();
+        _serverSubmissionDialogContainer.Visible = true;
+    }
+
+    private void CloseServerSubmissionDialog()
+    {
+        if (_serverSubmissionDialogContainer != null)
+        {
+            _serverSubmissionDialogContainer.Visible = false;
+        }
+    }
+
+    private void ShowServerSubmissionError(string message, bool visible = true)
+    {
+        if (_serverSubmissionDialogErrorLabel == null)
+        {
+            return;
+        }
+
+        SetLabelText(_serverSubmissionDialogErrorLabel, message);
+        _serverSubmissionDialogErrorLabel.Visible = visible && !string.IsNullOrWhiteSpace(message);
+    }
+
+    private void ClearServerSubmissionInputs()
+    {
+        if (_serverSubmissionDisplayNameInput != null)
+        {
+            _serverSubmissionDisplayNameInput.Text = string.Empty;
+        }
+
+        if (_serverSubmissionRegionInput != null)
+        {
+            _serverSubmissionRegionInput.Text = string.Empty;
+        }
+
+        if (_serverSubmissionBaseUrlInput != null)
+        {
+            _serverSubmissionBaseUrlInput.Text = string.Empty;
+        }
+
+        if (_serverSubmissionWsUrlInput != null)
+        {
+            _serverSubmissionWsUrlInput.Text = string.Empty;
+        }
+
+        if (_serverSubmissionBandwidthUrlInput != null)
+        {
+            _serverSubmissionBandwidthUrlInput.Text = string.Empty;
+        }
+
+        if (_serverSubmissionOperatorInput != null)
+        {
+            _serverSubmissionOperatorInput.Text = string.Empty;
+        }
+
+        if (_serverSubmissionContactInput != null)
+        {
+            _serverSubmissionContactInput.Text = string.Empty;
+        }
+
+        if (_serverSubmissionNotesInput != null)
+        {
+            _serverSubmissionNotesInput.Text = string.Empty;
+        }
     }
 
     private Control BuildProgressDialog()
@@ -773,6 +1029,418 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         input.Connect(LineEdit.SignalName.FocusExited, Callable.From(PersistSettings));
         row.AddChild(input);
         return row;
+    }
+
+    private async Task RefreshServerDirectoryAsync(bool userInitiated = false)
+    {
+        if (_directoryRefreshInFlight)
+        {
+            return;
+        }
+
+        _directoryRefreshInFlight = true;
+        SetDirectoryStatus(userInitiated ? "正在刷新线路目录..." : "正在同步线路目录...");
+        UpdateActionButtons();
+
+        try
+        {
+            using LobbyDirectoryApiClient apiClient = LobbyDirectoryApiClient.CreateConfigured();
+            IReadOnlyList<LobbyDirectoryServerEntry> servers = await apiClient.GetServersAsync();
+            _directoryServers.Clear();
+            _directoryServers.AddRange(servers);
+
+            _directoryLocalProbeRttMs.Clear();
+            List<Task<KeyValuePair<string, double?>>> probeTasks = new();
+            foreach (LobbyDirectoryServerEntry server in _directoryServers)
+            {
+                probeTasks.Add(MeasureDirectoryServerLocalProbeAsync(server));
+            }
+
+            KeyValuePair<string, double?>[] probeResults = await Task.WhenAll(probeTasks);
+            foreach (KeyValuePair<string, double?> result in probeResults)
+            {
+                _directoryLocalProbeRttMs[result.Key] = result.Value;
+            }
+
+            SetDirectoryStatus(_directoryServers.Count == 0
+                ? "中心注册表当前没有可用线路。"
+                : $"已同步 {_directoryServers.Count} 条线路。");
+        }
+        catch (Exception ex)
+        {
+            SetDirectoryStatus($"线路目录不可用：{ex.Message}");
+        }
+        finally
+        {
+            _directoryRefreshInFlight = false;
+            UpdateServerDirectorySummary();
+            RebuildServerDirectoryDialog();
+            UpdateActionButtons();
+        }
+    }
+
+    private void RebuildServerDirectoryDialog()
+    {
+        if (_serverDirectoryDialogList == null)
+        {
+            return;
+        }
+
+        foreach (Node child in _serverDirectoryDialogList.GetChildren())
+        {
+            child.QueueFree();
+        }
+
+        if (_serverDirectoryDialogStatusLabel != null)
+        {
+            SetLabelText(_serverDirectoryDialogStatusLabel, _lastDirectoryStatusMessage);
+        }
+
+        if (_directoryServers.Count == 0)
+        {
+            _serverDirectoryDialogList.AddChild(CreateEmptyRoomCard(
+                "当前没有可显示的线路。",
+                "你可以先刷新目录，或者提交新的社区服务器等待后台审核。"));
+            return;
+        }
+
+        AddDirectoryServerGroup("官方推荐", "official");
+        AddDirectoryServerGroup("社区已审核", "community");
+    }
+
+    private void AddDirectoryServerGroup(string title, string sourceType)
+    {
+        if (_serverDirectoryDialogList == null)
+        {
+            return;
+        }
+
+        List<LobbyDirectoryServerEntry> matches = new();
+        foreach (LobbyDirectoryServerEntry server in _directoryServers)
+        {
+            if (string.Equals(server.SourceType, sourceType, StringComparison.OrdinalIgnoreCase))
+            {
+                matches.Add(server);
+            }
+        }
+
+        if (matches.Count == 0)
+        {
+            return;
+        }
+
+        _serverDirectoryDialogList.AddChild(CreateSectionLabel(title));
+        foreach (LobbyDirectoryServerEntry server in matches)
+        {
+            _serverDirectoryDialogList.AddChild(CreateDirectoryServerCard(server));
+        }
+    }
+
+    private Control CreateDirectoryServerCard(LobbyDirectoryServerEntry server)
+    {
+        bool isCurrent = IsCurrentDirectoryServer(server);
+        Color border = isCurrent ? AccentColor : AccentMutedColor;
+        PanelContainer card = CreateSurfacePanel(
+            new Color(0.06f, 0.06f, 0.07f, 0.96f),
+            border,
+            radius: 16,
+            borderWidth: isCurrent ? 2 : 1,
+            padding: 18);
+
+        VBoxContainer body = new();
+        body.AddThemeConstantOverride("separation", 10);
+        card.AddChild(body);
+
+        Label title = CreateTitleLabel(server.DisplayName, 22);
+        title.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        body.AddChild(title);
+
+        Label meta = CreateBodyLabel($"{FormatDirectorySource(server.SourceType)} · {server.RegionLabel} · 运行 {FormatDirectoryRuntime(server.RuntimeState)} · 质量 {FormatDirectoryQuality(server.QualityGrade)}");
+        meta.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        meta.AddThemeColorOverride("font_color", TextStrongColor);
+        body.AddChild(meta);
+
+        string localProbe = _directoryLocalProbeRttMs.TryGetValue(server.Id, out double? localRtt)
+            ? localRtt.HasValue ? $"本地探测 {localRtt.Value:0}ms" : "本地探测不可用"
+            : "等待本地探测";
+        string centralProbe = server.LastProbeRttMs.HasValue
+            ? $"中心探针 {server.LastProbeRttMs.Value:0}ms"
+            : "中心探针暂无结果";
+        string bandwidth = server.LastBandwidthMbps.HasValue
+            ? $"测速 {server.LastBandwidthMbps.Value:0.0}Mbps"
+            : "测速暂无结果";
+        Label hint = CreateBodyLabel($"{localProbe} · {centralProbe} · {bandwidth}");
+        hint.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        hint.AddThemeColorOverride("font_color", TextMutedColor);
+        body.AddChild(hint);
+
+        if (!string.IsNullOrWhiteSpace(server.FailureReason))
+        {
+            Label failure = CreateBodyLabel($"最近异常：{server.FailureReason}");
+            failure.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+            failure.AddThemeColorOverride("font_color", DangerColor);
+            body.AddChild(failure);
+        }
+
+        string actionText = isCurrent ? "当前线路" : "切换到此线路";
+        Button action = CreateActionButton(
+            actionText,
+            "把当前大厅目标切换到这条线路；中心注册表入口会继续保留。",
+            () => ApplySelectedDirectoryServer(server),
+            primary: !isCurrent);
+        action.Disabled = isCurrent;
+        body.AddChild(action);
+        return card;
+    }
+
+    private async Task<KeyValuePair<string, double?>> MeasureDirectoryServerLocalProbeAsync(LobbyDirectoryServerEntry server)
+    {
+        try
+        {
+            using LobbyApiClient apiClient = new(server.BaseUrl, server.WsUrl);
+            double rtt = await apiClient.MeasureProbeRttAsync();
+            return new KeyValuePair<string, double?>(server.Id, rtt);
+        }
+        catch
+        {
+            return new KeyValuePair<string, double?>(server.Id, null);
+        }
+    }
+
+    private void ApplySelectedDirectoryServer(LobbyDirectoryServerEntry server)
+    {
+        if (IsBundledOfficialServer(server))
+        {
+            RestoreBundledServerDefaults();
+            return;
+        }
+
+        LanConnectConfig.SelectedServerId = server.Id;
+        LanConnectConfig.LobbyServerBaseUrl = server.BaseUrl;
+        LanConnectConfig.LobbyServerWsUrl = server.WsUrl;
+        SyncSettingsInputsFromConfig();
+        UpdateServerDirectorySummary();
+        CloseServerDirectoryDialog();
+        SetStatus($"已切换到线路“{server.DisplayName}”。");
+        TaskHelper.RunSafely(RefreshRoomsAsync(userInitiated: true));
+    }
+
+    private void RestoreBundledServerDefaults()
+    {
+        LanConnectConfig.SelectedServerId = string.Empty;
+        LanConnectConfig.LobbyServerBaseUrl = string.Empty;
+        LanConnectConfig.LobbyServerWsUrl = string.Empty;
+        SyncSettingsInputsFromConfig();
+        UpdateServerDirectorySummary();
+        CloseServerDirectoryDialog();
+        SetStatus("已恢复官方默认线路。");
+        TaskHelper.RunSafely(RefreshRoomsAsync(userInitiated: true));
+    }
+
+    private async Task SubmitServerDirectoryAsync()
+    {
+        ShowServerSubmissionError(string.Empty, visible: false);
+
+        try
+        {
+            using LobbyDirectoryApiClient apiClient = LobbyDirectoryApiClient.CreateConfigured();
+            await apiClient.SubmitServerAsync(new LobbyDirectorySubmissionRequest
+            {
+                DisplayName = _serverSubmissionDisplayNameInput?.Text.Trim() ?? string.Empty,
+                RegionLabel = _serverSubmissionRegionInput?.Text.Trim() ?? string.Empty,
+                BaseUrl = _serverSubmissionBaseUrlInput?.Text.Trim() ?? string.Empty,
+                WsUrl = NormalizeOptionalSubmissionField(_serverSubmissionWsUrlInput?.Text),
+                BandwidthProbeUrl = NormalizeOptionalSubmissionField(_serverSubmissionBandwidthUrlInput?.Text),
+                OperatorName = _serverSubmissionOperatorInput?.Text.Trim() ?? string.Empty,
+                Contact = _serverSubmissionContactInput?.Text.Trim() ?? string.Empty,
+                Notes = NormalizeOptionalSubmissionField(_serverSubmissionNotesInput?.Text)
+            });
+
+            CloseServerSubmissionDialog();
+            SetStatus("服务器信息已提交，等待后台审核。");
+            await RefreshServerDirectoryAsync(userInitiated: true);
+        }
+        catch (Exception ex)
+        {
+            ShowServerSubmissionError(ex.Message);
+        }
+    }
+
+    private void UpdateServerDirectorySummary()
+    {
+        if (_serverDirectorySummaryLabel == null || _serverDirectoryHintLabel == null)
+        {
+            return;
+        }
+
+        string summary;
+        string hint;
+        Color color;
+
+        LobbyDirectoryServerEntry? selectedServer = FindDirectoryServer(LanConnectConfig.SelectedServerId);
+        if (selectedServer != null)
+        {
+            summary = $"当前线路：{selectedServer.DisplayName} · {FormatDirectoryRuntime(selectedServer.RuntimeState)} · 质量 {FormatDirectoryQuality(selectedServer.QualityGrade)}";
+            hint = BuildDirectoryProbeSummary(selectedServer);
+            color = AccentColor;
+        }
+        else if (!string.IsNullOrWhiteSpace(LanConnectConfig.SelectedServerId))
+        {
+            summary = "当前线路：已选择目录服务器，等待目录详情同步。";
+            hint = "中心注册表刷新完成后会显示这条线路的状态、探针和测速信息。";
+            color = AccentColor;
+        }
+        else if (LanConnectConfig.HasLobbyServerOverrides)
+        {
+            summary = "当前线路：手动覆盖模式。";
+            hint = "你手动填写了 HTTP/WS 覆盖地址。重新从线路目录中选择服务器，或点击“恢复官方默认”，即可退出手动模式。";
+            color = DangerColor;
+        }
+        else
+        {
+            LobbyDirectoryServerEntry? officialServer = FindBundledOfficialDirectoryServer();
+            if (officialServer != null)
+            {
+                summary = $"当前线路：官方默认 · {officialServer.DisplayName} · {FormatDirectoryRuntime(officialServer.RuntimeState)}";
+                hint = BuildDirectoryProbeSummary(officialServer);
+                color = SuccessColor;
+            }
+            else
+            {
+                summary = "当前线路：官方默认。";
+                hint = "当前使用安装包内置的官方默认线路。中心注册表刷新后会显示这条线路的运行状态。";
+                color = SuccessColor;
+            }
+        }
+
+        SetLabelText(_serverDirectorySummaryLabel, summary);
+        _serverDirectorySummaryLabel.AddThemeColorOverride("font_color", color);
+        SetLabelText(_serverDirectoryHintLabel, hint);
+        _serverDirectoryHintLabel.AddThemeColorOverride("font_color", TextMutedColor);
+    }
+
+    private string BuildDirectoryProbeSummary(LobbyDirectoryServerEntry server)
+    {
+        string localProbe = _directoryLocalProbeRttMs.TryGetValue(server.Id, out double? localRtt)
+            ? localRtt.HasValue ? $"本地探测约 {localRtt.Value:0}ms" : "本地探测暂不可用"
+            : "等待本地探测";
+        string centralProbe = server.LastProbeRttMs.HasValue
+            ? $"中心探针 {server.LastProbeRttMs.Value:0}ms"
+            : "中心探针暂无结果";
+        string bandwidth = server.LastBandwidthMbps.HasValue
+            ? $"测速 {server.LastBandwidthMbps.Value:0.0}Mbps"
+            : "测速暂无结果";
+        return $"{localProbe} · {centralProbe} · {bandwidth}";
+    }
+
+    private void SetDirectoryStatus(string message)
+    {
+        _lastDirectoryStatusMessage = message;
+        if (_serverDirectoryDialogStatusLabel != null)
+        {
+            SetLabelText(_serverDirectoryDialogStatusLabel, message);
+        }
+    }
+
+    private LobbyDirectoryServerEntry? FindDirectoryServer(string? serverId)
+    {
+        if (string.IsNullOrWhiteSpace(serverId))
+        {
+            return null;
+        }
+
+        foreach (LobbyDirectoryServerEntry server in _directoryServers)
+        {
+            if (string.Equals(server.Id, serverId, StringComparison.Ordinal))
+            {
+                return server;
+            }
+        }
+
+        return null;
+    }
+
+    private LobbyDirectoryServerEntry? FindBundledOfficialDirectoryServer()
+    {
+        string bundledBaseUrl = NormalizeEndpointForComparison(LanConnectLobbyEndpointDefaults.GetDefaultBaseUrl());
+        string bundledWsUrl = NormalizeEndpointForComparison(LanConnectLobbyEndpointDefaults.GetDefaultWsUrl());
+        foreach (LobbyDirectoryServerEntry server in _directoryServers)
+        {
+            if (string.Equals(server.SourceType, "official", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(NormalizeEndpointForComparison(server.BaseUrl), bundledBaseUrl, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(NormalizeEndpointForComparison(server.WsUrl), bundledWsUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                return server;
+            }
+        }
+
+        return null;
+    }
+
+    private bool IsBundledOfficialServer(LobbyDirectoryServerEntry server)
+    {
+        return string.Equals(server.SourceType, "official", StringComparison.OrdinalIgnoreCase)
+               && string.Equals(
+                   NormalizeEndpointForComparison(server.BaseUrl),
+                   NormalizeEndpointForComparison(LanConnectLobbyEndpointDefaults.GetDefaultBaseUrl()),
+                   StringComparison.OrdinalIgnoreCase)
+               && string.Equals(
+                   NormalizeEndpointForComparison(server.WsUrl),
+                   NormalizeEndpointForComparison(LanConnectLobbyEndpointDefaults.GetDefaultWsUrl()),
+                   StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool IsCurrentDirectoryServer(LobbyDirectoryServerEntry server)
+    {
+        if (!string.IsNullOrWhiteSpace(LanConnectConfig.SelectedServerId))
+        {
+            return string.Equals(LanConnectConfig.SelectedServerId, server.Id, StringComparison.Ordinal);
+        }
+
+        return !LanConnectConfig.HasLobbyServerOverrides && IsBundledOfficialServer(server);
+    }
+
+    private static string? NormalizeOptionalSubmissionField(string? value)
+    {
+        string trimmed = value?.Trim() ?? string.Empty;
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
+
+    private static string NormalizeEndpointForComparison(string value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim().TrimEnd('/');
+    }
+
+    private static string FormatDirectorySource(string sourceType)
+    {
+        return string.Equals(sourceType, "official", StringComparison.OrdinalIgnoreCase)
+            ? "官方推荐"
+            : "社区已审核";
+    }
+
+    private static string FormatDirectoryRuntime(string runtimeState)
+    {
+        return runtimeState.Trim().ToLowerInvariant() switch
+        {
+            "online" => "在线",
+            "degraded" => "波动",
+            "maintenance" => "维护中",
+            _ => "离线"
+        };
+    }
+
+    private static string FormatDirectoryQuality(string qualityGrade)
+    {
+        return qualityGrade.Trim().ToLowerInvariant() switch
+        {
+            "excellent" => "优秀",
+            "good" => "良好",
+            "fair" => "一般",
+            "poor" => "较差",
+            _ => "未知"
+        };
     }
 
     private async Task RefreshRoomsAsync(bool userInitiated = false)
@@ -1714,22 +2382,19 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void PersistSettings()
     {
+        string nextBaseUrl = _serverBaseUrlInput?.Text.Trim() ?? string.Empty;
+        string nextWsUrl = _serverWsUrlInput?.Text.Trim() ?? string.Empty;
         if (_displayNameInput != null)
         {
             LanConnectConfig.PlayerDisplayName = _displayNameInput.Text.Trim();
         }
 
-        if (_serverBaseUrlInput != null)
-        {
-            LanConnectConfig.LobbyServerBaseUrl = _serverBaseUrlInput.Text.Trim();
-        }
-
-        if (_serverWsUrlInput != null)
-        {
-            LanConnectConfig.LobbyServerWsUrl = _serverWsUrlInput.Text.Trim();
-        }
+        LanConnectConfig.LobbyServerBaseUrl = nextBaseUrl;
+        LanConnectConfig.LobbyServerWsUrl = nextWsUrl;
+        SyncSelectedServerIdWithEffectiveEndpoints(nextBaseUrl, nextWsUrl);
 
         UpdateNetworkSummary();
+        UpdateServerDirectorySummary();
     }
 
     private void OnDisplayNameChanged(string nextValue)
@@ -1762,6 +2427,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         UpdateNetworkSummary();
+        UpdateServerDirectorySummary();
         UpdateNetworkFieldMasking();
     }
 
@@ -1869,6 +2535,21 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _refreshButton.Disabled = refreshBusy || actionBusy;
         }
 
+        if (_openServerDirectoryButton != null)
+        {
+            _openServerDirectoryButton.Disabled = _directoryRefreshInFlight;
+        }
+
+        if (_submitServerButton != null)
+        {
+            _submitServerButton.Disabled = false;
+        }
+
+        if (_restoreOfficialServerButton != null)
+        {
+            _restoreOfficialServerButton.Disabled = !LanConnectConfig.HasLobbyServerOverrides && string.IsNullOrWhiteSpace(LanConnectConfig.SelectedServerId);
+        }
+
         if (_createButton != null)
         {
             _createButton.Disabled = createDisabledReason != null;
@@ -1926,6 +2607,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_actionAvailabilityLabel != null)
         {
             List<string> lines = new();
+            if (_directoryRefreshInFlight)
+            {
+                lines.Add("线路目录同步中；不影响当前房间列表的刷新和加入。");
+            }
+
             lines.Add(createDisabledReason == null ? "创建房间：可用。" : $"创建房间：不可用，{createDisabledReason}");
             if (createWarning != null)
             {
@@ -1943,7 +2629,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                 "font_color",
                 createDisabledReason != null || joinDisabledReason != null
                     ? DangerColor
-                    : createWarning != null || refreshBusy
+                    : createWarning != null || refreshBusy || _directoryRefreshInFlight
                         ? AccentColor
                         : SuccessColor);
         }
@@ -2078,7 +2764,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         string summary;
         Color color;
-        if (LanConnectConfig.HasLobbyServerOverrides)
+        if (!string.IsNullOrWhiteSpace(LanConnectConfig.SelectedServerId))
+        {
+            summary = "当前网络：已通过线路目录切换到指定服务器。覆盖地址仍会写入本地配置，但其来源是目录选择，不是手动输入。";
+            color = AccentColor;
+        }
+        else if (LanConnectConfig.HasLobbyServerOverrides)
         {
             summary = "当前网络：已启用手动覆盖地址。覆盖值默认遮罩显示，不会回显打包默认地址。";
             color = AccentColor;
@@ -2096,6 +2787,35 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         SetLabelText(_networkSummaryLabel, summary);
         _networkSummaryLabel.AddThemeColorOverride("font_color", color);
+    }
+
+    private void SyncSelectedServerIdWithEffectiveEndpoints(string effectiveBaseUrl, string effectiveWsUrl)
+    {
+        string selectedServerId = LanConnectConfig.SelectedServerId;
+        if (string.IsNullOrWhiteSpace(selectedServerId) || _directoryServers.Count == 0)
+        {
+            return;
+        }
+
+        LobbyDirectoryServerEntry? selectedServer = FindDirectoryServer(selectedServerId);
+        if (selectedServer == null)
+        {
+            LanConnectConfig.SelectedServerId = string.Empty;
+            return;
+        }
+
+        bool matches = string.Equals(
+                           NormalizeEndpointForComparison(effectiveBaseUrl),
+                           NormalizeEndpointForComparison(selectedServer.BaseUrl),
+                           StringComparison.OrdinalIgnoreCase)
+                       && string.Equals(
+                           NormalizeEndpointForComparison(string.IsNullOrWhiteSpace(effectiveWsUrl) ? selectedServer.WsUrl : effectiveWsUrl),
+                           NormalizeEndpointForComparison(selectedServer.WsUrl),
+                           StringComparison.OrdinalIgnoreCase);
+        if (!matches)
+        {
+            LanConnectConfig.SelectedServerId = string.Empty;
+        }
     }
 
     private void SetStatus(string message)
