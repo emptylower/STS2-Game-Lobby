@@ -74,7 +74,7 @@ internal static class LanConnectBuildInfo
             return new List<string>(_cachedModList);
         }
 
-        List<string> mods = ModManager.GetGameplayRelevantModNameList()?
+        List<string> mods = GetGameplayRelevantModNames()?
             .Where(static value => !string.IsNullOrWhiteSpace(value))
             .Select(static value => value.Trim())
             .Distinct(StringComparer.Ordinal)
@@ -83,6 +83,29 @@ internal static class LanConnectBuildInfo
             ?? new List<string>();
         _cachedModList = mods;
         return new List<string>(mods);
+    }
+
+    private static IEnumerable<string>? GetGameplayRelevantModNames()
+    {
+        try
+        {
+            MethodInfo? preferred = typeof(ModManager).GetMethod("GetGameplayRelevantModNameList", BindingFlags.Public | BindingFlags.Static);
+            if (preferred?.Invoke(null, null) is IEnumerable<string> preferredList)
+            {
+                return preferredList;
+            }
+
+            MethodInfo? fallback = typeof(ModManager).GetMethod("GetModNameList", BindingFlags.Public | BindingFlags.Static);
+            if (fallback?.Invoke(null, null) is IEnumerable<string> fallbackList)
+            {
+                return fallbackList;
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
     }
 
     private static string ResolveModDirectory()

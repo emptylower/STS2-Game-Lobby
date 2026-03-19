@@ -51,11 +51,11 @@ npm run build
 npm start
 ```
 
-默认监听：
+默认监听（双栈推荐）：
 
-- HTTP: `http://0.0.0.0:8787`
-- WebSocket: `ws://0.0.0.0:8787/control`
-- Relay UDP: `udp://0.0.0.0:39000-39511`
+- HTTP: `http://[::]:8787`
+- WebSocket: `ws://[::]:8787/control`
+- Relay UDP: `udp://[::]:39000-39511`
 
 公网部署时至少需要放行：
 

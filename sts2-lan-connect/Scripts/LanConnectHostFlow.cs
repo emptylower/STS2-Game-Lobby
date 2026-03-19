@@ -58,7 +58,7 @@ internal static class LanConnectHostFlow
 
             await Task.Yield();
             string ip = LanConnectNetUtil.GetPrimaryLanAddress();
-            LanConnectPopupUtil.ShowInfo($"LAN 主机已启动。\n把这个地址发给好友：{ip}:{LanConnectConstants.DefaultPort}");
+            LanConnectPopupUtil.ShowInfo($"LAN 主机已启动。\n把这个地址发给好友：{LanConnectNetUtil.FormatEndpoint(ip, LanConnectConstants.DefaultPort)}");
         }
         catch
         {
@@ -121,7 +121,7 @@ internal static class LanConnectHostFlow
             string primaryAddress = LanConnectNetUtil.GetPrimaryLanAddress();
             string lockStatus = string.IsNullOrWhiteSpace(password) ? "无密码" : "已加锁";
             LanConnectPopupUtil.ShowInfo(
-                $"大厅房间已发布。\n房间名：{roomName}\n状态：{lockStatus}\n本地 ENet：{primaryAddress}:{LanConnectConstants.DefaultPort}\n好友现在可以从“游戏大厅”直接加入。");
+                $"大厅房间已发布。\n房间名：{roomName}\n状态：{lockStatus}\n本地 ENet：{LanConnectNetUtil.FormatEndpoint(primaryAddress, LanConnectConstants.DefaultPort)}\n好友现在可以从“游戏大厅”直接加入。");
             return true;
         }
         catch (LobbyServiceException ex)

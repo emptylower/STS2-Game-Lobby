@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -26,6 +27,7 @@ internal sealed class LanConnectLobbyRelayHostTunnel : IAsyncDisposable
     private readonly string _roomId;
     private readonly string _hostToken;
     private readonly string _relayHost;
+    private readonly IPAddress _relayAddress;
     private readonly int _relayPort;
     private readonly Task _receiveTask;
     private readonly Task _registerTask;
@@ -34,11 +36,20 @@ internal sealed class LanConnectLobbyRelayHostTunnel : IAsyncDisposable
     {
         _roomId = roomId;
         _hostToken = hostToken;
-        _relayHost = relayEndpoint.Host;
+        _relayHost = TrimIpv6Brackets(relayEndpoint.Host);
         _relayPort = relayEndpoint.Port;
-        _relaySocket = new UdpClient(AddressFamily.InterNetwork);
-        _relaySocket.Connect(_relayHost, _relayPort);
-        GD.Print($"sts2_lan_connect relay host tunnel: starting roomId={_roomId} relay={_relayHost}:{_relayPort}");
+        _relayAddress = ResolveRelayAddress(_relayHost);
+        bool useIpv6Socket = _relayAddress.AddressFamily == AddressFamily.InterNetworkV6;
+        _relaySocket = useIpv6Socket
+            ? new UdpClient(AddressFamily.InterNetworkV6)
+            : new UdpClient(AddressFamily.InterNetwork);
+        if (useIpv6Socket)
+        {
+            _relaySocket.Client.DualMode = true;
+        }
+
+        _relaySocket.Connect(_relayAddress, _relayPort);
+        GD.Print($"sts2_lan_connect relay host tunnel: starting roomId={_roomId} relayHost={_relayHost} relayIp={LanConnectNetUtil.FormatEndpoint(_relayAddress.ToString(), _relayPort)}");
         _receiveTask = Task.Run(ReceiveLoopAsync);
         _registerTask = Task.Run(RegisterLoopAsync);
     }
@@ -197,6 +208,77 @@ internal sealed class LanConnectLobbyRelayHostTunnel : IAsyncDisposable
         clientId = BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(Magic.Length + 1, 4));
         payload = buffer[(Magic.Length + 5)..];
         return true;
+    }
+
+    private static string TrimIpv6Brackets(string value)
+    {
+        if (value.StartsWith("[", StringComparison.Ordinal) && value.EndsWith("]", StringComparison.Ordinal))
+        {
+            return value[1..^1];
+        }
+
+        return value;
+    }
+
+    private static IPAddress ResolveRelayAddress(string host)
+    {
+        string trimmed = TrimIpv6Brackets(host).Trim();
+        if (IPAddress.TryParse(trimmed, out IPAddress? address))
+        {
+            return address;
+        }
+
+        IPAddress[] addresses = Dns.GetHostAddresses(trimmed);
+        if (addresses.Length == 0)
+        {
+            throw new InvalidOperationException($"No IP address resolved for relay host '{trimmed}'.");
+        }
+
+        bool preferIpv6 = HasUsableIpv6();
+        IPAddress? ipv6 = null;
+        IPAddress? ipv4 = null;
+        foreach (IPAddress candidate in addresses)
+        {
+            if (candidate.AddressFamily == AddressFamily.InterNetworkV6 && ipv6 == null)
+            {
+                ipv6 = candidate;
+            }
+            else if (candidate.AddressFamily == AddressFamily.InterNetwork && ipv4 == null)
+            {
+                ipv4 = candidate;
+            }
+        }
+
+        if (preferIpv6 && ipv6 != null)
+        {
+            return ipv6;
+        }
+
+        return ipv4 ?? ipv6 ?? addresses[0]!;
+    }
+
+    private static bool HasUsableIpv6()
+    {
+        foreach (NetworkInterface nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up || nic.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+            {
+                continue;
+            }
+
+            foreach (UnicastIPAddressInformation info in nic.GetIPProperties().UnicastAddresses)
+            {
+                IPAddress address = info.Address;
+                if (address.AddressFamily == AddressFamily.InterNetworkV6 &&
+                    !address.IsIPv6LinkLocal &&
+                    !address.IsIPv6Multicast)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private sealed class RelayPeerProxy : IAsyncDisposable
