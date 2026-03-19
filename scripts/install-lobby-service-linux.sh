@@ -314,7 +314,7 @@ cat > "$START_SCRIPT" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$APP_DIR"
-exec "$NPM_BIN" start
+exec "$NODE_BIN" --enable-source-maps "$APP_DIR/dist/server.js"
 EOF
 chmod +x "$START_SCRIPT"
 
@@ -348,7 +348,7 @@ After=network.target
 Type=simple
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$ENV_FILE
-ExecStart=$NPM_BIN start
+ExecStart=$NODE_BIN --enable-source-maps $APP_DIR/dist/server.js
 Restart=always
 RestartSec=3
 User=$RUN_AS_USER
