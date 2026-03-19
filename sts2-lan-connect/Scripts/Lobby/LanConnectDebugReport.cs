@@ -30,6 +30,9 @@ internal static class LanConnectDebugReport
         string writableDataDirectory = LanConnectPaths.ResolveWritableDataDirectory();
         string configPath = Path.Combine(writableDataDirectory, "config.json");
         string? logPath = ResolveClientLogPath();
+        string configuredPlayerName = LanConnectConfig.PlayerDisplayName;
+        string fallbackUserName = System.Environment.UserName;
+        string effectivePlayerName = LanConnectConfig.GetEffectivePlayerDisplayName();
         string effectiveBaseUrl = LanConnectConfig.LobbyServerBaseUrl;
         string effectiveWsUrl = LanConnectConfig.LobbyServerWsUrl;
         IReadOnlyList<string> logLines = ReadRelevantLogLines(logPath);
@@ -41,7 +44,11 @@ internal static class LanConnectDebugReport
         builder.AppendLine($"game_version: {LanConnectBuildInfo.GetGameVersion()}");
         builder.AppendLine($"mod_version: {LanConnectBuildInfo.GetModVersion()}");
         builder.AppendLine($"gameplay_relevant_mods: {FormatList(LanConnectBuildInfo.GetModList())}");
-        builder.AppendLine($"player_name: {LanConnectConfig.GetEffectivePlayerDisplayName()}");
+        builder.AppendLine($"player_name: {effectivePlayerName}");
+        builder.AppendLine($"player_name_source: {DescribePlayerNameSource(configuredPlayerName)}");
+        builder.AppendLine($"configured_player_name: {FormatValue(configuredPlayerName)}");
+        builder.AppendLine($"fallback_system_user_name: {FormatValue(fallbackUserName)}");
+        builder.AppendLine($"fallback_user_name_looks_like_android_uid: {LooksLikeAndroidUidUserName(fallbackUserName)}");
         builder.AppendLine($"primary_platform: {PlatformUtil.PrimaryPlatform}");
         builder.AppendLine($"local_platform_player_id: {TryGetLocalPlayerId()}");
         builder.AppendLine($"platform: {RuntimeInformation.OSDescription}");
@@ -192,6 +199,19 @@ internal static class LanConnectDebugReport
         {
             return $"<failed:{ex.GetType().Name}>";
         }
+    }
+
+    private static string DescribePlayerNameSource(string configuredPlayerName)
+    {
+        return string.IsNullOrWhiteSpace(configuredPlayerName)
+            ? "environment_user_name"
+            : "configured";
+    }
+
+    private static bool LooksLikeAndroidUidUserName(string value)
+    {
+        return !string.IsNullOrWhiteSpace(value)
+               && Regex.IsMatch(value, @"^u\d+_a\d+$", RegexOptions.CultureInvariant);
     }
 
     private static string FormatPlayerCounts(LobbyRoomSummary? room)

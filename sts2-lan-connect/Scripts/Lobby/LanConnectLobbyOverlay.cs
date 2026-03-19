@@ -288,6 +288,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         body.AddChild(intro);
 
         body.AddChild(BuildLabeledInputRow("玩家名", LanConnectConfig.PlayerDisplayName, out _displayNameInput, "留空时自动使用当前系统用户名"));
+        if (_displayNameInput != null)
+        {
+            _displayNameInput.Connect(LineEdit.SignalName.TextChanged, Callable.From<string>(OnDisplayNameChanged));
+        }
 
         _networkSummaryLabel = CreateBodyLabel(string.Empty);
         _networkSummaryLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
@@ -1725,6 +1729,18 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             LanConnectConfig.LobbyServerWsUrl = _serverWsUrlInput.Text.Trim();
         }
 
+        UpdateNetworkSummary();
+    }
+
+    private void OnDisplayNameChanged(string nextValue)
+    {
+        string trimmed = nextValue.Trim();
+        if (string.Equals(LanConnectConfig.PlayerDisplayName, trimmed, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        LanConnectConfig.PlayerDisplayName = trimmed;
         UpdateNetworkSummary();
     }
 
