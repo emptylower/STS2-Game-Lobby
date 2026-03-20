@@ -128,6 +128,7 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                 publishSource: $"continue_save:{context.ScreenType}",
                 boundSaveKey: binding.SaveKey,
                 savedRunInfo: savedRunInfo,
+                maxPlayers: LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
                 notifyOnFailure: false);
             if (!published)
             {

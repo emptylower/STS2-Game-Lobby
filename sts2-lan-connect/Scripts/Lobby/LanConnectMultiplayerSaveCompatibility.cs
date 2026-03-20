@@ -87,7 +87,8 @@ internal static class LanConnectMultiplayerSaveCompatibility
         try
         {
             NetHostGameService netService = new();
-            NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, LanConnectConstants.DefaultMaxPlayers);
+            int maxPlayers = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
+            NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, maxPlayers);
             if (error.HasValue)
             {
                 NErrorPopup? popup = NErrorPopup.Create(error.Value);
