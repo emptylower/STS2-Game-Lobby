@@ -54,7 +54,11 @@ class RoomRelaySession {
     private readonly config: RelayManagerConfig,
     private readonly logEvent: (event: RelayLogEvent) => void,
   ) {
-    this.socket = dgram.createSocket("udp4");
+    const socketType = resolveRelaySocketType(bindHost);
+    this.socket =
+      socketType === "udp6"
+        ? dgram.createSocket({ type: "udp6", ipv6Only: false })
+        : dgram.createSocket("udp4");
     this.socket.on("message", (message, remote) => {
       this.handleMessage(message, remote);
     });
@@ -69,7 +73,7 @@ class RoomRelaySession {
       this.logEvent({
         phase: "relay_listening",
         roomId: this.roomId,
-        detail: `udp://${bindHost}:${this.port}`,
+        detail: `udp://${formatUdpEndpoint(bindHost, this.port)}`,
       });
     });
   }
@@ -98,7 +102,7 @@ class RoomRelaySession {
       return null;
     }
 
-    return `${this.hostEndpoint.address}:${this.hostEndpoint.port}`;
+    return formatUdpEndpoint(this.hostEndpoint.address, this.hostEndpoint.port);
   }
 
   getClientCount() {
@@ -110,7 +114,7 @@ class RoomRelaySession {
       this.logEvent({
         phase: "relay_host_idle",
         roomId: this.roomId,
-        detail: `${this.hostEndpoint.address}:${this.hostEndpoint.port}`,
+        detail: formatUdpEndpoint(this.hostEndpoint.address, this.hostEndpoint.port),
       });
       this.hostEndpoint = undefined;
       this.hostLastSeenAt = 0;
@@ -155,7 +159,7 @@ class RoomRelaySession {
         this.logEvent({
           phase: "relay_host_register_rejected",
           roomId: this.roomId,
-          detail: `${remote.address}:${remote.port}`,
+          detail: formatUdpEndpoint(remote.address, remote.port),
         });
         return;
       }
@@ -167,7 +171,7 @@ class RoomRelaySession {
         this.logEvent({
           phase: "relay_host_registered",
           roomId: this.roomId,
-          detail: `${remote.address}:${remote.port}`,
+          detail: formatUdpEndpoint(remote.address, remote.port),
         });
       }
       return;
@@ -177,7 +181,7 @@ class RoomRelaySession {
       this.logEvent({
         phase: "relay_host_data_rejected",
         roomId: this.roomId,
-        detail: `${remote.address}:${remote.port}`,
+        detail: formatUdpEndpoint(remote.address, remote.port),
       });
       return;
     }
@@ -272,7 +276,7 @@ export class RoomRelayManager {
     this.logEvent({
       phase: "relay_allocated",
       roomId,
-      detail: `udp://${advertisedHost}:${port}`,
+      detail: `udp://${formatUdpEndpoint(advertisedHost, port)}`,
     });
     return session.getEndpoint();
   }
@@ -399,4 +403,18 @@ function encodeClientData(clientId: number, payload: Buffer) {
   header.writeUInt8(MESSAGE_TYPE_CLIENT_DATA, MAGIC.length);
   header.writeUInt32BE(clientId >>> 0, MAGIC.length + 1);
   return Buffer.concat([header, payload]);
+}
+
+function resolveRelaySocketType(bindHost: string): "udp4" | "udp6" {
+  const normalized = bindHost.trim().replace(/^\[(.*)\]$/, "$1");
+  return normalized.includes(":") ? "udp6" : "udp4";
+}
+
+function formatUdpEndpoint(host: string, port: number) {
+  const normalized = host.trim();
+  if (normalized.includes(":") && !normalized.startsWith("[") && !normalized.endsWith("]")) {
+    return `[${normalized}]:${port}`;
+  }
+
+  return `${normalized}:${port}`;
 }

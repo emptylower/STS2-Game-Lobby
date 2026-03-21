@@ -52,7 +52,7 @@ internal static class LanConnectLobbyJoinFlow
                 try
                 {
                     ENetClientConnectionInitializer initializer = new(netId, candidate.Host, candidate.Port);
-                    Log.Info($"sts2_lan_connect attempting lobby join via {candidate.Host}:{candidate.Port} ({candidate.Label}) using netId={netId}.");
+                    Log.Info($"sts2_lan_connect attempting lobby join via {LanConnectNetUtil.FormatEndpoint(candidate.Host, candidate.Port)} ({candidate.Label}) using netId={netId}.");
                     JoinResult joinResult = await joinFlow.BeginAsync(initializer, stack.GetTree());
                     _ = TaskHelper.RunSafely(ReportConnectionEventSafeAsync(
                         joinResponse.Room.RoomId,
@@ -74,7 +74,7 @@ internal static class LanConnectLobbyJoinFlow
                 {
                     lastConnectionFailure = ex;
                     joinFlow.NetService?.Disconnect(ex.info.GetReason());
-                    Log.Warn($"sts2_lan_connect lobby join candidate {candidate.Host}:{candidate.Port} failed: {ex.info}");
+                    Log.Warn($"sts2_lan_connect lobby join candidate {LanConnectNetUtil.FormatEndpoint(candidate.Host, candidate.Port)} failed: {ex.info}");
                     _ = TaskHelper.RunSafely(ReportConnectionEventSafeAsync(
                         joinResponse.Room.RoomId,
                         joinResponse.TicketId,
@@ -101,7 +101,7 @@ internal static class LanConnectLobbyJoinFlow
                 {
                     lastUnexpectedFailure = ex;
                     joinFlow.NetService?.Disconnect(NetError.InternalError);
-                    Log.Error($"sts2_lan_connect unexpected lobby join error via {candidate.Host}:{candidate.Port}: {ex}");
+                    Log.Error($"sts2_lan_connect unexpected lobby join error via {LanConnectNetUtil.FormatEndpoint(candidate.Host, candidate.Port)}: {ex}");
                     _ = TaskHelper.RunSafely(ReportConnectionEventSafeAsync(
                         joinResponse.Room.RoomId,
                         joinResponse.TicketId,
@@ -286,7 +286,7 @@ internal static class LanConnectLobbyJoinFlow
                 TicketId = ticketId,
                 Phase = phase,
                 CandidateLabel = candidate.Label,
-                CandidateEndpoint = $"{candidate.Host}:{candidate.Port}",
+                CandidateEndpoint = LanConnectNetUtil.FormatEndpoint(candidate.Host, candidate.Port),
                 Detail = detail,
                 PlayerName = LanConnectConfig.GetEffectivePlayerDisplayName()
             });

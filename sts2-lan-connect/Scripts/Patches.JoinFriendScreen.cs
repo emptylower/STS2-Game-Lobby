@@ -96,7 +96,7 @@ internal static class JoinFriendScreenPatches
         NMegaLineEdit endpointInput = new()
         {
             Name = LanConnectConstants.EndpointInputName,
-            PlaceholderText = "输入 IPv4 或 IPv4:端口，例如 192.168.1.20:33771",
+            PlaceholderText = "输入 IPv4/IPv6（可选端口），例如 192.168.1.20 或 [2001:db8::2]:33771",
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             Text = LanConnectConfig.LastEndpoint
         };
