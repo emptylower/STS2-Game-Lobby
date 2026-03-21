@@ -102,7 +102,7 @@ class RoomRelaySession {
       return null;
     }
 
-    return `${this.hostEndpoint.address}:${this.hostEndpoint.port}`;
+    return formatUdpEndpoint(this.hostEndpoint.address, this.hostEndpoint.port);
   }
 
   getClientCount() {
@@ -114,7 +114,7 @@ class RoomRelaySession {
       this.logEvent({
         phase: "relay_host_idle",
         roomId: this.roomId,
-        detail: `${this.hostEndpoint.address}:${this.hostEndpoint.port}`,
+        detail: formatUdpEndpoint(this.hostEndpoint.address, this.hostEndpoint.port),
       });
       this.hostEndpoint = undefined;
       this.hostLastSeenAt = 0;
@@ -159,7 +159,7 @@ class RoomRelaySession {
         this.logEvent({
           phase: "relay_host_register_rejected",
           roomId: this.roomId,
-          detail: `${remote.address}:${remote.port}`,
+          detail: formatUdpEndpoint(remote.address, remote.port),
         });
         return;
       }
@@ -171,7 +171,7 @@ class RoomRelaySession {
         this.logEvent({
           phase: "relay_host_registered",
           roomId: this.roomId,
-          detail: `${remote.address}:${remote.port}`,
+          detail: formatUdpEndpoint(remote.address, remote.port),
         });
       }
       return;
@@ -181,7 +181,7 @@ class RoomRelaySession {
       this.logEvent({
         phase: "relay_host_data_rejected",
         roomId: this.roomId,
-        detail: `${remote.address}:${remote.port}`,
+        detail: formatUdpEndpoint(remote.address, remote.port),
       });
       return;
     }
