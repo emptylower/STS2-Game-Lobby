@@ -16,17 +16,29 @@ namespace Sts2LanConnect.Scripts;
 internal sealed partial class LanConnectLobbyRuntime : Node
 {
     private const string RuntimeName = "Sts2LanConnectLobbyRuntime";
+    private const int MaxChatMessages = 60;
 
     private HostedRoomSession? _activeSession;
     private JoinedClientSession? _activeClientSession;
     private bool _heartbeatInFlight;
     private double _timeUntilHeartbeat;
+    private readonly List<LobbyRoomChatEntry> _chatMessages = new();
+    private int _chatRevision;
 
     internal static LanConnectLobbyRuntime? Instance { get; private set; }
 
     internal bool HasActiveHostedRoom => _activeSession != null;
 
-    internal string? ActiveRoomId => _activeSession?.RoomId;
+    internal string? ActiveRoomId => _activeSession?.RoomId ?? _activeClientSession?.RoomId;
+
+    internal bool HasActiveRoomSession => _activeSession != null || _activeClientSession != null;
+
+    internal int ChatRevision => _chatRevision;
+
+    internal IReadOnlyList<LobbyRoomChatEntry> GetChatMessagesSnapshot()
+    {
+        return _chatMessages.ToArray();
+    }
 
     internal bool IsManagingNetService(INetGameService netService)
     {
@@ -99,6 +111,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         HostedRoomSession session = new(netService, apiClient, registration, metadata);
         session.SetEnvelopeHandler(envelope => OnHostedControlEnvelope(session, envelope));
         _activeSession = session;
+        ResetChatState(registration.RoomId);
         _timeUntilHeartbeat = 0d;
         GD.Print(
             $"sts2_lan_connect lobby runtime: attached hosted room roomId={registration.RoomId}, roomName='{metadata.RoomName}', source={metadata.PublishSource}, saveKey={(metadata.SaveKey ?? "<none>")}");
@@ -135,6 +148,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
             netService.NetId.ToString());
         session.SetEnvelopeHandler(envelope => OnJoinedClientControlEnvelope(session, envelope));
         _activeClientSession = session;
+        ResetChatState(joinResponse.Room.RoomId);
         LanConnectLobbyPlayerNameDirectory.BeginRoom(joinResponse.Room.RoomId);
         LanConnectLobbyPlayerNameDirectory.Upsert(joinResponse.Room.RoomId, netService.NetId, LanConnectConfig.GetEffectivePlayerDisplayName());
         netService.Disconnected += session.OnDisconnected;
@@ -274,6 +288,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
             }
 
             LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
+            ClearChatIfInactive(session.RoomId);
         }
     }
 
@@ -292,7 +307,60 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         }
 
         LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
+        ClearChatIfInactive(session.RoomId);
         return Task.CompletedTask;
+    }
+
+    internal async Task SendRoomChatMessageAsync(string messageText)
+    {
+        string normalizedMessage = NormalizeChatMessage(messageText);
+        if (string.IsNullOrWhiteSpace(normalizedMessage))
+        {
+            return;
+        }
+
+        string senderName = LanConnectConfig.GetEffectivePlayerDisplayName();
+        DateTimeOffset sentAt = DateTimeOffset.UtcNow;
+        string messageId = Guid.NewGuid().ToString("N");
+
+        if (_activeSession != null)
+        {
+            await _activeSession.ControlClient.SendAsync(new LobbyControlEnvelope
+            {
+                Type = "room_chat",
+                RoomId = _activeSession.RoomId,
+                ControlChannelId = _activeSession.ControlChannelId,
+                Role = "host",
+                PlayerName = senderName,
+                PlayerNetId = _activeSession.NetService.NetId.ToString(),
+                MessageId = messageId,
+                MessageText = normalizedMessage,
+                SentAtUnixMs = sentAt.ToUnixTimeMilliseconds()
+            }, CancellationToken.None);
+            AppendChatMessage(_activeSession.RoomId, messageId, senderName, _activeSession.NetService.NetId.ToString(), normalizedMessage, sentAt, isLocal: true);
+            return;
+        }
+
+        if (_activeClientSession != null)
+        {
+            await _activeClientSession.ControlClient.SendAsync(new LobbyControlEnvelope
+            {
+                Type = "room_chat",
+                RoomId = _activeClientSession.RoomId,
+                ControlChannelId = _activeClientSession.ControlChannelId,
+                Role = "client",
+                TicketId = _activeClientSession.TicketId,
+                PlayerName = senderName,
+                PlayerNetId = _activeClientSession.PlayerNetId,
+                MessageId = messageId,
+                MessageText = normalizedMessage,
+                SentAtUnixMs = sentAt.ToUnixTimeMilliseconds()
+            }, CancellationToken.None);
+            AppendChatMessage(_activeClientSession.RoomId, messageId, senderName, _activeClientSession.PlayerNetId, normalizedMessage, sentAt, isLocal: true);
+            return;
+        }
+
+        throw new InvalidOperationException("No active lobby room session for chat.");
     }
 
     private void OnRunSaved()
@@ -321,24 +389,28 @@ internal sealed partial class LanConnectLobbyRuntime : Node
 
     private async void OnHostedControlEnvelope(HostedRoomSession session, LobbyControlEnvelope envelope)
     {
-        if (!string.Equals(envelope.Type, "player_name_sync", StringComparison.Ordinal))
+        switch (envelope.Type)
         {
-            return;
-        }
+            case "player_name_sync":
+                if (!ulong.TryParse(envelope.PlayerNetId, out ulong playerNetId) || string.IsNullOrWhiteSpace(envelope.PlayerName))
+                {
+                    return;
+                }
 
-        if (!ulong.TryParse(envelope.PlayerNetId, out ulong playerNetId) || string.IsNullOrWhiteSpace(envelope.PlayerName))
-        {
-            return;
-        }
+                LanConnectLobbyPlayerNameDirectory.Upsert(session.RoomId, playerNetId, envelope.PlayerName);
+                try
+                {
+                    await session.ControlClient.SendAsync(BuildPlayerNameSnapshotEnvelope(session.RoomId), CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"sts2_lan_connect failed to broadcast player name snapshot for room {session.RoomId}: {ex.Message}");
+                }
 
-        LanConnectLobbyPlayerNameDirectory.Upsert(session.RoomId, playerNetId, envelope.PlayerName);
-        try
-        {
-            await session.ControlClient.SendAsync(BuildPlayerNameSnapshotEnvelope(session.RoomId), CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"sts2_lan_connect failed to broadcast player name snapshot for room {session.RoomId}: {ex.Message}");
+                break;
+            case "room_chat":
+                TryAppendRemoteChatMessage(session.RoomId, envelope);
+                break;
         }
     }
 
@@ -356,7 +428,90 @@ internal sealed partial class LanConnectLobbyRuntime : Node
                 }
 
                 break;
+            case "room_chat":
+                TryAppendRemoteChatMessage(session.RoomId, envelope);
+                break;
         }
+    }
+
+    private void TryAppendRemoteChatMessage(string roomId, LobbyControlEnvelope envelope)
+    {
+        string normalizedMessage = NormalizeChatMessage(envelope.MessageText);
+        if (string.IsNullOrWhiteSpace(normalizedMessage))
+        {
+            return;
+        }
+
+        string senderName = string.IsNullOrWhiteSpace(envelope.PlayerName) ? "Unknown" : envelope.PlayerName.Trim();
+        string messageId = string.IsNullOrWhiteSpace(envelope.MessageId) ? Guid.NewGuid().ToString("N") : envelope.MessageId.Trim();
+        DateTimeOffset sentAt = envelope.SentAtUnixMs.HasValue
+            ? DateTimeOffset.FromUnixTimeMilliseconds(envelope.SentAtUnixMs.Value)
+            : DateTimeOffset.UtcNow;
+        AppendChatMessage(roomId, messageId, senderName, envelope.PlayerNetId, normalizedMessage, sentAt, isLocal: false);
+    }
+
+    private void ResetChatState(string roomId)
+    {
+        _chatMessages.Clear();
+        _chatRevision++;
+        AppendChatMessage(roomId, $"system-{Guid.NewGuid():N}", "房间聊天", null, "已连接房间聊天。", DateTimeOffset.UtcNow, isLocal: false);
+    }
+
+    private void ClearChatIfInactive(string roomId)
+    {
+        if (string.Equals(_activeSession?.RoomId, roomId, StringComparison.Ordinal)
+            || string.Equals(_activeClientSession?.RoomId, roomId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _chatMessages.Clear();
+        _chatRevision++;
+    }
+
+    private void AppendChatMessage(string roomId, string messageId, string senderName, string? senderNetId, string messageText, DateTimeOffset sentAt, bool isLocal)
+    {
+        foreach (LobbyRoomChatEntry existing in _chatMessages)
+        {
+            if (string.Equals(existing.MessageId, messageId, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        _chatMessages.Add(new LobbyRoomChatEntry
+        {
+            RoomId = roomId,
+            MessageId = messageId,
+            SenderName = senderName,
+            SenderNetId = senderNetId,
+            MessageText = messageText,
+            SentAt = sentAt,
+            IsLocal = isLocal
+        });
+
+        if (_chatMessages.Count > MaxChatMessages)
+        {
+            _chatMessages.RemoveRange(0, _chatMessages.Count - MaxChatMessages);
+        }
+
+        _chatRevision++;
+    }
+
+    private static string NormalizeChatMessage(string? messageText)
+    {
+        if (string.IsNullOrWhiteSpace(messageText))
+        {
+            return string.Empty;
+        }
+
+        string normalized = messageText.Replace("\r\n", "\n").Replace('\r', '\n').Trim();
+        if (normalized.Length > 60)
+        {
+            normalized = normalized[..60];
+        }
+
+        return normalized;
     }
 
     private static LobbyControlEnvelope BuildPlayerNameSyncEnvelope(string roomId, string playerNetId)

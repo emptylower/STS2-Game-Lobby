@@ -65,6 +65,11 @@ internal sealed class LobbyApiClient : IDisposable
         return stopwatch.Elapsed.TotalMilliseconds;
     }
 
+    public Task<LobbyAnnouncementResponse> GetAnnouncementAsync(CancellationToken cancellationToken = default)
+    {
+        return SendAsync<LobbyAnnouncementResponse>("announcement", HttpMethod.Get, null, cancellationToken);
+    }
+
     public Task<LobbyCreateRoomResponse> CreateRoomAsync(LobbyCreateRoomRequest request, CancellationToken cancellationToken = default)
     {
         return SendAsync<LobbyCreateRoomResponse>("rooms", HttpMethod.Post, request, cancellationToken);

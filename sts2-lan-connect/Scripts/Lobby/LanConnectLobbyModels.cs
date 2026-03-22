@@ -43,6 +43,24 @@ internal sealed class LobbyDirectoryServerListResponse
     public List<LobbyDirectoryServerEntry> Servers { get; set; } = new();
 }
 
+internal sealed class LobbyAnnouncementResponse
+{
+    public bool Ok { get; set; }
+
+    public bool Visible { get; set; }
+
+    public LobbyAnnouncementEntry? Announcement { get; set; }
+}
+
+internal sealed class LobbyAnnouncementEntry
+{
+    public string Title { get; set; } = string.Empty;
+
+    public string Body { get; set; } = string.Empty;
+
+    public DateTimeOffset? UpdatedAt { get; set; }
+}
+
 internal sealed class LobbyDirectoryServerEntry
 {
     public string ServerId { get; set; } = string.Empty;
@@ -228,6 +246,29 @@ internal sealed class LobbyControlEnvelope
     public string? PlayerName { get; set; }
 
     public List<LobbyPlayerNameEntry>? PlayerNames { get; set; }
+
+    public string? MessageId { get; set; }
+
+    public string? MessageText { get; set; }
+
+    public long? SentAtUnixMs { get; set; }
+}
+
+internal sealed class LobbyRoomChatEntry
+{
+    public string RoomId { get; set; } = string.Empty;
+
+    public string MessageId { get; set; } = string.Empty;
+
+    public string SenderName { get; set; } = string.Empty;
+
+    public string? SenderNetId { get; set; }
+
+    public string MessageText { get; set; } = string.Empty;
+
+    public DateTimeOffset SentAt { get; set; }
+
+    public bool IsLocal { get; set; }
 }
 
 internal sealed class LobbyPlayerNameEntry

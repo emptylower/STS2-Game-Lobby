@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using Godot;
 using MegaCrit.Sts2.Core.Logging;
 
 namespace Sts2LanConnect.Scripts;
@@ -16,6 +17,10 @@ internal sealed class LanConnectConfigData
     public string LastRoomName { get; set; } = string.Empty;
 
     public string PlayerDisplayName { get; set; } = string.Empty;
+
+    public float? RoomChatOffsetX { get; set; }
+
+    public float? RoomChatOffsetY { get; set; }
 
     public List<LanConnectSavedRoomBinding> SaveRoomBindings { get; set; } = new();
 }
@@ -133,6 +138,38 @@ internal static class LanConnectConfig
         }
     }
 
+    public static Vector2? RoomChatOverlayOffset
+    {
+        get
+        {
+            lock (Sync)
+            {
+                if (!_data.RoomChatOffsetX.HasValue || !_data.RoomChatOffsetY.HasValue)
+                {
+                    return null;
+                }
+
+                return new Vector2(_data.RoomChatOffsetX.Value, _data.RoomChatOffsetY.Value);
+            }
+        }
+        set
+        {
+            lock (Sync)
+            {
+                float? nextX = value?.X;
+                float? nextY = value?.Y;
+                if (_data.RoomChatOffsetX == nextX && _data.RoomChatOffsetY == nextY)
+                {
+                    return;
+                }
+
+                _data.RoomChatOffsetX = nextX;
+                _data.RoomChatOffsetY = nextY;
+                SaveUnsafe();
+            }
+        }
+    }
+
     public static LanConnectSavedRoomBinding? TryGetSaveRoomBinding(string saveKey)
     {
         lock (Sync)
@@ -185,7 +222,7 @@ internal static class LanConnectConfig
             return configured;
         }
 
-        return SanitizePlayerDisplayName(Environment.UserName);
+        return SanitizePlayerDisplayName(System.Environment.UserName);
     }
 
     public static void Load()
@@ -260,6 +297,14 @@ internal static class LanConnectConfig
 
         _data.LastRoomName = SanitizeRoomName(_data.LastRoomName);
         _data.PlayerDisplayName = SanitizePlayerDisplayName(_data.PlayerDisplayName);
+        if (_data.RoomChatOffsetX.HasValue && !float.IsFinite(_data.RoomChatOffsetX.Value))
+        {
+            _data.RoomChatOffsetX = null;
+        }
+        if (_data.RoomChatOffsetY.HasValue && !float.IsFinite(_data.RoomChatOffsetY.Value))
+        {
+            _data.RoomChatOffsetY = null;
+        }
 
         _data.SaveRoomBindings = _data.SaveRoomBindings
             .Where(binding => !string.IsNullOrWhiteSpace(binding.SaveKey) && !string.IsNullOrWhiteSpace(binding.RoomName))

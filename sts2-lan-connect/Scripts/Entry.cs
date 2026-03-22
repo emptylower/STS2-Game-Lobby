@@ -10,6 +10,7 @@ public static class Entry
     {
         LanConnectConfig.Load();
         LanConnectLobbyRuntime.Install();
+        LanConnectRoomChatOverlay.Install();
         LanConnectRuntimeMonitor.Install();
         Log.Info("sts2_lan_connect initialized with runtime monitor.");
     }

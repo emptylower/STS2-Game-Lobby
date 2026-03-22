@@ -36,6 +36,8 @@ internal static class LanConnectConstants
 
     public const string LobbyOverlayName = "LanConnectLobbyOverlay";
 
+    public const string RoomChatOverlayName = "LanConnectRoomChatOverlay";
+
     public const string SafeLoadButtonName = "LanConnectSafeLoadButton";
 
     public const string SafeAbandonButtonName = "LanConnectSafeAbandonButton";

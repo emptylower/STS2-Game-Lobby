@@ -46,6 +46,9 @@ internal static class MultiplayerSubmenuPatches
             return;
         }
 
+        LanConnectLobbyAnnouncementService.RequestOnceForLaunch();
+        LanConnectLobbyAnnouncementService.TryShowPending();
+
         bool buttonAlreadyInstalled = FindLobbyEntryButton(submenu) != null;
         EnsureLobbyEntry(submenu);
         if (!buttonAlreadyInstalled && FindLobbyEntryButton(submenu) != null)
