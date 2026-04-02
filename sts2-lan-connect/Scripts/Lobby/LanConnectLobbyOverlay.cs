@@ -1157,13 +1157,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private Control BuildDirectoryServerDialog()
     {
-        Control shell = CreateDialogShell(out VBoxContainer body);
+        Control shell = CreateDialogShell(out VBoxContainer body, halfWidth: 420f, halfHeight: 280f);
         _directoryServerDialogContainer = shell;
+        body.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        body.SizeFlagsVertical = SizeFlags.ExpandFill;
 
         _directoryServerDialogTitle = CreateSectionLabel("选择中心服务器中的大厅");
         body.AddChild(_directoryServerDialogTitle);
 
-        Label description = CreateBodyLabel("从中心服务器获取已验证的大厅服务列表。选择后会自动写入 HTTP 覆盖地址。WS 控制通道会从该地址自动推导。 ");
+        Label description = CreateBodyLabel("展示中心服务器返回的大厅。左右两列可滚动，点击即可切换。 ");
         description.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         description.AddThemeColorOverride("font_color", TextMutedColor);
         body.AddChild(description);
@@ -1173,12 +1175,23 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _directoryServerDialogStatusLabel.AddThemeColorOverride("font_color", TextMutedColor);
         body.AddChild(_directoryServerDialogStatusLabel);
 
+        ScrollContainer optionsScroll = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(0f, 280f),
+            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled
+        };
+        ConfigureRoomListScroll(optionsScroll);
+        body.AddChild(optionsScroll);
+
         _directoryServerDialogOptions = new VBoxContainer
         {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill
         };
         _directoryServerDialogOptions.AddThemeConstantOverride("separation", 10);
-        body.AddChild(_directoryServerDialogOptions);
+        optionsScroll.AddChild(_directoryServerDialogOptions);
 
         HBoxContainer actions = new()
         {
@@ -1197,7 +1210,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return shell;
     }
 
-    private Control CreateDialogShell(out VBoxContainer body)
+    private Control CreateDialogShell(out VBoxContainer body, float halfWidth = 300f, float halfHeight = 180f)
     {
         Control shell = new()
         {
@@ -1220,14 +1233,14 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         MarginContainer margin = new();
         margin.SetAnchorsPreset(LayoutPreset.Center);
-        margin.OffsetLeft = -300f;
-        margin.OffsetTop = -180f;
-        margin.OffsetRight = 300f;
-        margin.OffsetBottom = 180f;
+        margin.OffsetLeft = -halfWidth;
+        margin.OffsetTop = -halfHeight;
+        margin.OffsetRight = halfWidth;
+        margin.OffsetBottom = halfHeight;
         center.AddChild(margin);
 
         PanelContainer card = CreateSurfacePanel(FrameColor, AccentColor, radius: 20, padding: 22);
-        card.CustomMinimumSize = new Vector2(560f, 0f);
+        card.CustomMinimumSize = new Vector2(Mathf.Max((halfWidth * 2f) - 40f, 560f), 0f);
         margin.AddChild(card);
 
         body = new VBoxContainer();
@@ -2652,19 +2665,67 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                 return;
             }
 
-            SetLabelText(_directoryServerDialogStatusLabel, $"已找到 {servers.Count} 个可用大厅。点击任意条目即可切换。 ");
+            SetLabelText(_directoryServerDialogStatusLabel, $"已找到 {servers.Count} 个可用大厅。左右两列可滚动，点击条目即可切换。 ");
+            HBoxContainer? row = null;
+            int rowColumnIndex = 0;
             foreach (LobbyDirectoryServerEntry entry in servers)
             {
-                string title = string.IsNullOrWhiteSpace(entry.ServerName) ? entry.BaseUrl : entry.ServerName;
-                string detail =
+                string guardStatus = FormatCreateRoomGuardStatus(entry.CreateRoomGuardStatus);
+                string utilization = FormatUtilizationValue(entry.BandwidthUtilizationRatio);
+                string title = entry.ServerName?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(title))
+                {
+                    if (Uri.TryCreate(entry.BaseUrl, UriKind.Absolute, out Uri? parsedUri) && !string.IsNullOrWhiteSpace(parsedUri.Host))
+                    {
+                        title = parsedUri.Host;
+                    }
+                    else
+                    {
+                        title = entry.BaseUrl;
+                    }
+                }
+
+                string brief = $"房间 {entry.Rooms}  ·  新建 {guardStatus}  ·  负载 {utilization}";
+                string tooltip =
+                    $"{title}\n" +
                     $"{entry.BaseUrl}\n" +
-                    $"房间数：{entry.Rooms}  ·  最后验证：{entry.LastVerifiedAt:yyyy-MM-dd HH:mm:ss}\n" +
-                    $"新建房间：{FormatCreateRoomGuardStatus(entry.CreateRoomGuardStatus)}  ·  利用率：{FormatUtilizationValue(entry.BandwidthUtilizationRatio)}\n" +
-                    $"实时带宽：{FormatBandwidthValue(entry.CurrentBandwidthMbps)}  ·  有效容量：{FormatBandwidthValue(entry.ResolvedCapacityMbps ?? entry.BandwidthCapacityMbps)}";
-                Button option = CreateActionButton(title, detail, () => ApplyDirectoryServer(entry), primary: false);
-                option.Text = UiText(title + "\n" + detail);
+                    $"{brief}\n" +
+                    $"实时带宽：{FormatBandwidthValue(entry.CurrentBandwidthMbps)}  ·  有效容量：{FormatBandwidthValue(entry.ResolvedCapacityMbps ?? entry.BandwidthCapacityMbps)}\n" +
+                    $"最后验证：{entry.LastVerifiedAt:yyyy-MM-dd HH:mm:ss}";
+
+                if (row == null || rowColumnIndex == 0)
+                {
+                    row = new HBoxContainer
+                    {
+                        SizeFlagsHorizontal = SizeFlags.ExpandFill
+                    };
+                    row.AddThemeConstantOverride("separation", 10);
+                    _directoryServerDialogOptions.AddChild(row);
+                    rowColumnIndex = 0;
+                }
+
+                Button option = CreateActionButton(title, tooltip, () => ApplyDirectoryServer(entry), primary: false);
+                option.Text = UiText($"{title}  ·  {brief}");
                 option.Alignment = HorizontalAlignment.Left;
-                _directoryServerDialogOptions.AddChild(option);
+                option.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+                option.CustomMinimumSize = new Vector2(0f, 50f);
+                row.AddChild(option);
+
+                rowColumnIndex++;
+                if (rowColumnIndex >= 2)
+                {
+                    rowColumnIndex = 0;
+                }
+            }
+
+            if (row != null && rowColumnIndex == 1)
+            {
+                Control spacer = new()
+                {
+                    SizeFlagsHorizontal = SizeFlags.ExpandFill,
+                    MouseFilter = MouseFilterEnum.Ignore
+                };
+                row.AddChild(spacer);
             }
         }
         catch (Exception ex)
