@@ -6,7 +6,7 @@ internal static class LanConnectConstants
 
     public const int DefaultMaxPlayers = 4;
 
-    public const int LobbyRoomsPerPage = 8;
+    public const int LobbyRoomsPerPage = 5;
 
     public static readonly string DefaultLobbyServerBaseUrl = LanConnectLobbyEndpointDefaults.GetDefaultBaseUrl();
 

@@ -6,11 +6,14 @@ namespace Sts2LanConnect.Scripts;
 
 internal sealed partial class LobbyAnnouncementCarousel : Control
 {
-    private static readonly Color BaseBackgroundColor = new(0.09f, 0.055f, 0.032f, 0.96f);
-    private static readonly Color TextStrongColor = new(0.93f, 0.9f, 0.86f, 1f);
-    private static readonly Color TextMutedColor = new(0.73f, 0.67f, 0.61f, 1f);
-    private static readonly Color AccentColor = new(0.954f, 0.431f, 0.203f, 1f);
-    private static readonly Color AccentBrightColor = new(0.996f, 0.58f, 0.274f, 1f);
+    // ── Retro pixel-art palette (converted from reference UI oklch values) ──
+    private static readonly Color CardColor = new(0.99f, 0.97f, 0.93f, 1f);                 // #FDF8ED oklch(0.98,0.015,85)
+    private static readonly Color BaseBackgroundColor = new(0.97f, 0.95f, 0.89f, 1f);       // #F8F1E3 oklch(0.96,0.02,85)
+    private static readonly Color TextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);          // #341A09 oklch(0.25,0.05,50)
+    private static readonly Color TextMutedColor = new(0.46f, 0.36f, 0.31f, 1f);           // #775D4F oklch(0.50,0.04,50)
+    private static readonly Color AccentColor = new(0.87f, 0.41f, 0.00f, 1f);              // #DF6900 oklch(0.65,0.18,55)
+    private static readonly Color AccentBrightColor = new(0.93f, 0.50f, 0.08f, 1f);        // #ED7F14 brighter hover
+    private static readonly Color BorderColor = new(0.80f, 0.65f, 0.53f, 1f);              // #CBA688 oklch(0.75,0.06,60)
 
     private readonly List<LobbyAnnouncementItem> _announcements = new();
 
@@ -39,7 +42,7 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
         MouseFilter = MouseFilterEnum.Stop;
         ProcessMode = ProcessModeEnum.Always;
         SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        CustomMinimumSize = new Vector2(0f, 94f);
+        CustomMinimumSize = new Vector2(0f, 68f);
         BuildUi();
     }
 
@@ -113,76 +116,59 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
 
     private void BuildUi()
     {
-        _frame = CreatePanel(BaseBackgroundColor, new Color(AccentColor, 0.18f), radius: 18, borderWidth: 1, padding: 0, shadowSize: 4, shadowColor: new Color(AccentColor, 0.02f));
+        // Frame panel — padding is applied via StyleBox content margins,
+        // which is the ONLY way to add inner spacing inside a PanelContainer.
+        // Anchor offsets and MarginContainer offsets are ignored by Container parents.
+        StyleBoxFlat frameStyle = CreatePanelStyle(BaseBackgroundColor, BorderColor, radius: 0, borderWidth: 2, padding: 0, shadowSize: 2, shadowColor: new Color(BorderColor, 0.7f));
+        frameStyle.ContentMarginLeft = 24;
+        frameStyle.ContentMarginRight = 24;
+        frameStyle.ContentMarginTop = 14;
+        frameStyle.ContentMarginBottom = 10;
+        _frame = new PanelContainer { ClipContents = true };
+        _frame.AddThemeStyleboxOverride("panel", frameStyle);
         _frame.SetAnchorsPreset(LayoutPreset.FullRect);
         _frame.MouseFilter = MouseFilterEnum.Stop;
         _frame.Connect(Control.SignalName.MouseEntered, Callable.From(() => _paused = true));
         _frame.Connect(Control.SignalName.MouseExited, Callable.From(() => _paused = false));
         AddChild(_frame);
 
-        Control chrome = new()
-        {
-            MouseFilter = MouseFilterEnum.Ignore,
-            ClipContents = true
-        };
-        chrome.SetAnchorsPreset(LayoutPreset.FullRect);
-        _frame.AddChild(chrome);
-
+        // Background layers (gradient is disabled in flat mode but kept for structure)
         _backgroundGradient = new SmoothGradientControl
         {
-            MouseFilter = MouseFilterEnum.Ignore
-        };
-        _backgroundGradient.SetAnchorsPreset(LayoutPreset.FullRect);
-        chrome.AddChild(_backgroundGradient);
-
-        _topGlow = new ColorRect
-        {
-            Color = new Color(AccentBrightColor, 0.045f),
             MouseFilter = MouseFilterEnum.Ignore,
-            CustomMinimumSize = new Vector2(0f, 1f)
+            Visible = false
         };
-        _topGlow.SetAnchorsPreset(LayoutPreset.TopWide);
-        chrome.AddChild(_topGlow);
+        _frame.AddChild(_backgroundGradient);
+        _topGlow = new ColorRect { Visible = false, MouseFilter = MouseFilterEnum.Ignore };
+        _frame.AddChild(_topGlow);
 
-        MarginContainer content = new();
-        content.SetAnchorsPreset(LayoutPreset.FullRect);
-        content.OffsetLeft = 24f;
-        content.OffsetTop = 14f;
-        content.OffsetRight = -24f;
-        content.OffsetBottom = -12f;
-        _frame.AddChild(content);
-
+        // Single-line layout: [TYPE pill] [title] [date] [dot indicators]
         VBoxContainer root = new()
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill
         };
-        root.AddThemeConstantOverride("separation", 12);
-        content.AddChild(root);
+        root.AddThemeConstantOverride("separation", 2);
+        _frame.AddChild(root);
 
         HBoxContainer mainRow = new()
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill
         };
-        mainRow.AddThemeConstantOverride("separation", 18);
+        mainRow.AddThemeConstantOverride("separation", 12);
         root.AddChild(mainRow);
 
+        // Nav buttons hidden by default — use dot indicators + auto-advance
         _previousButton = CreateNavButton("‹", () => Advance(-1));
+        _previousButton.Visible = false;
         mainRow.AddChild(_previousButton);
 
-        HBoxContainer infoRow = new()
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            SizeFlagsVertical = SizeFlags.ShrinkCenter
-        };
-        infoRow.AddThemeConstantOverride("separation", 14);
-        mainRow.AddChild(infoRow);
-
-        _iconOrb = CreatePanel(new Color(0.055f, 0.04f, 0.028f, 0.98f), new Color(AccentColor, 0.14f), radius: 999, borderWidth: 1, padding: 0);
-        _iconOrb.CustomMinimumSize = new Vector2(48f, 48f);
+        // Type badge pill
+        _iconOrb = CreatePanel(AccentColor, BorderColor, radius: 0, borderWidth: 2, padding: 0, shadowSize: 2, shadowColor: new Color(BorderColor, 0.7f));
+        _iconOrb.CustomMinimumSize = new Vector2(42f, 28f);
         _iconOrb.SizeFlagsVertical = SizeFlags.ShrinkCenter;
-        infoRow.AddChild(_iconOrb);
+        mainRow.AddChild(_iconOrb);
 
         CenterContainer iconCenter = new();
         _iconOrb.AddChild(iconCenter);
@@ -192,80 +178,58 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
-        _iconLabel.AddThemeColorOverride("font_color", AccentColor);
-        _iconLabel.AddThemeFontSizeOverride("font_size", 22);
+        _iconLabel.AddThemeColorOverride("font_color", new Color(1f, 1f, 1f, 1f));
+        _iconLabel.AddThemeFontSizeOverride("font_size", 13);
         iconCenter.AddChild(_iconLabel);
 
-        VBoxContainer textGroup = new()
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            SizeFlagsVertical = SizeFlags.ShrinkCenter
-        };
-        textGroup.AddThemeConstantOverride("separation", 4);
-        infoRow.AddChild(textGroup);
-
-        HBoxContainer headingRow = new()
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            SizeFlagsVertical = SizeFlags.ShrinkCenter
-        };
-        headingRow.AddThemeConstantOverride("separation", 8);
-        textGroup.AddChild(headingRow);
-
+        // Title — single line, truncated
         _titleLabel = new Label
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            AutowrapMode = TextServer.AutowrapMode.WordSmart
+            AutowrapMode = TextServer.AutowrapMode.Off,
+            ClipText = true
         };
         _titleLabel.AddThemeColorOverride("font_color", TextStrongColor);
-        _titleLabel.AddThemeFontSizeOverride("font_size", 22);
-        headingRow.AddChild(_titleLabel);
+        _titleLabel.AddThemeFontSizeOverride("font_size", 16);
+        mainRow.AddChild(_titleLabel);
 
+        // Date label
         _dateLabel = new Label
         {
             HorizontalAlignment = HorizontalAlignment.Right,
             SizeFlagsVertical = SizeFlags.ShrinkCenter
         };
         _dateLabel.AddThemeColorOverride("font_color", TextMutedColor);
-        _dateLabel.AddThemeFontSizeOverride("font_size", 15);
-        headingRow.AddChild(_dateLabel);
+        _dateLabel.AddThemeFontSizeOverride("font_size", 14);
+        mainRow.AddChild(_dateLabel);
 
-        _bodyLabel = new Label
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            AutowrapMode = TextServer.AutowrapMode.WordSmart
-        };
-        _bodyLabel.AddThemeColorOverride("font_color", TextMutedColor);
-        _bodyLabel.AddThemeFontSizeOverride("font_size", 16);
-        textGroup.AddChild(_bodyLabel);
-
-        HBoxContainer controls = new()
-        {
-            SizeFlagsHorizontal = SizeFlags.ShrinkEnd,
-            SizeFlagsVertical = SizeFlags.ShrinkCenter
-        };
-        controls.AddThemeConstantOverride("separation", 14);
-        mainRow.AddChild(controls);
-
+        // Dot indicators
         _indicatorContainer = new HBoxContainer
         {
             SizeFlagsVertical = SizeFlags.ShrinkCenter
         };
-        _indicatorContainer.AddThemeConstantOverride("separation", 8);
-        controls.AddChild(_indicatorContainer);
+        _indicatorContainer.AddThemeConstantOverride("separation", 6);
+        mainRow.AddChild(_indicatorContainer);
 
+        // Counter label (compact mode only)
         _counterLabel = new Label
         {
             HorizontalAlignment = HorizontalAlignment.Right,
             SizeFlagsVertical = SizeFlags.ShrinkCenter
         };
         _counterLabel.AddThemeColorOverride("font_color", AccentColor);
-        _counterLabel.AddThemeFontSizeOverride("font_size", 15);
-        controls.AddChild(_counterLabel);
+        _counterLabel.AddThemeFontSizeOverride("font_size", 14);
+        mainRow.AddChild(_counterLabel);
 
         _nextButton = CreateNavButton("›", () => Advance(1));
-        controls.AddChild(_nextButton);
+        _nextButton.Visible = false;
+        mainRow.AddChild(_nextButton);
 
+        // Body label kept hidden (content available via tooltip)
+        _bodyLabel = new Label { Visible = false };
+        root.AddChild(_bodyLabel);
+
+        // Progress bar
         _progressTrack = new Control
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
@@ -273,7 +237,7 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
             ClipContents = true,
             MouseFilter = MouseFilterEnum.Ignore
         };
-        _progressTrack.AddThemeStyleboxOverride("panel", CreatePanelStyle(new Color(0.16f, 0.095f, 0.05f, 0.32f), new Color(AccentColor, 0.04f), radius: 999, borderWidth: 0, padding: 0));
+        _progressTrack.AddThemeStyleboxOverride("panel", CreatePanelStyle(new Color(BorderColor, 0.3f), Colors.Transparent, radius: 0, borderWidth: 0, padding: 0));
         _progressTrack.Connect(Control.SignalName.Resized, Callable.From(UpdateProgress));
         root.AddChild(_progressTrack);
 
@@ -319,30 +283,38 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
 
         if (_frame != null)
         {
-            _frame.AddThemeStyleboxOverride("panel", CreatePanelStyle(BaseBackgroundColor, style.Border, radius: 18, borderWidth: 1, padding: 0, shadowSize: 4, shadowColor: new Color(style.Border, 0.018f)));
-        }
-
-        _backgroundGradient?.SetColors(style.LeftGlow, style.CenterGlow, style.RightGlow);
-
-        if (_topGlow != null)
-        {
-            _topGlow.Color = style.TopGlow;
+            StyleBoxFlat refreshStyle = CreatePanelStyle(BaseBackgroundColor, BorderColor, radius: 0, borderWidth: 2, padding: 0, shadowSize: 2, shadowColor: new Color(BorderColor, 0.7f));
+            refreshStyle.ContentMarginLeft = 24;
+            refreshStyle.ContentMarginRight = 24;
+            refreshStyle.ContentMarginTop = 14;
+            refreshStyle.ContentMarginBottom = 10;
+            _frame.AddThemeStyleboxOverride("panel", refreshStyle);
         }
 
         if (_iconOrb != null)
         {
-            _iconOrb.AddThemeStyleboxOverride("panel", CreatePanelStyle(new Color(0.055f, 0.04f, 0.028f, 0.98f), new Color(style.Border, 0.1f), radius: 999, borderWidth: 1, padding: 0));
+            _iconOrb.AddThemeStyleboxOverride("panel", CreatePanelStyle(AccentColor, BorderColor, radius: 0, borderWidth: 2, padding: 0, shadowSize: 2, shadowColor: new Color(BorderColor, 0.7f)));
         }
 
         if (_iconLabel != null)
         {
             _iconLabel.Text = style.IconText;
-            _iconLabel.AddThemeColorOverride("font_color", style.Accent);
+            // White text on orange pill for contrast
+            _iconLabel.AddThemeColorOverride("font_color", new Color(1f, 1f, 1f, 1f));
         }
 
         if (_titleLabel != null)
         {
-            _titleLabel.Text = NormalizeText(string.IsNullOrWhiteSpace(current.Title) ? "暂无公告" : current.Title.Trim());
+            // Single-line: show body text as main content (title is shown via the type pill)
+            string displayText = !string.IsNullOrWhiteSpace(current.Body)
+                ? current.Body.Trim()
+                : !string.IsNullOrWhiteSpace(current.Title)
+                    ? current.Title.Trim()
+                    : "暂无公告";
+            _titleLabel.Text = NormalizeText(displayText);
+            // Full text available via tooltip
+            string fullText = $"{current.Title?.Trim()}\n{current.Body?.Trim()}".Trim();
+            _titleLabel.TooltipText = NormalizeText(fullText);
         }
 
         if (_dateLabel != null)
@@ -353,7 +325,7 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
 
         if (_bodyLabel != null)
         {
-            _bodyLabel.Text = NormalizeText(string.IsNullOrWhiteSpace(current.Body) ? "浏览房间列表，或稍后刷新查看最新公告。" : current.Body.Trim());
+            _bodyLabel.Visible = false;
         }
 
         if (_counterLabel != null)
@@ -389,7 +361,7 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
                 FocusMode = FocusModeEnum.None,
                 SizeFlagsVertical = SizeFlags.ShrinkCenter
             };
-            ApplyIndicatorStyle(dot, new Color(0.36f, 0.31f, 0.27f, 0.74f), active: false);
+            ApplyIndicatorStyle(dot, new Color(BorderColor, 0.4f), active: false);
             dot.Connect(Button.SignalName.Pressed, Callable.From(() => JumpToAnnouncement(selectedIndex)));
             _indicatorContainer.AddChild(dot);
         }
@@ -410,27 +382,29 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
             }
 
             bool active = index == _currentIndex;
-            button.CustomMinimumSize = active ? new Vector2(22f, 8f) : new Vector2(8f, 8f);
-            ApplyIndicatorStyle(button, active ? style.Accent : new Color(0.36f, 0.31f, 0.27f, 0.74f), active);
+            button.CustomMinimumSize = new Vector2(8f, 8f);
+            ApplyIndicatorStyle(button, active ? style.Accent : new Color(BorderColor, 0.4f), active);
         }
     }
 
     private void UpdateControlVisibility()
     {
         bool hasMultiple = _announcements.Count > 1;
+
+        // Nav buttons always hidden — use dot indicators + auto-advance
         if (_previousButton != null)
         {
-            _previousButton.Visible = !_compactMode && hasMultiple;
+            _previousButton.Visible = false;
         }
 
         if (_nextButton != null)
         {
-            _nextButton.Visible = !_compactMode && hasMultiple;
+            _nextButton.Visible = false;
         }
 
         if (_indicatorContainer != null)
         {
-            _indicatorContainer.Visible = !_compactMode && hasMultiple;
+            _indicatorContainer.Visible = hasMultiple;
         }
 
         if (_counterLabel != null)
@@ -480,12 +454,12 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
 
     private static void ApplyIndicatorStyle(Button button, Color baseColor, bool active)
     {
-        Color hoverColor = active ? baseColor.Lightened(0.08f) : new Color(0.46f, 0.38f, 0.32f, 0.82f);
-        Color pressedColor = active ? baseColor.Darkened(0.08f) : new Color(0.46f, 0.38f, 0.32f, 0.86f);
-        button.AddThemeStyleboxOverride("normal", CreatePanelStyle(baseColor, Colors.Transparent, radius: 999, borderWidth: 0, padding: 0));
-        button.AddThemeStyleboxOverride("hover", CreatePanelStyle(hoverColor, Colors.Transparent, radius: 999, borderWidth: 0, padding: 0));
-        button.AddThemeStyleboxOverride("pressed", CreatePanelStyle(pressedColor, Colors.Transparent, radius: 999, borderWidth: 0, padding: 0));
-        button.AddThemeStyleboxOverride("focus", CreatePanelStyle(hoverColor, Colors.Transparent, radius: 999, borderWidth: 0, padding: 0));
+        Color hoverColor = active ? baseColor.Lightened(0.08f) : new Color(BorderColor, 0.6f);
+        Color pressedColor = active ? baseColor.Darkened(0.08f) : new Color(BorderColor, 0.7f);
+        button.AddThemeStyleboxOverride("normal", CreatePanelStyle(baseColor, Colors.Transparent, radius: 0, borderWidth: 0, padding: 0));
+        button.AddThemeStyleboxOverride("hover", CreatePanelStyle(hoverColor, Colors.Transparent, radius: 0, borderWidth: 0, padding: 0));
+        button.AddThemeStyleboxOverride("pressed", CreatePanelStyle(pressedColor, Colors.Transparent, radius: 0, borderWidth: 0, padding: 0));
+        button.AddThemeStyleboxOverride("focus", CreatePanelStyle(hoverColor, Colors.Transparent, radius: 0, borderWidth: 0, padding: 0));
     }
 
     private LobbyAnnouncementItem GetCurrentAnnouncement()
@@ -514,10 +488,10 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
             FocusMode = FocusModeEnum.None,
             SizeFlagsVertical = SizeFlags.ShrinkCenter
         };
-        button.AddThemeStyleboxOverride("normal", CreatePanelStyle(new Color(0.16f, 0.07f, 0.05f, 0.88f), Colors.Transparent, radius: 999, borderWidth: 0, padding: 8));
-        button.AddThemeStyleboxOverride("hover", CreatePanelStyle(new Color(0.22f, 0.09f, 0.06f, 0.96f), Colors.Transparent, radius: 999, borderWidth: 0, padding: 8));
-        button.AddThemeStyleboxOverride("pressed", CreatePanelStyle(new Color(0.26f, 0.1f, 0.06f, 0.98f), Colors.Transparent, radius: 999, borderWidth: 0, padding: 8));
-        button.AddThemeStyleboxOverride("focus", CreatePanelStyle(new Color(0.22f, 0.09f, 0.06f, 0.96f), Colors.Transparent, radius: 999, borderWidth: 0, padding: 8));
+        button.AddThemeStyleboxOverride("normal", CreatePanelStyle(new Color(BorderColor, 0.2f), Colors.Transparent, radius: 0, borderWidth: 0, padding: 8));
+        button.AddThemeStyleboxOverride("hover", CreatePanelStyle(new Color(BorderColor, 0.4f), Colors.Transparent, radius: 0, borderWidth: 0, padding: 8));
+        button.AddThemeStyleboxOverride("pressed", CreatePanelStyle(new Color(BorderColor, 0.5f), Colors.Transparent, radius: 0, borderWidth: 0, padding: 8));
+        button.AddThemeStyleboxOverride("focus", CreatePanelStyle(new Color(BorderColor, 0.4f), Colors.Transparent, radius: 0, borderWidth: 0, padding: 8));
         button.AddThemeColorOverride("font_color", TextStrongColor);
         button.AddThemeFontSizeOverride("font_size", 22);
         button.Connect(Button.SignalName.Pressed, Callable.From(onPressed));
@@ -555,7 +529,7 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
         };
         style.ShadowColor = shadowColor ?? new Color(0f, 0f, 0f, 0f);
         style.ShadowSize = shadowSize;
-        style.ShadowOffset = Vector2.Zero;
+        style.ShadowOffset = shadowSize > 0 ? new Vector2(shadowSize, shadowSize) : Vector2.Zero;
         return style;
     }
 
@@ -566,40 +540,14 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
 
     private static AnnouncementVisualStyle GetVisualStyle(string? type)
     {
+        // All types use AccentColor for the pill — gradient colors are unused in flat mode
+        Color transparent = Colors.Transparent;
         return type switch
         {
-            "update" => new AnnouncementVisualStyle(
-                "✦",
-                new Color(0.46f, 0.77f, 1f, 0.96f),
-                new Color(0.15f, 0.16f, 0.28f, 0.22f),
-                new Color(0.13f, 0.1f, 0.22f, 0.12f),
-                new Color(0.03f, 0.02f, 0.015f, 0.24f),
-                new Color(0.46f, 0.77f, 1f, 0.045f),
-                new Color(0.32f, 0.52f, 0.78f, 0.22f)),
-            "event" => new AnnouncementVisualStyle(
-                "❖",
-                new Color(0.93f, 0.46f, 0.84f, 0.96f),
-                new Color(0.36f, 0.12f, 0.18f, 0.24f),
-                new Color(0.22f, 0.08f, 0.14f, 0.13f),
-                new Color(0.03f, 0.02f, 0.015f, 0.24f),
-                new Color(0.93f, 0.46f, 0.84f, 0.05f),
-                new Color(0.71f, 0.22f, 0.4f, 0.22f)),
-            "warning" => new AnnouncementVisualStyle(
-                "!",
-                new Color(0.99f, 0.53f, 0.23f, 0.98f),
-                new Color(0.44f, 0.14f, 0.08f, 0.26f),
-                new Color(0.28f, 0.1f, 0.05f, 0.16f),
-                new Color(0.03f, 0.02f, 0.015f, 0.26f),
-                new Color(0.99f, 0.53f, 0.23f, 0.055f),
-                new Color(0.78f, 0.25f, 0.13f, 0.22f)),
-            _ => new AnnouncementVisualStyle(
-                "i",
-                new Color(0.38f, 0.88f, 0.82f, 0.96f),
-                new Color(0.11f, 0.26f, 0.24f, 0.2f),
-                new Color(0.09f, 0.18f, 0.16f, 0.12f),
-                new Color(0.03f, 0.02f, 0.015f, 0.24f),
-                new Color(0.38f, 0.88f, 0.82f, 0.04f),
-                new Color(0.17f, 0.58f, 0.52f, 0.18f)),
+            "update" => new AnnouncementVisualStyle("NEW", AccentColor, transparent, transparent, transparent, transparent, transparent),
+            "event" => new AnnouncementVisualStyle("HOT", AccentColor, transparent, transparent, transparent, transparent, transparent),
+            "warning" => new AnnouncementVisualStyle("INFO", AccentColor, transparent, transparent, transparent, transparent, transparent),
+            _ => new AnnouncementVisualStyle("TIP", AccentColor, transparent, transparent, transparent, transparent, transparent),
         };
     }
 

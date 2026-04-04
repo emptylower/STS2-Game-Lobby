@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Helpers;
@@ -34,17 +36,23 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private const int FilterModeDailyId = 201;
     private const int FilterModeCustomId = 202;
 
-    private static readonly Color BackdropColor = new(0.051f, 0.043f, 0.035f, 0.96f);
-    private static readonly Color FrameColor = new(0.051f, 0.043f, 0.035f, 0.98f);
-    private static readonly Color SurfaceColor = new(0.059f, 0.047f, 0.039f, 0.76f);
-    private static readonly Color SurfaceMutedColor = new(0.059f, 0.047f, 0.039f, 0.68f);
-    private static readonly Color AccentColor = new(0.954f, 0.431f, 0.203f, 1f);
-    private static readonly Color AccentBrightColor = new(0.996f, 0.58f, 0.274f, 1f);
-    private static readonly Color AccentMutedColor = new(0.954f, 0.431f, 0.203f, 0.24f);
-    private static readonly Color TextStrongColor = new(0.91f, 0.878f, 0.835f, 1f);
-    private static readonly Color TextMutedColor = new(0.72f, 0.69f, 0.64f, 1f);
-    private static readonly Color SuccessColor = new(0.25f, 0.9f, 0.46f, 1f);
-    private static readonly Color DangerColor = new(0.94f, 0.38f, 0.33f, 1f);
+    // ── Retro pixel-art palette (converted from reference UI oklch values) ──
+    private static readonly Color BackdropColor = new(0.97f, 0.95f, 0.89f, 1f);        // #F8F1E3 oklch(0.96,0.02,85)
+    private static readonly Color FrameColor = new(0.80f, 0.65f, 0.53f, 1f);           // #CBA688 oklch(0.75,0.06,60)
+    private static readonly Color SurfaceColor = new(0.99f, 0.97f, 0.93f, 1f);         // #FDF8ED oklch(0.98,0.015,85)
+    private static readonly Color SurfaceMutedColor = new(0.89f, 0.87f, 0.81f, 1f);    // #E4DDCF oklch(0.90,0.02,85)
+    private static readonly Color AccentColor = new(0.87f, 0.41f, 0.00f, 1f);          // #DF6900 oklch(0.65,0.18,55)
+    private static readonly Color AccentBrightColor = new(0.93f, 0.50f, 0.08f, 1f);    // #ED7F14 brighter hover
+    private static readonly Color AccentMutedColor = new(0.87f, 0.41f, 0.00f, 0.10f);  // primary/10 per reference
+    private static readonly Color TextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);      // #341A09 oklch(0.25,0.05,50)
+    private static readonly Color TextMutedColor = new(0.46f, 0.36f, 0.31f, 1f);       // #775D4F oklch(0.50,0.04,50)
+    private static readonly Color SuccessColor = new(0.10f, 0.60f, 0.19f, 1f);         // #189A30 oklch(0.60,0.18,145)
+    private static readonly Color DangerColor = new(0.80f, 0.15f, 0.18f, 1f);          // #CC272E oklch(0.55,0.20,25)
+    private static readonly Color CardColor = new(0.99f, 0.97f, 0.93f, 1f);            // #FDF8ED oklch(0.98,0.015,85)
+    private static readonly Color SecondaryColor = new(0.93f, 0.89f, 0.82f, 1f);       // #ECE4D2 oklch(0.92,0.025,85)
+    private static readonly Color InputBgColor = new(0.95f, 0.92f, 0.86f, 1f);         // #F1EADC oklch(0.94,0.02,85)
+    private static readonly Color BorderColor = new(0.80f, 0.65f, 0.53f, 1f);          // #CBA688 oklch(0.75,0.06,60)
+    private static readonly Color PrimaryFgColor = new(0.15f, 0.05f, 0.00f, 1f);       // #270E01 oklch(0.20,0.05,50)
 
     private readonly List<LobbyRoomSummary> _rooms = new();
     private readonly List<LobbyAnnouncementItem> _announcements = new();
@@ -91,8 +99,22 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private VBoxContainer? _roomListContainer;
     private Label? _roomHintLabel;
     private LineEdit? _roomSearchInput;
-    private MenuButton? _roomFilterMenuButton;
+    private Button? _roomFilterMenuButton;
+    private Control? _filterDialogContainer;
+    private Button? _filterPublicButton;
+    private Button? _filterLockedButton;
+    private Button? _filterJoinableButton;
+    private Button? _filterStandardButton;
+    private Button? _filterDailyButton;
+    private Button? _filterCustomButton;
     private Label? _actionAvailabilityLabel;
+    private Label? _actionCreateStatusValue;
+    private ColorRect? _actionCreateStatusDot;
+    private Label? _actionJoinStatusValue;
+    private ColorRect? _actionJoinStatusDot;
+    private Label? _actionSyncStatusValue;
+    private ColorRect? _actionSyncStatusDot;
+    private HBoxContainer? _actionSyncStatusRow;
     private Button? _refreshButton;
     private Button? _createButton;
     private Button? _joinButton;
@@ -129,8 +151,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Control? _directoryServerDialogContainer;
     private Label? _directoryServerDialogTitle;
     private Label? _directoryServerDialogStatusLabel;
-    private VBoxContainer? _directoryServerDialogOptions;
+    private GridContainer? _directoryServerDialogOptions;
     private bool _directoryServerLoadInFlight;
+    private List<(LobbyDirectoryServerEntry Entry, double? RttMs)>? _cachedDirectoryServers;
     private LobbyRoomSummary? _pendingResumeJoinRoom;
     private string? _pendingResumeJoinPassword;
     private bool _networkFieldsRevealed;
@@ -199,7 +222,44 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         EnsureAnnouncementFallback();
         RebuildRoomStage();
         UpdateActionButtons();
-        TaskHelper.RunSafely(RefreshRoomsAsync(userInitiated: false));
+        TaskHelper.RunSafely(CheckConnectivityAndRefreshAsync());
+    }
+
+    private async Task CheckConnectivityAndRefreshAsync()
+    {
+        if (!HasAvailableLobbyEndpoint())
+        {
+            GD.Print("sts2_lan_connect overlay: no lobby endpoint configured, opening server dialog");
+            _ = OpenDirectoryServerDialogAsync();
+            return;
+        }
+
+        // Pre-fetch directory servers in background so cache is warm.
+        _ = RefreshDirectoryServersInBackgroundAsync();
+
+        try
+        {
+            using LobbyApiClient apiClient = LobbyApiClient.CreateConfigured();
+            LobbyHealthResponse health = await apiClient.GetHealthAsync();
+            if (health.CreateRoomGuardStatus == "block")
+            {
+                GD.Print("sts2_lan_connect overlay: current server blocks room creation, auto-opening server dialog");
+                SetStatus("当前服务器不允许创建房间，建议切换。");
+                _ = OpenDirectoryServerDialogAsync();
+                return;
+            }
+
+            GD.Print("sts2_lan_connect overlay: connectivity check passed, proceeding with refresh");
+        }
+        catch (Exception ex)
+        {
+            GD.Print($"sts2_lan_connect overlay: connectivity check failed ({ex.Message}), auto-opening server dialog");
+            SetStatus("当前服务器无法连接，建议切换。");
+            _ = OpenDirectoryServerDialogAsync();
+            return;
+        }
+
+        await RefreshRoomsAsync(userInitiated: false);
     }
 
     private void HideOverlay()
@@ -264,7 +324,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill
         };
-        root.AddThemeConstantOverride("separation", 18);
+        root.AddThemeConstantOverride("separation", 16);
         _frameMargin.AddChild(root);
 
         root.AddChild(BuildHeaderRow());
@@ -286,6 +346,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         AddChild(BuildProgressDialog());
         AddChild(BuildResumeSlotDialog());
         AddChild(BuildDirectoryServerDialog());
+        AddChild(BuildFilterDialog());
         ApplyResponsiveLayout();
     }
 
@@ -297,12 +358,17 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         section.AddThemeConstantOverride("separation", 10);
 
+        // Wrap entire header in a pixel-border panel
+        PanelContainer headerFrame = CreatePixelBorderPanel(background: CardColor, padding: 16);
+        headerFrame.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        section.AddChild(headerFrame);
+
         _headerContentHost = new Control
         {
-            CustomMinimumSize = new Vector2(0f, 72f),
+            CustomMinimumSize = new Vector2(0f, 52f),
             SizeFlagsHorizontal = SizeFlags.ExpandFill
         };
-        section.AddChild(_headerContentHost);
+        headerFrame.AddChild(_headerContentHost);
 
         _headerBrandRow = new HBoxContainer
         {
@@ -310,19 +376,19 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         _headerBrandRow.AddThemeConstantOverride("separation", 14);
 
-        PanelContainer badge = CreateSurfacePanel(new Color(0.059f, 0.047f, 0.039f, 0.82f), new Color(AccentColor, 0.76f), radius: 18, borderWidth: 1, padding: 0);
-        badge.CustomMinimumSize = new Vector2(56f, 56f);
+        PanelContainer badge = CreatePixelBorderSmPanel(background: AccentColor, padding: 0);
+        badge.CustomMinimumSize = new Vector2(48f, 48f);
         _headerBrandRow.AddChild(badge);
 
         CenterContainer badgeCenter = new();
         badge.AddChild(badgeCenter);
 
-        Label badgeLabel = CreateTitleLabel("S", 26);
-        badgeLabel.HorizontalAlignment = HorizontalAlignment.Center;
-        badgeLabel.VerticalAlignment = VerticalAlignment.Center;
-        badgeLabel.SizeFlagsHorizontal = SizeFlags.ShrinkCenter;
-        badgeLabel.AddThemeColorOverride("font_color", AccentColor);
-        badgeCenter.AddChild(badgeLabel);
+        badgeCenter.AddChild(new GlyphIcon
+        {
+            Kind = GlyphIconKind.Gamepad,
+            GlyphColor = PrimaryFgColor,
+            CustomMinimumSize = new Vector2(28f, 28f)
+        });
 
         VBoxContainer titleGroup = new()
         {
@@ -331,11 +397,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         titleGroup.AddThemeConstantOverride("separation", 3);
         _headerBrandRow.AddChild(titleGroup);
 
-        _headerTitleLabel = CreateTitleLabel("Slay the Spire 2", 26);
+        _headerTitleLabel = CreateTitleLabel("SLAY THE SPIRE 2", 26);
         titleGroup.AddChild(_headerTitleLabel);
 
-        _headerSubtitleLabel = CreateBodyLabel("Mod 联机大厅");
-        _headerSubtitleLabel.AddThemeFontSizeOverride("font_size", 15);
+        _headerSubtitleLabel = CreateBodyLabel("[ MOD LOBBY ]");
+        _headerSubtitleLabel.AddThemeFontSizeOverride("font_size", 14);
         _headerSubtitleLabel.AddThemeColorOverride("font_color", TextMutedColor);
         titleGroup.AddChild(_headerSubtitleLabel);
 
@@ -346,8 +412,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         _headerToolbar.AddThemeConstantOverride("separation", 10);
 
-        _headerHealthPill = CreateSurfacePanel(new Color(0.059f, 0.047f, 0.039f, 0.82f), AccentMutedColor, radius: 18, borderWidth: 1, padding: 12);
-        _headerHealthPill.CustomMinimumSize = new Vector2(194f, 0f);
+        _headerHealthPill = CreatePixelBorderSmPanel(background: SecondaryColor, padding: 10);
+        _headerHealthPill.CustomMinimumSize = new Vector2(200f, 0f);
         _headerToolbar.AddChild(_headerHealthPill);
 
         HBoxContainer healthRow = new()
@@ -357,60 +423,44 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         healthRow.AddThemeConstantOverride("separation", 10);
         _headerHealthPill.AddChild(healthRow);
 
-        _healthIndicatorDot = new GlyphIcon
+        // Simple colored square — matches reference design (no WiFi icon)
+        _healthIndicatorDot = new ColorRect
         {
-            Kind = GlyphIconKind.Wifi,
-            GlyphColor = SuccessColor,
-            CustomMinimumSize = new Vector2(20f, 20f),
+            Color = SuccessColor,
+            CustomMinimumSize = new Vector2(12f, 12f),
             SizeFlagsVertical = SizeFlags.ShrinkCenter
         };
-        _healthIndicatorDot.PivotOffset = new Vector2(10f, 10f);
         healthRow.AddChild(_healthIndicatorDot);
 
-        _healthIndicatorLabel = CreateBodyLabel("服务状态加载中");
+        _healthIndicatorLabel = CreateBodyLabel("ONLINE");
         _healthIndicatorLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        _healthIndicatorLabel.AddThemeFontSizeOverride("font_size", 17);
+        _healthIndicatorLabel.AddThemeFontSizeOverride("font_size", 15);
         _healthIndicatorLabel.AddThemeColorOverride("font_color", TextStrongColor);
         healthRow.AddChild(_healthIndicatorLabel);
 
         _healthIndicatorLatencyLabel = CreateBodyLabel("--");
         _healthIndicatorLatencyLabel.HorizontalAlignment = HorizontalAlignment.Right;
-        _healthIndicatorLatencyLabel.AddThemeFontSizeOverride("font_size", 17);
-        _healthIndicatorLatencyLabel.AddThemeColorOverride("font_color", SuccessColor);
+        _healthIndicatorLatencyLabel.AddThemeFontSizeOverride("font_size", 15);
+        _healthIndicatorLatencyLabel.AddThemeColorOverride("font_color", TextMutedColor);
         healthRow.AddChild(_healthIndicatorLatencyLabel);
 
-        _chooseDirectoryServerButton = CreateToolbarButton("切换服务器", "打开公共服务器列表，切换到其他大厅。", () => TaskHelper.RunSafely(OpenDirectoryServerDialogAsync()), GlyphIconKind.Server, accent: true);
+        _chooseDirectoryServerButton = CreateToolbarButton("SERVER", "打开公共服务器列表，切换到其他大厅。", () => TaskHelper.RunSafely(OpenDirectoryServerDialogAsync()), GlyphIconKind.Server, accent: true);
         _headerToolbar.AddChild(_chooseDirectoryServerButton);
 
         _settingsButton = CreateToolbarIconButton("展开或收起设置", ToggleSettingsVisibility, GlyphIconKind.Gear);
         _headerToolbar.AddChild(_settingsButton);
 
+        // Close button hidden in reference design — keep for functionality but start invisible
         _closeButton = CreateToolbarIconButton("返回上一级菜单", HideOverlay, GlyphIconKind.Back, accent: true);
+        _closeButton.Visible = false;
         _headerToolbar.AddChild(_closeButton);
 
-        ColorRect divider = new()
-        {
-            Color = new Color(AccentColor, 0.14f),
-            CustomMinimumSize = new Vector2(0f, 1f),
-            MouseFilter = MouseFilterEnum.Ignore
-        };
-        section.AddChild(divider);
-
-        VBoxContainer hero = new()
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill
-        };
-        hero.AddThemeConstantOverride("separation", 4);
-        section.AddChild(hero);
-
-        _heroTitleLabel = CreateTitleLabel("游戏大厅", 34);
-        hero.AddChild(_heroTitleLabel);
-
-        _heroSubtitleLabel = CreateBodyLabel("浏览房间、搜索筛选、查看状态，并按服务端策略走直连或 relay 加入联机流程。");
-        _heroSubtitleLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-        _heroSubtitleLabel.AddThemeFontSizeOverride("font_size", 15);
-        _heroSubtitleLabel.AddThemeColorOverride("font_color", TextMutedColor);
-        hero.AddChild(_heroSubtitleLabel);
+        // Remove the old hero section — the reference design places title in the header itself.
+        // We keep hidden hero labels so responsive layout code doesn't null-ref.
+        _heroTitleLabel = new Label { Visible = false };
+        section.AddChild(_heroTitleLabel);
+        _heroSubtitleLabel = new Label { Visible = false };
+        section.AddChild(_heroSubtitleLabel);
 
         RebuildHeaderLayout();
         return section;
@@ -432,7 +482,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             SizeFlagsHorizontal = SizeFlags.ExpandFill
         };
 
-        PanelContainer card = CreateSurfacePanel(SurfaceColor, AccentMutedColor, padding: 22);
+        PanelContainer card = CreatePixelBorderPanel(background: CardColor, padding: 22);
         section.AddChild(card);
 
         VBoxContainer body = new();
@@ -526,86 +576,65 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private Control BuildRoomStagePanel()
     {
-        PanelContainer card = CreateGlassPanel(padding: 20);
-        card.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        card.SizeFlagsVertical = SizeFlags.ExpandFill;
-
-        VBoxContainer body = new()
+        VBoxContainer outer = new()
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill
         };
-        body.AddThemeConstantOverride("separation", 14);
-        card.AddChild(body);
-
-        body.AddChild(CreateSectionLabel("房间目录"));
-
-        Label summary = CreateBodyLabel("搜索、筛选房间，双击卡片可快速加入。");
-        summary.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-        summary.AddThemeFontSizeOverride("font_size", 15);
-        summary.AddThemeColorOverride("font_color", TextMutedColor);
-        body.AddChild(summary);
+        outer.AddThemeConstantOverride("separation", 14);
 
         _roomListSummaryLabel = CreateBodyLabel("大厅当前没有房间。");
         _roomListSummaryLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-        _roomListSummaryLabel.AddThemeColorOverride("font_color", TextStrongColor);
+        _roomListSummaryLabel.AddThemeColorOverride("font_color", TextMutedColor);
         _roomListSummaryLabel.Visible = false;
-        body.AddChild(_roomListSummaryLabel);
+        outer.AddChild(_roomListSummaryLabel);
 
-        body.AddChild(BuildRoomFilterRow());
-        body.AddChild(BuildRoomPagerRow());
+        // Search/filter bar in a pixel-border panel
+        outer.AddChild(BuildRoomFilterRow());
 
-        PanelContainer listFrame = CreateSurfacePanel(new Color(0.059f, 0.047f, 0.039f, 0.68f), new Color(AccentColor, 0.12f), radius: 18, borderWidth: 1, padding: 10);
+        // Room list in a pixel-border panel — no scroll, fixed 5-slot grid
+        PanelContainer listFrame = CreatePixelBorderPanel(background: CardColor, padding: 14);
         listFrame.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         listFrame.SizeFlagsVertical = SizeFlags.ExpandFill;
-        body.AddChild(listFrame);
+        outer.AddChild(listFrame);
 
-        ScrollContainer scroll = new()
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            SizeFlagsVertical = SizeFlags.ExpandFill,
-            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled
-        };
-        _roomListScroll = scroll;
-        scroll.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnRoomListGuiInput));
-        listFrame.AddChild(scroll);
-        ConfigureRoomListScroll(scroll);
-
+        // Use a plain Control so we can position cards with anchors (1/5 each)
         _roomListContainer = new VBoxContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill
         };
-        _roomListContainer.AddThemeConstantOverride("separation", 12);
-        scroll.AddChild(_roomListContainer);
+        _roomListContainer.AddThemeConstantOverride("separation", 8);
+        listFrame.AddChild(_roomListContainer);
 
-        _roomHintLabel = CreateBodyLabel("刷新大厅后即可更新这里的内容。");
+        // Keep _roomListScroll as null-safe dummy for any code that still references it
+        _roomListScroll = new ScrollContainer { Visible = false };
+        outer.AddChild(_roomListScroll);
+
+        _roomHintLabel = CreateBodyLabel("[ DOUBLE-CLICK TO JOIN ]  [ LOCKED ROOMS REQUIRE PASSWORD ]");
         _roomHintLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-        _roomHintLabel.AddThemeColorOverride("font_color", AccentColor);
-        body.AddChild(_roomHintLabel);
-        return card;
+        _roomHintLabel.HorizontalAlignment = HorizontalAlignment.Center;
+        _roomHintLabel.AddThemeColorOverride("font_color", TextMutedColor);
+        _roomHintLabel.AddThemeFontSizeOverride("font_size", 13);
+        outer.AddChild(_roomHintLabel);
+        return outer;
     }
 
     private Control BuildRoomFilterRow()
     {
+        // All-in-one search + filter + pagination bar inside a pixel-border panel
+        PanelContainer barPanel = CreatePixelBorderPanel(background: CardColor, padding: 14);
+        barPanel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+
         HBoxContainer container = new()
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill
         };
-        container.AddThemeConstantOverride("separation", 8);
+        container.AddThemeConstantOverride("separation", 10);
+        barPanel.AddChild(container);
 
-        PanelContainer searchShell = CreateSurfacePanel(new Color(0.059f, 0.047f, 0.039f, 0.82f), AccentMutedColor, radius: 12, borderWidth: 1, padding: 10);
-        searchShell.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        container.AddChild(searchShell);
-
-        HBoxContainer searchRow = new()
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill
-        };
-        searchRow.AddThemeConstantOverride("separation", 8);
-        searchShell.AddChild(searchRow);
-
-        searchRow.AddChild(new GlyphIcon
+        // Search icon
+        container.AddChild(new GlyphIcon
         {
             Kind = GlyphIconKind.Search,
             GlyphColor = TextMutedColor,
@@ -613,61 +642,91 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             SizeFlagsVertical = SizeFlags.ShrinkCenter
         });
 
+        // Search input (transparent, inset style)
         _roomSearchInput = new LineEdit
         {
-            PlaceholderText = UiText("搜索房间 / 房主 / 版本 / 状态"),
+            PlaceholderText = UiText("SEARCH ROOM / HOST / VERSION"),
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SelectAllOnFocus = true
         };
         ApplySearchInputStyle(_roomSearchInput);
         _roomSearchInput.Connect(LineEdit.SignalName.TextChanged, Callable.From<string>(OnRoomSearchChanged));
-        searchRow.AddChild(_roomSearchInput);
+        container.AddChild(_roomSearchInput);
 
-        _roomFilterMenuButton = new MenuButton
+        // Filter button — opens a styled dialog instead of a native PopupMenu
+        _roomFilterMenuButton = new Button
         {
             Text = UiText("筛选"),
-            TooltipText = UiText("展开筛选菜单，选择公开状态、可加入状态和游戏模式。"),
-            CustomMinimumSize = new Vector2(92f, 44f)
+            TooltipText = UiText("打开筛选面板，选择房间类型和游戏模式。"),
+            CustomMinimumSize = new Vector2(96f, 44f)
         };
         ApplyInlineButtonStyle(_roomFilterMenuButton, accent: false);
-        PopupMenu filterPopup = _roomFilterMenuButton.GetPopup();
-        filterPopup.AddCheckItem(UiText("公开"), FilterPublicId);
-        filterPopup.AddCheckItem(UiText("上锁"), FilterLockedId);
-        filterPopup.AddCheckItem(UiText("可加入"), FilterJoinableId);
-        filterPopup.AddSeparator();
-        filterPopup.AddCheckItem(UiText("标准模式"), FilterModeStandardId);
-        filterPopup.AddCheckItem(UiText("多人每日挑战"), FilterModeDailyId);
-        filterPopup.AddCheckItem(UiText("自定义模式"), FilterModeCustomId);
-        filterPopup.Connect(PopupMenu.SignalName.IdPressed, Callable.From<long>(OnRoomFilterMenuIdPressed));
+        _roomFilterMenuButton.Connect(BaseButton.SignalName.Pressed, Callable.From(OpenFilterDialog));
         container.AddChild(_roomFilterMenuButton);
 
-        Button clearButton = CreateInlineButton("清空", ClearRoomFiltersAndSearch);
-        clearButton.TooltipText = UiText("清空当前搜索关键词");
+        // Clear button (ghost style — no border)
+        Button clearButton = new()
+        {
+            Text = UiText("清空"),
+            TooltipText = UiText("清空当前搜索关键词"),
+            CustomMinimumSize = new Vector2(76f, 44f)
+        };
+        // Ghost style normally, green bg + white text + press animation on hover/press
+        clearButton.AddThemeStyleboxOverride("normal", new StyleBoxEmpty { ContentMarginLeft = 15, ContentMarginRight = 15, ContentMarginTop = 9, ContentMarginBottom = 9 });
+        clearButton.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(SuccessColor, BorderColor, 2, 10, 3, 1));
+        clearButton.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(new Color(SuccessColor, 0.8f), BorderColor, 2, 10, 3, 3));
+        clearButton.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(SuccessColor, BorderColor, 2, 10, 3, 1));
+        clearButton.AddThemeColorOverride("font_color", TextMutedColor);
+        clearButton.AddThemeColorOverride("font_hover_color", CardColor);     // white on green
+        clearButton.AddThemeColorOverride("font_pressed_color", CardColor);
+        clearButton.AddThemeFontSizeOverride("font_size", 18);
+        clearButton.Connect(BaseButton.SignalName.Pressed, Callable.From(ClearRoomFiltersAndSearch));
         container.AddChild(clearButton);
+
+        // Vertical divider
+        ColorRect divider = new()
+        {
+            Color = BorderColor,
+            CustomMinimumSize = new Vector2(1f, 24f),
+            SizeFlagsVertical = SizeFlags.ShrinkCenter,
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+        container.AddChild(divider);
+
+        // Pagination (merged into the same bar)
+        _pageSummaryLabel = CreateBodyLabel("PAGE 1/1");
+        _pageSummaryLabel.AddThemeColorOverride("font_color", TextMutedColor);
+        _pageSummaryLabel.AddThemeFontSizeOverride("font_size", 16);
+        _pageSummaryLabel.SizeFlagsVertical = SizeFlags.ShrinkCenter;
+        container.AddChild(_pageSummaryLabel);
+
+        _pagePreviousButton = CreateInlineButton("<", () => ChangePage(-1));
+        _pagePreviousButton.CustomMinimumSize = new Vector2(40f, 40f);
+        container.AddChild(_pagePreviousButton);
+
+        _pageNextButton = CreateInlineButton(">", () => ChangePage(1));
+        _pageNextButton.CustomMinimumSize = new Vector2(40f, 40f);
+        container.AddChild(_pageNextButton);
+
+        // Keep _roomPagerRow as a hidden dummy so existing visibility logic doesn't null-ref
+        _roomPagerRow = new HBoxContainer { Visible = false };
+
         UpdateRoomFilterButtons();
-        return container;
+        return barPanel;
     }
 
     private Control BuildRoomPagerRow()
     {
+        // Pagination is now merged into BuildRoomFilterRow; this is a no-op stub.
         HBoxContainer row = new()
         {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            Visible = false
         };
-        row.AddThemeConstantOverride("separation", 10);
-        row.Visible = false;
         _roomPagerRow = row;
-
-        _pageSummaryLabel = CreateBodyLabel("第 1 / 1 页");
-        _pageSummaryLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        _pageSummaryLabel.AddThemeColorOverride("font_color", TextMutedColor);
-        row.AddChild(_pageSummaryLabel);
-
-        _pagePreviousButton = CreateInlineButton("上一页", () => ChangePage(-1));
-        row.AddChild(_pagePreviousButton);
-
-        _pageNextButton = CreateInlineButton("下一页", () => ChangePage(1));
-        row.AddChild(_pageNextButton);
+        _pageSummaryLabel ??= new Label();
+        _pagePreviousButton ??= new Button();
+        _pageNextButton ??= new Button();
         return row;
     }
 
@@ -675,10 +734,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         _sidebarContainer = new VBoxContainer
         {
-            CustomMinimumSize = new Vector2(278f, 0f),
+            CustomMinimumSize = new Vector2(200f, 0f),
             SizeFlagsVertical = SizeFlags.ExpandFill
         };
-        _sidebarContainer.AddThemeConstantOverride("separation", 16);
+        _sidebarContainer.AddThemeConstantOverride("separation", 12);
 
         _sidebarContainer.AddChild(BuildStatusCard());
         _sidebarContainer.AddChild(BuildActionCard());
@@ -716,23 +775,44 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
         else
         {
-            HBoxContainer layout = new()
+            // Anchor-based proportional layout: use a plain Control wrapper
+            // so the cleanup loop frees the wrapper, not the panels themselves.
+            const float sidebarFraction = 0.25f;    // sidebar = 25% of width (3:1 ratio)
+            const float gapPx = 16f;
+            float halfGap = gapPx / 2f;
+
+            Control wrapper = new()
             {
                 SizeFlagsHorizontal = SizeFlags.ExpandFill,
                 SizeFlagsVertical = SizeFlags.ExpandFill
             };
-            layout.SetAnchorsPreset(LayoutPreset.FullRect);
-            layout.AddThemeConstantOverride("separation", 22);
-            _mainContentHost.AddChild(layout);
+            wrapper.SetAnchorsPreset(LayoutPreset.FullRect);
+            _mainContentHost.AddChild(wrapper);
 
-            AttachChild(layout, _roomStagePanel);
-            AttachChild(layout, _sidebarContainer);
-            _roomStagePanel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-            _roomStagePanel.SizeFlagsVertical = SizeFlags.ExpandFill;
-            _roomStagePanel.SizeFlagsStretchRatio = 1f;
-            _sidebarContainer.SizeFlagsHorizontal = SizeFlags.Fill;
-            _sidebarContainer.SizeFlagsVertical = SizeFlags.ExpandFill;
-            _sidebarContainer.SizeFlagsStretchRatio = 0f;
+            _roomStagePanel.GetParent()?.RemoveChild(_roomStagePanel);
+            _sidebarContainer.GetParent()?.RemoveChild(_sidebarContainer);
+            wrapper.AddChild(_roomStagePanel);
+            wrapper.AddChild(_sidebarContainer);
+
+            // Room list: left 0% → 75%, full height
+            _roomStagePanel.AnchorLeft = 0f;
+            _roomStagePanel.AnchorRight = 1f - sidebarFraction;
+            _roomStagePanel.AnchorTop = 0f;
+            _roomStagePanel.AnchorBottom = 1f;
+            _roomStagePanel.OffsetLeft = 0f;
+            _roomStagePanel.OffsetRight = -halfGap;
+            _roomStagePanel.OffsetTop = 0f;
+            _roomStagePanel.OffsetBottom = 0f;
+
+            // Sidebar: right 75% → 100%, full height
+            _sidebarContainer.AnchorLeft = 1f - sidebarFraction;
+            _sidebarContainer.AnchorRight = 1f;
+            _sidebarContainer.AnchorTop = 0f;
+            _sidebarContainer.AnchorBottom = 1f;
+            _sidebarContainer.OffsetLeft = halfGap;
+            _sidebarContainer.OffsetRight = 0f;
+            _sidebarContainer.OffsetTop = 0f;
+            _sidebarContainer.OffsetBottom = 0f;
         }
     }
 
@@ -789,29 +869,29 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             if (compact)
             {
-                _frameMargin.OffsetLeft = 18f;
-                _frameMargin.OffsetTop = 18f;
-                _frameMargin.OffsetRight = -18f;
-                _frameMargin.OffsetBottom = -18f;
+                _frameMargin.OffsetLeft = 14f;
+                _frameMargin.OffsetTop = 14f;
+                _frameMargin.OffsetRight = -14f;
+                _frameMargin.OffsetBottom = -14f;
             }
             else
             {
-                _frameMargin.OffsetLeft = 28f;
-                _frameMargin.OffsetTop = 24f;
-                _frameMargin.OffsetRight = -28f;
-                _frameMargin.OffsetBottom = -24f;
+                _frameMargin.OffsetLeft = 30f;
+                _frameMargin.OffsetTop = 26f;
+                _frameMargin.OffsetRight = -30f;
+                _frameMargin.OffsetBottom = -26f;
             }
         }
 
         if (_sidebarContainer != null)
         {
-            _sidebarContainer.CustomMinimumSize = new Vector2(compact ? 0f : 278f, 0f);
+            _sidebarContainer.CustomMinimumSize = new Vector2(compact ? 0f : 200f, 0f);
             _sidebarContainer.SizeFlagsHorizontal = compact ? SizeFlags.ExpandFill : SizeFlags.Fill;
         }
 
         if (_headerContentHost != null)
         {
-            _headerContentHost.CustomMinimumSize = new Vector2(0f, compact ? 106f : 72f);
+            _headerContentHost.CustomMinimumSize = new Vector2(0f, compact ? 106f : 64f);
         }
 
         if (_headerTitleLabel != null)
@@ -841,23 +921,23 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (_headerHealthPill != null)
         {
-            _headerHealthPill.CustomMinimumSize = new Vector2(compact ? 148f : 206f, 0f);
+            _headerHealthPill.CustomMinimumSize = new Vector2(compact ? 148f : 200f, 0f);
         }
 
         if (_chooseDirectoryServerButton != null)
         {
-            _chooseDirectoryServerButton.CustomMinimumSize = new Vector2(compact ? 154f : 174f, compact ? 50f : 54f);
-            SetButtonText(_chooseDirectoryServerButton, "切换服务器");
+            _chooseDirectoryServerButton.CustomMinimumSize = new Vector2(compact ? 148f : 170f, compact ? 46f : 50f);
+            SetButtonText(_chooseDirectoryServerButton, "SERVER");
         }
 
         if (_settingsButton != null)
         {
-            _settingsButton.CustomMinimumSize = new Vector2(compact ? 50f : 54f, compact ? 50f : 54f);
+            _settingsButton.CustomMinimumSize = new Vector2(compact ? 46f : 50f, compact ? 46f : 50f);
         }
 
         if (_closeButton != null)
         {
-            _closeButton.CustomMinimumSize = new Vector2(compact ? 50f : 54f, compact ? 50f : 54f);
+            _closeButton.CustomMinimumSize = new Vector2(compact ? 46f : 50f, compact ? 46f : 50f);
         }
 
         if (layoutChanged || _headerContentHost?.GetChildCount() == 0)
@@ -897,7 +977,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private Control BuildStatusCard()
     {
-        PanelContainer card = CreateGlassPanel(padding: 20);
+        PanelContainer card = CreatePixelBorderPanel(background: CardColor, padding: 18);
         VBoxContainer body = new()
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill
@@ -905,11 +985,35 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         body.AddThemeConstantOverride("separation", 14);
         card.AddChild(body);
 
-        body.AddChild(CreateSectionHeader("大厅状态", GlyphIconKind.Nodes));
+        // Header with bottom border
+        HBoxContainer header = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        header.AddThemeConstantOverride("separation", 8);
+        body.AddChild(header);
+        header.AddChild(new GlyphIcon
+        {
+            Kind = GlyphIconKind.Globe,
+            GlyphColor = AccentColor,
+            CustomMinimumSize = new Vector2(18f, 18f),
+            SizeFlagsVertical = SizeFlags.ShrinkCenter
+        });
+        Label statusTitle = CreateBodyLabel("STATUS");
+        statusTitle.AddThemeColorOverride("font_color", TextStrongColor);
+        statusTitle.AddThemeFontSizeOverride("font_size", 16);
+        header.AddChild(statusTitle);
 
-        _statusHealthValueLabel = CreateMetricStatusRow(body, "服务状态", "等待探测");
-        _statusLatencyValueLabel = CreateMetricRow(body, "延迟", "--");
-        _statusRoomCountValueLabel = CreateMetricRow(body, "公开房间", "0");
+        // Separator line
+        ColorRect sep = new()
+        {
+            Color = BorderColor,
+            CustomMinimumSize = new Vector2(0f, 2f),
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+        body.AddChild(sep);
+
+        _statusHealthValueLabel = CreateMetricStatusRow(body, "SERVER", "OK");
+        _statusLatencyValueLabel = CreateMetricRow(body, "PING", "--");
+        _statusRoomCountValueLabel = CreateMetricRow(body, "ROOMS", "0");
 
         _statusLabel = CreateBodyLabel(string.Empty);
         _statusLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
@@ -920,36 +1024,76 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private Control BuildActionCard()
     {
-        PanelContainer card = CreateGlassPanel(padding: 20);
+        PanelContainer card = CreatePixelBorderPanel(background: CardColor, padding: 16);
+        card.SizeFlagsVertical = SizeFlags.ExpandFill;
         VBoxContainer body = new();
-        body.AddThemeConstantOverride("separation", 12);
+        body.AddThemeConstantOverride("separation", 8);
         card.AddChild(body);
 
-        body.AddChild(CreateSectionHeader("快速操作", GlyphIconKind.InfoCircle));
+        // Header with bottom border
+        HBoxContainer header = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        header.AddThemeConstantOverride("separation", 8);
+        body.AddChild(header);
+        header.AddChild(new GlyphIcon
+        {
+            Kind = GlyphIconKind.Zap,
+            GlyphColor = AccentColor,
+            CustomMinimumSize = new Vector2(18f, 18f),
+            SizeFlagsVertical = SizeFlags.ShrinkCenter
+        });
+        Label actTitle = CreateBodyLabel("ACTIONS");
+        actTitle.AddThemeColorOverride("font_color", TextStrongColor);
+        actTitle.AddThemeFontSizeOverride("font_size", 16);
+        header.AddChild(actTitle);
 
-        _createButton = CreateActionButton("创建房间", "先在本地起 ENet Host，再把房间发布到大厅。", () => TaskHelper.RunSafely(BeginCreateRoomFlowAsync()), primary: true, iconKind: GlyphIconKind.Plus);
+        ColorRect sep = new()
+        {
+            Color = BorderColor,
+            CustomMinimumSize = new Vector2(0f, 2f),
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+        body.AddChild(sep);
+
+        _createButton = CreateActionButton("CREATE", "先在本地起 ENet Host，再把房间发布到大厅。", () => TaskHelper.RunSafely(BeginCreateRoomFlowAsync()), primary: true, iconKind: GlyphIconKind.Plus);
         body.AddChild(_createButton);
 
-        _joinButton = CreateActionButton("加入选中房间", "加入当前选中的房间，密码房会先弹出输入框。", JoinSelectedRoom, iconKind: GlyphIconKind.JoinArrow);
+        _joinButton = CreateActionButton("JOIN", "加入当前选中的房间，密码房会先弹出输入框。", JoinSelectedRoom, iconKind: GlyphIconKind.JoinArrow);
         body.AddChild(_joinButton);
 
-        _refreshButton = CreateActionButton("刷新大厅", "立即抓取最新房间列表，并重置自动刷新计时。", () => TaskHelper.RunSafely(RefreshRoomsAsync(userInitiated: true)), iconKind: GlyphIconKind.Refresh);
+        _refreshButton = CreateActionButton("REFRESH", "立即抓取最新房间列表，并重置自动刷新计时。", () => TaskHelper.RunSafely(RefreshRoomsAsync(userInitiated: true)), iconKind: GlyphIconKind.Refresh);
         body.AddChild(_refreshButton);
 
         _closeRoomButton = CreateActionButton("关闭我的房间", "关闭当前托管中的大厅房间，并从房间列表里移除。", () => TaskHelper.RunSafely(CloseMyRoomAsync()), danger: true);
         _closeRoomButton.Visible = false;
         body.AddChild(_closeRoomButton);
 
-        _actionAvailabilityLabel = CreateBodyLabel("操作状态会显示在这里。");
-        _actionAvailabilityLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-        _actionAvailabilityLabel.AddThemeColorOverride("font_color", TextMutedColor);
-        body.AddChild(_actionAvailabilityLabel);
+        // Spacer before status indicators (reference: mt-3 = 12px)
+        Control statusSpacer = new() { CustomMinimumSize = new Vector2(0f, 6f) };
+        body.AddChild(statusSpacer);
+
+        // Status box (sunken/inset style) with structured KEY: VALUE rows
+        PanelContainer statusBox = new() { ClipContents = true };
+        statusBox.AddThemeStyleboxOverride("panel", CreatePixelStyle(SurfaceMutedColor, BorderColor, borderWidth: 2, padding: 8, shadowSize: 0));
+        VBoxContainer statusBody = new();
+        statusBody.AddThemeConstantOverride("separation", 4);
+        statusBox.AddChild(statusBody);
+
+        (_actionCreateStatusDot, _actionCreateStatusValue) = BuildActionStatusRow(statusBody, "CREATE:");
+        (_actionJoinStatusDot, _actionJoinStatusValue) = BuildActionStatusRow(statusBody, "JOIN:");
+        (_actionSyncStatusDot, _actionSyncStatusValue, _actionSyncStatusRow) = BuildActionStatusRowWithContainer(statusBody, "");
+
+        // Keep legacy label hidden for any code that still references it
+        _actionAvailabilityLabel = new Label { Visible = false };
+        statusBody.AddChild(_actionAvailabilityLabel);
+
+        body.AddChild(statusBox);
         return card;
     }
 
     private Control BuildSupportCard()
     {
-        PanelContainer card = CreateGlassPanel(padding: 22);
+        PanelContainer card = CreatePixelBorderPanel(background: CardColor, padding: 22);
         VBoxContainer body = new();
         body.AddThemeConstantOverride("separation", 12);
         card.AddChild(body);
@@ -1160,25 +1304,59 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Control shell = CreateDialogShell(out VBoxContainer body);
         _directoryServerDialogContainer = shell;
 
-        _directoryServerDialogTitle = CreateSectionLabel("选择中心服务器中的大厅");
+        // Enlarge dialog to cover ~80% of the screen for comfortable browsing.
+        if (body.GetParent() is PanelContainer card)
+        {
+            card.CustomMinimumSize = new Vector2(0f, 0f);
+            if (card.GetParent() is MarginContainer margin)
+            {
+                // Use percentage-based anchors instead of fixed offsets:
+                // roughly 10% margin on each side → 80% of screen.
+                if (margin.GetParent() is CenterContainer cc)
+                {
+                    cc.RemoveChild(margin);
+                    margin.SetAnchorsPreset(LayoutPreset.FullRect);
+                    margin.OffsetLeft = 0f;
+                    margin.OffsetTop = 0f;
+                    margin.OffsetRight = 0f;
+                    margin.OffsetBottom = 0f;
+                    margin.AddThemeConstantOverride("margin_left", 80);
+                    margin.AddThemeConstantOverride("margin_top", 60);
+                    margin.AddThemeConstantOverride("margin_right", 80);
+                    margin.AddThemeConstantOverride("margin_bottom", 60);
+                    shell.AddChild(margin);
+                }
+            }
+        }
+
+        _directoryServerDialogTitle = CreateSectionLabel("切换大厅服务器");
+        _directoryServerDialogTitle.AddThemeFontSizeOverride("font_size", 22);
         body.AddChild(_directoryServerDialogTitle);
 
-        Label description = CreateBodyLabel("从中心服务器获取已验证的大厅服务列表。选择后会自动写入 HTTP 覆盖地址。WS 控制通道会从该地址自动推导。 ");
-        description.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-        description.AddThemeColorOverride("font_color", TextMutedColor);
-        body.AddChild(description);
-
-        _directoryServerDialogStatusLabel = CreateBodyLabel("正在等待加载。 ");
+        _directoryServerDialogStatusLabel = CreateBodyLabel("选择一个大厅服务器。延迟越低体验越好。");
         _directoryServerDialogStatusLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         _directoryServerDialogStatusLabel.AddThemeColorOverride("font_color", TextMutedColor);
+        _directoryServerDialogStatusLabel.AddThemeFontSizeOverride("font_size", 18);
         body.AddChild(_directoryServerDialogStatusLabel);
 
-        _directoryServerDialogOptions = new VBoxContainer
+        _directoryServerDialogOptions = new GridContainer
         {
+            Columns = 2,
             SizeFlagsHorizontal = SizeFlags.ExpandFill
         };
-        _directoryServerDialogOptions.AddThemeConstantOverride("separation", 10);
-        body.AddChild(_directoryServerDialogOptions);
+        _directoryServerDialogOptions.AddThemeConstantOverride("h_separation", 14);
+        _directoryServerDialogOptions.AddThemeConstantOverride("v_separation", 14);
+
+        ScrollContainer directoryScroll = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(0f, 300f),
+            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
+            VerticalScrollMode = ScrollContainer.ScrollMode.Auto
+        };
+        directoryScroll.AddChild(_directoryServerDialogOptions);
+        body.AddChild(directoryScroll);
 
         HBoxContainer actions = new()
         {
@@ -1197,6 +1375,157 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return shell;
     }
 
+    private Control BuildFilterDialog()
+    {
+        Control shell = CreateDialogShell(out VBoxContainer body);
+        _filterDialogContainer = shell;
+
+        // ── Header row: title (left) + red close button (right) ──
+        HBoxContainer header = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        header.AddThemeConstantOverride("separation", 10);
+        body.AddChild(header);
+
+        Label title = CreateSectionLabel("筛选条件");
+        title.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        header.AddChild(title);
+
+        Button closeBtn = new()
+        {
+            Text = UiText("✕"),
+            CustomMinimumSize = new Vector2(44f, 44f),
+            TooltipText = UiText("关闭筛选面板")
+        };
+        // Red close button with press animation
+        Color dangerHover = new(0.90f, 0.22f, 0.22f, 1f);
+        Color dangerPressed = new(0.65f, 0.12f, 0.12f, 1f);
+        closeBtn.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(DangerColor, DangerColor, 2, 10, 3, 0));
+        closeBtn.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(dangerHover, DangerColor, 2, 10, 3, 1));
+        closeBtn.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(dangerPressed, DangerColor, 2, 10, 3, 3));
+        closeBtn.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(dangerHover, DangerColor, 2, 10, 3, 1));
+        closeBtn.AddThemeColorOverride("font_color", CardColor);
+        closeBtn.AddThemeColorOverride("font_hover_color", CardColor);
+        closeBtn.AddThemeColorOverride("font_pressed_color", CardColor);
+        closeBtn.AddThemeFontSizeOverride("font_size", 18);
+        closeBtn.Connect(BaseButton.SignalName.Pressed, Callable.From(CloseFilterDialog));
+        header.AddChild(closeBtn);
+
+        // ── Separator ──
+        body.AddChild(new ColorRect
+        {
+            Color = BorderColor,
+            CustomMinimumSize = new Vector2(0f, 2f),
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            MouseFilter = MouseFilterEnum.Ignore
+        });
+
+        // ── Section: 房间类型 ──
+        body.AddChild(CreateBodyLabel("房间类型"));
+
+        HBoxContainer accessRow = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        accessRow.AddThemeConstantOverride("separation", 10);
+        body.AddChild(accessRow);
+
+        _filterPublicButton = CreateFilterToggleButton("公开", () =>
+        {
+            _showPublicRooms = !_showPublicRooms;
+            SyncFilterDialogButtons();
+            ApplyRoomFilterState("dialog_public");
+        });
+        accessRow.AddChild(_filterPublicButton);
+
+        _filterLockedButton = CreateFilterToggleButton("上锁", () =>
+        {
+            _showLockedRooms = !_showLockedRooms;
+            SyncFilterDialogButtons();
+            ApplyRoomFilterState("dialog_locked");
+        });
+        accessRow.AddChild(_filterLockedButton);
+
+        _filterJoinableButton = CreateFilterToggleButton("可加入", () =>
+        {
+            _joinableOnlyFilter = !_joinableOnlyFilter;
+            SyncFilterDialogButtons();
+            ApplyRoomFilterState("dialog_joinable");
+        });
+        accessRow.AddChild(_filterJoinableButton);
+
+        // ── Section: 游戏模式 ──
+        body.AddChild(CreateBodyLabel("游戏模式"));
+
+        HBoxContainer modeRow = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        modeRow.AddThemeConstantOverride("separation", 10);
+        body.AddChild(modeRow);
+
+        _filterStandardButton = CreateFilterToggleButton("标准模式", () =>
+        {
+            _showStandardMode = !_showStandardMode;
+            SyncFilterDialogButtons();
+            ApplyRoomFilterState("dialog_standard");
+        });
+        modeRow.AddChild(_filterStandardButton);
+
+        _filterDailyButton = CreateFilterToggleButton("多人每日挑战", () =>
+        {
+            _showDailyMode = !_showDailyMode;
+            SyncFilterDialogButtons();
+            ApplyRoomFilterState("dialog_daily");
+        });
+        modeRow.AddChild(_filterDailyButton);
+
+        _filterCustomButton = CreateFilterToggleButton("自定义模式", () =>
+        {
+            _showCustomMode = !_showCustomMode;
+            SyncFilterDialogButtons();
+            ApplyRoomFilterState("dialog_custom");
+        });
+        modeRow.AddChild(_filterCustomButton);
+
+        return shell;
+    }
+
+    private Button CreateFilterToggleButton(string text, Action onPressed)
+    {
+        Button button = new()
+        {
+            Text = UiText(text),
+            CustomMinimumSize = new Vector2(0f, 44f)
+        };
+        ApplyFilterChipStyle(button, active: true);
+        button.Connect(BaseButton.SignalName.Pressed, Callable.From(onPressed));
+        return button;
+    }
+
+    private void SyncFilterDialogButtons()
+    {
+        ApplyFilterChipStyle(_filterPublicButton, _showPublicRooms);
+        ApplyFilterChipStyle(_filterLockedButton, _showLockedRooms);
+        ApplyFilterChipStyle(_filterJoinableButton, _joinableOnlyFilter);
+        ApplyFilterChipStyle(_filterStandardButton, _showStandardMode);
+        ApplyFilterChipStyle(_filterDailyButton, _showDailyMode);
+        ApplyFilterChipStyle(_filterCustomButton, _showCustomMode);
+        // Also update the 筛选 button accent state in the search bar
+        if (_roomFilterMenuButton != null)
+        {
+            ApplyInlineButtonStyle(_roomFilterMenuButton, HasRoomSearchOrFilter());
+        }
+    }
+
+    private void OpenFilterDialog()
+    {
+        if (_filterDialogContainer == null) return;
+        SyncFilterDialogButtons();
+        _filterDialogContainer.Visible = true;
+        _filterDialogContainer.MoveToFront();
+    }
+
+    private void CloseFilterDialog()
+    {
+        if (_filterDialogContainer != null)
+        {
+            _filterDialogContainer.Visible = false;
+        }
+    }
+
     private Control CreateDialogShell(out VBoxContainer body)
     {
         Control shell = new()
@@ -1208,7 +1537,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         ColorRect veil = new()
         {
-            Color = new Color(0f, 0f, 0f, 0.55f),
+            Color = new Color(0f, 0f, 0f, 0.45f),
             MouseFilter = MouseFilterEnum.Stop
         };
         veil.SetAnchorsPreset(LayoutPreset.FullRect);
@@ -1226,7 +1555,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         margin.OffsetBottom = 180f;
         center.AddChild(margin);
 
-        PanelContainer card = CreateSurfacePanel(FrameColor, AccentColor, radius: 20, padding: 22);
+        PanelContainer card = CreatePixelBorderPanel(background: CardColor, padding: 22);
         card.CustomMinimumSize = new Vector2(560f, 0f);
         margin.AddChild(card);
 
@@ -1502,18 +1831,18 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                 _rooms.Count == 0
                     ? "大厅当前没有房间。"
                     : $"没有匹配结果 · 当前筛选：{DescribeRoomFilterState()}");
-            SetLabelText(_pageSummaryLabel, "第 0 / 0 页");
+            SetLabelText(_pageSummaryLabel, "PAGE 0/0");
             if (_rooms.Count == 0)
             {
                 _roomListContainer.AddChild(CreateEmptyRoomCard(
                     "大厅当前没有房间。",
                     "刷新大厅后，你也可以在右侧直接创建一个新的公开房间。"));
                 SetLabelText(
-                    _roomHintLabel,
+                    _actionAvailabilityLabel,
                     HasAvailableLobbyEndpoint()
                         ? "你可以先刷新大厅，或者直接在右侧创建一个新的房间。"
                         : "当前客户端未绑定内置大厅服务。请在设置里填写 HTTP 覆盖地址。");
-                _roomHintLabel.AddThemeColorOverride("font_color", HasAvailableLobbyEndpoint() ? AccentColor : DangerColor);
+                _actionAvailabilityLabel?.AddThemeColorOverride("font_color", HasAvailableLobbyEndpoint() ? AccentColor : DangerColor);
             }
             else
             {
@@ -1523,11 +1852,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                         ? "尝试缩短关键词，或取消部分筛选后重试。"
                         : "可检索字段包括房间名、房主名、版本和状态。"));
                 SetLabelText(
-                    _roomHintLabel,
+                    _actionAvailabilityLabel,
                     hasSearchOrFilter
                         ? "尝试缩短关键词，或取消部分筛选后重新查看完整房间列表。"
                         : "尝试刷新大厅后重新查看完整房间列表。");
-                _roomHintLabel.AddThemeColorOverride("font_color", AccentColor);
+                _actionAvailabilityLabel?.AddThemeColorOverride("font_color", AccentColor);
             }
 
             UpdatePageControls(filteredRooms.Count);
@@ -1560,35 +1889,49 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _roomListContainer.AddChild(CreateRoomCard(room, isSelected, isHostRoom));
         }
 
+        // Pad with invisible spacers so the 5-slot grid is always full.
+        // Each card already has ExpandFill + ratio 1; spacers match.
+        for (int i = pageRooms.Count; i < LanConnectConstants.LobbyRoomsPerPage; i++)
+        {
+            Control spacer = new()
+            {
+                SizeFlagsHorizontal = SizeFlags.ExpandFill,
+                SizeFlagsVertical = SizeFlags.ExpandFill,
+                SizeFlagsStretchRatio = 1f
+            };
+            _roomListContainer.AddChild(spacer);
+        }
+
+        // Dynamic selection status goes to the action availability label (sidebar), not the bottom hint
         if (selectedIsHostRoom)
         {
-            SetLabelText(_roomHintLabel, "当前选中的是你自己托管的房间，无法重复加入；如需重开，请先关闭它。");
-            _roomHintLabel.AddThemeColorOverride("font_color", SuccessColor);
+            SetLabelText(_actionAvailabilityLabel, UiText("当前选中的是你自己托管的房间，无法重复加入。"));
+            _actionAvailabilityLabel?.AddThemeColorOverride("font_color", SuccessColor);
         }
         else if (!CanJoinRoom(selectedRoom, out string? joinDisabledReason))
         {
-            SetLabelText(_roomHintLabel, joinDisabledReason ?? "该房间当前不可加入。");
-            _roomHintLabel.AddThemeColorOverride("font_color", DangerColor);
+            SetLabelText(_actionAvailabilityLabel, UiText(joinDisabledReason ?? "该房间当前不可加入。"));
+            _actionAvailabilityLabel?.AddThemeColorOverride("font_color", DangerColor);
         }
         else if (selectedRoom.SavedRun != null)
         {
             int availableSlots = GetAvailableSavedRunSlots(selectedRoom).Count;
             SetLabelText(
-                _roomHintLabel,
-                availableSlots <= 0
-                    ? "当前选中的是续局房间，但暂时没有可接管的角色槽位。"
-                    : $"当前选中的是续局房间。可接管角色数：{availableSlots}；加入前会先让你选择角色槽位。");
-            _roomHintLabel.AddThemeColorOverride("font_color", availableSlots <= 0 ? DangerColor : AccentColor);
+                _actionAvailabilityLabel,
+                UiText(availableSlots <= 0
+                    ? "该续局房间当前没有可接管角色。"
+                    : $"续局房间，可接管 {availableSlots} 个角色槽位。"));
+            _actionAvailabilityLabel?.AddThemeColorOverride("font_color", availableSlots <= 0 ? DangerColor : AccentColor);
         }
         else if (selectedRoom.RequiresPassword)
         {
-            SetLabelText(_roomHintLabel, "当前选中房间需要密码。双击卡片或点击右侧“加入选中房间”后会先弹出密码输入框。");
-            _roomHintLabel.AddThemeColorOverride("font_color", AccentColor);
+            SetLabelText(_actionAvailabilityLabel, UiText("当前选中房间需要密码。"));
+            _actionAvailabilityLabel?.AddThemeColorOverride("font_color", AccentColor);
         }
         else
         {
-            SetLabelText(_roomHintLabel, "当前选中房间为公开房间。双击卡片可直接加入。");
-            _roomHintLabel.AddThemeColorOverride("font_color", SuccessColor);
+            SetLabelText(_actionAvailabilityLabel, UiText("当前选中房间为公开房间，可直接加入。"));
+            _actionAvailabilityLabel?.AddThemeColorOverride("font_color", SuccessColor);
         }
     }
 
@@ -1598,8 +1941,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         scroll.MouseFilter = MouseFilterEnum.Stop;
         VScrollBar scrollbar = scroll.GetVScrollBar();
         scrollbar.CustomMinimumSize = new Vector2(20f, 0f);
-        scrollbar.AddThemeStyleboxOverride("scroll", CreatePanelStyle(new Color(0.07f, 0.07f, 0.08f, 0.98f), new Color(AccentColor, 0.14f), radius: 999, borderWidth: 1, padding: 4));
-        scrollbar.AddThemeStyleboxOverride("grabber", CreatePanelStyle(new Color(0.54f, 0.19f, 0.11f, 0.92f), new Color(AccentColor, 0.3f), radius: 999, borderWidth: 0, padding: 8));
+        scrollbar.AddThemeStyleboxOverride("scroll", CreatePixelStyle(SurfaceMutedColor, BorderColor, borderWidth: 1, padding: 4, shadowSize: 0));
+        scrollbar.AddThemeStyleboxOverride("grabber", CreatePixelStyle(AccentColor, BorderColor, borderWidth: 0, padding: 8, shadowSize: 0));
         scrollbar.AddThemeStyleboxOverride("grabber_highlight", CreatePanelStyle(new Color(0.64f, 0.24f, 0.13f, 0.94f), new Color(AccentBrightColor, 0.34f), radius: 999, borderWidth: 0, padding: 8));
         scrollbar.AddThemeStyleboxOverride("grabber_pressed", CreatePanelStyle(new Color(0.72f, 0.28f, 0.15f, 0.96f), new Color(AccentBrightColor, 0.38f), radius: 999, borderWidth: 0, padding: 8));
     }
@@ -1702,9 +2045,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private Control CreateEmptyRoomCard(string titleText, string descriptionText)
     {
-        PanelContainer card = CreateSurfacePanel(new Color(0.059f, 0.047f, 0.039f, 0.72f), AccentMutedColor, radius: 18, borderWidth: 1, padding: 22);
+        PanelContainer card = CreateSurfacePanel(SurfaceMutedColor, BorderColor, borderWidth: 2, padding: 22);
         card.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        card.CustomMinimumSize = new Vector2(0f, 156f);
+        card.CustomMinimumSize = new Vector2(0f, 120f);
 
         VBoxContainer body = new()
         {
@@ -1730,33 +2073,33 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         if (isHostRoom)
         {
-            return ("你的房间", SuccessColor, new Color(0.06f, 0.11f, 0.07f, 0.96f));
+            return ("你的房间", SuccessColor, new Color(SuccessColor, 0.15f));
         }
 
         if (string.Equals(room.Status, "starting", StringComparison.OrdinalIgnoreCase))
         {
-            return ("已开局", DangerColor, new Color(0.18f, 0.09f, 0.09f, 0.96f));
+            return ("已开局", DangerColor, new Color(DangerColor, 0.12f));
         }
 
         if (string.Equals(room.Status, "full", StringComparison.OrdinalIgnoreCase))
         {
-            return ("已满", DangerColor, new Color(0.18f, 0.09f, 0.09f, 0.96f));
+            return ("已满", DangerColor, new Color(DangerColor, 0.12f));
         }
 
         if (room.SavedRun != null)
         {
             int availableSlots = GetAvailableSavedRunSlots(room).Count;
             return availableSlots > 0
-                ? ($"{availableSlots} 可接管", AccentColor, new Color(0.16f, 0.08f, 0.07f, 0.96f))
-                : ("续局已满", DangerColor, new Color(0.18f, 0.09f, 0.09f, 0.96f));
+                ? ($"{availableSlots} 可接管", AccentColor, new Color(AccentColor, 0.15f))
+                : ("续局已满", DangerColor, new Color(DangerColor, 0.12f));
         }
 
         if (room.RequiresPassword)
         {
-            return ("已上锁", DangerColor, new Color(0.18f, 0.09f, 0.09f, 0.96f));
+            return ("已上锁", BorderColor, SecondaryColor);
         }
 
-        return ("可加入", SuccessColor, new Color(0.06f, 0.11f, 0.07f, 0.96f));
+        return ("可加入", SuccessColor, new Color(SuccessColor, 0.15f));
     }
 
     private static Color GetRoomLockColor(LobbyRoomSummary room)
@@ -1768,9 +2111,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         return gameMode?.Trim().ToLowerInvariant() switch
         {
-            "daily" => ("挑战", new Color(0.97f, 0.76f, 0.34f, 1f), new Color(0.15f, 0.10f, 0.05f, 0.96f)),
-            "custom" => ("自定义", new Color(0.42f, 0.88f, 0.79f, 1f), new Color(0.06f, 0.11f, 0.10f, 0.96f)),
-            _ => ("标准", new Color(0.58f, 0.77f, 0.97f, 1f), new Color(0.08f, 0.10f, 0.14f, 0.96f))
+            "daily" => ("挑战", BorderColor, new Color(0.95f, 0.90f, 0.80f, 1f)),
+            "custom" => ("自定义", BorderColor, new Color(0.88f, 0.94f, 0.92f, 1f)),
+            _ => ("STD", BorderColor, SecondaryColor)
         };
     }
 
@@ -1837,7 +2180,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         Label label = CreateBodyLabel(text);
         label.AddThemeColorOverride("font_color", TextMutedColor);
-        label.AddThemeFontSizeOverride("font_size", 15);
+        label.AddThemeFontSizeOverride("font_size", 14);
         return label;
     }
 
@@ -1855,15 +2198,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill
         };
-        row.AddThemeConstantOverride("h_separation", 8);
+        row.AddThemeConstantOverride("h_separation", 12);
         row.AddThemeConstantOverride("v_separation", 4);
 
-        row.AddChild(CreateMetaLabel($"房主:{room.HostPlayerName}"));
-        row.AddChild(CreateMetaSeparator());
-        row.AddChild(CreateMetaLabel($"游戏:{room.Version}"));
-        row.AddChild(CreateMetaSeparator());
-        row.AddChild(CreateMetaLabel($"MOD:{room.ModVersion}"));
-        row.AddChild(CreateMetaSeparator());
+        row.AddChild(CreateMetaLabel($"HOST: {room.HostPlayerName}"));
+        row.AddChild(CreateMetaLabel($"GAME: {room.Version}"));
+        row.AddChild(CreateMetaLabel($"MOD: {room.ModVersion}"));
 
         HBoxContainer playerGroup = new()
         {
@@ -1874,7 +2214,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         GlyphIcon peopleIcon = new()
         {
-            Kind = GlyphIconKind.Person,
+            Kind = GlyphIconKind.Users,
             GlyphColor = TextMutedColor,
             CustomMinimumSize = new Vector2(16f, 16f)
         };
@@ -1885,92 +2225,109 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private Control CreateRoomCard(LobbyRoomSummary room, bool isSelected, bool isHostRoom)
     {
-        (string pillText, Color pillBorder, Color pillBackground) = GetRoomPrimaryPill(room, isHostRoom);
         string? detailText = BuildRoomDetailLine(room, isHostRoom);
+        // Reference: bg-primary/10 — blend AccentColor at 10% over CardColor
         Color background = isSelected
-            ? new Color(0.108f, 0.052f, 0.043f, 0.88f)
-            : new Color(0.055f, 0.043f, 0.037f, 0.76f);
-        Color border = isSelected
-            ? new Color(AccentBrightColor, 0.34f)
-            : isHostRoom
-                ? SuccessColor
-                : AccentMutedColor;
+            ? new Color(
+                CardColor.R * 0.9f + AccentColor.R * 0.1f,
+                CardColor.G * 0.9f + AccentColor.G * 0.1f,
+                CardColor.B * 0.9f + AccentColor.B * 0.1f, 1f)
+            : CardColor;
+        Color border = isHostRoom
+            ? SuccessColor
+            : BorderColor;
 
-        PanelContainer card = CreateSurfacePanel(background, border, radius: 18, borderWidth: 1, padding: 20);
+        // Selected card: thicker border + much larger shadow for emphasis
+        int cardBorder = isSelected ? 3 : 2;
+        PanelContainer card = new() { ClipContents = false };
+        if (isSelected)
+        {
+            // Selected card shadow — same depth as normal buttons (3px)
+            card.AddThemeStyleboxOverride("panel", CreatePixelStyle(background, border, borderWidth: cardBorder, padding: 16, shadowSize: 4));
+        }
+        else
+        {
+            card.AddThemeStyleboxOverride("panel", CreatePixelStyle(background, border, borderWidth: cardBorder, padding: 16, shadowSize: 2));
+        }
         card.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        card.CustomMinimumSize = new Vector2(0f, string.IsNullOrWhiteSpace(detailText) ? 118f : 142f);
+        card.SizeFlagsVertical = SizeFlags.ExpandFill;
+        card.SizeFlagsStretchRatio = 1f;
         card.MouseFilter = MouseFilterEnum.Stop;
         card.MouseDefaultCursorShape = CursorShape.PointingHand;
-
-        HBoxContainer shell = new()
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            SizeFlagsVertical = SizeFlags.ShrinkCenter
-        };
-        shell.AddThemeConstantOverride("separation", 16);
-        card.AddChild(shell);
-
-        CenterContainer iconHost = new()
-        {
-            CustomMinimumSize = new Vector2(42f, 0f),
-            SizeFlagsVertical = SizeFlags.ShrinkCenter
-        };
-        shell.AddChild(iconHost);
-
-        RoomStateGlyph icon = new()
-        {
-            GlyphColor = GetRoomLockColor(room),
-            Unlocked = !room.RequiresPassword
-        };
-        iconHost.AddChild(icon);
 
         VBoxContainer body = new()
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ShrinkCenter
         };
-        body.AddThemeConstantOverride("separation", 9);
-        shell.AddChild(body);
+        body.AddThemeConstantOverride("separation", 6);
+        card.AddChild(body);
 
+        // ── Row 1: [name + tags](left) ... [PASS REQ](right) ──
+        //
+        // Godot HBox gotcha: Label with ClipText=true has minWidth=0,
+        // so SizeFlags.Fill collapses it.  Label with ExpandFill pushes
+        // everything to the far right.
+        //
+        // Solution: NO ClipText. Truncate the name string instead.
+        // Title uses SizeFlags.Fill → natural text width.
+        // leftGroup uses ExpandFill so extra space is absorbed there,
+        // keeping PASS REQ at the far right of topRow.
         HBoxContainer topRow = new()
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ShrinkCenter
         };
-        topRow.AddThemeConstantOverride("separation", 12);
+        topRow.AddThemeConstantOverride("separation", 10);
         body.AddChild(topRow);
 
-        Label title = CreateTitleLabel(FormatRoomName(room.RoomName, 40), 24);
-        title.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        title.ClipText = true;
-        title.AutowrapMode = TextServer.AutowrapMode.Off;
-        topRow.AddChild(title);
-
-        HFlowContainer tagRow = new()
+        // Left group: name + tags flow together (expand to absorb extra space)
+        HBoxContainer leftGroup = new()
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ShrinkCenter
         };
-        tagRow.AddThemeConstantOverride("h_separation", 8);
-        tagRow.AddThemeConstantOverride("v_separation", 6);
-        body.AddChild(tagRow);
+        leftGroup.AddThemeConstantOverride("separation", 8);
+        topRow.AddChild(leftGroup);
+
+        // Title: natural width, no ClipText, truncated at 24 chars
+        Label title = CreateTitleLabel(FormatRoomName(room.RoomName, 24), 20);
+        title.SizeFlagsHorizontal = SizeFlags.Fill;
+        title.AutowrapMode = TextServer.AutowrapMode.Off;
+        leftGroup.AddChild(title);
 
         if (isSelected)
         {
-            tagRow.AddChild(CreateTagPill("已选中", AccentColor, new Color(0.18f, 0.08f, 0.06f, 0.94f)));
+            leftGroup.AddChild(CreateTagPill("SELECT", AccentColor, AccentColor, true));
         }
 
-        tagRow.AddChild(CreateTagPill(pillText, pillBorder, pillBackground));
-        (string modeText, Color modeBorder, Color modeBackground) = GetRoomGameModePill(room.GameMode);
-        tagRow.AddChild(CreateTagPill(modeText, modeBorder, modeBackground));
+        if (room.RequiresPassword)
+        {
+            leftGroup.AddChild(CreateTagPillWithIcon("LOCKED", BorderColor, SecondaryColor));
+        }
 
+        (string modeText, Color modeBorder, Color modeBackground) = GetRoomGameModePill(room.GameMode);
+        leftGroup.AddChild(CreateTagPill(modeText, modeBorder, modeBackground, false));
+
+        // PASS REQ: right-aligned, separate from tags
+        if (room.RequiresPassword)
+        {
+            Label passReq = CreateBodyLabel("PASS REQ");
+            passReq.SizeFlagsHorizontal = SizeFlags.ShrinkEnd;
+            passReq.AddThemeColorOverride("font_color", AccentColor);
+            passReq.AddThemeFontSizeOverride("font_size", 13);
+            topRow.AddChild(passReq);
+        }
+
+        // ── Row 2: META ──
         body.AddChild(BuildRoomMetaRow(room));
 
+        // ── Row 3: optional detail ──
         if (!string.IsNullOrWhiteSpace(detailText))
         {
             Label detailLine = CreateBodyLabel(detailText);
             detailLine.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-            detailLine.AddThemeFontSizeOverride("font_size", 16);
+            detailLine.AddThemeFontSizeOverride("font_size", 13);
             detailLine.AddThemeColorOverride("font_color", GetRoomDetailColor(room, isHostRoom));
             body.AddChild(detailLine);
         }
@@ -1981,15 +2338,45 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return card;
     }
 
-    private Control CreateTagPill(string text, Color border, Color background)
+    private Control CreateTagPill(string text, Color border, Color background, bool isPrimary)
     {
-        PanelContainer pill = CreateSurfacePanel(background, border, radius: 999, borderWidth: 1, padding: 8);
+        PanelContainer pill = CreateSurfacePanel(background, border, borderWidth: 2, padding: 7);
 
         Label label = CreateBodyLabel(text);
-        label.AddThemeColorOverride("font_color", border == TextMutedColor ? TextStrongColor : border);
+        label.AddThemeColorOverride("font_color", isPrimary ? PrimaryFgColor : TextStrongColor);
         label.AddThemeFontSizeOverride("font_size", 13);
         pill.AddChild(label);
         return pill;
+    }
+
+    /// <summary>Tag pill with a lock icon (for LOCKED badge).</summary>
+    private Control CreateTagPillWithIcon(string text, Color border, Color background)
+    {
+        PanelContainer pill = CreateSurfacePanel(background, border, borderWidth: 2, padding: 7);
+
+        HBoxContainer row = new();
+        row.AddThemeConstantOverride("separation", 4);
+        pill.AddChild(row);
+
+        row.AddChild(new GlyphIcon
+        {
+            Kind = GlyphIconKind.Lock,
+            GlyphColor = TextStrongColor,
+            CustomMinimumSize = new Vector2(12f, 12f),
+            SizeFlagsVertical = SizeFlags.ShrinkCenter
+        });
+
+        Label label = CreateBodyLabel(text);
+        label.AddThemeColorOverride("font_color", TextStrongColor);
+        label.AddThemeFontSizeOverride("font_size", 13);
+        row.AddChild(label);
+        return pill;
+    }
+
+    /// <summary>Legacy 3-arg overload for compatibility.</summary>
+    private Control CreateTagPill(string text, Color border, Color background)
+    {
+        return CreateTagPill(text, border, background, false);
     }
 
     private void OnRoomCardGuiInput(LobbyRoomSummary room, InputEvent inputEvent)
@@ -2071,7 +2458,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (SaveManager.Instance.HasMultiplayerRunSave)
         {
             GD.Print("sts2_lan_connect overlay: create blocked by multiplayer continue save.");
-            ShowCreateDialogError("检测到多人续局存档。请先点击官方“载入”进入该存档，mod 会自动恢复绑定的大厅房间。");
+            ShowCreateDialogError("检测到多人续局存档。请先点击官方载入进入该存档，mod 会自动恢复绑定的大厅房间。");
             return;
         }
 
@@ -2085,7 +2472,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _actionInFlight = true;
         UpdateActionButtons();
         ShowCreateDialogError(string.Empty, visible: false);
-        SetStatus($"正在创建{gameModeLabel}房间“{roomName}”...");
+        SetStatus($"正在创建{gameModeLabel}房间 {roomName}...");
 
         try
         {
@@ -2129,10 +2516,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         PersistSettings();
         _actionInFlight = true;
         UpdateActionButtons();
-        SetStatus($"正在请求加入“{FormatRoomName(room.RoomName, 24)}”...");
+        SetStatus($"正在请求加入 {FormatRoomName(room.RoomName, 24)}...");
         ShowProgressDialog(
             "正在加入房间",
-            $"正在向大厅申请进入“{FormatRoomName(room.RoomName, 24)}”",
+            $"正在向大厅申请进入 {FormatRoomName(room.RoomName, 24)}",
             "连接较慢时请稍候，期间不要重复点击按钮。");
 
         try
@@ -2150,7 +2537,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
             UpdateProgressDialog(
                 "正在建立联机连接",
-                $"大厅已响应，正在连接“{FormatRoomName(room.RoomName, 24)}”",
+                $"大厅已响应，正在连接 {FormatRoomName(room.RoomName, 24)}",
                 "如果房主在外网环境，首次握手通常会比刷新大厅更慢。");
 
             LobbyJoinAttemptResult joinResult = await LanConnectLobbyJoinFlow.JoinAsync(
@@ -2161,8 +2548,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                 message => UpdateProgressDialog("正在建立联机连接", message));
             if (joinResult.Joined)
             {
-                UpdateProgressDialog("正在进入房间", $"已连接“{FormatRoomName(room.RoomName, 24)}”，正在切换到联机界面");
-                SetStatus($"已加入“{FormatRoomName(room.RoomName, 24)}”。");
+                UpdateProgressDialog("正在进入房间", $"已连接 {FormatRoomName(room.RoomName, 24)}，正在切换到联机界面");
+                SetStatus($"已加入 {FormatRoomName(room.RoomName, 24)}。");
                 HideOverlay();
                 return true;
             }
@@ -2170,7 +2557,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             string failureMessage = string.IsNullOrWhiteSpace(joinResult.FailureMessage)
                 ? "请查看错误弹窗或连接日志。"
                 : joinResult.FailureMessage;
-            SetStatus($"加入“{FormatRoomName(room.RoomName, 24)}”失败：{failureMessage}");
+            SetStatus($"加入 {FormatRoomName(room.RoomName, 24)} 失败：{failureMessage}");
             return false;
         }
         catch (LobbyServiceException ex)
@@ -2310,7 +2697,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (room.RequiresPassword)
         {
             _pendingPasswordJoinRoom = room;
-            SetLabelText(_joinPasswordDialogTitle, $"输入“{FormatRoomName(room.RoomName, 24)}”的房间密码");
+            SetLabelText(_joinPasswordDialogTitle, $"输入 {FormatRoomName(room.RoomName, 24)} 的房间密码");
 
             if (_joinPasswordInput != null)
             {
@@ -2558,7 +2945,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _pendingResumeJoinRoom = room;
         _pendingResumeJoinPassword = password;
-        SetLabelText(_resumeSlotDialogTitle, $"选择“{FormatRoomName(room.RoomName, 24)}”的可接管角色");
+        SetLabelText(_resumeSlotDialogTitle, $"选择 {FormatRoomName(room.RoomName, 24)} 的可接管角色");
 
         foreach (Node child in _resumeSlotDialogOptions.GetChildren())
         {
@@ -2617,7 +3004,17 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _directoryServerDialogContainer.Visible = true;
         _directoryServerDialogContainer.MoveToFront();
-        await RefreshDirectoryServersAsync();
+
+        if (_cachedDirectoryServers != null && _cachedDirectoryServers.Count > 0)
+        {
+            RebuildDirectoryServerCards(_cachedDirectoryServers);
+            SetLabelText(_directoryServerDialogStatusLabel, $"{_cachedDirectoryServers.Count} 个可用大厅。点击即可切换。");
+            _ = RefreshDirectoryServersInBackgroundAsync();
+        }
+        else
+        {
+            await RefreshDirectoryServersAsync();
+        }
     }
 
     private void CloseDirectoryServerDialog()
@@ -2625,6 +3022,67 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_directoryServerDialogContainer != null)
         {
             _directoryServerDialogContainer.Visible = false;
+        }
+    }
+
+    private void RebuildDirectoryServerCards(List<(LobbyDirectoryServerEntry Entry, double? RttMs)> servers)
+    {
+        if (_directoryServerDialogOptions == null)
+        {
+            return;
+        }
+
+        foreach (Node child in _directoryServerDialogOptions.GetChildren())
+        {
+            _directoryServerDialogOptions.RemoveChild(child);
+            child.QueueFree();
+        }
+
+        foreach ((LobbyDirectoryServerEntry entry, double? rtt) in servers)
+        {
+            Control card = BuildDirectoryServerCard(entry, rtt);
+            _directoryServerDialogOptions.AddChild(card);
+        }
+    }
+
+    private async Task RefreshDirectoryServersInBackgroundAsync()
+    {
+        if (_directoryServerLoadInFlight)
+        {
+            return;
+        }
+
+        _directoryServerLoadInFlight = true;
+        try
+        {
+            IReadOnlyList<LobbyDirectoryServerEntry> servers = await LanConnectLobbyDirectoryClient.GetServersAsync();
+            if (servers.Count == 0)
+            {
+                return;
+            }
+
+            Task<double?>[] probeTasks = servers.Select(s => MeasureServerProbeRttSafeAsync(s.BaseUrl)).ToArray();
+            await Task.WhenAll(probeTasks);
+
+            _cachedDirectoryServers = new List<(LobbyDirectoryServerEntry, double?)>();
+            for (int i = 0; i < servers.Count; i++)
+            {
+                _cachedDirectoryServers.Add((servers[i], probeTasks[i].Result));
+            }
+
+            if (_directoryServerDialogContainer is { Visible: true })
+            {
+                RebuildDirectoryServerCards(_cachedDirectoryServers);
+                SetLabelText(_directoryServerDialogStatusLabel, $"{_cachedDirectoryServers.Count} 个可用大厅。点击即可切换。");
+            }
+        }
+        catch (Exception ex)
+        {
+            GD.Print($"sts2_lan_connect overlay: background directory refresh failed: {ex.Message}");
+        }
+        finally
+        {
+            _directoryServerLoadInFlight = false;
         }
     }
 
@@ -2636,7 +3094,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         _directoryServerLoadInFlight = true;
-        SetLabelText(_directoryServerDialogStatusLabel, "正在从中心服务器拉取大厅列表...");
+        SetLabelText(_directoryServerDialogStatusLabel, "正在刷新...");
         foreach (Node child in _directoryServerDialogOptions.GetChildren())
         {
             _directoryServerDialogOptions.RemoveChild(child);
@@ -2648,33 +3106,114 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             IReadOnlyList<LobbyDirectoryServerEntry> servers = await LanConnectLobbyDirectoryClient.GetServersAsync();
             if (servers.Count == 0)
             {
-                SetLabelText(_directoryServerDialogStatusLabel, "中心服务器当前没有可用大厅。可稍后重试，或继续手动填写 HTTP 覆盖地址。");
+                _cachedDirectoryServers = null;
+                SetLabelText(_directoryServerDialogStatusLabel, "当前没有可用大厅。");
                 return;
             }
 
-            SetLabelText(_directoryServerDialogStatusLabel, $"已找到 {servers.Count} 个可用大厅。点击任意条目即可切换。 ");
-            foreach (LobbyDirectoryServerEntry entry in servers)
+            SetLabelText(_directoryServerDialogStatusLabel, $"已找到 {servers.Count} 个大厅，正在测速...");
+
+            Task<double?>[] probeTasks = servers.Select(s => MeasureServerProbeRttSafeAsync(s.BaseUrl)).ToArray();
+            await Task.WhenAll(probeTasks);
+
+            _cachedDirectoryServers = new List<(LobbyDirectoryServerEntry, double?)>();
+            for (int i = 0; i < servers.Count; i++)
             {
-                string title = string.IsNullOrWhiteSpace(entry.ServerName) ? entry.BaseUrl : entry.ServerName;
-                string detail =
-                    $"{entry.BaseUrl}\n" +
-                    $"房间数：{entry.Rooms}  ·  最后验证：{entry.LastVerifiedAt:yyyy-MM-dd HH:mm:ss}\n" +
-                    $"新建房间：{FormatCreateRoomGuardStatus(entry.CreateRoomGuardStatus)}  ·  利用率：{FormatUtilizationValue(entry.BandwidthUtilizationRatio)}\n" +
-                    $"实时带宽：{FormatBandwidthValue(entry.CurrentBandwidthMbps)}  ·  有效容量：{FormatBandwidthValue(entry.ResolvedCapacityMbps ?? entry.BandwidthCapacityMbps)}";
-                Button option = CreateActionButton(title, detail, () => ApplyDirectoryServer(entry), primary: false);
-                option.Text = UiText(title + "\n" + detail);
-                option.Alignment = HorizontalAlignment.Left;
-                _directoryServerDialogOptions.AddChild(option);
+                _cachedDirectoryServers.Add((servers[i], probeTasks[i].Result));
             }
+
+            RebuildDirectoryServerCards(_cachedDirectoryServers);
+            SetLabelText(_directoryServerDialogStatusLabel, $"{servers.Count} 个可用大厅。点击即可切换。");
         }
         catch (Exception ex)
         {
-            SetLabelText(_directoryServerDialogStatusLabel, $"拉取中心服务器列表失败：{ex.Message}");
+            SetLabelText(_directoryServerDialogStatusLabel, $"拉取列表失败：{ex.Message}");
         }
         finally
         {
             _directoryServerLoadInFlight = false;
         }
+    }
+
+    private Control BuildDirectoryServerCard(LobbyDirectoryServerEntry entry, double? rttMs)
+    {
+        string name = string.IsNullOrWhiteSpace(entry.ServerName) ? entry.BaseUrl : entry.ServerName;
+        bool blocked = entry.CreateRoomGuardStatus == "block";
+        string guardText = FormatCreateRoomGuardStatus(entry.CreateRoomGuardStatus);
+        string rttText = rttMs.HasValue ? $"{rttMs.Value:0}ms" : "超时";
+        Color rttColor = rttMs.HasValue
+            ? rttMs.Value <= 200d ? SuccessColor : rttMs.Value <= 600d ? AccentColor : DangerColor
+            : DangerColor;
+
+        string tooltipDetail =
+            $"{entry.BaseUrl}\n" +
+            $"最后验证：{entry.LastVerifiedAt:yyyy-MM-dd HH:mm:ss}\n" +
+            $"利用率：{FormatUtilizationValue(entry.BandwidthUtilizationRatio)}\n" +
+            $"带宽：{FormatBandwidthValue(entry.CurrentBandwidthMbps)} / {FormatBandwidthValue(entry.ResolvedCapacityMbps ?? entry.BandwidthCapacityMbps)}";
+
+        PanelContainer card = CreateSurfacePanel(CardColor, BorderColor, borderWidth: 2, padding: 18);
+        card.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        card.TooltipText = UiText(tooltipDetail);
+        card.MouseFilter = MouseFilterEnum.Stop;
+        card.MouseDefaultCursorShape = CursorShape.PointingHand;
+
+        VBoxContainer content = new();
+        content.AddThemeConstantOverride("separation", 6);
+        content.MouseFilter = MouseFilterEnum.Ignore;
+        card.AddChild(content);
+
+        // Row 1: name + latency
+        HBoxContainer topRow = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        topRow.AddThemeConstantOverride("separation", 10);
+        topRow.MouseFilter = MouseFilterEnum.Ignore;
+        content.AddChild(topRow);
+
+        Label nameLabel = CreateBodyLabel(name);
+        nameLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        nameLabel.AddThemeFontSizeOverride("font_size", 20);
+        nameLabel.AddThemeColorOverride("font_color", TextStrongColor);
+        nameLabel.ClipText = true;
+        nameLabel.MouseFilter = MouseFilterEnum.Ignore;
+        topRow.AddChild(nameLabel);
+
+        Label rttLabel = CreateBodyLabel(rttText);
+        rttLabel.HorizontalAlignment = HorizontalAlignment.Right;
+        rttLabel.AddThemeFontSizeOverride("font_size", 20);
+        rttLabel.AddThemeColorOverride("font_color", rttColor);
+        rttLabel.MouseFilter = MouseFilterEnum.Ignore;
+        topRow.AddChild(rttLabel);
+
+        // Row 2: room count + create status
+        HBoxContainer bottomRow = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        bottomRow.AddThemeConstantOverride("separation", 10);
+        bottomRow.MouseFilter = MouseFilterEnum.Ignore;
+        content.AddChild(bottomRow);
+
+        Label infoLabel = CreateBodyLabel($"房间 {entry.Rooms}");
+        infoLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        infoLabel.AddThemeFontSizeOverride("font_size", 16);
+        infoLabel.AddThemeColorOverride("font_color", TextMutedColor);
+        infoLabel.MouseFilter = MouseFilterEnum.Ignore;
+        bottomRow.AddChild(infoLabel);
+
+        Label guardLabel = CreateBodyLabel(guardText);
+        guardLabel.HorizontalAlignment = HorizontalAlignment.Right;
+        guardLabel.AddThemeFontSizeOverride("font_size", 16);
+        guardLabel.AddThemeColorOverride("font_color", blocked ? DangerColor : SuccessColor);
+        guardLabel.MouseFilter = MouseFilterEnum.Ignore;
+        bottomRow.AddChild(guardLabel);
+
+        LobbyDirectoryServerEntry capturedEntry = entry;
+        card.Connect(Control.SignalName.GuiInput, Callable.From((InputEvent @event) =>
+        {
+            if (@event is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left })
+            {
+                GD.Print($"sts2_lan_connect overlay: directory server card '{capturedEntry.ServerName}' clicked");
+                ApplyDirectoryServer(capturedEntry);
+            }
+        }));
+
+        return card;
     }
 
     private void ApplyDirectoryServer(LobbyDirectoryServerEntry entry)
@@ -2832,7 +3371,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         string? createDisabledReason = GetCreateDisabledReason(actionBusy, hasRunSave, hasActiveRoom, hasLobbyEndpoint);
         string? createWarning = hasRunSave
-            ? "检测到多人续局存档。请先走官方“载入”入口，进入后会自动恢复绑定的大厅房间。"
+            ? "检测到多人续局存档。请先走官方载入入口，进入后会自动恢复绑定的大厅房间。"
             : null;
         string? joinDisabledReason = GetJoinDisabledReason(actionBusy, selectedRoom, selectedIsHostRoom);
 
@@ -2896,29 +3435,29 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _clearNetworkOverridesButton.Disabled = !(LanConnectConfig.HasLobbyServerOverrides || hasOverrideText);
         }
 
-        if (_actionAvailabilityLabel != null)
+        // Update structured action status rows
+        if (_actionCreateStatusDot != null && _actionCreateStatusValue != null)
         {
-            List<string> lines = new();
-            lines.Add(createDisabledReason == null ? "创建房间：可用。" : $"创建房间：不可用，{createDisabledReason}");
-            if (createWarning != null)
-            {
-                lines.Add(createWarning);
-            }
+            bool createOk = createDisabledReason == null;
+            _actionCreateStatusDot.Color = createOk ? SuccessColor : DangerColor;
+            SetLabelText(_actionCreateStatusValue, createOk ? "OK" : "BLOCKED");
+            _actionCreateStatusValue.AddThemeColorOverride("font_color", createOk ? SuccessColor : DangerColor);
+        }
 
-            lines.Add(joinDisabledReason == null ? "加入选中房间：可用。" : $"加入选中房间：不可用，{joinDisabledReason}");
-            if (refreshBusy)
-            {
-                lines.Add("大厅列表刷新中；刷新不会再单独锁死建房按钮。");
-            }
+        if (_actionJoinStatusDot != null && _actionJoinStatusValue != null)
+        {
+            bool joinOk = joinDisabledReason == null;
+            _actionJoinStatusDot.Color = joinOk ? SuccessColor : AccentColor;
+            SetLabelText(_actionJoinStatusValue, joinOk ? "OK" : "BLOCKED");
+            _actionJoinStatusValue.AddThemeColorOverride("font_color", joinOk ? SuccessColor : AccentColor);
+        }
 
-            SetLabelText(_actionAvailabilityLabel, string.Join("\n", lines));
-            _actionAvailabilityLabel.AddThemeColorOverride(
-                "font_color",
-                createDisabledReason != null || joinDisabledReason != null
-                    ? DangerColor
-                    : createWarning != null || refreshBusy
-                        ? AccentColor
-                        : SuccessColor);
+        if (_actionSyncStatusRow != null && _actionSyncStatusDot != null && _actionSyncStatusValue != null)
+        {
+            _actionSyncStatusRow.Visible = refreshBusy;
+            _actionSyncStatusDot.Color = AccentColor;
+            SetLabelText(_actionSyncStatusValue, "SYNCING...");
+            _actionSyncStatusValue.AddThemeColorOverride("font_color", TextMutedColor);
         }
 
         string actionState = $"refresh={refreshBusy};action={actionBusy};hasRunSave={hasRunSave};hasActiveRoom={hasActiveRoom};hasLobbyEndpoint={hasLobbyEndpoint};rooms={_rooms.Count};selected={(selectedRoom == null ? "<none>" : selectedRoom.RoomId)};create={(createDisabledReason ?? "enabled")};join={(joinDisabledReason ?? "enabled")}";
@@ -2983,8 +3522,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         SetLabelText(
             _pageSummaryLabel,
             totalPages <= 0
-                ? "第 0 / 0 页"
-                : $"第 {_currentPageIndex + 1} / {totalPages} 页");
+                ? "PAGE 0/0"
+                : $"PAGE {_currentPageIndex + 1}/{totalPages}");
 
         if (_pagePreviousButton != null)
         {
@@ -3009,43 +3548,43 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Color color;
         if (!HasAvailableLobbyEndpoint())
         {
-            statusText = "未绑定大厅";
+            statusText = "OFFLINE";
             latencyText = "--";
             color = DangerColor;
         }
         else if (_consecutiveRefreshFailures >= 2)
         {
-            statusText = "连接异常";
-            latencyText = "切服";
+            statusText = "ERROR";
+            latencyText = "--";
             color = DangerColor;
         }
         else if (_consecutiveRefreshFailures == 1)
         {
-            statusText = "最近失败";
-            latencyText = "重试";
+            statusText = "RETRY";
+            latencyText = "--";
             color = AccentColor;
         }
         else if (_lastLobbyRttMs < 0d)
         {
-            statusText = _rooms.Count > 0 ? "等待探测" : "连接检查中";
+            statusText = _rooms.Count > 0 ? "ONLINE" : "CONNECTING";
             latencyText = "--";
             color = AccentColor;
         }
         else if (_lastLobbyRttMs <= 600d)
         {
-            statusText = "服务正常";
+            statusText = "ONLINE";
             latencyText = $"{_lastLobbyRttMs:0}ms";
             color = SuccessColor;
         }
         else if (_lastLobbyRttMs <= 1500d)
         {
-            statusText = "延迟偏高";
+            statusText = "ONLINE";
             latencyText = $"{_lastLobbyRttMs:0}ms";
             color = AccentColor;
         }
         else
         {
-            statusText = "延迟过高";
+            statusText = "ONLINE";
             latencyText = $"{_lastLobbyRttMs:0}ms";
             color = DangerColor;
         }
@@ -3055,7 +3594,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         SetLabelText(_healthIndicatorLatencyLabel, latencyText);
         _healthIndicatorLatencyLabel?.AddThemeColorOverride("font_color", color);
         _healthIndicatorDotColor = color;
-        if (_healthIndicatorDot != null)
+        if (_healthIndicatorDot is ColorRect dotRect)
+        {
+            dotRect.Color = color;
+        }
+        else if (_healthIndicatorDot != null)
         {
             _healthIndicatorDot.SelfModulate = color;
         }
@@ -3063,23 +3606,27 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_statusHealthValueLabel != null)
         {
             string healthText = !HasAvailableLobbyEndpoint()
-                ? "未绑定"
+                ? "N/A"
                 : _consecutiveRefreshFailures >= 2
-                    ? "连接异常"
+                    ? "FAIL"
                     : _consecutiveRefreshFailures == 1
-                        ? "最近失败"
+                        ? "RETRY"
                         : _lastLobbyRttMs < 0d
-                            ? "等待探测"
+                            ? "..."
                             : _lastLobbyRttMs <= 600d
-                                ? "服务正常"
+                                ? "OK"
                                 : _lastLobbyRttMs <= 1500d
-                                    ? "延迟偏高"
-                                    : "延迟过高";
+                                    ? "SLOW"
+                                    : "SLOW";
             SetLabelText(_statusHealthValueLabel, healthText);
             _statusHealthValueLabel.AddThemeColorOverride("font_color", color);
         }
 
-        if (_statusHealthValueIcon != null)
+        if (_statusHealthValueIcon is ColorRect statusSquare)
+        {
+            statusSquare.Color = color;
+        }
+        else if (_statusHealthValueIcon != null)
         {
             _statusHealthValueIcon.SelfModulate = color;
         }
@@ -3106,6 +3653,24 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         catch (Exception ex)
         {
             GD.Print($"sts2_lan_connect overlay: probe request failed with exception {ex.Message}");
+            return null;
+        }
+    }
+
+    private static async Task<double?> MeasureServerProbeRttSafeAsync(string baseUrl)
+    {
+        try
+        {
+            string normalized = baseUrl.TrimEnd('/');
+            Uri probeUri = new($"{normalized}/probe");
+            using System.Net.Http.HttpClient client = new() { Timeout = TimeSpan.FromSeconds(5d) };
+            Stopwatch sw = Stopwatch.StartNew();
+            using HttpResponseMessage response = await client.GetAsync(probeUri);
+            sw.Stop();
+            return response.IsSuccessStatusCode ? sw.Elapsed.TotalMilliseconds : null;
+        }
+        catch
+        {
             return null;
         }
     }
@@ -3354,7 +3919,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (hasRunSave)
         {
-            return "检测到多人续局存档，请先点击官方“载入”。";
+            return "检测到多人续局存档，请先点击官方载入。";
         }
 
         if (hasActiveRoom)
@@ -3809,14 +4374,14 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             Text = iconKind == GlyphIconKind.None ? UiText(text) : string.Empty,
             TooltipText = UiText(tooltip),
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(0f, 50f),
+            CustomMinimumSize = new Vector2(0f, 42f),
             Alignment = HorizontalAlignment.Center
         };
         ApplyButtonStyle(button, primary, danger);
         if (iconKind != GlyphIconKind.None)
         {
             AttachActionButtonContent(button, iconKind, text, primary
-                ? new Color(0.1f, 0.08f, 0.06f, 1f)
+                ? PrimaryFgColor
                 : TextStrongColor);
         }
 
@@ -3834,7 +4399,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             Text = string.Empty,
             TooltipText = UiText(tooltip),
-            CustomMinimumSize = new Vector2(174f, 54f),
+            CustomMinimumSize = new Vector2(170f, 50f),
             Alignment = HorizontalAlignment.Center
         };
         ApplyToolbarButtonStyle(button, accent, iconOnly: false);
@@ -3853,7 +4418,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             Text = string.Empty,
             TooltipText = UiText(tooltip),
-            CustomMinimumSize = new Vector2(54f, 54f),
+            CustomMinimumSize = new Vector2(50f, 50f),
             Alignment = HorizontalAlignment.Center
         };
         ApplyToolbarButtonStyle(button, accent, iconOnly: true);
@@ -4003,23 +4568,50 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         });
     }
 
-    private static PanelContainer CreateGlassPanel(int padding = 18, int radius = 20)
+    // ── Pixel-art panel factories ──
+
+    private static PanelContainer CreateGlassPanel(int padding = 18, int radius = 0)
     {
-        return CreateSurfacePanel(new Color(0.059f, 0.047f, 0.039f, 0.72f), new Color(AccentColor, 0.14f), radius: radius, borderWidth: 1, padding: padding);
+        return CreatePixelBorderPanel(padding: padding);
     }
 
-    private static PanelContainer CreateSurfacePanel(Color background, Color border, int radius = 18, int borderWidth = 1, int padding = 18)
+    /// <summary>Main pixel-border container (3px border, 4px hard offset shadow).</summary>
+    private static PanelContainer CreatePixelBorderPanel(Color? background = null, int padding = 18)
     {
-        PanelContainer panel = new()
+        return new PixelBorderPanel
         {
-            ClipContents = true
+            BgColor = background ?? CardColor,
+            PixelBorderColor = BorderColor,
+            PixelBorderWidth = 3,
+            ShadowPixelOffset = 4,
+            DrawInsetBevel = true,
+            Padding = padding
         };
-        panel.AddThemeStyleboxOverride("panel", CreatePanelStyle(background, border, radius, borderWidth, padding, shadowSize: 6, shadowColor: WithAlpha(border, 0.03f)));
-        AddPanelChrome(panel, border);
+    }
+
+    /// <summary>Compact pixel-border container (2px border, 2px hard offset shadow).</summary>
+    private static PanelContainer CreatePixelBorderSmPanel(Color? background = null, int padding = 10)
+    {
+        return new PixelBorderPanel
+        {
+            BgColor = background ?? CardColor,
+            PixelBorderColor = BorderColor,
+            PixelBorderWidth = 2,
+            ShadowPixelOffset = 2,
+            DrawInsetBevel = true,
+            Padding = padding
+        };
+    }
+
+    /// <summary>Legacy compatibility — routes to pixel-border.</summary>
+    private static PanelContainer CreateSurfacePanel(Color background, Color border, int radius = 0, int borderWidth = 2, int padding = 18)
+    {
+        PanelContainer panel = new() { ClipContents = true };
+        panel.AddThemeStyleboxOverride("panel", CreatePixelStyle(background, border, borderWidth: borderWidth, padding: padding, shadowSize: borderWidth >= 3 ? 4 : 2));
         return panel;
     }
 
-    private static StyleBoxFlat CreatePanelStyle(Color background, Color border, int radius, int borderWidth, int padding, int shadowSize = 0, Color? shadowColor = null)
+    private static StyleBoxFlat CreatePixelStyle(Color background, Color border, int borderWidth = 3, int padding = 18, int shadowSize = 4)
     {
         StyleBoxFlat style = new()
         {
@@ -4029,19 +4621,110 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             BorderWidthTop = borderWidth,
             BorderWidthRight = borderWidth,
             BorderWidthBottom = borderWidth,
-            CornerRadiusTopLeft = radius,
-            CornerRadiusTopRight = radius,
-            CornerRadiusBottomRight = radius,
-            CornerRadiusBottomLeft = radius,
+            CornerRadiusTopLeft = 0,
+            CornerRadiusTopRight = 0,
+            CornerRadiusBottomRight = 0,
+            CornerRadiusBottomLeft = 0,
             ContentMarginLeft = padding,
             ContentMarginTop = padding,
             ContentMarginRight = padding,
             ContentMarginBottom = padding
         };
-        style.ShadowColor = shadowColor ?? new Color(0f, 0f, 0f, 0f);
+        style.ShadowColor = new Color(border, 0.55f);
         style.ShadowSize = shadowSize;
-        style.ShadowOffset = Vector2.Zero;
+        style.ShadowOffset = new Vector2(shadowSize, shadowSize);
         return style;
+    }
+
+    /// <summary>
+    /// Creates a pixel-art button style with physical press animation.
+    ///
+    /// The trick: ExpandMargin shifts the ENTIRE drawn area (border + bg)
+    /// while keeping the total visual footprint constant.
+    ///
+    /// depth=0 → normal: button at rest, full shadow visible.
+    /// depth=maxShadow → fully pressed: button moved into shadow position, no shadow.
+    ///
+    /// Visual:  Normal:  [BUTTON]░░░   (shadow on right/bottom)
+    ///          Pressed: ░░░[BUTTON]   (button slid into shadow, shadow gone)
+    ///          The shadow's outer edge stays fixed — the button moves toward it.
+    /// </summary>
+    private static StyleBoxFlat CreatePixelPressStyle(Color background, Color border, int borderWidth, int padding, int maxShadow, int depth)
+    {
+        int shadow = Math.Max(0, maxShadow - depth);
+        return new StyleBoxFlat
+        {
+            BgColor = background,
+            BorderColor = border,
+            BorderWidthLeft = borderWidth,
+            BorderWidthTop = borderWidth,
+            BorderWidthRight = borderWidth,
+            BorderWidthBottom = borderWidth,
+            CornerRadiusTopLeft = 0,
+            CornerRadiusTopRight = 0,
+            CornerRadiusBottomRight = 0,
+            CornerRadiusBottomLeft = 0,
+            ContentMarginLeft = padding,
+            ContentMarginTop = padding,
+            ContentMarginRight = padding,
+            ContentMarginBottom = padding,
+            // ExpandMargin shifts the drawn rect (bg + border).
+            // Negative left/top → draws starting further right/down.
+            // Positive right/bottom → extends draw area to keep total footprint constant.
+            // Total footprint = control_rect + maxShadow (constant across all depths).
+            ExpandMarginLeft = -depth,
+            ExpandMarginTop = -depth,
+            ExpandMarginRight = maxShadow + depth,
+            ExpandMarginBottom = maxShadow + depth,
+            ShadowColor = new Color(border, 0.55f),
+            ShadowSize = shadow,
+            ShadowOffset = new Vector2(shadow, shadow)
+        };
+    }
+
+    /// <summary>
+    /// Connects mouse_entered/mouse_exited on a Button to tint all child
+    /// Labels and GlyphIcons between normal and hover colors.
+    /// Fixes the issue where Button.font_hover_color only affects Button.Text
+    /// but not custom child nodes.
+    /// </summary>
+    private static void SetupChildHoverTint(Button button, Color normalColor, Color hoverColor)
+    {
+        button.Connect(Control.SignalName.MouseEntered, Callable.From(() =>
+            TintButtonChildrenRecursive(button, hoverColor)));
+        button.Connect(Control.SignalName.MouseExited, Callable.From(() =>
+            TintButtonChildrenRecursive(button, normalColor)));
+    }
+
+    private static void TintButtonChildrenRecursive(Node node, Color color)
+    {
+        foreach (Node child in node.GetChildren())
+        {
+            if (child is Label label)
+            {
+                label.AddThemeColorOverride("font_color", color);
+            }
+            else if (child is GlyphIcon icon)
+            {
+                // GlyphColor is init-only; use SelfModulate to tint at runtime.
+                // GlyphIcon draws a white texture tinted by GlyphColor in _Draw().
+                // SelfModulate multiplies on top, so we compute the ratio.
+                Color original = icon.GlyphColor;
+                icon.SelfModulate = new Color(
+                    original.R > 0.01f ? color.R / original.R : color.R,
+                    original.G > 0.01f ? color.G / original.G : color.G,
+                    original.B > 0.01f ? color.B / original.B : color.B,
+                    1f);
+            }
+
+            TintButtonChildrenRecursive(child, color);
+        }
+    }
+
+    /// <summary>Legacy compatibility shim.</summary>
+    private static StyleBoxFlat CreatePanelStyle(Color background, Color border, int radius, int borderWidth, int padding, int shadowSize = 0, Color? shadowColor = null)
+    {
+        return CreatePixelStyle(background, border, borderWidth: borderWidth, padding: padding, shadowSize: shadowSize);
     }
 
     private static Label CreateTitleLabel(string text, int size)
@@ -4100,71 +4783,80 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private static void ApplyButtonStyle(Button button, bool primary, bool danger)
     {
-        Color normal = primary
-            ? new Color(0.953f, 0.631f, 0.227f, 1f)
-            : danger
-                ? new Color(0.34f, 0.1f, 0.1f, 0.98f)
-                : new Color(0.059f, 0.047f, 0.039f, 0.22f);
-        Color hover = primary
-            ? new Color(0.99f, 0.69f, 0.29f, 1f)
-            : danger
-                ? new Color(0.46f, 0.14f, 0.14f, 1f)
-                : new Color(0.059f, 0.047f, 0.039f, 0.34f);
-        Color pressed = primary
-            ? new Color(0.88f, 0.54f, 0.16f, 1f)
-            : danger
-                ? new Color(0.28f, 0.09f, 0.09f, 1f)
-                : new Color(0.059f, 0.047f, 0.039f, 0.42f);
-        Color border = danger ? new Color(DangerColor, 0.32f) : new Color(AccentColor, primary ? 0.3f : 0.18f);
+        Color normalBg = primary ? AccentColor
+            : danger ? new Color(0.63f, 0.24f, 0.24f, 0.9f)
+            : CardColor;
+        Color hoverBg = primary ? AccentBrightColor
+            : danger ? new Color(0.73f, 0.30f, 0.30f, 1f)
+            : SuccessColor;
+        Color pressedBg = primary ? new Color(AccentColor, 0.85f)
+            : danger ? new Color(0.55f, 0.20f, 0.20f, 1f)
+            : new Color(SuccessColor, 0.8f);
+        Color border = danger ? DangerColor : BorderColor;
 
-        button.AddThemeStyleboxOverride("normal", CreatePanelStyle(normal, border, radius: 14, borderWidth: 1, padding: 14, shadowSize: primary ? 10 : 0, shadowColor: primary ? WithAlpha(AccentColor, 0.06f) : null));
-        button.AddThemeStyleboxOverride("hover", CreatePanelStyle(hover, danger ? new Color(DangerColor, 0.4f) : new Color(AccentBrightColor, 0.36f), radius: 14, borderWidth: 1, padding: 14, shadowSize: primary ? 10 : 0, shadowColor: primary ? WithAlpha(AccentBrightColor, 0.07f) : null));
-        button.AddThemeStyleboxOverride("pressed", CreatePanelStyle(pressed, danger ? new Color(DangerColor, 0.42f) : new Color(AccentColor, 0.34f), radius: 14, borderWidth: 1, padding: 14, shadowSize: primary ? 8 : 0, shadowColor: primary ? WithAlpha(AccentColor, 0.05f) : null));
-        button.AddThemeStyleboxOverride("disabled", CreatePanelStyle(WithAlpha(normal, 0.45f), WithAlpha(border, 0.24f), radius: 14, borderWidth: 1, padding: 14));
-        button.AddThemeStyleboxOverride("focus", CreatePanelStyle(hover, new Color(AccentBrightColor, 0.36f), radius: 14, borderWidth: 1, padding: 14, shadowSize: primary ? 10 : 0, shadowColor: primary ? WithAlpha(AccentBrightColor, 0.07f) : null));
-        button.AddThemeColorOverride("font_color", primary ? new Color(0.1f, 0.08f, 0.06f, 1f) : (danger ? TextStrongColor : AccentColor));
+        // Physical press: content shifts toward shadow → depth 0/1/3
+        button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(normalBg, border, 2, 14, 3, 0));
+        button.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(hoverBg, border, 2, 14, 3, 1));
+        button.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(pressedBg, border, 2, 14, 3, 3));
+        button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(WithAlpha(normalBg, 0.45f), WithAlpha(border, 0.4f), borderWidth: 2, padding: 14, shadowSize: 0));
+        button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, border, 2, 14, 3, 1));
+        // Primary (CREATE) keeps dark text; all others → white on hover/press
+        Color normalText = primary ? PrimaryFgColor : (danger ? CardColor : TextStrongColor);
+        Color activeText = primary ? PrimaryFgColor : CardColor;
+        button.AddThemeColorOverride("font_color", normalText);
+        button.AddThemeColorOverride("font_hover_color", activeText);
+        button.AddThemeColorOverride("font_pressed_color", activeText);
+        button.AddThemeColorOverride("font_focus_color", activeText);
         button.AddThemeColorOverride("font_disabled_color", WithAlpha(TextMutedColor, 0.65f));
         button.AddThemeFontSizeOverride("font_size", 16);
+        // Tint custom child icons/labels on hover (Button.font_hover_color only affects Button.Text)
+        if (!primary)
+        {
+            SetupChildHoverTint(button, normalText, activeText);
+        }
     }
 
     private static void ApplyToolbarButtonStyle(Button button, bool accent, bool iconOnly)
     {
-        Color border = accent ? new Color(AccentBrightColor, 0.26f) : AccentMutedColor;
-        Color normal = accent
-            ? new Color(0.059f, 0.047f, 0.039f, 0.9f)
-            : new Color(0.059f, 0.047f, 0.039f, 0.82f);
-        Color hover = accent
-            ? new Color(0.059f, 0.047f, 0.039f, 0.96f)
-            : new Color(0.059f, 0.047f, 0.039f, 0.92f);
+        int pad = iconOnly ? 10 : 14;
+        Color bg = SecondaryColor;
+        Color hoverBg = SuccessColor;
+        Color pressedBg = new Color(SuccessColor, 0.8f);
 
-        button.AddThemeStyleboxOverride("normal", CreatePanelStyle(normal, border, radius: 16, borderWidth: 1, padding: iconOnly ? 10 : 14));
-        button.AddThemeStyleboxOverride("hover", CreatePanelStyle(hover, new Color(AccentBrightColor, 0.32f), radius: 16, borderWidth: 1, padding: iconOnly ? 10 : 14, shadowSize: 6, shadowColor: WithAlpha(AccentColor, 0.05f)));
-        button.AddThemeStyleboxOverride("pressed", CreatePanelStyle(normal, new Color(AccentBrightColor, 0.32f), radius: 16, borderWidth: 1, padding: iconOnly ? 10 : 14));
-        button.AddThemeStyleboxOverride("disabled", CreatePanelStyle(WithAlpha(normal, 0.45f), WithAlpha(border, 0.2f), radius: 16, borderWidth: 1, padding: iconOnly ? 10 : 14));
-        button.AddThemeStyleboxOverride("focus", CreatePanelStyle(hover, new Color(AccentBrightColor, 0.32f), radius: 16, borderWidth: 1, padding: iconOnly ? 10 : 14));
+        // Physical press animation
+        button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(bg, BorderColor, 2, pad, 3, 0));
+        button.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(hoverBg, BorderColor, 2, pad, 3, 1));
+        button.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(pressedBg, BorderColor, 2, pad, 3, 3));
+        button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(WithAlpha(bg, 0.45f), WithAlpha(BorderColor, 0.4f), borderWidth: 2, padding: pad, shadowSize: 0));
+        button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, BorderColor, 2, pad, 3, 1));
         button.AddThemeColorOverride("font_color", TextStrongColor);
+        button.AddThemeColorOverride("font_hover_color", CardColor);
+        button.AddThemeColorOverride("font_pressed_color", CardColor);
+        button.AddThemeColorOverride("font_focus_color", CardColor);
         button.AddThemeColorOverride("font_disabled_color", WithAlpha(TextMutedColor, 0.65f));
         button.AddThemeFontSizeOverride("font_size", iconOnly ? 18 : 15);
+        // Tint child icons/labels white on hover
+        SetupChildHoverTint(button, TextStrongColor, CardColor);
     }
 
     private static void ApplyInlineButtonStyle(Button button, bool accent)
     {
-        Color border = accent ? new Color(AccentColor, 0.24f) : AccentMutedColor;
-        Color normal = accent
-            ? new Color(0.059f, 0.047f, 0.039f, 0.9f)
-            : new Color(0.059f, 0.047f, 0.039f, 0.82f);
-        Color hover = accent
-            ? new Color(0.059f, 0.047f, 0.039f, 0.96f)
-            : new Color(0.059f, 0.047f, 0.039f, 0.92f);
+        Color bg = accent ? SecondaryColor : CardColor;
+        Color hoverBg = SuccessColor;
+        Color pressedBg = new Color(SuccessColor, 0.8f);
 
-        button.AddThemeStyleboxOverride("normal", CreatePanelStyle(normal, border, radius: 12, borderWidth: 1, padding: 10));
-        button.AddThemeStyleboxOverride("hover", CreatePanelStyle(hover, new Color(AccentBrightColor, 0.28f), radius: 12, borderWidth: 1, padding: 10));
-        button.AddThemeStyleboxOverride("pressed", CreatePanelStyle(normal, new Color(AccentColor, 0.28f), radius: 12, borderWidth: 1, padding: 10));
-        button.AddThemeStyleboxOverride("disabled", CreatePanelStyle(WithAlpha(normal, 0.45f), WithAlpha(border, 0.2f), radius: 12, borderWidth: 1, padding: 10));
-        button.AddThemeStyleboxOverride("focus", CreatePanelStyle(hover, new Color(AccentBrightColor, 0.28f), radius: 12, borderWidth: 1, padding: 10));
+        // Physical press animation
+        button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(bg, BorderColor, 2, 12, 3, 0));
+        button.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(hoverBg, BorderColor, 2, 12, 3, 1));
+        button.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(pressedBg, BorderColor, 2, 12, 3, 3));
+        button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(WithAlpha(bg, 0.45f), WithAlpha(BorderColor, 0.4f), borderWidth: 2, padding: 12, shadowSize: 0));
+        button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, BorderColor, 2, 12, 3, 1));
         button.AddThemeColorOverride("font_color", TextStrongColor);
+        button.AddThemeColorOverride("font_hover_color", CardColor);
+        button.AddThemeColorOverride("font_pressed_color", CardColor);
+        button.AddThemeColorOverride("font_focus_color", CardColor);
         button.AddThemeColorOverride("font_disabled_color", WithAlpha(TextMutedColor, 0.65f));
-        button.AddThemeFontSizeOverride("font_size", 15);
+        button.AddThemeFontSizeOverride("font_size", 17);
     }
 
     private void UpdateRoomFilterButtons()
@@ -4173,13 +4865,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             ApplyInlineButtonStyle(_roomFilterMenuButton, HasRoomSearchOrFilter());
             _roomFilterMenuButton.TooltipText = UiText($"当前筛选：{DescribeRoomFilterState()}");
-            PopupMenu popup = _roomFilterMenuButton.GetPopup();
-            SyncPopupCheckState(popup, FilterPublicId, _showPublicRooms);
-            SyncPopupCheckState(popup, FilterLockedId, _showLockedRooms);
-            SyncPopupCheckState(popup, FilterJoinableId, _joinableOnlyFilter);
-            SyncPopupCheckState(popup, FilterModeStandardId, _showStandardMode);
-            SyncPopupCheckState(popup, FilterModeDailyId, _showDailyMode);
-            SyncPopupCheckState(popup, FilterModeCustomId, _showCustomMode);
+        }
+
+        // Sync toggle buttons in the filter dialog if it's open
+        if (_filterDialogContainer is { Visible: true })
+        {
+            SyncFilterDialogButtons();
         }
     }
 
@@ -4198,27 +4889,28 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         input.AddThemeStyleboxOverride("normal", new StyleBoxEmpty());
         input.AddThemeStyleboxOverride("focus", new StyleBoxEmpty());
         input.AddThemeColorOverride("font_color", TextStrongColor);
-        input.AddThemeColorOverride("font_placeholder_color", new Color(TextMutedColor, 0.72f));
+        input.AddThemeColorOverride("font_placeholder_color", new Color(TextMutedColor, 0.6f));
         input.AddThemeColorOverride("caret_color", AccentColor);
         input.AddThemeFontSizeOverride("font_size", 15);
     }
 
     private static void ApplyFilterChipStyle(Button button, bool active)
     {
-        Color normal = active
-            ? new Color(0.24f, 0.09f, 0.06f, 0.98f)
-            : new Color(0.059f, 0.047f, 0.039f, 0.78f);
-        Color hover = active
-            ? new Color(0.3f, 0.12f, 0.07f, 1f)
-            : new Color(0.059f, 0.047f, 0.039f, 0.9f);
-        Color border = active ? new Color(AccentColor, 0.28f) : AccentMutedColor;
+        Color bg = active ? AccentColor : SecondaryColor;
+        Color hoverBg = active ? AccentBrightColor : SuccessColor;
+        Color pressedBg = active ? new Color(AccentColor, 0.85f) : new Color(SuccessColor, 0.8f);
 
-        button.AddThemeStyleboxOverride("normal", CreatePanelStyle(normal, border, radius: 14, borderWidth: 1, padding: 10));
-        button.AddThemeStyleboxOverride("hover", CreatePanelStyle(hover, new Color(AccentBrightColor, 0.3f), radius: 14, borderWidth: 1, padding: 10));
-        button.AddThemeStyleboxOverride("pressed", CreatePanelStyle(normal, new Color(AccentColor, 0.3f), radius: 14, borderWidth: 1, padding: 10));
-        button.AddThemeStyleboxOverride("disabled", CreatePanelStyle(WithAlpha(normal, 0.45f), WithAlpha(border, 0.2f), radius: 14, borderWidth: 1, padding: 10));
-        button.AddThemeStyleboxOverride("focus", CreatePanelStyle(hover, new Color(AccentBrightColor, 0.3f), radius: 14, borderWidth: 1, padding: 10));
-        button.AddThemeColorOverride("font_color", active ? TextStrongColor : TextMutedColor);
+        // Physical press animation
+        button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(bg, BorderColor, 2, 10, 3, 0));
+        button.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(hoverBg, BorderColor, 2, 10, 3, 1));
+        button.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(pressedBg, BorderColor, 2, 10, 3, 3));
+        button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(WithAlpha(bg, 0.45f), WithAlpha(BorderColor, 0.4f), borderWidth: 2, padding: 10, shadowSize: 0));
+        button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, BorderColor, 2, 10, 3, 1));
+        Color normalText = active ? PrimaryFgColor : TextStrongColor;
+        button.AddThemeColorOverride("font_color", normalText);
+        button.AddThemeColorOverride("font_hover_color", CardColor);
+        button.AddThemeColorOverride("font_pressed_color", CardColor);
+        button.AddThemeColorOverride("font_focus_color", CardColor);
         button.AddThemeColorOverride("font_disabled_color", WithAlpha(TextMutedColor, 0.65f));
         button.AddThemeFontSizeOverride("font_size", 15);
     }
@@ -4226,10 +4918,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private static void ApplyInputStyle(LineEdit input)
     {
         input.CustomMinimumSize = new Vector2(0f, 48f);
-        input.AddThemeStyleboxOverride("normal", CreatePanelStyle(new Color(0.059f, 0.047f, 0.039f, 0.82f), AccentMutedColor, radius: 12, borderWidth: 1, padding: 12));
-        input.AddThemeStyleboxOverride("focus", CreatePanelStyle(new Color(0.059f, 0.047f, 0.039f, 0.94f), new Color(AccentBrightColor, 0.28f), radius: 12, borderWidth: 1, padding: 12));
+        input.AddThemeStyleboxOverride("normal", CreatePixelStyle(InputBgColor, BorderColor, borderWidth: 2, padding: 12, shadowSize: 0));
+        input.AddThemeStyleboxOverride("focus", CreatePixelStyle(CardColor, AccentColor, borderWidth: 2, padding: 12, shadowSize: 0));
         input.AddThemeColorOverride("font_color", TextStrongColor);
-        input.AddThemeColorOverride("font_placeholder_color", new Color(TextMutedColor, 0.72f));
+        input.AddThemeColorOverride("font_placeholder_color", new Color(TextMutedColor, 0.6f));
         input.AddThemeColorOverride("caret_color", AccentColor);
         input.AddThemeFontSizeOverride("font_size", 16);
     }
@@ -4237,16 +4929,65 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private static void ApplyInputStyle(OptionButton input)
     {
         input.CustomMinimumSize = new Vector2(0f, 48f);
-        input.AddThemeStyleboxOverride("normal", CreatePanelStyle(new Color(0.059f, 0.047f, 0.039f, 0.82f), AccentMutedColor, radius: 12, borderWidth: 1, padding: 12));
-        input.AddThemeStyleboxOverride("hover", CreatePanelStyle(new Color(0.059f, 0.047f, 0.039f, 0.94f), new Color(AccentBrightColor, 0.28f), radius: 12, borderWidth: 1, padding: 12));
-        input.AddThemeStyleboxOverride("pressed", CreatePanelStyle(new Color(0.059f, 0.047f, 0.039f, 0.94f), new Color(AccentBrightColor, 0.28f), radius: 12, borderWidth: 1, padding: 12));
-        input.AddThemeStyleboxOverride("focus", CreatePanelStyle(new Color(0.059f, 0.047f, 0.039f, 0.94f), new Color(AccentBrightColor, 0.28f), radius: 12, borderWidth: 1, padding: 12));
+        input.AddThemeStyleboxOverride("normal", CreatePixelStyle(InputBgColor, BorderColor, borderWidth: 2, padding: 12, shadowSize: 0));
+        input.AddThemeStyleboxOverride("hover", CreatePixelStyle(CardColor, AccentColor, borderWidth: 2, padding: 12, shadowSize: 0));
+        input.AddThemeStyleboxOverride("pressed", CreatePixelStyle(CardColor, AccentColor, borderWidth: 2, padding: 12, shadowSize: 0));
+        input.AddThemeStyleboxOverride("focus", CreatePixelStyle(CardColor, AccentColor, borderWidth: 2, padding: 12, shadowSize: 0));
         input.AddThemeColorOverride("font_color", TextStrongColor);
         input.AddThemeColorOverride("font_hover_color", TextStrongColor);
         input.AddThemeColorOverride("font_pressed_color", TextStrongColor);
         input.AddThemeColorOverride("font_focus_color", TextStrongColor);
         input.AddThemeColorOverride("modulate_arrow", AccentColor);
         input.AddThemeFontSizeOverride("font_size", 16);
+    }
+
+    private static (ColorRect Dot, Label Value) BuildActionStatusRow(VBoxContainer parent, string keyText)
+    {
+        HBoxContainer row = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        row.AddThemeConstantOverride("separation", 6);
+        parent.AddChild(row);
+
+        ColorRect dot = new()
+        {
+            Color = SuccessColor,
+            CustomMinimumSize = new Vector2(6f, 6f),
+            SizeFlagsVertical = SizeFlags.ShrinkCenter
+        };
+        row.AddChild(dot);
+
+        Label key = CreateBodyLabel(keyText);
+        key.AddThemeColorOverride("font_color", TextMutedColor);
+        key.AddThemeFontSizeOverride("font_size", 12);
+        row.AddChild(key);
+
+        Label value = CreateBodyLabel("OK");
+        value.AddThemeColorOverride("font_color", SuccessColor);
+        value.AddThemeFontSizeOverride("font_size", 12);
+        row.AddChild(value);
+
+        return (dot, value);
+    }
+
+    private static (ColorRect Dot, Label Value, HBoxContainer Row) BuildActionStatusRowWithContainer(VBoxContainer parent, string keyText)
+    {
+        HBoxContainer row = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        row.AddThemeConstantOverride("separation", 6);
+        parent.AddChild(row);
+
+        ColorRect dot = new()
+        {
+            Color = AccentColor,
+            CustomMinimumSize = new Vector2(6f, 6f),
+            SizeFlagsVertical = SizeFlags.ShrinkCenter
+        };
+        row.AddChild(dot);
+
+        Label value = CreateBodyLabel("SYNCING...");
+        value.AddThemeColorOverride("font_color", TextMutedColor);
+        value.AddThemeFontSizeOverride("font_size", 12);
+        row.AddChild(value);
+
+        return (dot, value, row);
     }
 
     private Label CreateMetricStatusRow(VBoxContainer parent, string labelText, string valueText)
@@ -4272,11 +5013,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         valueRow.AddThemeConstantOverride("separation", 6);
         row.AddChild(valueRow);
 
-        _statusHealthValueIcon = new GlyphIcon
+        _statusHealthValueIcon = new ColorRect
         {
-            Kind = GlyphIconKind.Wifi,
-            GlyphColor = SuccessColor,
-            CustomMinimumSize = new Vector2(16f, 16f),
+            Color = SuccessColor,
+            CustomMinimumSize = new Vector2(12f, 12f),
             SizeFlagsVertical = SizeFlags.ShrinkCenter
         };
         valueRow.AddChild(_statusHealthValueIcon);
@@ -4344,11 +5084,23 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         InfoCircle,
         Plus,
         JoinArrow,
-        Refresh
+        Refresh,
+        Gamepad,
+        Lock,
+        Globe,
+        Zap,
+        Users
     }
 
     private sealed partial class GlyphIcon : Control
     {
+        // ── SVG texture cache (shared across all GlyphIcon instances) ──
+        // Keyed by GlyphIconKind — all icons render white strokes; color is applied via DrawTexture modulate.
+        private static readonly Dictionary<GlyphIconKind, ImageTexture> SvgTextureCache = new();
+
+        // Render resolution: 4x the 24px viewbox for crisp rendering at all display sizes.
+        private const int SvgRenderSize = 96;
+
         public GlyphIconKind Kind { get; init; }
 
         public Color GlyphColor { get; init; } = Colors.White;
@@ -4362,162 +5114,207 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         public override void _Draw()
         {
-            switch (Kind)
+            if (Kind == GlyphIconKind.None)
             {
-                case GlyphIconKind.None:
-                    break;
-                case GlyphIconKind.Wifi:
-                    DrawWifi();
-                    break;
-                case GlyphIconKind.Server:
-                    DrawServer();
-                    break;
-                case GlyphIconKind.Gear:
-                    DrawGear();
-                    break;
-                case GlyphIconKind.Back:
-                    DrawBackArrow();
-                    break;
-                case GlyphIconKind.Person:
-                    DrawPerson();
-                    break;
-                case GlyphIconKind.Search:
-                    DrawSearch();
-                    break;
-                case GlyphIconKind.Nodes:
-                    DrawNodes();
-                    break;
-                case GlyphIconKind.InfoCircle:
-                    DrawInfoCircle();
-                    break;
-                case GlyphIconKind.Plus:
-                    DrawPlus();
-                    break;
-                case GlyphIconKind.JoinArrow:
-                    DrawJoinArrow();
-                    break;
-                case GlyphIconKind.Refresh:
-                    DrawRefresh();
-                    break;
+                return;
+            }
+
+            ImageTexture? texture = GetOrCreateTexture(Kind);
+            if (texture != null)
+            {
+                DrawTextureRect(texture, new Rect2(Vector2.Zero, Size), false, GlyphColor);
             }
         }
 
-        private void DrawWifi()
+        private static ImageTexture? GetOrCreateTexture(GlyphIconKind kind)
         {
-            Vector2 center = new(Size.X * 0.5f, Size.Y * 0.72f);
-            DrawArc(center, Size.X * 0.38f, Mathf.Pi * 1.12f, Mathf.Pi * 1.88f, 18, GlyphColor, StrokeWidth, true);
-            DrawArc(center, Size.X * 0.26f, Mathf.Pi * 1.15f, Mathf.Pi * 1.85f, 16, GlyphColor, StrokeWidth, true);
-            DrawArc(center, Size.X * 0.14f, Mathf.Pi * 1.18f, Mathf.Pi * 1.82f, 12, GlyphColor, StrokeWidth, true);
-            DrawCircle(new Vector2(Size.X * 0.5f, Size.Y * 0.78f), 1.8f, GlyphColor);
-        }
-
-        private void DrawServer()
-        {
-            float left = Size.X * 0.14f;
-            float width = Size.X * 0.72f;
-            float height = Size.Y * 0.22f;
-            Rect2 top = new(new Vector2(left, Size.Y * 0.2f), new Vector2(width, height));
-            Rect2 bottom = new(new Vector2(left, Size.Y * 0.58f), new Vector2(width, height));
-            DrawRect(top, Colors.Transparent, false, StrokeWidth, true);
-            DrawRect(bottom, Colors.Transparent, false, StrokeWidth, true);
-            DrawCircle(new Vector2(top.Position.X + width * 0.2f, top.GetCenter().Y), 1.3f, GlyphColor);
-            DrawCircle(new Vector2(bottom.Position.X + width * 0.2f, bottom.GetCenter().Y), 1.3f, GlyphColor);
-            DrawLine(new Vector2(top.Position.X + width * 0.38f, top.GetCenter().Y), new Vector2(top.End.X - 3f, top.GetCenter().Y), GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(bottom.Position.X + width * 0.38f, bottom.GetCenter().Y), new Vector2(bottom.End.X - 3f, bottom.GetCenter().Y), GlyphColor, StrokeWidth, true);
-        }
-
-        private void DrawGear()
-        {
-            Vector2 center = Size * 0.5f;
-            float outerRadius = Size.X * 0.28f;
-            float innerRadius = Size.X * 0.13f;
-            for (int index = 0; index < 8; index++)
+            if (SvgTextureCache.TryGetValue(kind, out ImageTexture? cached))
             {
-                float angle = index / 8f * Mathf.Tau;
-                Vector2 start = center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * outerRadius;
-                Vector2 end = center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * (outerRadius + 3f);
-                DrawLine(start, end, GlyphColor, StrokeWidth, true);
+                return cached;
             }
 
-            DrawArc(center, outerRadius, 0f, Mathf.Tau, 28, GlyphColor, StrokeWidth, true);
-            DrawArc(center, innerRadius, 0f, Mathf.Tau, 24, GlyphColor, StrokeWidth, true);
+            string? svgData = GetSvgForKind(kind);
+            if (svgData == null)
+            {
+                return null;
+            }
+
+            // Replace stroke color with white so modulate tinting works correctly.
+            // White (#FFFFFF) * modulate color = desired color.
+            svgData = svgData.Replace("stroke=\"currentColor\"", "stroke=\"#FFFFFF\"");
+
+            Image image = new();
+            float scale = SvgRenderSize / 24f;
+            Error err = image.LoadSvgFromString(svgData, scale);
+            if (err != Error.Ok)
+            {
+                GD.PrintErr($"sts2_lan_connect: failed to load SVG for icon {kind}: {err}");
+                return null;
+            }
+
+            ImageTexture texture = ImageTexture.CreateFromImage(image);
+            SvgTextureCache[kind] = texture;
+            return texture;
         }
 
-        private void DrawBackArrow()
+        private static string? GetSvgForKind(GlyphIconKind kind) => kind switch
         {
-            Vector2 center = new(Size.X * 0.55f, Size.Y * 0.5f);
-            DrawLine(new Vector2(Size.X * 0.72f, center.Y), new Vector2(Size.X * 0.28f, center.Y), GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(Size.X * 0.28f, center.Y), new Vector2(Size.X * 0.46f, Size.Y * 0.32f), GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(Size.X * 0.28f, center.Y), new Vector2(Size.X * 0.46f, Size.Y * 0.68f), GlyphColor, StrokeWidth, true);
-        }
+            GlyphIconKind.Wifi => SvgWifi,
+            GlyphIconKind.Server => SvgServer,
+            GlyphIconKind.Gear => SvgGear,
+            GlyphIconKind.Back => SvgBack,
+            GlyphIconKind.Person => SvgPerson,
+            GlyphIconKind.Search => SvgSearch,
+            GlyphIconKind.Nodes => SvgNodes,
+            GlyphIconKind.InfoCircle => SvgInfoCircle,
+            GlyphIconKind.Plus => SvgPlus,
+            GlyphIconKind.JoinArrow => SvgJoinArrow,
+            GlyphIconKind.Refresh => SvgRefresh,
+            GlyphIconKind.Gamepad => SvgGamepad,
+            GlyphIconKind.Lock => SvgLock,
+            GlyphIconKind.Globe => SvgGlobe,
+            GlyphIconKind.Zap => SvgZap,
+            GlyphIconKind.Users => SvgUsers,
+            _ => null,
+        };
 
-        private void DrawPerson()
-        {
-            Vector2 headCenter = new(Size.X * 0.5f, Size.Y * 0.32f);
-            DrawArc(headCenter, Size.X * 0.16f, 0f, Mathf.Tau, 18, GlyphColor, StrokeWidth, true);
-            DrawArc(new Vector2(Size.X * 0.5f, Size.Y * 0.84f), Size.X * 0.28f, Mathf.Pi * 1.15f, Mathf.Pi * 1.85f, 18, GlyphColor, StrokeWidth, true);
-        }
+        // ── Lucide icon SVG strings (24×24 viewbox, stroke-based) ──
 
-        private void DrawSearch()
-        {
-            Vector2 center = new(Size.X * 0.42f, Size.Y * 0.42f);
-            float radius = Size.X * 0.22f;
-            DrawArc(center, radius, 0f, Mathf.Tau, 20, GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(center.X + radius * 0.7f, center.Y + radius * 0.7f), new Vector2(Size.X * 0.84f, Size.Y * 0.84f), GlyphColor, StrokeWidth, true);
-        }
+        private const string SvgWifi = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 20h.01"/>
+              <path d="M2 8.82a15 15 0 0 1 20 0"/>
+              <path d="M5 12.859a10 10 0 0 1 14 0"/>
+              <path d="M8.5 16.429a5 5 0 0 1 7 0"/>
+            </svg>
+            """;
 
-        private void DrawNodes()
-        {
-            Rect2 top = new(new Vector2(Size.X * 0.38f, Size.Y * 0.08f), new Vector2(Size.X * 0.24f, Size.Y * 0.24f));
-            Rect2 left = new(new Vector2(Size.X * 0.12f, Size.Y * 0.62f), new Vector2(Size.X * 0.24f, Size.Y * 0.24f));
-            Rect2 right = new(new Vector2(Size.X * 0.64f, Size.Y * 0.62f), new Vector2(Size.X * 0.24f, Size.Y * 0.24f));
-            DrawRect(top, Colors.Transparent, false, StrokeWidth, true);
-            DrawRect(left, Colors.Transparent, false, StrokeWidth, true);
-            DrawRect(right, Colors.Transparent, false, StrokeWidth, true);
-            DrawLine(top.GetCenter() + new Vector2(0f, top.Size.Y * 0.5f), left.GetCenter() - new Vector2(0f, left.Size.Y * 0.5f), GlyphColor, StrokeWidth, true);
-            DrawLine(top.GetCenter() + new Vector2(0f, top.Size.Y * 0.5f), right.GetCenter() - new Vector2(0f, right.Size.Y * 0.5f), GlyphColor, StrokeWidth, true);
-        }
+        private const string SvgServer = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="20" height="8" x="2" y="2" rx="2" ry="2"/>
+              <rect width="20" height="8" x="2" y="14" rx="2" ry="2"/>
+              <line x1="6" x2="6.01" y1="6" y2="6"/>
+              <line x1="6" x2="6.01" y1="18" y2="18"/>
+            </svg>
+            """;
 
-        private void DrawInfoCircle()
-        {
-            Vector2 center = Size * 0.5f;
-            float radius = Size.X * 0.34f;
-            DrawArc(center, radius, 0f, Mathf.Tau, 24, GlyphColor, StrokeWidth, true);
-            DrawCircle(new Vector2(center.X, Size.Y * 0.3f), 1.5f, GlyphColor);
-            DrawLine(new Vector2(center.X, Size.Y * 0.42f), new Vector2(center.X, Size.Y * 0.68f), GlyphColor, StrokeWidth, true);
-        }
+        private const string SvgGear = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+            """;
 
-        private void DrawPlus()
-        {
-            Vector2 center = Size * 0.5f;
-            DrawLine(new Vector2(center.X, Size.Y * 0.22f), new Vector2(center.X, Size.Y * 0.78f), GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(Size.X * 0.22f, center.Y), new Vector2(Size.X * 0.78f, center.Y), GlyphColor, StrokeWidth, true);
-        }
+        private const string SvgBack = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m12 19-7-7 7-7"/>
+              <path d="M19 12H5"/>
+            </svg>
+            """;
 
-        private void DrawJoinArrow()
-        {
-            float midY = Size.Y * 0.52f;
-            DrawLine(new Vector2(Size.X * 0.16f, midY), new Vector2(Size.X * 0.72f, midY), GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(Size.X * 0.56f, Size.Y * 0.28f), new Vector2(Size.X * 0.72f, midY), GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(Size.X * 0.56f, Size.Y * 0.76f), new Vector2(Size.X * 0.72f, midY), GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(Size.X * 0.18f, Size.Y * 0.24f), new Vector2(Size.X * 0.18f, Size.Y * 0.44f), GlyphColor, StrokeWidth, true);
-        }
+        private const string SvgPerson = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+            """;
 
-        private void DrawRefresh()
-        {
-            Vector2 center = Size * 0.5f;
-            float radius = Size.X * 0.28f;
-            DrawArc(center, radius, Mathf.Pi * 0.22f, Mathf.Pi * 1.4f, 18, GlyphColor, StrokeWidth, true);
-            DrawArc(center, radius, Mathf.Pi * 1.22f, Mathf.Pi * 2.38f, 18, GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(Size.X * 0.73f, Size.Y * 0.18f), new Vector2(Size.X * 0.83f, Size.Y * 0.18f), GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(Size.X * 0.83f, Size.Y * 0.18f), new Vector2(Size.X * 0.8f, Size.Y * 0.31f), GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(Size.X * 0.27f, Size.Y * 0.82f), new Vector2(Size.X * 0.17f, Size.Y * 0.82f), GlyphColor, StrokeWidth, true);
-            DrawLine(new Vector2(Size.X * 0.17f, Size.Y * 0.82f), new Vector2(Size.X * 0.2f, Size.Y * 0.69f), GlyphColor, StrokeWidth, true);
-        }
+        private const string SvgSearch = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m21 21-4.34-4.34"/>
+              <circle cx="11" cy="11" r="8"/>
+            </svg>
+            """;
+
+        private const string SvgNodes = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="16" y="16" width="6" height="6" rx="1"/>
+              <rect x="2" y="16" width="6" height="6" rx="1"/>
+              <rect x="9" y="2" width="6" height="6" rx="1"/>
+              <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/>
+              <path d="M12 12V8"/>
+            </svg>
+            """;
+
+        private const string SvgInfoCircle = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 16v-4"/>
+              <path d="M12 8h.01"/>
+            </svg>
+            """;
+
+        private const string SvgPlus = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14"/>
+              <path d="M12 5v14"/>
+            </svg>
+            """;
+
+        private const string SvgJoinArrow = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m10 17 5-5-5-5"/>
+              <path d="M15 12H3"/>
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+            </svg>
+            """;
+
+        private const string SvgRefresh = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+              <path d="M21 3v5h-5"/>
+              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+              <path d="M8 16H3v5"/>
+            </svg>
+            """;
+
+        private const string SvgGamepad = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="6" x2="10" y1="11" y2="11"/>
+              <line x1="8" x2="8" y1="9" y2="13"/>
+              <line x1="15" x2="15.01" y1="12" y2="12"/>
+              <line x1="18" x2="18.01" y1="10" y2="10"/>
+              <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/>
+            </svg>
+            """;
+
+        private const string SvgLock = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            """;
+
+        private const string SvgGlobe = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/>
+              <path d="M2 12h20"/>
+            </svg>
+            """;
+
+        private const string SvgZap = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>
+            </svg>
+            """;
+
+        private const string SvgUsers = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+              <path d="M16 3.128a4 4 0 0 1 0 7.744"/>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+              <circle cx="9" cy="7" r="4"/>
+            </svg>
+            """;
     }
 
     private sealed partial class RoomStateGlyph : Control
     {
+        private static ImageTexture? _lockedTexture;
+        private static ImageTexture? _unlockedTexture;
+        private const int RenderSize = 96;
+
         public Color GlyphColor { get; init; } = Colors.White;
 
         public bool Unlocked { get; init; } = true;
@@ -4530,19 +5327,121 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         public override void _Draw()
         {
-            const float strokeWidth = 2.6f;
-            Rect2 bodyRect = new(new Vector2(7f, 14f), new Vector2(16f, 11f));
-            DrawRect(bodyRect, Colors.Transparent, false, strokeWidth, true);
-
-            if (Unlocked)
+            ImageTexture? texture = GetOrCreateTexture(Unlocked);
+            if (texture != null)
             {
-                DrawLine(new Vector2(9f, 14f), new Vector2(9f, 11.4f), GlyphColor, strokeWidth, true);
-                DrawArc(new Vector2(14f, 13.6f), 5.8f, Mathf.Pi * 1.04f, Mathf.Pi * 1.6f, 20, GlyphColor, strokeWidth, true);
-                DrawLine(new Vector2(17.8f, 9.4f), new Vector2(21.8f, 6.2f), GlyphColor, strokeWidth, true);
+                DrawTextureRect(texture, new Rect2(Vector2.Zero, Size), false, GlyphColor);
             }
-            else
+        }
+
+        private static ImageTexture? GetOrCreateTexture(bool unlocked)
+        {
+            ref ImageTexture? cached = ref (unlocked ? ref _unlockedTexture : ref _lockedTexture);
+            if (cached != null)
             {
-                DrawArc(new Vector2(15f, 14f), 5.8f, Mathf.Pi, Mathf.Tau, 22, GlyphColor, strokeWidth, true);
+                return cached;
+            }
+
+            string svgData = (unlocked ? SvgLockOpen : SvgLockClosed).Replace("stroke=\"currentColor\"", "stroke=\"#FFFFFF\"");
+            Image image = new();
+            float scale = RenderSize / 24f;
+            Error err = image.LoadSvgFromString(svgData, scale);
+            if (err != Error.Ok)
+            {
+                return null;
+            }
+
+            cached = ImageTexture.CreateFromImage(image);
+            return cached;
+        }
+
+        private const string SvgLockClosed = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            """;
+
+        private const string SvgLockOpen = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+            </svg>
+            """;
+    }
+
+    /// <summary>
+    /// Custom PanelContainer that draws pixel-art borders with hard-edged offset shadows,
+    /// matching CSS box-shadow: Npx Npx 0 0 (no blur).
+    /// Replaces StyleBoxFlat which only supports blurred shadows.
+    /// </summary>
+    private sealed partial class PixelBorderPanel : PanelContainer
+    {
+        public Color BgColor { get; set; } = new(1f, 0.99f, 0.98f, 1f); // CardColor
+        public Color PixelBorderColor { get; set; } = new(0.77f, 0.70f, 0.62f, 1f); // BorderColor
+        public int PixelBorderWidth { get; set; } = 3;
+        public int ShadowPixelOffset { get; set; } = 4;
+        public bool DrawInsetBevel { get; set; } = true;
+        public int Padding { get; set; } = 18;
+
+        public PixelBorderPanel()
+        {
+            ClipContents = false;
+        }
+
+        public override void _Ready()
+        {
+            base._Ready();
+            // Use a transparent StyleBox with padding only — all visuals come from _Draw()
+            StyleBoxEmpty padStyle = new()
+            {
+                ContentMarginLeft = Padding,
+                ContentMarginTop = Padding,
+                ContentMarginRight = Padding,
+                ContentMarginBottom = Padding
+            };
+            AddThemeStyleboxOverride("panel", padStyle);
+        }
+
+        public override void _Draw()
+        {
+            float w = Size.X;
+            float h = Size.Y;
+            int bw = PixelBorderWidth;
+            int so = ShadowPixelOffset;
+
+            // 1) Hard-edged offset shadow (drawn first, behind everything)
+            if (so > 0)
+            {
+                DrawRect(new Rect2(so, so, w, h), PixelBorderColor);
+            }
+
+            // 2) Background fill
+            DrawRect(new Rect2(0, 0, w, h), BgColor);
+
+            // 3) Border (draw inward from edges)
+            for (int i = 0; i < bw; i++)
+            {
+                DrawRect(new Rect2(i, i, w - 2 * i, h - 2 * i), PixelBorderColor, false, 1.0f);
+            }
+
+            // 4) Inner bevel highlights (CSS inset shadows)
+            if (DrawInsetBevel)
+            {
+                float innerLeft = bw;
+                float innerTop = bw;
+                float innerRight = w - bw;
+                float innerBottom = h - bw;
+                Color highlight = new(1f, 1f, 1f, 0.3f);
+                Color shadow = new(0f, 0f, 0f, 0.1f);
+
+                // Top-left highlight
+                DrawLine(new Vector2(innerLeft, innerTop + 1), new Vector2(innerRight, innerTop + 1), highlight, 2f);
+                DrawLine(new Vector2(innerLeft + 1, innerTop), new Vector2(innerLeft + 1, innerBottom), highlight, 2f);
+
+                // Bottom-right shadow
+                DrawLine(new Vector2(innerRight - 1, innerTop), new Vector2(innerRight - 1, innerBottom), shadow, 2f);
+                DrawLine(new Vector2(innerLeft, innerBottom - 1), new Vector2(innerRight, innerBottom - 1), shadow, 2f);
             }
         }
     }
@@ -4558,9 +5457,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         float phase = (float)(_healthPulseTime / 2d * Math.Tau);
         float wave = 0.5f * (1f + Mathf.Cos(phase));
         float opacity = 0.6f + 0.4f * wave;
-        float scale = 1f + 0.1f * (1f - wave);
-        _healthIndicatorDot.SelfModulate = WithAlpha(_healthIndicatorDotColor, opacity);
-        _healthIndicatorDot.Scale = new Vector2(scale, scale);
+        // ColorRect uses Color property directly for pulsing
+        if (_healthIndicatorDot is ColorRect dotRect)
+        {
+            dotRect.Color = WithAlpha(_healthIndicatorDotColor, opacity);
+        }
+        else
+        {
+            _healthIndicatorDot.SelfModulate = WithAlpha(_healthIndicatorDotColor, opacity);
+        }
     }
 
     private static string GetSuggestedRoomName()
