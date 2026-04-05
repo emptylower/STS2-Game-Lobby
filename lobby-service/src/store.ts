@@ -33,6 +33,7 @@ export interface SavedRunSlotInput {
   netId: string;
   characterId?: string | undefined;
   characterName?: string | undefined;
+  playerName?: string | undefined;
   isHost?: boolean | undefined;
 }
 
@@ -40,6 +41,7 @@ export interface SavedRunSlot {
   netId: string;
   characterId: string;
   characterName: string;
+  playerName: string;
   isHost: boolean;
   isConnected: boolean;
 }
@@ -711,6 +713,7 @@ function normalizeSavedRunInput(savedRun: CreateRoomInput["savedRun"]): SavedRun
       netId: normalizeNetId(slot.netId),
       characterId: slot.characterId?.trim() ?? "",
       characterName: slot.characterName?.trim() ?? "",
+      playerName: slot.playerName?.trim() ?? "",
       isHost: Boolean(slot.isHost),
       isConnected: false,
     }))

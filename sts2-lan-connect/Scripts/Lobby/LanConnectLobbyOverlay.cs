@@ -130,6 +130,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private LineEdit? _roomNameInput;
     private OptionButton? _roomTypeOption;
     private LineEdit? _roomPasswordInput;
+    private OptionButton? _maxPlayersOption;
     private Control? _createGuardDialogContainer;
     private Label? _createGuardDialogTitle;
     private Label? _createGuardDialogMessage;
@@ -1125,6 +1126,14 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             ("多人每日挑战", 1),
             ("自定义模式", 2)));
         body.AddChild(BuildLabeledInputRow("可选密码", string.Empty, out _roomPasswordInput, "留空表示公开房间", showLengthCounter: true, maxLength: LanConnectConfig.MaxRoomPasswordLength));
+        body.AddChild(BuildLabeledOptionRow(
+            "最大人数",
+            out _maxPlayersOption,
+            ("4人", 4),
+            ("5人", 5),
+            ("6人", 6),
+            ("7人", 7),
+            ("8人", 8)));
 
         if (_roomNameInput != null)
         {
@@ -2469,6 +2478,16 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
+        int? selectedMaxPlayers = null;
+        if (_maxPlayersOption != null)
+        {
+            int id = _maxPlayersOption.GetSelectedId();
+            if (id >= LanConnectConstants.MinMaxPlayers)
+            {
+                selectedMaxPlayers = id;
+            }
+        }
+
         _actionInFlight = true;
         UpdateActionButtons();
         ShowCreateDialogError(string.Empty, visible: false);
@@ -2476,7 +2495,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         try
         {
-            bool created = await LanConnectHostFlow.StartLobbyHostAsync(roomName, password, gameMode, _loadingOverlay, _stack);
+            bool created = await LanConnectHostFlow.StartLobbyHostAsync(roomName, password, gameMode, _loadingOverlay, _stack, selectedMaxPlayers);
             if (created)
             {
                 CloseCreateDialog();
@@ -2809,6 +2828,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             : LanConnectConfig.LastRoomName;
         _roomTypeOption.Select(0);
         _roomPasswordInput.Text = string.Empty;
+        if (_maxPlayersOption != null)
+        {
+            int effectiveMax = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
+            int selectIndex = _maxPlayersOption.GetItemIndex(Math.Clamp(effectiveMax, LanConnectConstants.MinMaxPlayers, 8));
+            if (selectIndex >= 0)
+            {
+                _maxPlayersOption.Select(selectIndex);
+            }
+        }
         ShowCreateDialogError(string.Empty, visible: false);
         _createDialogContainer.Visible = true;
         _roomNameInput.GrabFocus();
@@ -2957,8 +2985,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             string selectedNetId = slot.NetId;
             Button option = CreateActionButton(
-                string.IsNullOrWhiteSpace(slot.CharacterName) ? slot.CharacterId : slot.CharacterName,
-                $"接管该续局角色并使用已保存的玩家槽位加入。存档角色 ID：{slot.CharacterId}",
+                FormatSlotLabel(slot),
+                string.IsNullOrWhiteSpace(slot.PlayerName)
+                    ? $"接管该续局角色并使用已保存的玩家槽位加入。存档角色 ID：{slot.CharacterId}"
+                    : $"接管 {slot.PlayerName} 的续局角色（{slot.CharacterId}）并使用已保存的玩家槽位加入。",
                 () => TaskHelper.RunSafely(SubmitResumeSlotAsync(selectedNetId)),
                 primary: _resumeSlotDialogOptions.GetChildCount() == 0);
             option.SizeFlagsHorizontal = SizeFlags.ExpandFill;
@@ -2993,6 +3023,17 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _pendingResumeJoinRoom = null;
         _pendingResumeJoinPassword = null;
+    }
+
+    private static string FormatSlotLabel(LobbySavedRunSlot slot)
+    {
+        string characterLabel = string.IsNullOrWhiteSpace(slot.CharacterName)
+            ? slot.CharacterId
+            : slot.CharacterName;
+
+        return string.IsNullOrWhiteSpace(slot.PlayerName)
+            ? characterLabel
+            : $"{characterLabel}（{slot.PlayerName}）";
     }
 
     private async Task OpenDirectoryServerDialogAsync()
@@ -4138,6 +4179,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             if (!string.Equals(leftSlot.NetId, rightSlot.NetId, StringComparison.Ordinal) ||
                 !string.Equals(leftSlot.CharacterId, rightSlot.CharacterId, StringComparison.Ordinal) ||
                 !string.Equals(leftSlot.CharacterName, rightSlot.CharacterName, StringComparison.Ordinal) ||
+                !string.Equals(leftSlot.PlayerName, rightSlot.PlayerName, StringComparison.Ordinal) ||
                 leftSlot.IsHost != rightSlot.IsHost ||
                 leftSlot.IsConnected != rightSlot.IsConnected)
             {

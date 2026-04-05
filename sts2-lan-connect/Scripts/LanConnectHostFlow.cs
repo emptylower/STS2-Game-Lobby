@@ -77,11 +77,11 @@ internal static class LanConnectHostFlow
         }
     }
 
-    public static async Task<bool> StartLobbyHostAsync(string roomName, string? password, GameMode gameMode, Control loadingOverlay, NSubmenuStack stack)
+    public static async Task<bool> StartLobbyHostAsync(string roomName, string? password, GameMode gameMode, Control loadingOverlay, NSubmenuStack stack, int? maxPlayersOverride = null)
     {
         loadingOverlay.Visible = true;
         NetHostGameService netService = new();
-        int maxPlayers = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
+        int maxPlayers = maxPlayersOverride ?? LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
         string lobbyGameMode = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode);
         string gameModeLabel = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameModeLabel(gameMode);
 

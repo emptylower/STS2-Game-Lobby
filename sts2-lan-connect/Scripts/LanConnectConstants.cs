@@ -4,7 +4,19 @@ internal static class LanConnectConstants
 {
     public const ushort DefaultPort = 33771;
 
-    public const int DefaultMaxPlayers = 4;
+    public const int DefaultMaxPlayers = 8;
+
+    public const int MinMaxPlayers = 4;
+
+    public const int MaxMaxPlayers = 16;
+
+    public const int VanillaSlotIdBits = 2;
+
+    public const int ExtendedSlotIdBits = 4;
+
+    public const int VanillaLobbyListBits = 3;
+
+    public const int ExtendedLobbyListBits = 5;
 
     public const int LobbyRoomsPerPage = 5;
 

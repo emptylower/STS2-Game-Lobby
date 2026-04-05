@@ -134,6 +134,8 @@ internal sealed class LobbySavedRunSlot
 
     public string CharacterName { get; set; } = string.Empty;
 
+    public string PlayerName { get; set; } = string.Empty;
+
     public bool IsHost { get; set; }
 
     public bool IsConnected { get; set; }

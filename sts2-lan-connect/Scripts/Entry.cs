@@ -9,7 +9,9 @@ public static class Entry
     public static void Init()
     {
         LanConnectConfig.Load();
+        LanConnectExternalModDetection.Detect();
         LanConnectMultiplayerCompatibility.Initialize();
+        LanConnectGameplayPatches.Initialize();
         LanConnectLobbyRuntime.Install();
         LanConnectRoomChatOverlay.Install();
         LanConnectRuntimeMonitor.Install();

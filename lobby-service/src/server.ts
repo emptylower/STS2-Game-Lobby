@@ -218,6 +218,7 @@ app.post("/rooms", (req, res, next) => {
                   netId: requiredString(candidate.netId, `savedRun.slots[${index}].netId`),
                   characterId: optionalString(candidate.characterId),
                   characterName: optionalString(candidate.characterName),
+                  playerName: optionalString(candidate.playerName),
                   isHost: Boolean(candidate.isHost),
                 };
               })

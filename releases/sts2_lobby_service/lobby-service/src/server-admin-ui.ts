@@ -7,7 +7,11 @@ export function renderServerAdminPage() {
     <title>STS2 服务器控制台</title>
     <link rel="stylesheet" href="https://unpkg.com/antd@5.22.6/dist/reset.css" />
     <style>
-      html, body, #root { min-height: 100%; }
+      html, body, #root {
+        min-height: 100%;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+      }
       body {
         margin: 0;
         background:
@@ -23,6 +27,10 @@ export function renderServerAdminPage() {
         position: sticky;
         top: 0;
         z-index: 8;
+        height: auto;
+        min-height: 0;
+        line-height: normal;
+        padding: 0;
         background: rgba(255,255,255,0.86);
         backdrop-filter: blur(10px);
         border-bottom: 1px solid rgba(5, 5, 5, 0.06);
@@ -32,7 +40,8 @@ export function renderServerAdminPage() {
         margin: 0 auto;
         padding: 20px 24px;
         display: flex;
-        align-items: center;
+        flex-wrap: wrap;
+        align-items: flex-start;
         justify-content: space-between;
         gap: 16px;
       }
@@ -40,6 +49,26 @@ export function renderServerAdminPage() {
         display: flex;
         flex-direction: column;
         gap: 4px;
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+      .page-brand-title {
+        margin: 0 !important;
+        line-height: 1.15;
+        overflow-wrap: anywhere;
+      }
+      .page-brand-subtitle {
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+      .page-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 12px;
+        flex: 0 0 auto;
+        margin-left: auto;
       }
       .page-content {
         max-width: 1280px;
@@ -124,6 +153,49 @@ export function renderServerAdminPage() {
         }
         .announcement-grid.two-columns {
           grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 640px) {
+        .page-header-inner {
+          flex-direction: column;
+          align-items: stretch;
+          padding-top: 16px;
+          padding-bottom: 16px;
+          gap: 12px;
+        }
+        .page-brand-title {
+          font-size: 24px !important;
+        }
+        .page-brand-subtitle {
+          font-size: 12px;
+        }
+        .page-actions {
+          width: 100%;
+        }
+        .section-title,
+        .announcement-card-header {
+          flex-wrap: wrap;
+        }
+        .status-block .ant-descriptions-item-label {
+          width: 120px;
+        }
+      }
+      @media (max-width: 480px) {
+        .page-content {
+          padding-top: 16px;
+          padding-bottom: 16px;
+        }
+        .page-brand-subtitle {
+          display: none;
+        }
+        .page-actions {
+          justify-content: space-between;
+        }
+        .page-actions .ant-badge-status-text {
+          font-size: 12px;
+        }
+        .status-block .ant-descriptions-item-label {
+          width: 108px;
         }
       }
     </style>
@@ -877,14 +949,14 @@ export function renderServerAdminPage() {
                   "div",
                   { className: "page-header-inner" },
                   h(
-                    "div",
-                    { className: "page-brand" },
-                    h(Title, { level: 3, style: { margin: 0 } }, "服务器控制台"),
-                    h(Text, { type: "secondary" }, "管理公开列表申请、显示名称和与公共服务器控制台的同步状态")
+                  "div",
+                  { className: "page-brand" },
+                    h(Title, { level: 3, className: "page-brand-title" }, "服务器控制台"),
+                    h(Text, { type: "secondary", className: "page-brand-subtitle" }, "管理公开列表申请、显示名称和与公共服务器控制台的同步状态")
                   ),
                   h(
-                    Space,
-                    { size: 12 },
+                    "div",
+                    { className: "page-actions" },
                     h(Badge, { status: "processing", text: "已登录" }),
                     h(Button, { onClick: handleLogout }, "退出")
                   )
