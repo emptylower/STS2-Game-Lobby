@@ -26,6 +26,8 @@ internal sealed class LanConnectLobbyManagedJoinFlow
     private readonly MegaCrit.Sts2.Core.Logging.Logger _logger = new("LanConnectManagedJoinFlow", LogType.Network);
     private readonly bool _relaxedCompatibility;
     private string? _protocolMismatchSummary;
+    private List<string>? _detectedMissingModsOnLocal;
+    private List<string>? _detectedMissingModsOnHost;
 
     public LanConnectLobbyManagedJoinFlow(string compatibilityProfile)
     {
@@ -197,15 +199,23 @@ internal sealed class LanConnectLobbyManagedJoinFlow
 
             _logger.Warn(
                 $"Ignoring mod list mismatch because relaxed profile is enabled. MissingOnLocal={string.Join(",", missingModsOnLocal)} MissingOnHost={string.Join(",", missingModsOnHost)}");
+            _detectedMissingModsOnLocal = missingModsOnLocal;
+            _detectedMissingModsOnHost = missingModsOnHost;
         }
 
         if (initialMessage.idDatabaseHash != ModelIdSerializationCache.Hash)
         {
+            if (!_relaxedCompatibility)
+            {
+                _logger.Warn(
+                    $"ModelDb hash mismatch. Host={initialMessage.idDatabaseHash} Local={ModelIdSerializationCache.Hash}");
+                throw new ClientConnectionFailedException(
+                    $"ModelDb hash mismatch. Host: {initialMessage.idDatabaseHash} Ours: {ModelIdSerializationCache.Hash}",
+                    new NetErrorInfo(ConnectionFailureReason.VersionMismatch, extraInfo));
+            }
+
             _logger.Warn(
-                $"ModelDb hash mismatch. Host={initialMessage.idDatabaseHash} Local={ModelIdSerializationCache.Hash}");
-            throw new ClientConnectionFailedException(
-                $"ModelDb hash mismatch. Host: {initialMessage.idDatabaseHash} Ours: {ModelIdSerializationCache.Hash}",
-                new NetErrorInfo(ConnectionFailureReason.VersionMismatch, extraInfo));
+                $"Ignoring ModelDb hash mismatch because relaxed profile is enabled. Host={initialMessage.idDatabaseHash} Local={ModelIdSerializationCache.Hash}");
         }
 
         if (declaredCompatibilityFailure.HasValue)
@@ -316,6 +326,23 @@ internal sealed class LanConnectLobbyManagedJoinFlow
 
     private void OnDisconnected(NetErrorInfo info)
     {
+        if ((_detectedMissingModsOnLocal?.Count > 0 || _detectedMissingModsOnHost?.Count > 0)
+            && IsJoinHandshakeStillPending())
+        {
+            string modMessage = LanConnectLobbyModMismatchFormatter.BuildMessage(
+                _detectedMissingModsOnLocal, _detectedMissingModsOnHost);
+            _logger.Warn(
+                $"Disconnect during handshake with prior mod mismatch (relaxed mode): {modMessage}");
+            ClientConnectionFailedException modException = new(
+                modMessage,
+                new NetErrorInfo(NetError.InternalError, selfInitiated: false));
+            TrySetException(_connectCompletion, modException);
+            TrySetException(_joinCompletion, modException);
+            TrySetException(_loadJoinCompletion, modException);
+            TrySetException(_rejoinCompletion, modException);
+            return;
+        }
+
         if (!string.IsNullOrWhiteSpace(_protocolMismatchSummary) &&
             (info.GetReason() == NetError.HandshakeTimeout ||
              info.GetReason() == NetError.Timeout ||
@@ -375,10 +402,20 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         }
 
         string errorText = ex.ToString();
+        string typeName = ex.GetType().Name;
+
+        if (typeName.Contains("ModelNotFound", StringComparison.Ordinal) ||
+            typeName.Contains("KeyNotFound", StringComparison.Ordinal))
+        {
+            _protocolMismatchSummary ??= BuildModEnrichedProtocolMessage(
+                "联机协议不兼容：客户端缺少房间中存在的游戏内容，导致数据无法解析。");
+            return;
+        }
+
         if (errorText.Contains("no message handlers are registered for that type", StringComparison.OrdinalIgnoreCase))
         {
-            _protocolMismatchSummary ??=
-                "联机协议不兼容：房主提前发送了当前客户端未注册的联机消息。通常是房主与加入方的 Mod 内容或联机流程不一致。";
+            _protocolMismatchSummary ??= BuildModEnrichedProtocolMessage(
+                "联机协议不兼容：房主提前发送了当前客户端未注册的联机消息。通常是房主与加入方的 Mod 内容或联机流程不一致。");
             return;
         }
 
@@ -394,9 +431,20 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         if (errorText.Contains("Deserialize(PacketReader", StringComparison.Ordinal) ||
             errorText.Contains("NetMessageBus.TryDeserializeMessage", StringComparison.Ordinal))
         {
-            _protocolMismatchSummary ??=
-                "联机协议不兼容：客户端在握手阶段无法解析房主发来的数据包。通常是房主与加入方的 Mod 内容或底层数据协议不一致。";
+            _protocolMismatchSummary ??= BuildModEnrichedProtocolMessage(
+                "联机协议不兼容：客户端在握手阶段无法解析房主发来的数据包。通常是房主与加入方的 Mod 内容或底层数据协议不一致。");
         }
+    }
+
+    private string BuildModEnrichedProtocolMessage(string fallback)
+    {
+        if (_detectedMissingModsOnLocal?.Count > 0 || _detectedMissingModsOnHost?.Count > 0)
+        {
+            return LanConnectLobbyModMismatchFormatter.BuildMessage(
+                _detectedMissingModsOnLocal, _detectedMissingModsOnHost);
+        }
+
+        return fallback;
     }
 
     private bool IsJoinHandshakeStillPending()
