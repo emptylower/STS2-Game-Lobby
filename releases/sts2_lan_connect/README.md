@@ -109,4 +109,4 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 - 刷新失败或延迟异常时，可优先尝试 `切换服务器`
 - 单击房间卡片会选中目标房间，双击会直接尝试加入
 - 如果加入时间较长，界面会显示阶段化进度提示
-- 如果提示 `MOD 不一致`，当前版本会优先直接告诉你缺少哪些 MOD
+- 如果提示 `MOD 不一致`，当前版本会直接弹窗告诉你缺少哪些 MOD，即使在宽松兼容模式下连接失败也会给出具体的 MOD 名称
