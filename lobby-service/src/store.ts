@@ -83,12 +83,18 @@ export interface JoinTicket {
   connectionPlan: ConnectionPlan;
 }
 
+export interface RoomSettings {
+  chatEnabled: boolean;
+}
+
 export interface HostSession {
   roomId: string;
   controlChannelId: string;
   hostToken: string;
   relayState: RelayState;
   lastSeenAt: Date;
+  kickedPlayerNetIds: Set<string>;
+  roomSettings: RoomSettings;
 }
 
 export interface CreateRoomInput {
@@ -118,6 +124,7 @@ export interface JoinRoomInput {
   modVersion: string;
   modList?: string[] | undefined;
   desiredSavePlayerNetId?: string | undefined;
+  playerNetId?: string | undefined;
 }
 
 export interface HeartbeatInput {
@@ -241,6 +248,8 @@ export class LobbyStore {
       hostToken,
       relayState: "disabled",
       lastSeenAt: now,
+      kickedPlayerNetIds: new Set(),
+      roomSettings: { chatEnabled: true },
     };
 
     this.rooms.set(roomId, room);
@@ -263,6 +272,11 @@ export class LobbyStore {
     const requestedModList = normalizeModList(input.modList ?? []);
     const availableSavedRunSlots = getAvailableSavedRunSlots(room);
     const canResumeSavedRun = room.savedRun !== undefined && availableSavedRunSlots.length > 0;
+
+    const playerNetId = input.playerNetId?.trim();
+    if (playerNetId && hostSession.kickedPlayerNetIds.has(playerNetId)) {
+      throw new LobbyStoreError(403, "kicked", "你已被房主移出该房间，无法重新加入。");
+    }
 
     if (room.status === "closed") {
       throw new LobbyStoreError(410, "room_closed", "该房间已经关闭。");
@@ -445,6 +459,40 @@ export class LobbyStore {
     }
 
     return true;
+  }
+
+  kickPlayer(roomId: string, hostToken: string, playerNetId: string) {
+    const hostSession = this.requireHostSession(roomId);
+    this.assertHostToken(hostSession, hostToken);
+    hostSession.kickedPlayerNetIds.add(playerNetId);
+  }
+
+  isPlayerKicked(roomId: string, playerNetId: string) {
+    const hostSession = this.hostSessions.get(roomId);
+    if (!hostSession) {
+      return false;
+    }
+
+    return hostSession.kickedPlayerNetIds.has(playerNetId);
+  }
+
+  updateRoomSettings(roomId: string, hostToken: string, settings: Partial<RoomSettings>): RoomSettings {
+    const hostSession = this.requireHostSession(roomId);
+    this.assertHostToken(hostSession, hostToken);
+    if (settings.chatEnabled !== undefined) {
+      hostSession.roomSettings.chatEnabled = settings.chatEnabled;
+    }
+
+    return { ...hostSession.roomSettings };
+  }
+
+  getRoomSettings(roomId: string): RoomSettings {
+    const hostSession = this.hostSessions.get(roomId);
+    if (!hostSession) {
+      return { chatEnabled: true };
+    }
+
+    return { ...hostSession.roomSettings };
   }
 
   private requireRoom(roomId: string) {

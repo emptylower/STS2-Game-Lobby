@@ -476,6 +476,145 @@ test("joinRoom treats trailing .0 mod version suffix as equivalent", () => {
   assert.equal(joined.room.modVersion, "0.1.2");
 });
 
+test("kickPlayer blocks kicked player from re-joining", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = store.createRoom(
+    {
+      roomName: "踢人测试房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.1.0",
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+      },
+    },
+    "203.0.113.10",
+  );
+
+  store.kickPlayer(created.roomId, created.hostToken, "12345");
+  assert.equal(store.isPlayerKicked(created.roomId, "12345"), true);
+  assert.equal(store.isPlayerKicked(created.roomId, "99999"), false);
+
+  assert.throws(
+    () =>
+      store.joinRoom(created.roomId, {
+        playerName: "Kicked Guest",
+        version: "1.2.3",
+        modVersion: "0.1.0",
+        playerNetId: "12345",
+      }),
+    (error: unknown) =>
+      error instanceof LobbyStoreError &&
+      error.code === "kicked" &&
+      error.statusCode === 403,
+  );
+
+  // A different player can still join
+  const joined = store.joinRoom(created.roomId, {
+    playerName: "Other Guest",
+    version: "1.2.3",
+    modVersion: "0.1.0",
+    playerNetId: "99999",
+  });
+  assert.equal(joined.room.roomId, created.roomId);
+});
+
+test("kickPlayer rejects invalid host token", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = store.createRoom(
+    {
+      roomName: "踢人鉴权测试",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.1.0",
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+      },
+    },
+    "203.0.113.10",
+  );
+
+  assert.throws(
+    () => store.kickPlayer(created.roomId, "wrong-token", "12345"),
+    (error: unknown) =>
+      error instanceof LobbyStoreError &&
+      error.code === "invalid_host_token" &&
+      error.statusCode === 401,
+  );
+});
+
+test("updateRoomSettings persists and returns settings", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = store.createRoom(
+    {
+      roomName: "设置测试房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.1.0",
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+      },
+    },
+    "203.0.113.10",
+  );
+
+  // Default settings
+  const defaults = store.getRoomSettings(created.roomId);
+  assert.equal(defaults.chatEnabled, true);
+
+  // Update settings
+  const updated = store.updateRoomSettings(created.roomId, created.hostToken, { chatEnabled: false });
+  assert.equal(updated.chatEnabled, false);
+
+  // Verify persisted
+  const retrieved = store.getRoomSettings(created.roomId);
+  assert.equal(retrieved.chatEnabled, false);
+
+  // Toggle back
+  const restored = store.updateRoomSettings(created.roomId, created.hostToken, { chatEnabled: true });
+  assert.equal(restored.chatEnabled, true);
+});
+
+test("getRoomSettings returns default for non-existent room", () => {
+  const store = new LobbyStore(baseConfig);
+  const settings = store.getRoomSettings("non-existent-room");
+  assert.equal(settings.chatEnabled, true);
+});
+
+test("joinRoom without playerNetId does not check kicked list", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = store.createRoom(
+    {
+      roomName: "不传 netId 房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.1.0",
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+      },
+    },
+    "203.0.113.10",
+  );
+
+  store.kickPlayer(created.roomId, created.hostToken, "12345");
+
+  // Without playerNetId, the kicked check is skipped (backward compat)
+  const joined = store.joinRoom(created.roomId, {
+    playerName: "Legacy Client",
+    version: "1.2.3",
+    modVersion: "0.1.0",
+  });
+  assert.equal(joined.room.roomId, created.roomId);
+});
+
 test("relay-only strategy omits direct candidates", () => {
   const store = new LobbyStore({
     ...baseConfig,

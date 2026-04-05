@@ -8,6 +8,7 @@ sts2-lan-connect/release/
 lobby-service/node_modules/
 lobby-service/dist/
 lobby-service/release/
+lobby-service/data/
 lobby-service/.env
 
 server-registry/node_modules/

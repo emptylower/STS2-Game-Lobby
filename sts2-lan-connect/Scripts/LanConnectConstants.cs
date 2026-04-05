@@ -53,4 +53,8 @@ internal static class LanConnectConstants
     public const string SafeLoadButtonName = "LanConnectSafeLoadButton";
 
     public const string SafeAbandonButtonName = "LanConnectSafeAbandonButton";
+
+    public const string RoomManagementButtonName = "LanConnectRoomManagementButton";
+
+    public const string RoomManagementPanelName = "LanConnectRoomManagementPanel";
 }

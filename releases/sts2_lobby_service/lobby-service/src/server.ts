@@ -218,6 +218,7 @@ app.post("/rooms", (req, res, next) => {
                   netId: requiredString(candidate.netId, `savedRun.slots[${index}].netId`),
                   characterId: optionalString(candidate.characterId),
                   characterName: optionalString(candidate.characterName),
+                  playerName: optionalString(candidate.playerName),
                   isHost: Boolean(candidate.isHost),
                 };
               })
@@ -270,6 +271,7 @@ app.post("/rooms/:id/join", (req, res, next) => {
       modVersion: requiredString(body?.modVersion, "modVersion"),
       modList: optionalStringArray(body?.modList),
       desiredSavePlayerNetId: optionalString(body?.desiredSavePlayerNetId),
+      playerNetId: optionalString(body?.playerNetId),
     });
     const relayEndpoint = relayManager.getRoomEndpoint(req.params.id, resolveAdvertisedRelayHost(req));
     if (relayEndpoint) {
@@ -523,6 +525,7 @@ wss.on("connection", (socket, req) => {
       controlChannelId,
       role,
       lastSeenAt: Date.now(),
+      ...(role === "client" ? { ticketId: requiredQuery(requestUrl, "ticketId") } : {}),
     };
 
     addPeer(peer);
@@ -532,6 +535,11 @@ wss.on("connection", (socket, req) => {
       controlChannelId,
       role,
     });
+
+    if (role === "client") {
+      const settings = store.getRoomSettings(roomId);
+      sendJson(socket, { type: "room_settings", roomId, ...settings });
+    }
 
     socket.on("message", (payload) => {
       try {
@@ -558,7 +566,59 @@ wss.on("connection", (socket, req) => {
           return;
         }
 
-        if (parsed.type === "pong" || parsed.type === "host_hello" || parsed.type === "client_hello") {
+        if (parsed.type === "pong" || parsed.type === "host_hello") {
+          return;
+        }
+
+        if (parsed.type === "client_hello") {
+          peer.playerNetId = String(parsed.playerNetId ?? "");
+          peer.playerName = String(parsed.playerName ?? "");
+          return;
+        }
+
+        if (parsed.type === "kick_player" && peer.role === "host") {
+          const targetNetId = String(parsed.targetPlayerNetId ?? "");
+          if (!targetNetId) return;
+          const hostToken = requiredQuery(requestUrl, "token");
+          store.kickPlayer(peer.roomId, hostToken, targetNetId);
+          const targetPeer = findPeerByNetId(peer.roomId, targetNetId);
+          if (targetPeer) {
+            sendJson(targetPeer.socket, {
+              type: "kicked",
+              roomId: peer.roomId,
+              reason: "host_kick",
+              message: "你已被房主移出房间。",
+            });
+            targetPeer.socket.close(4001, "kicked");
+          }
+          broadcastToRoom(peer, {
+            type: "player_kicked",
+            roomId: peer.roomId,
+            playerNetId: targetNetId,
+            playerName: String(parsed.targetPlayerName ?? ""),
+          });
+          console.log(`[control] kick_player roomId=${peer.roomId} targetNetId=${targetNetId} found=${!!targetPeer}`);
+          return;
+        }
+
+        if (parsed.type === "room_settings" && peer.role === "host") {
+          const hostToken = requiredQuery(requestUrl, "token");
+          store.updateRoomSettings(peer.roomId, hostToken, {
+            chatEnabled: parsed.chatEnabled !== false,
+          });
+          const allPeers = roomPeers.get(peer.roomId);
+          if (allPeers) {
+            for (const p of allPeers) {
+              if (p.socket.readyState === p.socket.OPEN) {
+                sendJson(p.socket, {
+                  type: "room_settings",
+                  roomId: peer.roomId,
+                  chatEnabled: parsed.chatEnabled !== false,
+                });
+              }
+            }
+          }
+          console.log(`[control] room_settings roomId=${peer.roomId} chatEnabled=${parsed.chatEnabled !== false}`);
           return;
         }
 
@@ -662,6 +722,15 @@ function closeRoomSockets(roomId: string, code: number, reason: string) {
   }
 
   roomPeers.delete(roomId);
+}
+
+function findPeerByNetId(roomId: string, playerNetId: string): ControlPeer | undefined {
+  const peers = roomPeers.get(roomId);
+  if (!peers) return undefined;
+  for (const peer of peers) {
+    if (peer.playerNetId === playerNetId) return peer;
+  }
+  return undefined;
 }
 
 function cleanupExpiredRoomsNow(now = new Date()) {
@@ -958,6 +1027,9 @@ interface ControlPeer {
   controlChannelId: string;
   role: "host" | "client";
   lastSeenAt: number;
+  ticketId?: string;
+  playerNetId?: string;
+  playerName?: string;
 }
 
 interface ServerAdminSession {

@@ -5,6 +5,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.CustomRun;
 using MegaCrit.Sts2.Core.Nodes.Screens.DailyRun;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
+using MegaCrit.Sts2.Core.Nodes.Screens.PauseMenu;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -93,6 +94,10 @@ internal sealed partial class LanConnectRuntimeMonitor : Node
         else if (node is NMultiplayerSubmenu multiplayerSubmenu)
         {
             MultiplayerSubmenuPatches.ScheduleEnsureLobbyEntry(multiplayerSubmenu, "runtime_monitor");
+        }
+        else if (node is NPauseMenu pauseMenu)
+        {
+            PauseMenuPatches.ScheduleEnsureRoomManagementButton(pauseMenu, "runtime_monitor");
         }
         else if (node is NRemoteLobbyPlayer remoteLobbyPlayer)
         {

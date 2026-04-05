@@ -24,6 +24,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node
     private double _timeUntilHeartbeat;
     private readonly List<LobbyRoomChatEntry> _chatMessages = new();
     private int _chatRevision;
+    private bool _chatEnabled = true;
+    private int _chatEnabledRevision;
 
     internal static LanConnectLobbyRuntime? Instance { get; private set; }
 
@@ -35,9 +37,18 @@ internal sealed partial class LanConnectLobbyRuntime : Node
 
     internal int ChatRevision => _chatRevision;
 
+    internal bool ChatEnabled => _chatEnabled;
+
+    internal int ChatEnabledRevision => _chatEnabledRevision;
+
     internal IReadOnlyList<LobbyRoomChatEntry> GetChatMessagesSnapshot()
     {
         return _chatMessages.ToArray();
+    }
+
+    internal NetHostGameService? GetHostNetService()
+    {
+        return _activeSession?.NetService;
     }
 
     internal bool IsManagingNetService(INetGameService netService)
@@ -363,6 +374,44 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         throw new InvalidOperationException("No active lobby room session for chat.");
     }
 
+    internal async Task SendKickPlayerAsync(string targetPlayerNetId, string targetPlayerName)
+    {
+        if (_activeSession == null)
+        {
+            return;
+        }
+
+        await _activeSession.ControlClient.SendAsync(new LobbyControlEnvelope
+        {
+            Type = "kick_player",
+            RoomId = _activeSession.RoomId,
+            TargetPlayerNetId = targetPlayerNetId,
+            TargetPlayerName = targetPlayerName,
+        }, CancellationToken.None);
+    }
+
+    internal async Task SendRoomSettingsAsync(bool chatEnabled)
+    {
+        if (_activeSession == null)
+        {
+            return;
+        }
+
+        _chatEnabled = chatEnabled;
+        _chatEnabledRevision++;
+        await _activeSession.ControlClient.SendAsync(new LobbyControlEnvelope
+        {
+            Type = "room_settings",
+            RoomId = _activeSession.RoomId,
+            ChatEnabled = chatEnabled,
+        }, CancellationToken.None);
+    }
+
+    internal IReadOnlyCollection<ulong> GetHostedRoomPeerIds()
+    {
+        return _activeSession?.ConnectedPeerIds ?? (IReadOnlyCollection<ulong>)Array.Empty<ulong>();
+    }
+
     private void OnRunSaved()
     {
         LanConnectSaveDiagnostics.LogNow("save_event:before_persist");
@@ -411,6 +460,20 @@ internal sealed partial class LanConnectLobbyRuntime : Node
             case "room_chat":
                 TryAppendRemoteChatMessage(session.RoomId, envelope);
                 break;
+            case "room_settings":
+                if (envelope.ChatEnabled.HasValue)
+                {
+                    _chatEnabled = envelope.ChatEnabled.Value;
+                    _chatEnabledRevision++;
+                }
+
+                break;
+            case "player_kicked":
+                AppendChatMessage(session.RoomId, $"system-kick-{Guid.NewGuid():N}",
+                    "系统", null,
+                    $"玩家 {envelope.TargetPlayerName ?? envelope.TargetPlayerNetId} 已被移出房间。",
+                    DateTimeOffset.UtcNow, isLocal: false);
+                break;
         }
     }
 
@@ -430,6 +493,35 @@ internal sealed partial class LanConnectLobbyRuntime : Node
                 break;
             case "room_chat":
                 TryAppendRemoteChatMessage(session.RoomId, envelope);
+                break;
+            case "kicked":
+                Log.Info($"sts2_lan_connect: kicked from room {session.RoomId}, reason={envelope.Reason}");
+                // Disconnect ENet FIRST so the game doesn't show "主机离开了游戏"
+                try
+                {
+                    session.NetService.Disconnect(MegaCrit.Sts2.Core.Entities.Multiplayer.NetError.Quit, now: true);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"sts2_lan_connect: kicked ENet disconnect failed: {ex.Message}");
+                }
+
+                TaskHelper.RunSafely(CloseJoinedClientAsync(session));
+                LanConnectPopupUtil.ShowInfo(envelope.Message ?? "你已被房主移出房间。");
+                break;
+            case "room_settings":
+                if (envelope.ChatEnabled.HasValue)
+                {
+                    _chatEnabled = envelope.ChatEnabled.Value;
+                    _chatEnabledRevision++;
+                }
+
+                break;
+            case "player_kicked":
+                AppendChatMessage(session.RoomId, $"system-kick-{Guid.NewGuid():N}",
+                    "系统", null,
+                    $"玩家 {envelope.TargetPlayerName ?? envelope.TargetPlayerNetId} 已被移出房间。",
+                    DateTimeOffset.UtcNow, isLocal: false);
                 break;
         }
     }
@@ -454,6 +546,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node
     {
         _chatMessages.Clear();
         _chatRevision++;
+        _chatEnabled = true;
+        _chatEnabledRevision++;
         AppendChatMessage(roomId, $"system-{Guid.NewGuid():N}", "房间聊天", null, "已连接房间聊天。", DateTimeOffset.UtcNow, isLocal: false);
     }
 
@@ -543,7 +637,9 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         private readonly Action<ulong> _clientConnectedHandler;
         private readonly Action<ulong, NetErrorInfo> _clientDisconnectedHandler;
         private Action<LobbyControlEnvelope>? _controlEnvelopeHandler;
-        private readonly HashSet<ulong> _connectedPeerIds = new();
+        internal readonly HashSet<ulong> _connectedPeerIds = new();
+
+        public IReadOnlyCollection<ulong> ConnectedPeerIds => _connectedPeerIds;
 
         public HostedRoomSession(
             NetHostGameService netService,

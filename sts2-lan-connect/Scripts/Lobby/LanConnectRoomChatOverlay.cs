@@ -236,19 +236,26 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     {
         LanConnectLobbyRuntime? runtime = LanConnectLobbyRuntime.Instance;
         bool hasSession = runtime?.HasActiveRoomSession == true;
+        bool chatEnabled = runtime?.ChatEnabled ?? true;
+        bool showChat = hasSession && chatEnabled;
         if (_root != null)
         {
-            _root.Visible = hasSession;
+            _root.Visible = showChat;
         }
 
         if (_toggleButton != null)
         {
-            _toggleButton.Visible = hasSession;
+            _toggleButton.Visible = showChat;
         }
 
         if (_panel != null)
         {
-            _panel.Visible = hasSession && _panelOpen;
+            _panel.Visible = showChat && _panelOpen;
+        }
+
+        if (hasSession && !chatEnabled && _panelOpen)
+        {
+            _panelOpen = false;
         }
 
         if (!hasSession)
@@ -402,6 +409,12 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             if (runtime == null || !runtime.HasActiveRoomSession)
             {
                 _statusLabel.Text = "当前没有已连接的房间。";
+                return;
+            }
+
+            if (!runtime.ChatEnabled)
+            {
+                _statusLabel.Text = "房主已禁用聊天。";
                 return;
             }
 

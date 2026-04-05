@@ -712,30 +712,56 @@ export function renderServerAdminPage() {
           const [session, setSession] = React.useState(null);
           const [settings, setSettings] = React.useState(null);
           const [announcements, setAnnouncements] = React.useState([]);
+          const [hasUnsavedDrafts, setHasUnsavedDrafts] = React.useState(false);
+          const [pollRefreshDeferred, setPollRefreshDeferred] = React.useState(false);
           const [loginLoading, setLoginLoading] = React.useState(false);
           const [settingsLoading, setSettingsLoading] = React.useState(false);
           const [saveLoading, setSaveLoading] = React.useState(false);
           const [loginForm] = Form.useForm();
           const [settingsForm] = Form.useForm();
           const settingsRef = React.useRef(null);
+          const draftDirtyRef = React.useRef(false);
           const statusAlert = settings ? buildStatusAlert(settings) : null;
+
+          const clearDraftDirty = React.useCallback(function () {
+            draftDirtyRef.current = false;
+            setHasUnsavedDrafts(false);
+            setPollRefreshDeferred(false);
+          }, []);
+
+          const markDraftDirty = React.useCallback(function () {
+            if (draftDirtyRef.current) {
+              return;
+            }
+
+            draftDirtyRef.current = true;
+            setHasUnsavedDrafts(true);
+          }, []);
 
           const applySettingsSnapshot = React.useCallback(function (next, source) {
             const previous = settingsRef.current;
             settingsRef.current = next;
             setSettings(next);
-            setAnnouncements(normalizeAnnouncements(next.announcements));
-            settingsForm.setFieldsValue({
-              displayName: next.displayName || "",
-              publicListingEnabled: Boolean(next.publicListingEnabled),
-              bandwidthCapacityMbps: next.bandwidthCapacityMbps,
-            });
+            if (source === "poll" && draftDirtyRef.current) {
+              setPollRefreshDeferred(true);
+            } else {
+              setAnnouncements(normalizeAnnouncements(next.announcements));
+              settingsForm.setFieldsValue({
+                displayName: next.displayName || "",
+                publicListingEnabled: Boolean(next.publicListingEnabled),
+                bandwidthCapacityMbps: next.bandwidthCapacityMbps,
+              });
+              clearDraftDirty();
+            }
             notifySyncState(next, previous, source || "refresh");
-          }, [settingsForm]);
+          }, [clearDraftDirty, settingsForm]);
 
           const refreshSettings = React.useCallback(async function (options) {
             const source = options && options.source ? options.source : "refresh";
-            setSettingsLoading(true);
+            const showLoading = source !== "poll";
+            if (showLoading) {
+              setSettingsLoading(true);
+            }
             try {
               const next = await readJson("/server-admin/settings");
               applySettingsSnapshot(next, source);
@@ -753,7 +779,9 @@ export function renderServerAdminPage() {
                 throw error;
               }
             } finally {
-              setSettingsLoading(false);
+              if (showLoading) {
+                setSettingsLoading(false);
+              }
             }
           }, [applySettingsSnapshot]);
 
@@ -768,10 +796,11 @@ export function renderServerAdminPage() {
               setSettings(null);
               setAnnouncements([]);
               settingsRef.current = null;
+              clearDraftDirty();
             } finally {
               setBooting(false);
             }
-          }, [refreshSettings]);
+          }, [clearDraftDirty, refreshSettings]);
 
           React.useEffect(function () {
             void refreshSession();
@@ -816,6 +845,7 @@ export function renderServerAdminPage() {
             setSettings(null);
             setAnnouncements([]);
             settingsRef.current = null;
+            clearDraftDirty();
             message.success("已退出登录");
           }
 
@@ -843,7 +873,19 @@ export function renderServerAdminPage() {
             await handleSave(settingsForm.getFieldsValue());
           }
 
+          async function handleManualRefresh() {
+            if (draftDirtyRef.current && typeof window !== "undefined" && typeof window.confirm === "function") {
+              const confirmed = window.confirm("当前有未保存的修改。重新加载会覆盖左侧设置和公告草稿，是否继续？");
+              if (!confirmed) {
+                return;
+              }
+            }
+
+            await refreshSettings({ source: "manual" });
+          }
+
           function addAnnouncement() {
+            markDraftDirty();
             setAnnouncements(function (current) {
               return current.concat([createAnnouncementDraft({
                 type: "info",
@@ -855,6 +897,7 @@ export function renderServerAdminPage() {
           }
 
           function updateAnnouncement(index, patch) {
+            markDraftDirty();
             setAnnouncements(function (current) {
               return current.map(function (item, itemIndex) {
                 return itemIndex === index ? { ...item, ...patch } : item;
@@ -863,6 +906,7 @@ export function renderServerAdminPage() {
           }
 
           function moveAnnouncement(index, direction) {
+            markDraftDirty();
             setAnnouncements(function (current) {
               const nextIndex = index + direction;
               if (nextIndex < 0 || nextIndex >= current.length) {
@@ -877,6 +921,7 @@ export function renderServerAdminPage() {
           }
 
           function removeAnnouncement(index) {
+            markDraftDirty();
             setAnnouncements(function (current) {
               return current.filter(function (_item, itemIndex) {
                 return itemIndex !== index;
@@ -974,6 +1019,16 @@ export function renderServerAdminPage() {
                     h(
                       Space,
                       { direction: "vertical", size: 16, style: { width: "100%" } },
+                      hasUnsavedDrafts
+                        ? h(Alert, {
+                            type: pollRefreshDeferred ? "warning" : "info",
+                            showIcon: true,
+                            message: pollRefreshDeferred ? "有未保存修改，自动刷新不会覆盖当前草稿" : "有未保存修改",
+                            description: pollRefreshDeferred
+                              ? "右侧状态仍会自动刷新；左侧设置和公告草稿会继续保留，直到你保存或手动重新加载配置。"
+                              : "右侧状态仍会自动刷新；左侧设置和公告草稿在保存前不会被自动覆盖。",
+                          })
+                        : null,
                       h(
                         Card,
                         { className: "console-card", title: "公开设置" },
@@ -992,6 +1047,7 @@ export function renderServerAdminPage() {
                               form: settingsForm,
                               layout: "vertical",
                               onFinish: handleSave,
+                              onValuesChange: function () { markDraftDirty(); },
                               initialValues: {
                                 displayName: settings.displayName || "",
                                 publicListingEnabled: Boolean(settings.publicListingEnabled),
@@ -1023,7 +1079,7 @@ export function renderServerAdminPage() {
                                 Space,
                                 { size: 12 },
                                 h(Button, { type: "primary", htmlType: "submit", loading: saveLoading }, "保存设置"),
-                                h(Button, { onClick: function () { void refreshSettings({ source: "manual" }); }, loading: settingsLoading }, "刷新状态")
+                                h(Button, { onClick: function () { void handleManualRefresh(); }, loading: settingsLoading }, "重新加载配置")
                               )
                             )
                           )
