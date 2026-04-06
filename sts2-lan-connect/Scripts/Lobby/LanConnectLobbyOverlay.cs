@@ -2805,6 +2805,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (blockReason != null)
         {
             SetStatus($"当前无法打开建房：{blockReason}");
+            LanConnectPopupUtil.ShowInfo($"无法创建房间\n\n{blockReason}");
             return;
         }
 
