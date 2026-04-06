@@ -3462,7 +3462,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (_createButton != null)
         {
-            _createButton.Disabled = createDisabledReason != null;
+            _createButton.Disabled = actionBusy;
         }
 
         if (_joinButton != null)
