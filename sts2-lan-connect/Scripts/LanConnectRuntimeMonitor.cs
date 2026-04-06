@@ -91,6 +91,10 @@ internal sealed partial class LanConnectRuntimeMonitor : Node
         {
             LanConnectContinueRunLobbyAutoPublisher.ScheduleEnsureAutoPublish(dailyRunLoadScreen, "runtime_monitor");
         }
+        else if (node is NCharacterSelectScreen characterSelectScreen)
+        {
+            LanConnectInviteButtonPatch.EnsureInviteButton(characterSelectScreen);
+        }
         else if (node is NMultiplayerSubmenu multiplayerSubmenu)
         {
             MultiplayerSubmenuPatches.ScheduleEnsureLobbyEntry(multiplayerSubmenu, "runtime_monitor");

@@ -149,6 +149,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Label? _resumeSlotDialogTitle;
     private Label? _resumeSlotDialogErrorLabel;
     private VBoxContainer? _resumeSlotDialogOptions;
+    private Control? _inviteConfirmDialogContainer;
+    private Label? _inviteConfirmDialogMessage;
+    private LanConnectInvitePayload? _pendingInvitePayload;
     private Control? _directoryServerDialogContainer;
     private Label? _directoryServerDialogTitle;
     private Label? _directoryServerDialogStatusLabel;
@@ -223,6 +226,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         EnsureAnnouncementFallback();
         RebuildRoomStage();
         UpdateActionButtons();
+        CheckClipboardForInviteCode();
         TaskHelper.RunSafely(CheckConnectivityAndRefreshAsync());
     }
 
@@ -296,6 +300,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _directoryServerDialogContainer.Visible = false;
         }
 
+        if (_inviteConfirmDialogContainer != null)
+        {
+            _inviteConfirmDialogContainer.Visible = false;
+        }
+
         HideProgressDialog();
     }
 
@@ -348,6 +357,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         AddChild(BuildResumeSlotDialog());
         AddChild(BuildDirectoryServerDialog());
         AddChild(BuildFilterDialog());
+        AddChild(BuildInviteConfirmDialog());
         ApplyResponsiveLayout();
     }
 
@@ -3783,6 +3793,173 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
     }
 
+    private void CheckClipboardForInviteCode()
+    {
+        try
+        {
+            string clipboardText = DisplayServer.ClipboardGet();
+            if (!LanConnectInviteCode.TryDecode(clipboardText, out LanConnectInvitePayload? payload) || payload == null)
+            {
+                return;
+            }
+
+            GD.Print($"sts2_lan_connect overlay: detected invite code in clipboard, server={payload.S}, roomId={payload.R}");
+
+            if (_actionInFlight)
+            {
+                return;
+            }
+
+            if (LanConnectLobbyRuntime.Instance?.ActiveRoomId == payload.R)
+            {
+                GD.Print("sts2_lan_connect overlay: invite code targets own hosted room, ignoring");
+                return;
+            }
+
+            ShowInviteConfirmDialog(payload);
+        }
+        catch (Exception ex)
+        {
+            GD.Print($"sts2_lan_connect overlay: clipboard invite check failed -> {ex.Message}");
+        }
+    }
+
+    private void ShowInviteConfirmDialog(LanConnectInvitePayload payload)
+    {
+        _pendingInvitePayload = payload;
+
+        bool serverDiffers = !string.Equals(
+            payload.S.TrimEnd('/'),
+            LanConnectConfig.LobbyServerBaseUrl.TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase);
+
+        string roomIdPreview = payload.R.Length > 8 ? payload.R[..8] + "..." : payload.R;
+        string message = $"剪贴板中包含一个房间邀请码。\n房间ID：{roomIdPreview}";
+        if (serverDiffers)
+        {
+            message += $"\n\n注意：该邀请指向不同的服务器（{payload.S}），加入时会临时切换。";
+        }
+        if (!string.IsNullOrWhiteSpace(payload.P))
+        {
+            message += "\n邀请码中已包含房间密码，无需手动输入。";
+        }
+
+        SetLabelText(_inviteConfirmDialogMessage, message);
+
+        if (_inviteConfirmDialogContainer != null)
+        {
+            _inviteConfirmDialogContainer.Visible = true;
+            _inviteConfirmDialogContainer.MoveToFront();
+        }
+    }
+
+    private void CloseInviteConfirmDialog()
+    {
+        if (_inviteConfirmDialogContainer != null)
+        {
+            _inviteConfirmDialogContainer.Visible = false;
+        }
+        _pendingInvitePayload = null;
+    }
+
+    private async Task AcceptInviteAsync()
+    {
+        LanConnectInvitePayload? payload = _pendingInvitePayload;
+        CloseInviteConfirmDialog();
+
+        if (payload == null) return;
+
+        bool serverDiffers = !string.Equals(
+            payload.S.TrimEnd('/'),
+            LanConnectConfig.LobbyServerBaseUrl.TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase);
+
+        string originalServerUrl = LanConnectConfig.LobbyServerBaseUrl;
+        string? originalInputText = _serverBaseUrlInput?.Text;
+
+        if (serverDiffers)
+        {
+            // Update both config AND the settings input field.
+            // PersistSettings() (called by JoinRoomAsync) reads from the input field
+            // and writes it back to config — if we only set the config, the input field
+            // still holds the old URL and PersistSettings() would revert our switch.
+            LanConnectConfig.LobbyServerBaseUrl = payload.S;
+            if (_serverBaseUrlInput != null)
+            {
+                _serverBaseUrlInput.Text = payload.S;
+            }
+            GD.Print($"sts2_lan_connect overlay: switched server for invite join: {originalServerUrl} -> {payload.S}");
+        }
+
+        try
+        {
+            using LobbyApiClient apiClient = LobbyApiClient.CreateConfigured();
+            IReadOnlyList<LobbyRoomSummary> rooms = await apiClient.GetRoomsAsync();
+            LobbyRoomSummary? targetRoom = null;
+            foreach (LobbyRoomSummary r in rooms)
+            {
+                if (string.Equals(r.RoomId, payload.R, StringComparison.Ordinal))
+                {
+                    targetRoom = r;
+                    break;
+                }
+            }
+
+            if (targetRoom == null)
+            {
+                SetStatus("邀请码对应的房间不存在或已关闭。");
+                LanConnectPopupUtil.ShowInfo("邀请码对应的房间不存在或已关闭，可能房主已经关闭了房间。");
+                RevertInviteServerSwitch(serverDiffers, originalServerUrl, originalInputText);
+                return;
+            }
+
+            await BeginJoinRoomAsync(targetRoom, payload.P);
+        }
+        catch (Exception ex)
+        {
+            GD.Print($"sts2_lan_connect overlay: invite join failed -> {ex}");
+            SetStatus($"通过邀请码加入失败：{ex.Message}");
+            RevertInviteServerSwitch(serverDiffers, originalServerUrl, originalInputText);
+        }
+    }
+
+    private void RevertInviteServerSwitch(bool serverDiffers, string originalServerUrl, string? originalInputText)
+    {
+        if (!serverDiffers) return;
+        LanConnectConfig.LobbyServerBaseUrl = originalServerUrl;
+        if (_serverBaseUrlInput != null && originalInputText != null)
+        {
+            _serverBaseUrlInput.Text = originalInputText;
+        }
+    }
+
+    private Control BuildInviteConfirmDialog()
+    {
+        Control shell = CreateDialogShell(out VBoxContainer body);
+        _inviteConfirmDialogContainer = shell;
+
+        body.AddChild(CreateSectionLabel("检测到邀请码"));
+
+        _inviteConfirmDialogMessage = CreateBodyLabel("");
+        _inviteConfirmDialogMessage.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        _inviteConfirmDialogMessage.AddThemeColorOverride("font_color", TextMutedColor);
+        body.AddChild(_inviteConfirmDialogMessage);
+
+        HBoxContainer buttons = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        buttons.AddThemeConstantOverride("separation", 10);
+        body.AddChild(buttons);
+
+        Button cancel = CreateActionButton("忽略", "忽略该邀请码，继续浏览大厅。", CloseInviteConfirmDialog);
+        cancel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        buttons.AddChild(cancel);
+
+        Button accept = CreateActionButton("加入房间", "根据邀请码自动加入该房间。", () => TaskHelper.RunSafely(AcceptInviteAsync()), primary: true);
+        accept.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        buttons.AddChild(accept);
+
+        return shell;
+    }
+
     private void ShowProgressDialog(string title, string message, string? hint = null)
     {
         if (_progressDialogContainer == null)
@@ -5131,7 +5308,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Lock,
         Globe,
         Zap,
-        Users
+        Users,
+        Share2
     }
 
     private sealed partial class GlyphIcon : Control
@@ -5217,6 +5395,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             GlyphIconKind.Globe => SvgGlobe,
             GlyphIconKind.Zap => SvgZap,
             GlyphIconKind.Users => SvgUsers,
+            GlyphIconKind.Share2 => SvgShare2,
             _ => null,
         };
 
@@ -5347,6 +5526,16 @@ internal sealed partial class LanConnectLobbyOverlay : Control
               <path d="M16 3.128a4 4 0 0 1 0 7.744"/>
               <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
               <circle cx="9" cy="7" r="4"/>
+            </svg>
+            """;
+
+        private const string SvgShare2 = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/>
+              <line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>
             </svg>
             """;
     }

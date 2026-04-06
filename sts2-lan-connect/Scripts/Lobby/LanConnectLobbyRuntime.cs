@@ -46,6 +46,11 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         return _chatMessages.ToArray();
     }
 
+    internal string? GetHostedRoomPassword()
+    {
+        return _activeSession?.Metadata.Password;
+    }
+
     internal NetHostGameService? GetHostNetService()
     {
         return _activeSession?.NetService;
