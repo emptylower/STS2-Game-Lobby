@@ -130,7 +130,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private LineEdit? _roomNameInput;
     private OptionButton? _roomTypeOption;
     private LineEdit? _roomPasswordInput;
-    private OptionButton? _maxPlayersOption;
+    private SpinBox? _maxPlayersSpinBox;
     private Control? _createGuardDialogContainer;
     private Label? _createGuardDialogTitle;
     private Label? _createGuardDialogMessage;
@@ -461,9 +461,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _settingsButton = CreateToolbarIconButton("展开或收起设置", ToggleSettingsVisibility, GlyphIconKind.Gear);
         _headerToolbar.AddChild(_settingsButton);
 
-        // Close button hidden in reference design — keep for functionality but start invisible
-        _closeButton = CreateToolbarIconButton("返回上一级菜单", HideOverlay, GlyphIconKind.Back, accent: true);
-        _closeButton.Visible = false;
+        _closeButton = CreateDestructiveToolbarIconButton("返回上一级菜单", HideOverlay, GlyphIconKind.XClose);
         _headerToolbar.AddChild(_closeButton);
 
         // Remove the old hero section — the reference design places title in the header itself.
@@ -1123,11 +1121,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         body.AddChild(CreateSectionLabel("创建房间"));
 
-        Label description = CreateBodyLabel("房间会先在本地起 ENet Host，再向大厅注册。你可以在这里直接选择标准模式、多人每日挑战或自定义模式。当前入口只做房间目录与连接编排，不重写原生联机逻辑。");
-        description.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-        description.AddThemeColorOverride("font_color", TextMutedColor);
-        body.AddChild(description);
-
         body.AddChild(BuildLabeledInputRow("房间名", GetSuggestedRoomName(), out _roomNameInput, "房间列表里展示的名称", showLengthCounter: true, maxLength: LanConnectConfig.MaxRoomNameLength));
         body.AddChild(BuildLabeledOptionRow(
             "房间类型",
@@ -1136,14 +1129,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             ("多人每日挑战", 1),
             ("自定义模式", 2)));
         body.AddChild(BuildLabeledInputRow("可选密码", string.Empty, out _roomPasswordInput, "留空表示公开房间", showLengthCounter: true, maxLength: LanConnectConfig.MaxRoomPasswordLength));
-        body.AddChild(BuildLabeledOptionRow(
-            "最大人数",
-            out _maxPlayersOption,
-            ("4人", 4),
-            ("5人", 5),
-            ("6人", 6),
-            ("7人", 7),
-            ("8人", 8)));
+        body.AddChild(BuildMaxPlayersRow());
 
         if (_roomNameInput != null)
         {
@@ -1661,6 +1647,50 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         ApplyInputStyle(option);
         row.AddChild(option);
+        return row;
+    }
+
+    private Control BuildMaxPlayersRow()
+    {
+        VBoxContainer row = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        row.AddThemeConstantOverride("separation", 6);
+
+        Label label = CreateBodyLabel("最大人数");
+        label.AddThemeColorOverride("font_color", TextStrongColor);
+        row.AddChild(label);
+
+        _maxPlayersSpinBox = new SpinBox
+        {
+            MinValue = LanConnectConstants.MinMaxPlayers,
+            MaxValue = 8,
+            Value = 8,
+            Step = 1,
+            AllowGreater = true,
+            AllowLesser = false,
+            Rounded = true,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(0f, 48f),
+            Suffix = "人"
+        };
+        LineEdit innerLineEdit = _maxPlayersSpinBox.GetLineEdit();
+        innerLineEdit.AddThemeColorOverride("font_color", TextStrongColor);
+        innerLineEdit.AddThemeFontSizeOverride("font_size", 16);
+        innerLineEdit.SelectAllOnFocus = true;
+        _maxPlayersSpinBox.AddThemeStyleboxOverride("up_down", new StyleBoxEmpty());
+        _maxPlayersSpinBox.AddThemeColorOverride("up_down", AccentColor);
+        StyleBoxFlat spinNormal = CreatePixelStyle(InputBgColor, BorderColor, borderWidth: 2, padding: 12, shadowSize: 0);
+        StyleBoxFlat spinFocus = CreatePixelStyle(CardColor, AccentColor, borderWidth: 2, padding: 12, shadowSize: 0);
+        innerLineEdit.AddThemeStyleboxOverride("normal", spinNormal);
+        innerLineEdit.AddThemeStyleboxOverride("focus", spinFocus);
+        row.AddChild(_maxPlayersSpinBox);
+
+        Label hint = CreateBodyLabel("房间最大人数为 8 人");
+        hint.AddThemeColorOverride("font_color", TextMutedColor);
+        row.AddChild(hint);
+
         return row;
     }
 
@@ -2489,13 +2519,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         int? selectedMaxPlayers = null;
-        if (_maxPlayersOption != null)
+        if (_maxPlayersSpinBox != null)
         {
-            int id = _maxPlayersOption.GetSelectedId();
-            if (id >= LanConnectConstants.MinMaxPlayers)
+            int parsedMaxPlayers = (int)_maxPlayersSpinBox.Value;
+            if (parsedMaxPlayers > 8)
             {
-                selectedMaxPlayers = id;
+                ShowCreateDialogError("房间最大人数不能超过 8 人。");
+                return;
             }
+            selectedMaxPlayers = parsedMaxPlayers;
         }
 
         _actionInFlight = true;
@@ -2838,14 +2870,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             : LanConnectConfig.LastRoomName;
         _roomTypeOption.Select(0);
         _roomPasswordInput.Text = string.Empty;
-        if (_maxPlayersOption != null)
+        if (_maxPlayersSpinBox != null)
         {
-            int effectiveMax = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
-            int selectIndex = _maxPlayersOption.GetItemIndex(Math.Clamp(effectiveMax, LanConnectConstants.MinMaxPlayers, 8));
-            if (selectIndex >= 0)
-            {
-                _maxPlayersOption.Select(selectIndex);
-            }
+            int effectiveMax = Math.Clamp(LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(), LanConnectConstants.MinMaxPlayers, 8);
+            _maxPlayersSpinBox.Value = effectiveMax;
         }
         ShowCreateDialogError(string.Empty, visible: false);
         _createDialogContainer.Visible = true;
@@ -4650,6 +4678,25 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return button;
     }
 
+    private Button CreateDestructiveToolbarIconButton(string tooltip, Action onPressed, GlyphIconKind iconKind)
+    {
+        Button button = new()
+        {
+            Text = string.Empty,
+            TooltipText = UiText(tooltip),
+            CustomMinimumSize = new Vector2(50f, 50f),
+            Alignment = HorizontalAlignment.Center
+        };
+        ApplyDestructiveToolbarButtonStyle(button);
+        AttachToolbarIconContent(button, iconKind, CardColor);
+        button.Connect(Button.SignalName.Pressed, Callable.From(() =>
+        {
+            GD.Print($"sts2_lan_connect overlay: destructive toolbar icon button pressed");
+            onPressed();
+        }));
+        return button;
+    }
+
     private Button CreateInlineButton(string text, Action onPressed, bool accent = false)
     {
         Button button = new()
@@ -4717,6 +4764,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         center.SetAnchorsPreset(LayoutPreset.FullRect);
         button.AddChild(center);
+        SetupPressShift(button, center, 3);
 
         HBoxContainer row = new()
         {
@@ -4746,6 +4794,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         center.SetAnchorsPreset(LayoutPreset.FullRect);
         button.AddChild(center);
+        SetupPressShift(button, center, 3);
 
         HBoxContainer row = new()
         {
@@ -4771,7 +4820,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         row.AddChild(label);
     }
 
-    private static void AttachToolbarIconContent(Button button, GlyphIconKind iconKind)
+    private static void AttachToolbarIconContent(Button button, GlyphIconKind iconKind, Color? color = null)
     {
         CenterContainer center = new()
         {
@@ -4779,10 +4828,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         center.SetAnchorsPreset(LayoutPreset.FullRect);
         button.AddChild(center);
+        SetupPressShift(button, center, 3);
         center.AddChild(new GlyphIcon
         {
             Kind = iconKind,
-            GlyphColor = TextStrongColor,
+            GlyphColor = color ?? TextStrongColor,
             CustomMinimumSize = new Vector2(19f, 19f)
         });
     }
@@ -4895,7 +4945,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             ExpandMarginTop = -depth,
             ExpandMarginRight = maxShadow + depth,
             ExpandMarginBottom = maxShadow + depth,
-            ShadowColor = new Color(border, 0.55f),
+            ShadowColor = new Color(0.15f, 0.10f, 0.08f, 0.45f),
             ShadowSize = shadow,
             ShadowOffset = new Vector2(shadow, shadow)
         };
@@ -4910,9 +4960,46 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private static void SetupChildHoverTint(Button button, Color normalColor, Color hoverColor)
     {
         button.Connect(Control.SignalName.MouseEntered, Callable.From(() =>
-            TintButtonChildrenRecursive(button, hoverColor)));
+        {
+            if (!button.Disabled)
+                TintButtonChildrenRecursive(button, hoverColor);
+        }));
         button.Connect(Control.SignalName.MouseExited, Callable.From(() =>
             TintButtonChildrenRecursive(button, normalColor)));
+    }
+
+    /// <summary>
+    /// Shifts a FullRect-anchored content host to follow the CreatePixelPressStyle
+    /// expand-margin animation on hover (depth=1) and press (depth=maxShadow).
+    /// Without this, child icons/labels stay fixed while the background sinks.
+    /// </summary>
+    private static void SetupPressShift(Button button, Control contentHost, int maxShadow)
+    {
+        bool hovering = false;
+        button.Connect(Control.SignalName.MouseEntered, Callable.From(() =>
+        {
+            hovering = true;
+            if (!button.ButtonPressed)
+                ApplyContentShift(contentHost, 1);
+        }));
+        button.Connect(Control.SignalName.MouseExited, Callable.From(() =>
+        {
+            hovering = false;
+            if (!button.ButtonPressed)
+                ApplyContentShift(contentHost, 0);
+        }));
+        button.Connect(BaseButton.SignalName.ButtonDown, Callable.From(() =>
+            ApplyContentShift(contentHost, maxShadow)));
+        button.Connect(BaseButton.SignalName.ButtonUp, Callable.From(() =>
+            ApplyContentShift(contentHost, hovering ? 1 : 0)));
+    }
+
+    private static void ApplyContentShift(Control host, int depth)
+    {
+        host.OffsetLeft = depth;
+        host.OffsetTop = depth;
+        host.OffsetRight = depth;
+        host.OffsetBottom = depth;
     }
 
     private static void TintButtonChildrenRecursive(Node node, Color color)
@@ -5056,6 +5143,28 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         button.AddThemeFontSizeOverride("font_size", iconOnly ? 18 : 15);
         // Tint child icons/labels white on hover
         SetupChildHoverTint(button, TextStrongColor, CardColor);
+    }
+
+    private static void ApplyDestructiveToolbarButtonStyle(Button button)
+    {
+        int pad = 10;
+        Color bg = DangerColor;
+        Color hoverBg = new Color(0.65f, 0.10f, 0.12f, 1f);   // darker red on hover
+        Color pressedBg = new Color(0.55f, 0.08f, 0.10f, 1f);  // even darker on press
+
+        button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(bg, new Color(0.60f, 0.10f, 0.12f, 1f), 2, pad, 3, 0));
+        button.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(hoverBg, new Color(0.50f, 0.08f, 0.10f, 1f), 2, pad, 3, 1));
+        button.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(pressedBg, new Color(0.45f, 0.06f, 0.08f, 1f), 2, pad, 3, 3));
+        button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(WithAlpha(bg, 0.45f), WithAlpha(BorderColor, 0.4f), borderWidth: 2, padding: pad, shadowSize: 0));
+        button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, new Color(0.50f, 0.08f, 0.10f, 1f), 2, pad, 3, 1));
+        button.AddThemeColorOverride("font_color", CardColor);
+        button.AddThemeColorOverride("font_hover_color", CardColor);
+        button.AddThemeColorOverride("font_pressed_color", CardColor);
+        button.AddThemeColorOverride("font_focus_color", CardColor);
+        button.AddThemeColorOverride("font_disabled_color", WithAlpha(CardColor, 0.65f));
+        button.AddThemeFontSizeOverride("font_size", 18);
+        // Icon starts white on red bg — stays white on hover
+        SetupChildHoverTint(button, CardColor, CardColor);
     }
 
     private static void ApplyInlineButtonStyle(Button button, bool accent)
@@ -5309,7 +5418,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Globe,
         Zap,
         Users,
-        Share2
+        Share2,
+        XClose
     }
 
     private sealed partial class GlyphIcon : Control
@@ -5396,6 +5506,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             GlyphIconKind.Zap => SvgZap,
             GlyphIconKind.Users => SvgUsers,
             GlyphIconKind.Share2 => SvgShare2,
+            GlyphIconKind.XClose => SvgXClose,
             _ => null,
         };
 
@@ -5536,6 +5647,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
               <circle cx="18" cy="19" r="3"/>
               <line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/>
               <line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>
+            </svg>
+            """;
+
+        private const string SvgXClose = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 6 6 18"/>
+              <path d="m6 6 12 12"/>
             </svg>
             """;
     }
