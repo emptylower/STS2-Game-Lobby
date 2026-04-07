@@ -16,38 +16,75 @@ internal static class LanConnectLobbyCapacityPatches
 
     public static void Apply(Harmony harmony)
     {
-        MethodInfo? startENet = AccessTools.Method(typeof(NetHostGameService), nameof(NetHostGameService.StartENetHost));
-        if (startENet != null)
-        {
-            harmony.Patch(startENet, prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartENetHostPrefix)));
-        }
+        int applied = 0;
+        int skipped = 0;
+        int failed = 0;
 
-        MethodInfo? startSteam = AccessTools.Method(typeof(NetHostGameService), nameof(NetHostGameService.StartSteamHost));
-        if (startSteam != null)
+        MethodInfo? startENet = AccessTools.Method(typeof(NetHostGameService), nameof(NetHostGameService.StartENetHost));
+        TrySafePatch(harmony, startENet, "StartENetHost",
+            ref applied, ref skipped, ref failed,
+            prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartENetHostPrefix)));
+
+        if (OperatingSystem.IsAndroid())
         {
-            harmony.Patch(startSteam, prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartSteamHostPrefix)));
+            Log.Info("sts2_lan_connect gameplay: skipping StartSteamHost patch on Android.");
+            skipped++;
+        }
+        else
+        {
+            MethodInfo? startSteam = AccessTools.Method(typeof(NetHostGameService), nameof(NetHostGameService.StartSteamHost));
+            TrySafePatch(harmony, startSteam, "StartSteamHost",
+                ref applied, ref skipped, ref failed,
+                prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartSteamHostPrefix)));
         }
 
         ConstructorInfo? lobbyCtor = AccessTools.Constructor(typeof(StartRunLobby),
             new[] { typeof(GameMode), typeof(INetGameService), typeof(IStartRunLobbyListener), typeof(int) });
-        if (lobbyCtor != null)
-        {
-            harmony.Patch(lobbyCtor, postfix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartRunLobbyCtorPostfix)));
-        }
+        TrySafePatch(harmony, lobbyCtor, "StartRunLobby.ctor",
+            ref applied, ref skipped, ref failed,
+            postfix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartRunLobbyCtorPostfix)));
 
         MethodInfo? onConnected = AccessTools.Method(typeof(StartRunLobby), "OnConnectedToClientAsHost");
-        if (onConnected != null)
-        {
-            harmony.Patch(onConnected, prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(SyncMaxPlayersPrefix)));
-        }
+        TrySafePatch(harmony, onConnected, "OnConnectedToClientAsHost",
+            ref applied, ref skipped, ref failed,
+            prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(SyncMaxPlayersPrefix)));
 
         MethodInfo? handleJoin = AccessTools.Method(typeof(StartRunLobby), "HandleClientLobbyJoinRequestMessage");
-        if (handleJoin != null)
+        TrySafePatch(harmony, handleJoin, "HandleClientLobbyJoinRequestMessage",
+            ref applied, ref skipped, ref failed,
+            prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(SyncMaxPlayersPrefix)));
+
+        Log.Info($"sts2_lan_connect gameplay: lobby capacity patches applied={applied}, skipped={skipped}, failed={failed}.");
+    }
+
+    private static void TrySafePatch(
+        Harmony harmony,
+        MethodBase? target,
+        string label,
+        ref int applied,
+        ref int skipped,
+        ref int failed,
+        HarmonyMethod? prefix = null,
+        HarmonyMethod? postfix = null)
+    {
+        if (target == null)
         {
-            harmony.Patch(handleJoin, prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(SyncMaxPlayersPrefix)));
+            Log.Warn($"sts2_lan_connect gameplay: capacity patch target not found, skipping: {label}.");
+            skipped++;
+            return;
         }
 
-        Log.Info("sts2_lan_connect gameplay: lobby capacity patches applied.");
+        try
+        {
+            harmony.Patch(target, prefix: prefix, postfix: postfix);
+            Log.Info($"sts2_lan_connect gameplay: capacity: patched {label}.");
+            applied++;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"sts2_lan_connect gameplay: capacity patch failed for {label}: {ex.Message}");
+            failed++;
+        }
     }
 
     // ReSharper disable UnusedMember.Local

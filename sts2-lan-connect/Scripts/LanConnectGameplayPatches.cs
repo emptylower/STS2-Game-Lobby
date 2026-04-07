@@ -24,19 +24,29 @@ internal static class LanConnectGameplayPatches
             return;
         }
 
+        var applied = 0;
+        var failed = 0;
+
+        if (TryApplyGroup("DifficultyScaling", () => DifficultyScalingPatches.Apply(HarmonyInstance))) applied++; else failed++;
+        if (TryApplyGroup("RestSite", () => RestSitePatches.Apply(HarmonyInstance))) applied++; else failed++;
+        if (TryApplyGroup("Merchant", () => MerchantPatches.Apply(HarmonyInstance))) applied++; else failed++;
+        if (TryApplyGroup("Treasure", () => TreasurePatches.Apply(HarmonyInstance))) applied++; else failed++;
+        if (TryApplyGroup("LobbyCapacity", () => LanConnectLobbyCapacityPatches.Apply(HarmonyInstance))) applied++; else failed++;
+
+        Log.Info($"sts2_lan_connect gameplay: patch groups applied={applied}, failed={failed}.");
+    }
+
+    private static bool TryApplyGroup(string groupName, Action apply)
+    {
         try
         {
-            DifficultyScalingPatches.Apply(HarmonyInstance);
-            RestSitePatches.Apply(HarmonyInstance);
-            MerchantPatches.Apply(HarmonyInstance);
-            TreasurePatches.Apply(HarmonyInstance);
-            LanConnectLobbyCapacityPatches.Apply(HarmonyInstance);
-
-            Log.Info("sts2_lan_connect gameplay: all gameplay patches applied.");
+            apply();
+            return true;
         }
         catch (Exception ex)
         {
-            Log.Error($"sts2_lan_connect gameplay: failed to apply patches: {ex}");
+            Log.Error($"sts2_lan_connect gameplay: {groupName} patches failed: {ex.GetType().Name}: {ex.Message}");
+            return false;
         }
     }
 }

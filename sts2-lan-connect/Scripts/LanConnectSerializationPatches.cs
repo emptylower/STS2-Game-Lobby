@@ -15,6 +15,8 @@ internal static class LanConnectSerializationPatches
 {
     private static readonly Harmony HarmonyInstance = new("sts2_lan_connect.serialization");
     private static bool _applied;
+    private static int _patchedCount;
+    private static int _failedCount;
 
     private static readonly MethodInfo? WriteIntWithBits =
         AccessTools.Method(typeof(PacketWriter), nameof(PacketWriter.WriteInt), new[] { typeof(int), typeof(int) });
@@ -51,75 +53,72 @@ internal static class LanConnectSerializationPatches
             return;
         }
 
+        PatchLobbyPlayerSlotId();
+        PatchClientLobbyJoinResponseList();
+        PatchLobbyBeginRunList();
+
+        Log.Info(
+            $"sts2_lan_connect serialization: patches applied={_patchedCount}, failed={_failedCount}. " +
+            $"slotId={LanConnectConstants.VanillaSlotIdBits}->{LanConnectConstants.ExtendedSlotIdBits}, " +
+            $"lobbyList={LanConnectConstants.VanillaLobbyListBits}->{LanConnectConstants.ExtendedLobbyListBits}");
+    }
+
+    private static void TrySafePatch(MethodInfo? target, string transpilerName, string label)
+    {
+        if (target == null)
+        {
+            Log.Warn($"sts2_lan_connect serialization: target method not found, skipping patch: {label}");
+            _failedCount++;
+            return;
+        }
+
         try
         {
-            PatchLobbyPlayerSlotId();
-            PatchClientLobbyJoinResponseList();
-            PatchLobbyBeginRunList();
-
-            Log.Info(
-                $"sts2_lan_connect serialization: all patches applied. " +
-                $"slotId={LanConnectConstants.VanillaSlotIdBits}->{LanConnectConstants.ExtendedSlotIdBits}, " +
-                $"lobbyList={LanConnectConstants.VanillaLobbyListBits}->{LanConnectConstants.ExtendedLobbyListBits}");
+            HarmonyInstance.Patch(target, transpiler: new HarmonyMethod(
+                typeof(LanConnectSerializationPatches), transpilerName));
+            _patchedCount++;
         }
         catch (Exception ex)
         {
-            Log.Error($"sts2_lan_connect serialization: failed to apply patches: {ex}");
+            Log.Error($"sts2_lan_connect serialization: failed to patch {label}: {ex}");
+            _failedCount++;
         }
     }
 
     private static void PatchLobbyPlayerSlotId()
     {
-        MethodInfo? serialize = AccessTools.Method(typeof(LobbyPlayer), nameof(LobbyPlayer.Serialize));
-        MethodInfo? deserialize = AccessTools.Method(typeof(LobbyPlayer), nameof(LobbyPlayer.Deserialize));
-
-        if (serialize != null)
-        {
-            HarmonyInstance.Patch(serialize, transpiler: new HarmonyMethod(
-                typeof(LanConnectSerializationPatches), nameof(TranspileLobbyPlayerSerialize)));
-        }
-
-        if (deserialize != null)
-        {
-            HarmonyInstance.Patch(deserialize, transpiler: new HarmonyMethod(
-                typeof(LanConnectSerializationPatches), nameof(TranspileLobbyPlayerDeserialize)));
-        }
+        TrySafePatch(
+            AccessTools.Method(typeof(LobbyPlayer), nameof(LobbyPlayer.Serialize)),
+            nameof(TranspileLobbyPlayerSerialize),
+            "LobbyPlayer.Serialize");
+        TrySafePatch(
+            AccessTools.Method(typeof(LobbyPlayer), nameof(LobbyPlayer.Deserialize)),
+            nameof(TranspileLobbyPlayerDeserialize),
+            "LobbyPlayer.Deserialize");
     }
 
     private static void PatchClientLobbyJoinResponseList()
     {
-        MethodInfo? serialize = AccessTools.Method(typeof(ClientLobbyJoinResponseMessage), nameof(ClientLobbyJoinResponseMessage.Serialize));
-        MethodInfo? deserialize = AccessTools.Method(typeof(ClientLobbyJoinResponseMessage), nameof(ClientLobbyJoinResponseMessage.Deserialize));
-
-        if (serialize != null)
-        {
-            HarmonyInstance.Patch(serialize, transpiler: new HarmonyMethod(
-                typeof(LanConnectSerializationPatches), nameof(TranspileJoinResponseSerialize)));
-        }
-
-        if (deserialize != null)
-        {
-            HarmonyInstance.Patch(deserialize, transpiler: new HarmonyMethod(
-                typeof(LanConnectSerializationPatches), nameof(TranspileJoinResponseDeserialize)));
-        }
+        TrySafePatch(
+            AccessTools.Method(typeof(ClientLobbyJoinResponseMessage), nameof(ClientLobbyJoinResponseMessage.Serialize)),
+            nameof(TranspileJoinResponseSerialize),
+            "ClientLobbyJoinResponseMessage.Serialize");
+        TrySafePatch(
+            AccessTools.Method(typeof(ClientLobbyJoinResponseMessage), nameof(ClientLobbyJoinResponseMessage.Deserialize)),
+            nameof(TranspileJoinResponseDeserialize),
+            "ClientLobbyJoinResponseMessage.Deserialize");
     }
 
     private static void PatchLobbyBeginRunList()
     {
-        MethodInfo? serialize = AccessTools.Method(typeof(LobbyBeginRunMessage), nameof(LobbyBeginRunMessage.Serialize));
-        MethodInfo? deserialize = AccessTools.Method(typeof(LobbyBeginRunMessage), nameof(LobbyBeginRunMessage.Deserialize));
-
-        if (serialize != null)
-        {
-            HarmonyInstance.Patch(serialize, transpiler: new HarmonyMethod(
-                typeof(LanConnectSerializationPatches), nameof(TranspileBeginRunSerialize)));
-        }
-
-        if (deserialize != null)
-        {
-            HarmonyInstance.Patch(deserialize, transpiler: new HarmonyMethod(
-                typeof(LanConnectSerializationPatches), nameof(TranspileBeginRunDeserialize)));
-        }
+        TrySafePatch(
+            AccessTools.Method(typeof(LobbyBeginRunMessage), nameof(LobbyBeginRunMessage.Serialize)),
+            nameof(TranspileBeginRunSerialize),
+            "LobbyBeginRunMessage.Serialize");
+        TrySafePatch(
+            AccessTools.Method(typeof(LobbyBeginRunMessage), nameof(LobbyBeginRunMessage.Deserialize)),
+            nameof(TranspileBeginRunDeserialize),
+            "LobbyBeginRunMessage.Deserialize");
     }
 
     // ReSharper disable UnusedMember.Local — invoked by Harmony via reflection
