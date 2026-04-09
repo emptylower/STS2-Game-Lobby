@@ -138,6 +138,12 @@
 - 所有联机玩家必须使用完全相同版本的 `STS2 LAN Connect`
 - 建议直接对照 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号
 
+### 安卓端启动就弹“致命错误”
+
+- 先确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号已经是 `0.2.3`
+- 如果你是覆盖安装旧包，建议先完整卸载一次，再重新安装，确保 `sts2_lan_connect.dll`、`sts2_lan_connect.pck` 和 `sts2_lan_connect.json` 同步更新
+- 如果仍然崩溃，把最新 `godot.log` 和 `复制本地调试报告` 一起发给开发者
+
 ### 需要回退到手动 LAN/IP
 
 - 官方 Host / Join 页面里的手动 LAN 调试入口仍然保留，可作为排障回退方案

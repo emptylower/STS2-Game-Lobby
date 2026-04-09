@@ -15,6 +15,7 @@ internal static class LanConnectSceneReadyPatches
 {
     private static readonly Harmony HarmonyInstance = new("sts2_lan_connect.scene_ready");
     private static bool _applied;
+    private static bool _dailyRunReadyPatchPending;
 
     public static void Apply()
     {
@@ -30,53 +31,86 @@ internal static class LanConnectSceneReadyPatches
         TryPatchReady(typeof(NMultiplayerSubmenu), nameof(OnMultiplayerSubmenuReady), "NMultiplayerSubmenu._Ready");
         TryPatchReady(typeof(NMultiplayerLoadGameScreen), nameof(OnMultiplayerLoadScreenReady), "NMultiplayerLoadGameScreen._Ready");
         TryPatchReady(typeof(NCustomRunLoadScreen), nameof(OnCustomRunLoadScreenReady), "NCustomRunLoadScreen._Ready");
-        TryPatchReady(typeof(NDailyRunLoadScreen), nameof(OnDailyRunLoadScreenReady), "NDailyRunLoadScreen._Ready");
         TryPatchReady(typeof(NCharacterSelectScreen), nameof(OnCharacterSelectReady), "NCharacterSelectScreen._Ready");
         TryPatchReady(typeof(NPauseMenu), nameof(OnPauseMenuReady), "NPauseMenu._Ready");
         TryPatchReady(typeof(NRemoteLobbyPlayer), nameof(OnRemoteLobbyPlayerReady), "NRemoteLobbyPlayer._Ready");
-    }
 
-    private static void TryPatchReady(Type nodeType, string postfixName, string label)
-    {
-        MethodInfo? target = AccessTools.DeclaredMethod(nodeType, "_Ready");
-        if (target == null)
+        if (OperatingSystem.IsAndroid())
         {
-            Log.Warn($"sts2_lan_connect scene_ready: target method not found, skipping patch {label}");
+            // On Android, patching this screen during mod initialization triggers the game's static ctor too
+            // early and poisons later startup. Install the hook lazily once the menu UI is already alive.
+            _dailyRunReadyPatchPending = true;
+            Log.Info("sts2_lan_connect scene_ready: deferring NDailyRunLoadScreen._Ready patch on Android.");
             return;
         }
 
+        TryPatchReady(typeof(NDailyRunLoadScreen), nameof(OnDailyRunLoadScreenReady), "NDailyRunLoadScreen._Ready");
+    }
+
+    private static bool TryPatchReady(Type nodeType, string postfixName, string label)
+    {
         try
         {
+            MethodInfo? target = AccessTools.DeclaredMethod(nodeType, "_Ready");
+            if (target == null)
+            {
+                Log.Warn($"sts2_lan_connect scene_ready: target method not found, skipping patch {label}");
+                return false;
+            }
+
             HarmonyInstance.Patch(target, postfix: new HarmonyMethod(typeof(LanConnectSceneReadyPatches), postfixName));
+            return true;
         }
         catch (Exception ex)
         {
             Log.Error($"sts2_lan_connect scene_ready: failed to patch {label}: {ex}");
+            return false;
         }
+    }
+
+    private static void EnsureDeferredAndroidPatches()
+    {
+        if (!_dailyRunReadyPatchPending)
+        {
+            return;
+        }
+
+        if (!TryPatchReady(typeof(NDailyRunLoadScreen), nameof(OnDailyRunLoadScreenReady), "NDailyRunLoadScreen._Ready"))
+        {
+            return;
+        }
+
+        _dailyRunReadyPatchPending = false;
+        Log.Info("sts2_lan_connect scene_ready: applied deferred NDailyRunLoadScreen._Ready patch.");
     }
 
     private static void OnHostSubmenuReady(NMultiplayerHostSubmenu __instance)
     {
+        EnsureDeferredAndroidPatches();
         HostSubmenuPatches.ScheduleEnsureLanHostButton(__instance, "ready_postfix");
     }
 
     private static void OnJoinFriendScreenReady(NJoinFriendScreen __instance)
     {
+        EnsureDeferredAndroidPatches();
         JoinFriendScreenPatches.ScheduleEnsureLanJoinControls(__instance, "ready_postfix");
     }
 
     private static void OnMultiplayerSubmenuReady(NMultiplayerSubmenu __instance)
     {
+        EnsureDeferredAndroidPatches();
         MultiplayerSubmenuPatches.ScheduleEnsureLobbyEntry(__instance, "ready_postfix");
     }
 
     private static void OnMultiplayerLoadScreenReady(NMultiplayerLoadGameScreen __instance)
     {
+        EnsureDeferredAndroidPatches();
         LanConnectContinueRunLobbyAutoPublisher.ScheduleEnsureAutoPublish(__instance, "ready_postfix");
     }
 
     private static void OnCustomRunLoadScreenReady(NCustomRunLoadScreen __instance)
     {
+        EnsureDeferredAndroidPatches();
         LanConnectContinueRunLobbyAutoPublisher.ScheduleEnsureAutoPublish(__instance, "ready_postfix");
     }
 
@@ -87,16 +121,19 @@ internal static class LanConnectSceneReadyPatches
 
     private static void OnCharacterSelectReady(NCharacterSelectScreen __instance)
     {
+        EnsureDeferredAndroidPatches();
         LanConnectInviteButtonPatch.EnsureInviteButton(__instance);
     }
 
     private static void OnPauseMenuReady(NPauseMenu __instance)
     {
+        EnsureDeferredAndroidPatches();
         PauseMenuPatches.ScheduleEnsureRoomManagementButton(__instance, "ready_postfix");
     }
 
     private static void OnRemoteLobbyPlayerReady(NRemoteLobbyPlayer __instance)
     {
+        EnsureDeferredAndroidPatches();
         LanConnectRemoteLobbyPlayerPatches.RegisterAndRefresh(__instance, "ready_postfix");
     }
 }
