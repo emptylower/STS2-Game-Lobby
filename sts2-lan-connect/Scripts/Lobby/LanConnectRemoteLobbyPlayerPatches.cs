@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Godot;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Logging;
@@ -11,11 +13,52 @@ namespace Sts2LanConnect.Scripts;
 internal static class LanConnectRemoteLobbyPlayerPatches
 {
     private const string KickButtonName = "LanConnectKickButton";
+    private const string RegisteredMetaKey = "sts2_lan_connect_remote_lobby_player_registered";
+    private static readonly object RegistrySync = new();
+    private static readonly Dictionary<ulong, NRemoteLobbyPlayer> RegisteredPlayers = new();
+    private static bool _refreshQueued;
 
     private static readonly Color DangerColor = new(0.80f, 0.15f, 0.18f, 0.85f);
     private static readonly Color DangerHoverColor = new(0.90f, 0.25f, 0.20f, 0.95f);
     private static readonly Color BorderColor = new(0.60f, 0.20f, 0.15f, 0.8f);
     private static readonly Color TextColor = new(0.99f, 0.97f, 0.93f, 1f);
+
+    internal static void RegisterAndRefresh(NRemoteLobbyPlayer player, string source)
+    {
+        if (!GodotObject.IsInstanceValid(player))
+        {
+            return;
+        }
+
+        lock (RegistrySync)
+        {
+            RegisteredPlayers[player.GetInstanceId()] = player;
+        }
+
+        if (!player.HasMeta(RegisteredMetaKey))
+        {
+            player.SetMeta(RegisteredMetaKey, true);
+            player.Connect(Node.SignalName.TreeExiting, Callable.From(() => Unregister(player)));
+        }
+
+        Log.Info($"sts2_lan_connect remote_lobby_player: registered source={source} netId={player.PlayerId}");
+        RefreshNameplate(player);
+    }
+
+    internal static void QueueRefreshAll()
+    {
+        lock (RegistrySync)
+        {
+            if (_refreshQueued)
+            {
+                return;
+            }
+
+            _refreshQueued = true;
+        }
+
+        Callable.From(RefreshAllRegistered).CallDeferred();
+    }
 
     internal static void RefreshNameplate(NRemoteLobbyPlayer player)
     {
@@ -35,6 +78,27 @@ internal static class LanConnectRemoteLobbyPlayerPatches
         }
 
         EnsureKickButton(player);
+    }
+
+    private static void RefreshAllRegistered()
+    {
+        List<KeyValuePair<ulong, NRemoteLobbyPlayer>> players;
+        lock (RegistrySync)
+        {
+            _refreshQueued = false;
+            players = RegisteredPlayers.ToList();
+        }
+
+        foreach ((ulong instanceId, NRemoteLobbyPlayer player) in players)
+        {
+            if (!GodotObject.IsInstanceValid(player))
+            {
+                Unregister(instanceId);
+                continue;
+            }
+
+            RefreshNameplate(player);
+        }
     }
 
     private static void EnsureKickButton(NRemoteLobbyPlayer player)
@@ -82,8 +146,7 @@ internal static class LanConnectRemoteLobbyPlayerPatches
         kickButton.AddThemeStyleboxOverride("focus", normal);
 
         ulong targetNetId = player.PlayerId;
-        string targetName = LanConnectLobbyPlayerNameDirectory.TryGetPlayerName(targetNetId) ?? targetNetId.ToString();
-        kickButton.Pressed += () => OnLobbyKickPressed(targetNetId, targetName);
+        kickButton.Pressed += () => OnLobbyKickPressed(targetNetId, ResolvePlayerName(targetNetId));
 
         // Add directly to the NRemoteLobbyPlayer control and position absolutely
         player.AddChild(kickButton);
@@ -128,6 +191,11 @@ internal static class LanConnectRemoteLobbyPlayerPatches
         ScheduleDelayedDisconnect(runtime, targetNetId);
     }
 
+    private static string ResolvePlayerName(ulong targetNetId)
+    {
+        return LanConnectLobbyPlayerNameDirectory.TryGetPlayerName(targetNetId) ?? targetNetId.ToString();
+    }
+
     internal static void ScheduleDelayedDisconnect(LanConnectLobbyRuntime runtime, ulong targetNetId)
     {
         NetHostGameService? hostService = runtime.GetHostNetService();
@@ -154,6 +222,19 @@ internal static class LanConnectRemoteLobbyPlayerPatches
                 Log.Warn($"sts2_lan_connect kick: delayed ENet disconnect failed: {ex.Message}");
             }
         };
+    }
+
+    private static void Unregister(NRemoteLobbyPlayer player)
+    {
+        Unregister(player.GetInstanceId());
+    }
+
+    private static void Unregister(ulong instanceId)
+    {
+        lock (RegistrySync)
+        {
+            RegisteredPlayers.Remove(instanceId);
+        }
     }
 
     private static StyleBoxFlat CreateButtonStyle(Color bgColor)

@@ -26,6 +26,8 @@ internal static class LanConnectLobbyPlayerNameDirectory
             ActiveRoomNames.Clear();
             ApplyUnsafe();
         }
+
+        LanConnectRemoteLobbyPlayerPatches.QueueRefreshAll();
     }
 
     public static void ClearRoom(string? roomId)
@@ -41,6 +43,8 @@ internal static class LanConnectLobbyPlayerNameDirectory
             ActiveRoomNames.Clear();
             ApplyUnsafe();
         }
+
+        LanConnectRemoteLobbyPlayerPatches.QueueRefreshAll();
     }
 
     public static void Upsert(string roomId, ulong netId, string playerName)
@@ -61,6 +65,8 @@ internal static class LanConnectLobbyPlayerNameDirectory
             ActiveRoomNames[netId] = LanConnectConfig.SanitizePlayerDisplayName(playerName);
             ApplyUnsafe();
         }
+
+        LanConnectRemoteLobbyPlayerPatches.QueueRefreshAll();
     }
 
     public static void UpsertSnapshot(string roomId, IEnumerable<LobbyPlayerNameEntry>? entries)
@@ -90,6 +96,8 @@ internal static class LanConnectLobbyPlayerNameDirectory
 
             ApplyUnsafe();
         }
+
+        LanConnectRemoteLobbyPlayerPatches.QueueRefreshAll();
     }
 
     public static List<LobbyPlayerNameEntry> BuildSnapshot(string roomId)

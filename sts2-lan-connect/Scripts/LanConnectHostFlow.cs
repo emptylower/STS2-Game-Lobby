@@ -40,12 +40,15 @@ internal static class LanConnectHostFlow
         loadingOverlay.Visible = true;
         NetHostGameService netService = new();
         int maxPlayers = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
+        string protocolProfile = LanConnectProtocolProfiles.DetermineProfileForMaxPlayers(maxPlayers);
 
         try
         {
+            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, "start_lan_host");
             NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, maxPlayers);
             if (error.HasValue)
             {
+                LanConnectProtocolProfiles.ResetActiveProfile("start_lan_host_failed");
                 NErrorPopup? popup = NErrorPopup.Create(error.Value);
                 if (popup != null)
                 {
@@ -63,6 +66,7 @@ internal static class LanConnectHostFlow
         }
         catch
         {
+            LanConnectProtocolProfiles.ResetActiveProfile("start_lan_host_exception");
             NErrorPopup? popup = NErrorPopup.Create(new NetErrorInfo(NetError.InternalError, selfInitiated: false));
             if (popup != null)
             {
@@ -82,6 +86,7 @@ internal static class LanConnectHostFlow
         loadingOverlay.Visible = true;
         NetHostGameService netService = new();
         int maxPlayers = maxPlayersOverride ?? LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
+        string protocolProfile = LanConnectProtocolProfiles.DetermineProfileForMaxPlayers(maxPlayers);
         string lobbyGameMode = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode);
         string gameModeLabel = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameModeLabel(gameMode);
 
@@ -90,9 +95,11 @@ internal static class LanConnectHostFlow
 
         try
         {
+            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, "start_lobby_host");
             NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, maxPlayers);
             if (error.HasValue)
             {
+                LanConnectProtocolProfiles.ResetActiveProfile("start_lobby_host_failed");
                 GD.Print($"sts2_lan_connect host_flow: ENet host failed with {error.Value}");
                 NErrorPopup? popup = NErrorPopup.Create(error.Value);
                 if (popup != null)
@@ -118,6 +125,7 @@ internal static class LanConnectHostFlow
             if (!published)
             {
                 netService.Disconnect(NetError.InternalError, now: true);
+                LanConnectProtocolProfiles.ResetActiveProfile("publish_existing_host_failed");
                 return false;
             }
 
@@ -133,6 +141,7 @@ internal static class LanConnectHostFlow
         catch (LobbyServiceException ex)
         {
             netService.Disconnect(NetError.InternalError, now: true);
+            LanConnectProtocolProfiles.ResetActiveProfile("start_lobby_host_service_exception");
             GD.Print($"sts2_lan_connect host_flow: lobby create failed code={ex.Code}, status={ex.StatusCode}, message={ex.Message}");
             if (string.Equals(ex.Code, "server_bandwidth_near_capacity", StringComparison.Ordinal))
             {
@@ -144,6 +153,7 @@ internal static class LanConnectHostFlow
         catch (Exception ex)
         {
             netService.Disconnect(NetError.InternalError, now: true);
+            LanConnectProtocolProfiles.ResetActiveProfile("start_lobby_host_exception");
             GD.Print($"sts2_lan_connect host_flow: unexpected exception during host create -> {ex}");
             NErrorPopup? popup = NErrorPopup.Create(new NetErrorInfo(NetError.InternalError, selfInitiated: false));
             if (popup != null)
@@ -178,12 +188,14 @@ internal static class LanConnectHostFlow
         string playerName = LanConnectConfig.GetEffectivePlayerDisplayName();
         string lobbyGameMode = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode);
         int localAddressCount = LanConnectNetUtil.GetLanAddressStrings().Count;
+        string protocolProfile = LanConnectProtocolProfiles.DetermineProfileForMaxPlayers(maxPlayers);
 
         GD.Print(
             $"sts2_lan_connect host_flow: publish existing host source={publishSource}, roomName='{trimmedRoomName}', passwordSet={!string.IsNullOrWhiteSpace(trimmedPassword)}, gameMode={lobbyGameMode}, player='{playerName}', platform={netService.Platform}, localAddressCount={localAddressCount}, saveKey={(boundSaveKey ?? "<none>")}");
 
         try
         {
+            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, $"publish_existing_host:{publishSource}");
             apiClient = LobbyApiClient.CreateConfigured();
             LobbyCreateRoomResponse registration = await apiClient.CreateRoomAsync(new LobbyCreateRoomRequest
             {
@@ -194,6 +206,7 @@ internal static class LanConnectHostFlow
                 Version = LanConnectBuildInfo.GetGameVersion(),
                 ModVersion = LanConnectBuildInfo.GetModVersion(),
                 ModList = LanConnectBuildInfo.GetModList(),
+                ProtocolProfile = protocolProfile,
                 MaxPlayers = maxPlayers,
                 HostConnectionInfo = new LobbyHostConnectionInfo
                 {
@@ -231,7 +244,8 @@ internal static class LanConnectHostFlow
                     GameMode = lobbyGameMode,
                     PublishSource = publishSource,
                     SaveKey = boundSaveKey,
-                    SavedRun = savedRunInfo
+                    SavedRun = savedRunInfo,
+                    ProtocolProfile = protocolProfile
                 });
             apiClient = null;
             GD.Print($"sts2_lan_connect host_flow: attached hosted room session roomId={registration.RoomId}, source={publishSource}");
@@ -240,6 +254,7 @@ internal static class LanConnectHostFlow
         catch (LobbyServiceException ex)
         {
             apiClient?.Dispose();
+            LanConnectProtocolProfiles.ResetActiveProfile($"publish_existing_host_failed:{publishSource}");
             GD.Print(
                 $"sts2_lan_connect host_flow: publish existing host failed source={publishSource}, code={ex.Code}, status={ex.StatusCode}, message={ex.Message}");
             if (throwOnCreateGuardRejection && string.Equals(ex.Code, "server_bandwidth_near_capacity", StringComparison.Ordinal))
@@ -256,6 +271,7 @@ internal static class LanConnectHostFlow
         catch (Exception ex)
         {
             apiClient?.Dispose();
+            LanConnectProtocolProfiles.ResetActiveProfile($"publish_existing_host_exception:{publishSource}");
             GD.Print($"sts2_lan_connect host_flow: unexpected exception during publish source={publishSource} -> {ex}");
             if (notifyOnFailure)
             {

@@ -71,6 +71,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         ProcessMode = ProcessModeEnum.Always;
         _timeUntilHeartbeat = 0d;
         Instance = this;
+        LanConnectProtocolProfiles.ResetActiveProfile("runtime_ready");
         SaveManager.Instance.Saved += OnRunSaved;
         LanConnectSaveDiagnostics.LogNow("runtime_ready");
         Log.Info("sts2_lan_connect lobby runtime ready.");
@@ -129,6 +130,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         _activeSession = session;
         ResetChatState(registration.RoomId);
         _timeUntilHeartbeat = 0d;
+        LanConnectProtocolProfiles.SetActiveProfile(registration.Room.ProtocolProfile, "attach_hosted_room");
         GD.Print(
             $"sts2_lan_connect lobby runtime: attached hosted room roomId={registration.RoomId}, roomName='{metadata.RoomName}', source={metadata.PublishSource}, saveKey={(metadata.SaveKey ?? "<none>")}");
         LanConnectSaveDiagnostics.LogNow("attach_hosted_room", $"roomId={registration.RoomId}, publishSource={metadata.PublishSource}, saveKey={(metadata.SaveKey ?? "<none>")}");
@@ -165,6 +167,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         session.SetEnvelopeHandler(envelope => OnJoinedClientControlEnvelope(session, envelope));
         _activeClientSession = session;
         ResetChatState(joinResponse.Room.RoomId);
+        LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, "attach_joined_client");
         LanConnectLobbyPlayerNameDirectory.BeginRoom(joinResponse.Room.RoomId);
         LanConnectLobbyPlayerNameDirectory.Upsert(joinResponse.Room.RoomId, netService.NetId, LanConnectConfig.GetEffectivePlayerDisplayName());
         netService.Disconnected += session.OnDisconnected;
@@ -305,6 +308,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
 
             LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
             ClearChatIfInactive(session.RoomId);
+            ResetProtocolProfileIfIdle($"close_hosted_room:{session.RoomId}");
         }
     }
 
@@ -324,7 +328,16 @@ internal sealed partial class LanConnectLobbyRuntime : Node
 
         LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
         ClearChatIfInactive(session.RoomId);
+        ResetProtocolProfileIfIdle($"close_joined_client:{session.RoomId}");
         return Task.CompletedTask;
+    }
+
+    private void ResetProtocolProfileIfIdle(string source)
+    {
+        if (_activeSession == null && _activeClientSession == null)
+        {
+            LanConnectProtocolProfiles.ResetActiveProfile(source);
+        }
     }
 
     internal async Task SendRoomChatMessageAsync(string messageText)

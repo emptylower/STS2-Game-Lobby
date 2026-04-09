@@ -34,6 +34,85 @@ test("createRoom exposes room summary in listRooms", () => {
   assert.equal(rooms[0]?.requiresPassword, false);
 });
 
+test("createRoom infers legacy_4p protocol profile for old 0.2.2 four-player rooms", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = store.createRoom(
+    {
+      roomName: "旧版本四人房",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.2.2",
+      modList: ["sts2_lan_connect"],
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+      },
+    },
+    "203.0.113.10",
+  );
+
+  assert.equal(created.room.protocolProfile, "legacy_4p");
+
+  const joined = store.joinRoom(created.roomId, {
+    playerName: "Guest",
+    version: "1.2.3",
+    modVersion: "0.2.2",
+    modList: ["sts2_lan_connect"],
+  });
+  assert.equal(joined.room.protocolProfile, "legacy_4p");
+});
+
+test("createRoom preserves explicit protocol profile and echoes it in joins", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = store.createRoom(
+    {
+      roomName: "扩展协议房",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.2.3",
+      protocolProfile: "extended_8p",
+      maxPlayers: 8,
+      hostConnectionInfo: {
+        enetPort: 33771,
+      },
+    },
+    "203.0.113.10",
+  );
+
+  assert.equal(created.room.protocolProfile, "extended_8p");
+  assert.equal(store.listRooms()[0]?.protocolProfile, "extended_8p");
+
+  const joined = store.joinRoom(created.roomId, {
+    playerName: "Guest",
+    version: "1.2.3",
+    modVersion: "0.2.3",
+  });
+  assert.equal(joined.room.protocolProfile, "extended_8p");
+});
+
+test("createRoom does not infer legacy_4p when the RMP mod is advertised", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = store.createRoom(
+    {
+      roomName: "RMP四人房",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.2.2",
+      modList: ["RemoveMultiplayerPlayerLimit"],
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+      },
+    },
+    "203.0.113.10",
+  );
+
+  assert.equal(created.room.protocolProfile, "extended_8p");
+});
+
 test("listRooms stays stable when heartbeat updates last seen time", () => {
   const store = new LobbyStore(baseConfig);
   const olderCreatedAt = new Date("2026-03-14T08:00:00.000Z");

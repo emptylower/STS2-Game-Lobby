@@ -13,4 +13,6 @@ internal sealed class LanConnectHostedRoomMetadata
     public string? SaveKey { get; init; }
 
     public LobbySavedRunInfo? SavedRun { get; init; }
+
+    public string ProtocolProfile { get; init; } = LanConnectProtocolProfiles.Extended8p;
 }

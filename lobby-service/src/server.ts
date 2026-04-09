@@ -195,6 +195,7 @@ app.post("/rooms", (req, res, next) => {
       version: requiredString(body?.version, "version"),
       modVersion: requiredString(body?.modVersion, "modVersion"),
       modList: optionalStringArray(body?.modList),
+      protocolProfile: optionalString(body?.protocolProfile),
       maxPlayers: positiveInt(body?.maxPlayers, "maxPlayers", 1, MaxLobbyPlayers),
       hostConnectionInfo: {
         enetPort: positiveInt(body?.hostConnectionInfo?.enetPort, "hostConnectionInfo.enetPort", 1, 65535),
@@ -243,7 +244,7 @@ app.post("/rooms", (req, res, next) => {
       room.room.relayState = "planned";
     }
     console.log(
-      `[lobby] create room roomId=${room.roomId} roomName="${room.room.roomName}" hostPlayer="${room.room.hostPlayerName}" version=${room.room.version} modVersion=${room.room.modVersion} remote=${requestIp(req)} relay=${relayEndpoint ? `${relayEndpoint.host}:${relayEndpoint.port}` : "disabled"} relayState=${room.room.relayState}`,
+      `[lobby] create room roomId=${room.roomId} roomName="${room.room.roomName}" hostPlayer="${room.room.hostPlayerName}" version=${room.room.version} modVersion=${room.room.modVersion} protocolProfile=${room.room.protocolProfile} remote=${requestIp(req)} relay=${relayEndpoint ? `${relayEndpoint.host}:${relayEndpoint.port}` : "disabled"} relayState=${room.room.relayState}`,
     );
     res.status(201).json(room);
   } catch (error) {
@@ -281,7 +282,7 @@ app.post("/rooms/:id/join", (req, res, next) => {
     const relayStatus = relayManager.getRoomStatus(req.params.id);
     assertRelayJoinReady(env.connectionStrategy, response.room.relayState, relayStatus.hasActiveHost);
     console.log(
-      `[lobby] join ticket issued roomId=${req.params.id} player="${body?.playerName ?? ""}" roomModVersion=${response.room.modVersion} ticketId=${response.ticketId} remote=${requestIp(req)} strategy=${response.connectionPlan.strategy} direct=${response.connectionPlan.directCandidates.length} relay=${relayEndpoint ? `${relayEndpoint.host}:${relayEndpoint.port}` : "disabled"} relayState=${response.room.relayState} relayHost=${relayStatus.hasActiveHost ? relayStatus.activeHostDetail : "unregistered"} relayClients=${relayStatus.clientCount}`,
+      `[lobby] join ticket issued roomId=${req.params.id} player="${body?.playerName ?? ""}" roomModVersion=${response.room.modVersion} protocolProfile=${response.room.protocolProfile} ticketId=${response.ticketId} remote=${requestIp(req)} strategy=${response.connectionPlan.strategy} direct=${response.connectionPlan.directCandidates.length} relay=${relayEndpoint ? `${relayEndpoint.host}:${relayEndpoint.port}` : "disabled"} relayState=${response.room.relayState} relayHost=${relayStatus.hasActiveHost ? relayStatus.activeHostDetail : "unregistered"} relayClients=${relayStatus.clientCount}`,
     );
     res.json(response);
   } catch (error) {

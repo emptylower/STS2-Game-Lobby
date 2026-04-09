@@ -53,7 +53,7 @@ internal static class LanConnectExternalModDetection
 
             IsRmpModLoaded = true;
 
-            PropertyInfo? prop = configType.GetProperty("TargetPlayerLimit", BindingFlags.Public | BindingFlags.Static);
+            PropertyInfo? prop = configType.GetProperty("TargetPlayerLimit", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
             object? value = prop?.GetValue(null);
             if (value is int limit && limit > 0)
             {

@@ -201,7 +201,7 @@ internal sealed class LobbyApiClient : IDisposable
         return payload switch
         {
             null => "no-payload",
-            LobbyCreateRoomRequest create => $"create room='{create.RoomName}', passwordSet={!string.IsNullOrWhiteSpace(create.Password)}, maxPlayers={create.MaxPlayers}, localAddressCount={create.HostConnectionInfo.LocalAddresses.Count}, savedRunSlots={create.SavedRun?.Slots.Count ?? 0}",
+            LobbyCreateRoomRequest create => $"create room='{create.RoomName}', passwordSet={!string.IsNullOrWhiteSpace(create.Password)}, maxPlayers={create.MaxPlayers}, protocolProfile={create.ProtocolProfile ?? "<auto>"}, localAddressCount={create.HostConnectionInfo.LocalAddresses.Count}, savedRunSlots={create.SavedRun?.Slots.Count ?? 0}",
             LobbyJoinRoomRequest join => $"join player='{join.PlayerName}', passwordSet={!string.IsNullOrWhiteSpace(join.Password)}, desiredSavePlayerNetId={(string.IsNullOrWhiteSpace(join.DesiredSavePlayerNetId) ? "<none>" : join.DesiredSavePlayerNetId)}",
             LobbyHeartbeatRequest heartbeat => $"heartbeat currentPlayers={heartbeat.CurrentPlayers}, status={heartbeat.Status}, connectedSaveSlots={heartbeat.ConnectedPlayerNetIds?.Count ?? 0}",
             LobbyDeleteRoomRequest => "delete-room",

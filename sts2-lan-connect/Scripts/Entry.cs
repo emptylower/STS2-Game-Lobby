@@ -19,9 +19,9 @@ public static class Entry
         LanConnectExternalModDetection.Detect();
         LanConnectMultiplayerCompatibility.Initialize();
         LanConnectGameplayPatches.Initialize();
+        LanConnectSceneReadyPatches.Apply();
         LanConnectLobbyRuntime.Install();
         LanConnectRoomChatOverlay.Install();
-        LanConnectRuntimeMonitor.Install();
-        Log.Info("sts2_lan_connect initialized with runtime monitor.");
+        Log.Info("sts2_lan_connect initialized with ready hooks.");
     }
 }

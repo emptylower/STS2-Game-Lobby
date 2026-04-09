@@ -288,7 +288,7 @@ internal static class TreasurePatches
         LocalVotePendingStates.Add(__instance);
         LocalSkipLockedStates.Add(__instance);
         SetSyncPredictedVote(__instance, SkipVoteIndex);
-        actionQueue.RequestEnqueue(SkipRelicActionFactory.CreateSkipAction(player));
+        actionQueue.RequestEnqueue(new LanConnectSkipRelicGameAction(player));
         InvokeVotesChanged(__instance);
         return false;
     }

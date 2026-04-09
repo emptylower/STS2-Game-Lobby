@@ -12,6 +12,8 @@
 - 向客户端返回 `ENet` 直连优先、失败时自动切 relay 的连接计划
 - 保存续局大厅房间的 `savedRun` 元数据与可接管角色槽位
 - `maxPlayers/currentPlayers` 上限已放宽，用于兼容扩展人数房间元数据
+- 房间会持久化并回显 `protocolProfile`；`4` 人房会自动发布为 `legacy_4p` 用于兼容 `0.2.2`，`5-8` 人房保持 `extended_8p`
+- 对旧 `0.2.2` 四人房，如果没有显式 `protocolProfile`，服务端会按 `maxPlayers + modVersion + modList` 自动推断兼容档位
 - 在 join 前置校验里区分 `version_mismatch`、`mod_version_mismatch`、`mod_mismatch`、`room_started`、`room_full`
 - 记录 `direct_timeout` / `relay_success` / `relay_failure` 等连接阶段日志
 - 内置子服务器控制面板 `/server-admin`

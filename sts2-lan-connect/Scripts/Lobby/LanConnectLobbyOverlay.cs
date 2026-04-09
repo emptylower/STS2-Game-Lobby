@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Helpers;
@@ -35,6 +36,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private const int FilterModeStandardId = 200;
     private const int FilterModeDailyId = 201;
     private const int FilterModeCustomId = 202;
+    private const double JoinCancelRevealDelaySeconds = 3d;
 
     // ── Retro pixel-art palette (converted from reference UI oklch values) ──
     private static readonly Color BackdropColor = new(0.97f, 0.95f, 0.89f, 1f);        // #F8F1E3 oklch(0.96,0.02,85)
@@ -131,6 +133,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private OptionButton? _roomTypeOption;
     private LineEdit? _roomPasswordInput;
     private SpinBox? _maxPlayersSpinBox;
+    private Label? _maxPlayersHintLabel;
     private Control? _createGuardDialogContainer;
     private Label? _createGuardDialogTitle;
     private Label? _createGuardDialogMessage;
@@ -145,6 +148,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Label? _progressDialogTitle;
     private Label? _progressDialogMessage;
     private Label? _progressDialogHint;
+    private Button? _progressDialogCancelButton;
     private Control? _resumeSlotDialogContainer;
     private Label? _resumeSlotDialogTitle;
     private Label? _resumeSlotDialogErrorLabel;
@@ -165,6 +169,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private bool _actionInFlight;
     private double _timeUntilAutoRefresh;
     private double _progressDialogTick;
+    private double _progressDialogVisibleDuration;
     private int _progressDialogDotCount;
     private int _currentPageIndex;
     private int _consecutiveRefreshFailures;
@@ -186,8 +191,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private bool _showStandardMode = true;
     private bool _showDailyMode = true;
     private bool _showCustomMode = true;
+    private bool _progressDialogAllowCancel;
     private double _healthPulseTime;
     private Color _healthIndicatorDotColor = SuccessColor;
+    private CancellationTokenSource? _activeJoinCancellationSource;
 
     public void Initialize(NMultiplayerSubmenu submenu, NSubmenuButton templateButton, NSubmenuStack stack, Control loadingOverlay)
     {
@@ -1290,8 +1297,21 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Control shell = CreateDialogShell(out VBoxContainer body);
         _progressDialogContainer = shell;
 
+        HBoxContainer header = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        header.AddThemeConstantOverride("separation", 12);
+        body.AddChild(header);
+
         _progressDialogTitle = CreateSectionLabel("正在处理");
-        body.AddChild(_progressDialogTitle);
+        _progressDialogTitle.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        header.AddChild(_progressDialogTitle);
+
+        _progressDialogCancelButton = CreateDestructiveToolbarIconButton("取消当前连接", CancelActiveJoinRequest, GlyphIconKind.XClose);
+        _progressDialogCancelButton.CustomMinimumSize = new Vector2(42f, 42f);
+        _progressDialogCancelButton.Visible = false;
+        header.AddChild(_progressDialogCancelButton);
 
         _progressDialogMessage = CreateTitleLabel("正在连接房间", 24);
         _progressDialogMessage.AutowrapMode = TextServer.AutowrapMode.WordSmart;
@@ -1687,9 +1707,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         innerLineEdit.AddThemeStyleboxOverride("focus", spinFocus);
         row.AddChild(_maxPlayersSpinBox);
 
-        Label hint = CreateBodyLabel("房间最大人数为 8 人");
-        hint.AddThemeColorOverride("font_color", TextMutedColor);
-        row.AddChild(hint);
+        _maxPlayersHintLabel = CreateBodyLabel(string.Empty);
+        _maxPlayersHintLabel.AddThemeColorOverride("font_color", TextMutedColor);
+        row.AddChild(_maxPlayersHintLabel);
+
+        _maxPlayersSpinBox.Connect(Godot.Range.SignalName.ValueChanged, Callable.From<double>(_ => UpdateMaxPlayersHint()));
+        UpdateMaxPlayersHint();
 
         return row;
     }
@@ -2578,10 +2601,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _actionInFlight = true;
         UpdateActionButtons();
         SetStatus($"正在请求加入 {FormatRoomName(room.RoomName, 24)}...");
+        CancellationTokenSource joinCancellationSource = new();
+        ReplaceJoinCancellationSource(joinCancellationSource);
         ShowProgressDialog(
             "正在加入房间",
             $"正在向大厅申请进入 {FormatRoomName(room.RoomName, 24)}",
-            "连接较慢时请稍候，期间不要重复点击按钮。");
+            "连接较慢时请稍候，期间不要重复点击按钮。",
+            allowCancel: true);
 
         try
         {
@@ -2594,35 +2620,52 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                 ModVersion = LanConnectBuildInfo.GetModVersion(),
                 ModList = LanConnectBuildInfo.GetModList(),
                 DesiredSavePlayerNetId = string.IsNullOrWhiteSpace(desiredSavePlayerNetId) ? null : desiredSavePlayerNetId
-            });
+            }, joinCancellationSource.Token);
 
             UpdateProgressDialog(
                 "正在建立联机连接",
                 $"大厅已响应，正在连接 {FormatRoomName(room.RoomName, 24)}",
-                "如果房主在外网环境，首次握手通常会比刷新大厅更慢。");
+                "如果房主在外网环境，首次握手通常会比刷新大厅更慢。",
+                allowCancel: true);
 
             LobbyJoinAttemptResult joinResult = await LanConnectLobbyJoinFlow.JoinAsync(
                 _stack,
                 _loadingOverlay,
                 joinResponse,
                 desiredSavePlayerNetId,
-                message => UpdateProgressDialog("正在建立联机连接", message));
+                joinCancellationSource.Token,
+                message => UpdateProgressDialog("正在建立联机连接", message, allowCancel: true));
             if (joinResult.Joined)
             {
-                UpdateProgressDialog("正在进入房间", $"已连接 {FormatRoomName(room.RoomName, 24)}，正在切换到联机界面");
+                UpdateProgressDialog("正在进入房间", $"已连接 {FormatRoomName(room.RoomName, 24)}，正在切换到联机界面", allowCancel: false);
                 SetStatus($"已加入 {FormatRoomName(room.RoomName, 24)}。");
                 HideOverlay();
                 return true;
             }
 
+            if (joinResult.Canceled)
+            {
+                LanConnectProtocolProfiles.ResetActiveProfile("join_canceled_overlay");
+                SetStatus($"已取消加入 {FormatRoomName(room.RoomName, 24)}。");
+                return false;
+            }
+
             string failureMessage = string.IsNullOrWhiteSpace(joinResult.FailureMessage)
                 ? "请查看错误弹窗或连接日志。"
                 : joinResult.FailureMessage;
+            LanConnectProtocolProfiles.ResetActiveProfile("join_failed_overlay");
             SetStatus($"加入 {FormatRoomName(room.RoomName, 24)} 失败：{failureMessage}");
+            return false;
+        }
+        catch (OperationCanceledException) when (joinCancellationSource.IsCancellationRequested)
+        {
+            LanConnectProtocolProfiles.ResetActiveProfile("join_canceled_request");
+            SetStatus($"已取消加入 {FormatRoomName(room.RoomName, 24)}。");
             return false;
         }
         catch (LobbyServiceException ex)
         {
+            LanConnectProtocolProfiles.ResetActiveProfile("join_service_exception");
             string message = DescribeJoinFailure(ex);
             if (_resumeSlotDialogContainer != null && _resumeSlotDialogContainer.Visible)
             {
@@ -2641,11 +2684,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
         catch (Exception ex)
         {
+            LanConnectProtocolProfiles.ResetActiveProfile("join_exception");
             SetStatus($"加入房间失败：{DescribeGenericJoinFailure(ex)}");
             return false;
         }
         finally
         {
+            ClearJoinCancellationSource(joinCancellationSource);
             HideProgressDialog();
             _actionInFlight = false;
             UpdateActionButtons();
@@ -2875,6 +2920,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             int effectiveMax = Math.Clamp(LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(), LanConnectConstants.MinMaxPlayers, 8);
             _maxPlayersSpinBox.Value = effectiveMax;
+            UpdateMaxPlayersHint();
         }
         ShowCreateDialogError(string.Empty, visible: false);
         _createDialogContainer.Visible = true;
@@ -3989,24 +4035,31 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return shell;
     }
 
-    private void ShowProgressDialog(string title, string message, string? hint = null)
+    private void ShowProgressDialog(string title, string message, string? hint = null, bool allowCancel = false)
     {
         if (_progressDialogContainer == null)
         {
             return;
         }
 
+        _progressDialogVisibleDuration = 0d;
+        ConfigureProgressDialogCancel(allowCancel);
         SetProgressDialogContent(title, message, hint);
         _progressDialogContainer.Visible = true;
         _progressDialogContainer.MoveToFront();
         GD.Print($"sts2_lan_connect overlay: progress dialog shown -> {title} | {message}");
     }
 
-    private void UpdateProgressDialog(string title, string message, string? hint = null)
+    private void UpdateProgressDialog(string title, string message, string? hint = null, bool? allowCancel = null)
     {
         if (_progressDialogContainer == null || !_progressDialogContainer.Visible)
         {
             return;
+        }
+
+        if (allowCancel.HasValue)
+        {
+            ConfigureProgressDialogCancel(allowCancel.Value);
         }
 
         SetProgressDialogContent(title, message, hint);
@@ -4023,6 +4076,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _progressDialogBaseMessage = string.Empty;
         _progressDialogTick = 0d;
         _progressDialogDotCount = 0;
+        _progressDialogVisibleDuration = 0d;
+        ConfigureProgressDialogCancel(false);
     }
 
     private void SetProgressDialogContent(string title, string message, string? hint)
@@ -4048,6 +4103,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
+        _progressDialogVisibleDuration += delta;
+        RefreshProgressDialogCancelButton();
         _progressDialogTick += delta;
         if (_progressDialogTick < 0.45d)
         {
@@ -4068,6 +4125,76 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         string suffix = _progressDialogDotCount == 0 ? string.Empty : new string('.', _progressDialogDotCount);
         SetLabelText(_progressDialogMessage, _progressDialogBaseMessage + suffix);
+    }
+
+    private void UpdateMaxPlayersHint()
+    {
+        if (_maxPlayersHintLabel == null || _maxPlayersSpinBox == null)
+        {
+            return;
+        }
+
+        int selectedMaxPlayers = (int)_maxPlayersSpinBox.Value;
+        string message = selectedMaxPlayers <= LanConnectConstants.MinMaxPlayers
+            ? "4 人房会自动启用 0.2.2 兼容协议，可与 0.2.2 玩家共同游玩。"
+            : "5-8 人房仅支持 0.2.3+ 客户端，不兼容 0.2.2。";
+        SetLabelText(_maxPlayersHintLabel, message);
+    }
+
+    private void ReplaceJoinCancellationSource(CancellationTokenSource cancellationTokenSource)
+    {
+        _activeJoinCancellationSource?.Dispose();
+        _activeJoinCancellationSource = cancellationTokenSource;
+        RefreshProgressDialogCancelButton();
+    }
+
+    private void ClearJoinCancellationSource(CancellationTokenSource cancellationTokenSource)
+    {
+        if (!ReferenceEquals(_activeJoinCancellationSource, cancellationTokenSource))
+        {
+            cancellationTokenSource.Dispose();
+            return;
+        }
+
+        _activeJoinCancellationSource?.Dispose();
+        _activeJoinCancellationSource = null;
+        RefreshProgressDialogCancelButton();
+    }
+
+    private void CancelActiveJoinRequest()
+    {
+        if (_activeJoinCancellationSource == null || _activeJoinCancellationSource.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _activeJoinCancellationSource.Cancel();
+        ConfigureProgressDialogCancel(false);
+        UpdateProgressDialog(
+            "正在取消连接",
+            "正在取消当前联机连接",
+            "正在通知房主停止本次连接申请，请稍候。",
+            allowCancel: false);
+    }
+
+    private void ConfigureProgressDialogCancel(bool allowCancel)
+    {
+        _progressDialogAllowCancel = allowCancel;
+        RefreshProgressDialogCancelButton();
+    }
+
+    private void RefreshProgressDialogCancelButton()
+    {
+        if (_progressDialogCancelButton == null)
+        {
+            return;
+        }
+
+        bool hasCancelableJoin = _progressDialogAllowCancel
+            && _activeJoinCancellationSource != null
+            && !_activeJoinCancellationSource.IsCancellationRequested
+            && _progressDialogVisibleDuration >= JoinCancelRevealDelaySeconds;
+        _progressDialogCancelButton.Visible = hasCancelableJoin;
     }
 
     private void ShowCreateDialogError(string message, bool visible = true)
@@ -4352,6 +4479,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                && left.MaxPlayers == right.MaxPlayers
                && string.Equals(left.Version, right.Version, StringComparison.Ordinal)
                && string.Equals(left.ModVersion, right.ModVersion, StringComparison.Ordinal)
+               && string.Equals(left.ProtocolProfile, right.ProtocolProfile, StringComparison.Ordinal)
                && string.Equals(left.RelayState, right.RelayState, StringComparison.Ordinal)
                && AreSavedRunsEquivalent(left.SavedRun, right.SavedRun);
     }

@@ -38,6 +38,12 @@ internal static class LanConnectSerializationPatches
                 && m.GetParameters().Length == 1
                 && m.GetParameters()[0].ParameterType == typeof(int));
 
+    private static readonly MethodInfo? GetActiveSlotIdBitWidth =
+        AccessTools.Method(typeof(LanConnectProtocolProfiles), nameof(LanConnectProtocolProfiles.GetActiveSlotIdBitWidth));
+
+    private static readonly MethodInfo? GetActiveLobbyListBitWidth =
+        AccessTools.Method(typeof(LanConnectProtocolProfiles), nameof(LanConnectProtocolProfiles.GetActiveLobbyListBitWidth));
+
     public static void Apply()
     {
         if (_applied)
@@ -59,8 +65,7 @@ internal static class LanConnectSerializationPatches
 
         Log.Info(
             $"sts2_lan_connect serialization: patches applied={_patchedCount}, failed={_failedCount}. " +
-            $"slotId={LanConnectConstants.VanillaSlotIdBits}->{LanConnectConstants.ExtendedSlotIdBits}, " +
-            $"lobbyList={LanConnectConstants.VanillaLobbyListBits}->{LanConnectConstants.ExtendedLobbyListBits}");
+            $"activeProfile={LanConnectProtocolProfiles.GetActiveProfile()}, slotId=dynamic, lobbyList=dynamic");
     }
 
     private static void TrySafePatch(MethodInfo? target, string transpilerName, string label)
@@ -124,39 +129,45 @@ internal static class LanConnectSerializationPatches
     // ReSharper disable UnusedMember.Local — invoked by Harmony via reflection
 
     private static IEnumerable<CodeInstruction> TranspileLobbyPlayerSerialize(IEnumerable<CodeInstruction> instructions)
-        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCall(instructions,
+        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCallWithProvider(instructions,
             WriteIntWithBits,
-            LanConnectConstants.VanillaSlotIdBits, LanConnectConstants.ExtendedSlotIdBits,
+            LanConnectConstants.VanillaSlotIdBits,
+            GetActiveSlotIdBitWidth,
             nameof(TranspileLobbyPlayerSerialize));
 
     private static IEnumerable<CodeInstruction> TranspileLobbyPlayerDeserialize(IEnumerable<CodeInstruction> instructions)
-        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCall(instructions,
+        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCallWithProvider(instructions,
             ReadIntWithBits,
-            LanConnectConstants.VanillaSlotIdBits, LanConnectConstants.ExtendedSlotIdBits,
+            LanConnectConstants.VanillaSlotIdBits,
+            GetActiveSlotIdBitWidth,
             nameof(TranspileLobbyPlayerDeserialize));
 
     private static IEnumerable<CodeInstruction> TranspileJoinResponseSerialize(IEnumerable<CodeInstruction> instructions)
-        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCall(instructions,
+        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCallWithProvider(instructions,
             WriteListWithBits,
-            LanConnectConstants.VanillaLobbyListBits, LanConnectConstants.ExtendedLobbyListBits,
+            LanConnectConstants.VanillaLobbyListBits,
+            GetActiveLobbyListBitWidth,
             nameof(TranspileJoinResponseSerialize));
 
     private static IEnumerable<CodeInstruction> TranspileJoinResponseDeserialize(IEnumerable<CodeInstruction> instructions)
-        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCall(instructions,
+        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCallWithProvider(instructions,
             ReadListWithBits,
-            LanConnectConstants.VanillaLobbyListBits, LanConnectConstants.ExtendedLobbyListBits,
+            LanConnectConstants.VanillaLobbyListBits,
+            GetActiveLobbyListBitWidth,
             nameof(TranspileJoinResponseDeserialize));
 
     private static IEnumerable<CodeInstruction> TranspileBeginRunSerialize(IEnumerable<CodeInstruction> instructions)
-        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCall(instructions,
+        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCallWithProvider(instructions,
             WriteListWithBits,
-            LanConnectConstants.VanillaLobbyListBits, LanConnectConstants.ExtendedLobbyListBits,
+            LanConnectConstants.VanillaLobbyListBits,
+            GetActiveLobbyListBitWidth,
             nameof(TranspileBeginRunSerialize));
 
     private static IEnumerable<CodeInstruction> TranspileBeginRunDeserialize(IEnumerable<CodeInstruction> instructions)
-        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCall(instructions,
+        => LanConnectTranspilerUtils.ReplaceBitWidthBeforeCallWithProvider(instructions,
             ReadListWithBits,
-            LanConnectConstants.VanillaLobbyListBits, LanConnectConstants.ExtendedLobbyListBits,
+            LanConnectConstants.VanillaLobbyListBits,
+            GetActiveLobbyListBitWidth,
             nameof(TranspileBeginRunDeserialize));
 
     // ReSharper restore UnusedMember.Local

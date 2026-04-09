@@ -25,6 +25,8 @@ internal sealed class LobbyRoomSummary
 
     public string ModVersion { get; set; } = string.Empty;
 
+    public string ProtocolProfile { get; set; } = LanConnectProtocolProfiles.Extended8p;
+
     public string RelayState { get; set; } = "disabled";
 
     public DateTimeOffset CreatedAt { get; set; }
@@ -163,6 +165,8 @@ internal sealed class LobbyCreateRoomRequest
     public string ModVersion { get; set; } = string.Empty;
 
     public List<string> ModList { get; set; } = new();
+
+    public string? ProtocolProfile { get; set; }
 
     public int MaxPlayers { get; set; } = LanConnectConstants.DefaultMaxPlayers;
 

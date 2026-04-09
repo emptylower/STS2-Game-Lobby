@@ -56,6 +56,51 @@ internal static class LanConnectTranspilerUtils
         return list;
     }
 
+    internal static IEnumerable<CodeInstruction> ReplaceBitWidthBeforeCallWithProvider(
+        IEnumerable<CodeInstruction> instructions,
+        MethodInfo? targetMethod,
+        int expectedBitWidth,
+        MethodInfo? providerMethod,
+        string patchName)
+    {
+        MethodInfo resolvedTargetMethod = targetMethod
+            ?? throw new InvalidOperationException($"{patchName}: target method is null.");
+        MethodInfo resolvedProviderMethod = providerMethod
+            ?? throw new InvalidOperationException($"{patchName}: provider method is null.");
+
+        List<CodeInstruction> list = new(instructions);
+        int count = 0;
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (!IsCallToMethod(list[i], resolvedTargetMethod))
+            {
+                continue;
+            }
+
+            int loadIndex = FindBitWidthLoadIndex(list, i, expectedBitWidth);
+            if (loadIndex < 0)
+            {
+                continue;
+            }
+
+            list[loadIndex] = CloneWithMethodCall(list[loadIndex], resolvedProviderMethod);
+            count++;
+        }
+
+        if (count == 0)
+        {
+            Log.Warn($"sts2_lan_connect transpiler [{patchName}]: no bit-width operand replaced for method {resolvedTargetMethod.Name}");
+        }
+        else
+        {
+            Log.Info(
+                $"sts2_lan_connect transpiler [{patchName}]: replaced {count} bit-width operand(s) {expectedBitWidth} -> dynamic {resolvedProviderMethod.Name} for {resolvedTargetMethod.Name}");
+        }
+
+        return list;
+    }
+
     private static int FindBitWidthLoadIndex(IReadOnlyList<CodeInstruction> instructions, int callIndex, int expectedValue)
     {
         int searchStart = Math.Max(0, callIndex - 8);
@@ -91,6 +136,14 @@ internal static class LanConnectTranspilerUtils
     private static CodeInstruction CloneWithNewIntOperand(CodeInstruction source, int newValue)
     {
         CodeInstruction result = new(OpCodes.Ldc_I4, newValue);
+        result.labels.AddRange(source.labels);
+        result.blocks.AddRange(source.blocks);
+        return result;
+    }
+
+    private static CodeInstruction CloneWithMethodCall(CodeInstruction source, MethodInfo providerMethod)
+    {
+        CodeInstruction result = new(OpCodes.Call, providerMethod);
         result.labels.AddRange(source.labels);
         result.blocks.AddRange(source.blocks);
         return result;

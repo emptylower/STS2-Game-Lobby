@@ -1,31 +1,40 @@
-using System;
-using System.Reflection;
+using System.Threading.Tasks;
+using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.GameActions.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
+using MegaCrit.Sts2.Core.Runs;
 
 namespace Sts2LanConnect.Scripts;
 
-internal static class SkipRelicActionFactory
+internal sealed class LanConnectSkipRelicGameAction : GameAction
 {
-    private static readonly ConstructorInfo? PickRelicCtor =
-        typeof(NetPickRelicAction).GetConstructor(new[] { typeof(Player), typeof(int) });
+    private readonly Player _player;
 
-    internal static GameAction CreateSkipAction(Player player)
+    public LanConnectSkipRelicGameAction(Player player)
     {
-        if (PickRelicCtor != null)
-        {
-            return (GameAction)PickRelicCtor.Invoke(new object[] { player, -1 });
-        }
-
-        throw new InvalidOperationException("Cannot create NetPickRelicAction via reflection.");
+        _player = player;
     }
+
+    public override ulong OwnerId => _player.NetId;
+
+    public override GameActionType ActionType => GameActionType.NonCombat;
+
+    protected override Task ExecuteAction()
+    {
+        RunManager.Instance.TreasureRoomRelicSynchronizer.OnPicked(_player, -1);
+        return Task.CompletedTask;
+    }
+
+    public override INetAction ToNetAction() => new LanConnectSkipRelicNetAction();
+
+    public override string ToString() => $"LanConnectSkipRelicAction for player {_player.NetId}";
 }
 
 public struct LanConnectSkipRelicNetAction : INetAction, IPacketSerializable
 {
-    public readonly GameAction ToGameAction(Player player) => SkipRelicActionFactory.CreateSkipAction(player);
+    public readonly GameAction ToGameAction(Player player) => new LanConnectSkipRelicGameAction(player);
 
     public readonly void Serialize(PacketWriter writer)
     {
