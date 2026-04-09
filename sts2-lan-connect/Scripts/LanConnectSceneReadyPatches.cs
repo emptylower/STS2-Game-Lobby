@@ -25,25 +25,29 @@ internal static class LanConnectSceneReadyPatches
         }
 
         _applied = true;
+        bool isAndroid = OperatingSystem.IsAndroid();
 
         TryPatchReady(typeof(NMultiplayerHostSubmenu), nameof(OnHostSubmenuReady), "NMultiplayerHostSubmenu._Ready");
         TryPatchReady(typeof(NJoinFriendScreen), nameof(OnJoinFriendScreenReady), "NJoinFriendScreen._Ready");
-        TryPatchReady(typeof(NMultiplayerSubmenu), nameof(OnMultiplayerSubmenuReady), "NMultiplayerSubmenu._Ready");
         TryPatchReady(typeof(NMultiplayerLoadGameScreen), nameof(OnMultiplayerLoadScreenReady), "NMultiplayerLoadGameScreen._Ready");
         TryPatchReady(typeof(NCustomRunLoadScreen), nameof(OnCustomRunLoadScreenReady), "NCustomRunLoadScreen._Ready");
-        TryPatchReady(typeof(NCharacterSelectScreen), nameof(OnCharacterSelectReady), "NCharacterSelectScreen._Ready");
         TryPatchReady(typeof(NPauseMenu), nameof(OnPauseMenuReady), "NPauseMenu._Ready");
         TryPatchReady(typeof(NRemoteLobbyPlayer), nameof(OnRemoteLobbyPlayerReady), "NRemoteLobbyPlayer._Ready");
 
-        if (OperatingSystem.IsAndroid())
+        if (isAndroid)
         {
             // On Android, patching this screen during mod initialization triggers the game's static ctor too
             // early and poisons later startup. Install the hook lazily once the menu UI is already alive.
             _dailyRunReadyPatchPending = true;
             Log.Info("sts2_lan_connect scene_ready: deferring NDailyRunLoadScreen._Ready patch on Android.");
+            Log.Info("sts2_lan_connect scene_ready: skipping NMultiplayerSubmenu._Ready patch on Android.");
+            Log.Info("sts2_lan_connect scene_ready: skipping NCharacterSelectScreen._Ready patch on Android.");
+            TryPatchMainMenuSubmenuLookup();
             return;
         }
 
+        TryPatchReady(typeof(NMultiplayerSubmenu), nameof(OnMultiplayerSubmenuReady), "NMultiplayerSubmenu._Ready");
+        TryPatchReady(typeof(NCharacterSelectScreen), nameof(OnCharacterSelectReady), "NCharacterSelectScreen._Ready");
         TryPatchReady(typeof(NDailyRunLoadScreen), nameof(OnDailyRunLoadScreenReady), "NDailyRunLoadScreen._Ready");
     }
 
@@ -68,6 +72,28 @@ internal static class LanConnectSceneReadyPatches
         }
     }
 
+    private static void TryPatchMainMenuSubmenuLookup()
+    {
+        try
+        {
+            MethodInfo? target = AccessTools.DeclaredMethod(
+                typeof(NMainMenuSubmenuStack),
+                nameof(NMainMenuSubmenuStack.GetSubmenuType),
+                new[] { typeof(Type) });
+            if (target == null)
+            {
+                Log.Warn("sts2_lan_connect scene_ready: target method not found, skipping patch NMainMenuSubmenuStack.GetSubmenuType(Type)");
+                return;
+            }
+
+            HarmonyInstance.Patch(target, postfix: new HarmonyMethod(typeof(LanConnectSceneReadyPatches), nameof(OnMainMenuSubmenuResolved)));
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"sts2_lan_connect scene_ready: failed to patch NMainMenuSubmenuStack.GetSubmenuType(Type): {ex}");
+        }
+    }
+
     private static void EnsureDeferredAndroidPatches()
     {
         if (!_dailyRunReadyPatchPending)
@@ -82,6 +108,17 @@ internal static class LanConnectSceneReadyPatches
 
         _dailyRunReadyPatchPending = false;
         Log.Info("sts2_lan_connect scene_ready: applied deferred NDailyRunLoadScreen._Ready patch.");
+    }
+
+    private static void OnMainMenuSubmenuResolved(Type __0, NSubmenu __result)
+    {
+        EnsureDeferredAndroidPatches();
+        if (__0 != typeof(NMultiplayerSubmenu) || __result is not NMultiplayerSubmenu submenu)
+        {
+            return;
+        }
+
+        MultiplayerSubmenuPatches.ScheduleEnsureLobbyEntry(submenu, "main_menu_stack_get_submenu_type");
     }
 
     private static void OnHostSubmenuReady(NMultiplayerHostSubmenu __instance)

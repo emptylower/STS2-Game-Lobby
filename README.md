@@ -20,6 +20,8 @@
 
 - 客户端运行时安装从常驻扫描改为场景 `_Ready` hook，不再每 `0.25s` 扫描节点树；单人和移动端性能/耗电显著改善
 - 修复部分安卓机型启动阶段的致命错误：`NDailyRunLoadScreen._Ready` 改为主菜单界面 ready 后再延后安装 Harmony patch，避免静态初始化在模组启动时被提前触发
+- 修复安卓端成功进入主菜单后打开多人页面 / 游戏大厅时报 `MethodAccessException` 的问题：不再在 Android 上直接 patch `NMultiplayerSubmenu._Ready`，改为在菜单栈拿到子页面实例后再 deferred 注入大厅入口
+- 安卓端房主准备页面的邀请码按钮也不再依赖 `NCharacterSelectScreen._Ready` patch，改为页面入栈后再延后安装，避免出现“大厅按钮只装上一半”的异常
 - 大厅房间现在按房间级协议档位工作：`4` 人房自动启用 `legacy_4p` 用于兼容 `0.2.2`，`5-8` 人房保持 `extended_8p`，仅支持 `0.2.3+`
 - 加入进度弹窗支持超时后手动取消；检测到协议/兼容性错误时会提前停止无意义重试
 - 已同步上游 `sts2-RMP-Mods 0.0.6` 的两项关键修复：遗物房 `skip` 改为独立网络动作；外部 RMP `0.0.6` 的人数配置读取兼容 `internal ProtocolConfig`

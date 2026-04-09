@@ -8,6 +8,45 @@ namespace Sts2LanConnect.Scripts;
 internal static class LanConnectInviteButtonPatch
 {
     private const string InviteButtonName = "LanConnectLobbyInviteButton";
+    private const string HookedMetaKey = "sts2_lan_connect_invite_button_hooks";
+
+    internal static void ScheduleEnsureInviteButton(NCharacterSelectScreen screen, string source)
+    {
+        if (!GodotObject.IsInstanceValid(screen))
+        {
+            return;
+        }
+
+        if (!screen.HasMeta(HookedMetaKey))
+        {
+            screen.SetMeta(HookedMetaKey, true);
+            screen.Connect(Node.SignalName.TreeEntered, Callable.From(() => QueueEnsureInviteButton(screen, "tree_entered")));
+            screen.Connect(Node.SignalName.Ready, Callable.From(() => QueueEnsureInviteButton(screen, "ready")));
+            screen.Connect(CanvasItem.SignalName.VisibilityChanged, Callable.From(() => QueueEnsureInviteButton(screen, "visibility_changed")));
+        }
+
+        QueueEnsureInviteButton(screen, source);
+    }
+
+    private static void QueueEnsureInviteButton(NCharacterSelectScreen screen, string source)
+    {
+        Callable.From(() => TryEnsureInviteButton(screen, source)).CallDeferred();
+    }
+
+    private static void TryEnsureInviteButton(NCharacterSelectScreen screen, string source)
+    {
+        if (!GodotObject.IsInstanceValid(screen) || !screen.IsInsideTree() || !screen.IsNodeReady())
+        {
+            return;
+        }
+
+        bool hadButton = screen.FindChild(InviteButtonName, recursive: true, owned: false) is Button;
+        EnsureInviteButton(screen);
+        if (!hadButton && screen.FindChild(InviteButtonName, recursive: true, owned: false) is Button)
+        {
+            Log.Info($"sts2_lan_connect: invite button ensured via {source}");
+        }
+    }
 
     internal static void EnsureInviteButton(NCharacterSelectScreen screen)
     {

@@ -51,6 +51,16 @@ die() {
   exit 1
 }
 
+read_default_value() {
+  local key="$1"
+
+  if [[ ! -f "$LOCAL_DEFAULTS_FILE" ]]; then
+    return
+  fi
+
+  sed -nE "s/^[[:space:]]*\"$key\":[[:space:]]*\"([^\"]*)\".*/\1/p" "$LOCAL_DEFAULTS_FILE" | head -n 1
+}
+
 cleanup() {
   if [[ -d "$BUILD_LOCK_DIR" ]]; then
     rmdir "$BUILD_LOCK_DIR" >/dev/null 2>&1 || true
@@ -64,8 +74,18 @@ write_lobby_defaults() {
   local registry_base_url="${STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL:-}"
   local compatibility_profile="${STS2_LOBBY_COMPATIBILITY_PROFILE:-}"
   local connection_strategy="${STS2_LOBBY_CONNECTION_STRATEGY:-}"
+  local default_registry_base_url
+  local default_compatibility_profile
+  local default_connection_strategy
 
   if [[ -n "$base_url" ]]; then
+    default_registry_base_url="$(read_default_value "registryBaseUrl")"
+    default_compatibility_profile="$(read_default_value "compatibilityProfile")"
+    default_connection_strategy="$(read_default_value "connectionStrategy")"
+    registry_base_url="${registry_base_url:-$default_registry_base_url}"
+    compatibility_profile="${compatibility_profile:-${default_compatibility_profile:-test_relaxed}}"
+    connection_strategy="${connection_strategy:-${default_connection_strategy:-relay-only}}"
+
     if [[ -z "$ws_url" ]]; then
       case "$base_url" in
         https://*) ws_url="wss://${base_url#https://}" ;;
@@ -83,8 +103,8 @@ write_lobby_defaults() {
   "baseUrl": "$base_url",
   "registryBaseUrl": "${registry_base_url:-}",
   "wsUrl": "$ws_url",
-  "compatibilityProfile": "${compatibility_profile:-test_relaxed}",
-  "connectionStrategy": "${connection_strategy:-relay-only}"
+  "compatibilityProfile": "$compatibility_profile",
+  "connectionStrategy": "$connection_strategy"
 }
 EOF
     return

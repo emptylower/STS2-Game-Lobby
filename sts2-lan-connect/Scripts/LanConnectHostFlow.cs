@@ -295,6 +295,10 @@ internal static class LanConnectHostFlow
                 NCharacterSelectScreen submenu = stack.GetSubmenuType<NCharacterSelectScreen>();
                 submenu.InitializeMultiplayerAsHost(netService, maxPlayers);
                 stack.Push(submenu);
+                if (OperatingSystem.IsAndroid())
+                {
+                    LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(submenu, "push_host_screen");
+                }
                 break;
             }
             case GameMode.Daily:
