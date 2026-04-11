@@ -63,6 +63,27 @@ test("createRoom infers legacy_4p protocol profile for old 0.2.2 four-player roo
   assert.equal(joined.room.protocolProfile, "legacy_4p");
 });
 
+test("createRoom infers legacy_4p protocol profile for prefixed 0.2.2 mod versions", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = store.createRoom(
+    {
+      roomName: "跨端旧版本四人房",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "iOS.0.2.2",
+      modList: ["sts2_lan_connect"],
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+      },
+    },
+    "203.0.113.10",
+  );
+
+  assert.equal(created.room.protocolProfile, "legacy_4p");
+});
+
 test("createRoom preserves explicit protocol profile and echoes it in joins", () => {
   const store = new LobbyStore(baseConfig);
   const created = store.createRoom(

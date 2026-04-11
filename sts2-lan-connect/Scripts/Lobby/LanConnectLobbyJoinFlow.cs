@@ -57,7 +57,7 @@ internal static class LanConnectLobbyJoinFlow
 
         try
         {
-            LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, "join_room");
+            LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, joinResponse.Room.MaxPlayers, "join_room");
             ulong netId = ResolveJoinNetId(joinResponse, desiredSavePlayerNetId);
             for (int index = 0; index < candidates.Count; index++)
             {

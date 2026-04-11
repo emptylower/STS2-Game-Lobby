@@ -12,6 +12,9 @@ internal static class LanConnectConstants
 
     public const int VanillaSlotIdBits = 2;
 
+    // Historical 0.2.2 releases used this slot bit-width on the wire.
+    public const int Legacy4pSlotIdBits = 8;
+
     public const int ExtendedSlotIdBits = 4;
 
     public const int VanillaLobbyListBits = 3;

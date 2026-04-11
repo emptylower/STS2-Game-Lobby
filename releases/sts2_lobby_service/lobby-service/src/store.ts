@@ -684,11 +684,14 @@ function normalizeComparableVersion(value: string) {
     return trimmed;
   }
 
-  const segments = trimmed.split(".");
-  if (segments.some((segment) => !/^\d+$/.test(segment))) {
+  const comparableSource = /^\d+(?:\.\d+)*$/.test(trimmed)
+    ? trimmed
+    : extractEmbeddedComparableVersion(trimmed);
+  if (!comparableSource) {
     return trimmed;
   }
 
+  const segments = comparableSource.split(".");
   const normalized = segments.map((segment) => String(Number.parseInt(segment, 10)));
   let end = normalized.length - 1;
   while (end > 0 && normalized[end] === "0") {
@@ -696,6 +699,11 @@ function normalizeComparableVersion(value: string) {
   }
 
   return normalized.slice(0, end + 1).join(".");
+}
+
+function extractEmbeddedComparableVersion(value: string) {
+  const match = value.match(/\d+(?:\.\d+)+/);
+  return match?.[0];
 }
 
 function compareComparableVersions(left: string, right: string) {

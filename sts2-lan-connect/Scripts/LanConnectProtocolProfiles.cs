@@ -17,6 +17,7 @@ internal static class LanConnectProtocolProfiles
     };
 
     private static string _activeProfile = Extended8p;
+    private static int _activeMaxPlayers = LanConnectConstants.DefaultMaxPlayers;
 
     public static string DefaultProfile => Extended8p;
 
@@ -85,27 +86,42 @@ internal static class LanConnectProtocolProfiles
         return _activeProfile;
     }
 
+    public static int GetActiveMaxPlayers()
+    {
+        return _activeMaxPlayers;
+    }
+
     public static void SetActiveProfile(string? value, string source)
     {
+        SetActiveProfile(value, null, source);
+    }
+
+    public static void SetActiveProfile(string? value, int? maxPlayers, string source)
+    {
         string normalized = Normalize(value);
-        if (string.Equals(_activeProfile, normalized, StringComparison.Ordinal))
+        int resolvedMaxPlayers = ResolveActiveMaxPlayers(normalized, maxPlayers);
+        if (string.Equals(_activeProfile, normalized, StringComparison.Ordinal)
+            && _activeMaxPlayers == resolvedMaxPlayers)
         {
             return;
         }
 
         _activeProfile = normalized;
-        Log.Info($"sts2_lan_connect protocol profile -> {_activeProfile} source={source}");
+        _activeMaxPlayers = resolvedMaxPlayers;
+        Log.Info(
+            $"sts2_lan_connect protocol profile -> {_activeProfile} maxPlayers={_activeMaxPlayers} " +
+            $"slotBits={GetActiveSlotIdBitWidth()} lobbyListBits={GetActiveLobbyListBitWidth()} source={source}");
     }
 
     public static void ResetActiveProfile(string source)
     {
-        SetActiveProfile(DefaultProfile, source);
+        SetActiveProfile(DefaultProfile, LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(), source);
     }
 
     public static int GetActiveSlotIdBitWidth()
     {
         return IsLegacy(_activeProfile)
-            ? LanConnectConstants.VanillaSlotIdBits
+            ? LanConnectConstants.Legacy4pSlotIdBits
             : LanConnectConstants.ExtendedSlotIdBits;
     }
 
@@ -124,5 +140,19 @@ internal static class LanConnectProtocolProfiles
         }
 
         return parsed <= LegacyCompatibleMaxVersion;
+    }
+
+    private static int ResolveActiveMaxPlayers(string normalizedProfile, int? maxPlayers)
+    {
+        int fallback = maxPlayers.HasValue
+            ? Math.Clamp(maxPlayers.Value, LanConnectConstants.MinMaxPlayers, LanConnectConstants.MaxMaxPlayers)
+            : LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
+
+        if (string.Equals(normalizedProfile, Legacy4p, StringComparison.Ordinal))
+        {
+            return LanConnectConstants.MinMaxPlayers;
+        }
+
+        return Math.Clamp(fallback, LanConnectConstants.MinMaxPlayers, LanConnectConstants.MaxMaxPlayers);
     }
 }

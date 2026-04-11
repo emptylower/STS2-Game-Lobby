@@ -21,7 +21,8 @@ internal static class LanConnectMultiplayerCompatibility
             LanConnectSerializationPatches.Apply();
 
             Log.Info(
-                $"sts2_lan_connect multiplayer compatibility ready. effectiveMaxPlayers={GetEffectiveMaxPlayers()}");
+                $"sts2_lan_connect multiplayer compatibility ready. effectiveMaxPlayers={GetEffectiveMaxPlayers()} " +
+                $"legacy4pSlotBits={LanConnectConstants.Legacy4pSlotIdBits}");
         }
         catch (Exception ex)
         {

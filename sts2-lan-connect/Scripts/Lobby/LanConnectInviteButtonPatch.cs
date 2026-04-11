@@ -1,7 +1,11 @@
 using System;
+using System.Reflection;
 using Godot;
+using HarmonyLib;
 using MegaCrit.Sts2.Core.Logging;
+using MegaCrit.Sts2.Core.Nodes.Multiplayer;
 using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
+using MegaCrit.Sts2.addons.mega_text;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -9,6 +13,47 @@ internal static class LanConnectInviteButtonPatch
 {
     private const string InviteButtonName = "LanConnectLobbyInviteButton";
     private const string HookedMetaKey = "sts2_lan_connect_invite_button_hooks";
+    private const string NativeInviteManagedMetaKey = "sts2_lan_connect_native_invite_button_managed";
+    private static readonly Harmony NativeInviteHarmony = new("sts2_lan_connect.invite_button");
+    private static bool _nativeInvitePatched;
+
+    internal static void ApplyNativeInvitePatches()
+    {
+        if (_nativeInvitePatched)
+        {
+            return;
+        }
+
+        _nativeInvitePatched = true;
+        TryPatch(
+            AccessTools.DeclaredMethod(typeof(NInvitePlayersButton), "UpdateVisibility"),
+            prefix: null,
+            postfix: new HarmonyMethod(typeof(LanConnectInviteButtonPatch), nameof(OnNativeInviteUpdateVisibilityPostfix)),
+            "NInvitePlayersButton.UpdateVisibility");
+        TryPatch(
+            AccessTools.DeclaredMethod(typeof(NInvitePlayersButton), "OnRelease"),
+            prefix: new HarmonyMethod(typeof(LanConnectInviteButtonPatch), nameof(OnNativeInviteReleasePrefix)),
+            postfix: null,
+            "NInvitePlayersButton.OnRelease");
+    }
+
+    private static void TryPatch(MethodInfo? target, HarmonyMethod? prefix, HarmonyMethod? postfix, string label)
+    {
+        if (target == null)
+        {
+            Log.Warn($"sts2_lan_connect invite_button: target method not found, skipping patch {label}");
+            return;
+        }
+
+        try
+        {
+            NativeInviteHarmony.Patch(target, prefix: prefix, postfix: postfix);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"sts2_lan_connect invite_button: failed to patch {label}: {ex}");
+        }
+    }
 
     internal static void ScheduleEnsureInviteButton(NCharacterSelectScreen screen, string source)
     {
@@ -40,9 +85,9 @@ internal static class LanConnectInviteButtonPatch
             return;
         }
 
-        bool hadButton = screen.FindChild(InviteButtonName, recursive: true, owned: false) is Button;
+        bool hadButton = HasManagedLobbyInviteButton(screen);
         EnsureInviteButton(screen);
-        if (!hadButton && screen.FindChild(InviteButtonName, recursive: true, owned: false) is Button)
+        if (!hadButton && HasManagedLobbyInviteButton(screen))
         {
             Log.Info($"sts2_lan_connect: invite button ensured via {source}");
         }
@@ -56,8 +101,8 @@ internal static class LanConnectInviteButtonPatch
         }
 
         bool isLobbyHost = LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true;
-
         Button? existing = screen.FindChild(InviteButtonName, recursive: true, owned: false) as Button;
+        NInvitePlayersButton? nativeInvite = FindNativeInviteButton(screen);
 
         if (!isLobbyHost)
         {
@@ -65,6 +110,24 @@ internal static class LanConnectInviteButtonPatch
             {
                 existing.Visible = false;
             }
+            if (nativeInvite != null && nativeInvite.HasMeta(NativeInviteManagedMetaKey))
+            {
+                nativeInvite.Visible = false;
+                if (nativeInvite.GetParent() is CanvasItem container)
+                {
+                    container.Visible = false;
+                }
+            }
+            return;
+        }
+
+        if (nativeInvite != null)
+        {
+            if (existing != null)
+            {
+                existing.Visible = false;
+            }
+            RepurposeNativeInviteButton(nativeInvite);
             return;
         }
 
@@ -74,34 +137,31 @@ internal static class LanConnectInviteButtonPatch
             return;
         }
 
-        // Try to find the native invite button to clone its position/style
-        Button? nativeInvite = FindNativeInviteButton(screen);
-        if (nativeInvite != null)
-        {
-            // Native button exists — repurpose it
-            RepurposeNativeInviteButton(nativeInvite);
-            return;
-        }
-
-        // Native button not found — create our own in the same area
+        // Fallback: game scene layout changed or native invite control missing.
         CreateLobbyInviteButton(screen);
     }
 
-    private static Button? FindNativeInviteButton(NCharacterSelectScreen screen)
+    private static bool HasManagedLobbyInviteButton(NCharacterSelectScreen screen)
     {
-        return FindButtonByText(screen, "邀请");
+        if (screen.FindChild(InviteButtonName, recursive: true, owned: false) is Button)
+        {
+            return true;
+        }
+
+        NInvitePlayersButton? nativeInvite = FindNativeInviteButton(screen);
+        return nativeInvite != null && nativeInvite.HasMeta(NativeInviteManagedMetaKey);
     }
 
-    private static Button? FindButtonByText(Node root, string text)
+    private static NInvitePlayersButton? FindNativeInviteButton(Node root)
     {
-        if (root is Button button && button.Text.Contains(text, StringComparison.Ordinal))
+        if (root is NInvitePlayersButton nativeInvite)
         {
-            return button;
+            return nativeInvite;
         }
 
         foreach (Node child in root.GetChildren())
         {
-            Button? found = FindButtonByText(child, text);
+            NInvitePlayersButton? found = FindNativeInviteButton(child);
             if (found != null)
             {
                 return found;
@@ -111,23 +171,56 @@ internal static class LanConnectInviteButtonPatch
         return null;
     }
 
-    private static void RepurposeNativeInviteButton(Button nativeButton)
+    private static bool OnNativeInviteReleasePrefix(NInvitePlayersButton __instance)
     {
-        // Disconnect all existing signals and reconnect to our invite logic
-        nativeButton.Text = "大厅邀请";
-
-        // Remove existing Pressed connections by setting a meta flag
-        if (!nativeButton.HasMeta(InviteButtonName))
+        if (!ShouldInterceptNativeInviteRelease(__instance))
         {
-            nativeButton.SetMeta(InviteButtonName, true);
-
-            // We can't easily disconnect anonymous signal handlers.
-            // Instead, connect our handler and let it run — the native handler
-            // (Steam invite) will be a no-op when there's no Steam lobby session.
-            nativeButton.Pressed += OnLobbyInvitePressed;
+            return true;
         }
 
+        OnLobbyInvitePressed();
+        return false;
+    }
+
+    private static void OnNativeInviteUpdateVisibilityPostfix(NInvitePlayersButton __instance)
+    {
+        if (!ShouldForceNativeInviteVisible(__instance))
+        {
+            return;
+        }
+
+        RepurposeNativeInviteButton(__instance);
+    }
+
+    private static bool ShouldInterceptNativeInviteRelease(Node inviteButtonNode)
+    {
+        return GodotObject.IsInstanceValid(inviteButtonNode)
+               && inviteButtonNode.IsInsideTree()
+               && (inviteButtonNode.HasMeta(NativeInviteManagedMetaKey)
+                   || LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true);
+    }
+
+    private static bool ShouldForceNativeInviteVisible(Node inviteButtonNode)
+    {
+        return GodotObject.IsInstanceValid(inviteButtonNode)
+               && inviteButtonNode.IsInsideTree()
+               && LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true;
+    }
+
+    private static void RepurposeNativeInviteButton(NInvitePlayersButton nativeButton)
+    {
+        nativeButton.SetMeta(NativeInviteManagedMetaKey, true);
         nativeButton.Visible = true;
+        nativeButton.TooltipText = "生成邀请码并复制到剪贴板，发给朋友即可一键加入。";
+        if (nativeButton.GetParent() is Control container)
+        {
+            container.Visible = true;
+        }
+
+        if (nativeButton.GetNodeOrNull<MegaRichTextLabel>("Label") is { } label)
+        {
+            label.SetTextAutoSize("大厅邀请");
+        }
     }
 
     private static void CreateLobbyInviteButton(NCharacterSelectScreen screen)

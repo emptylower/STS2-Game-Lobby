@@ -130,7 +130,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         _activeSession = session;
         ResetChatState(registration.RoomId);
         _timeUntilHeartbeat = 0d;
-        LanConnectProtocolProfiles.SetActiveProfile(registration.Room.ProtocolProfile, "attach_hosted_room");
+        LanConnectProtocolProfiles.SetActiveProfile(registration.Room.ProtocolProfile, registration.Room.MaxPlayers, "attach_hosted_room");
         GD.Print(
             $"sts2_lan_connect lobby runtime: attached hosted room roomId={registration.RoomId}, roomName='{metadata.RoomName}', source={metadata.PublishSource}, saveKey={(metadata.SaveKey ?? "<none>")}");
         LanConnectSaveDiagnostics.LogNow("attach_hosted_room", $"roomId={registration.RoomId}, publishSource={metadata.PublishSource}, saveKey={(metadata.SaveKey ?? "<none>")}");
@@ -167,7 +167,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         session.SetEnvelopeHandler(envelope => OnJoinedClientControlEnvelope(session, envelope));
         _activeClientSession = session;
         ResetChatState(joinResponse.Room.RoomId);
-        LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, "attach_joined_client");
+        LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, joinResponse.Room.MaxPlayers, "attach_joined_client");
         LanConnectLobbyPlayerNameDirectory.BeginRoom(joinResponse.Room.RoomId);
         LanConnectLobbyPlayerNameDirectory.Upsert(joinResponse.Room.RoomId, netService.NetId, LanConnectConfig.GetEffectivePlayerDisplayName());
         netService.Disconnected += session.OnDisconnected;

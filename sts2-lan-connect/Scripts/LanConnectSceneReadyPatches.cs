@@ -25,6 +25,7 @@ internal static class LanConnectSceneReadyPatches
         }
 
         _applied = true;
+        LanConnectInviteButtonPatch.ApplyNativeInvitePatches();
         bool isAndroid = OperatingSystem.IsAndroid();
 
         TryPatchReady(typeof(NMultiplayerHostSubmenu), nameof(OnHostSubmenuReady), "NMultiplayerHostSubmenu._Ready");
@@ -159,7 +160,7 @@ internal static class LanConnectSceneReadyPatches
     private static void OnCharacterSelectReady(NCharacterSelectScreen __instance)
     {
         EnsureDeferredAndroidPatches();
-        LanConnectInviteButtonPatch.EnsureInviteButton(__instance);
+        LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(__instance, "ready_postfix");
     }
 
     private static void OnPauseMenuReady(NPauseMenu __instance)

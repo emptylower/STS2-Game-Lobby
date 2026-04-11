@@ -28,6 +28,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
     private string? _protocolMismatchSummary;
     private List<string>? _detectedMissingModsOnLocal;
     private List<string>? _detectedMissingModsOnHost;
+    private bool _protocolMismatchEscalated;
 
     public LanConnectLobbyManagedJoinFlow(string compatibilityProfile)
     {
@@ -237,6 +238,23 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             catch (Exception ex)
             {
                 CaptureJoinProtocolFailure(ex);
+                if (!_protocolMismatchEscalated &&
+                    !string.IsNullOrWhiteSpace(_protocolMismatchSummary) &&
+                    IsJoinHandshakeStillPending())
+                {
+                    _protocolMismatchEscalated = true;
+                    ClientConnectionFailedException protocolException = new(
+                        _protocolMismatchSummary,
+                        new NetErrorInfo(NetError.InternalError, selfInitiated: false));
+                    TrySetException(_connectCompletion, protocolException);
+                    TrySetException(_joinCompletion, protocolException);
+                    TrySetException(_loadJoinCompletion, protocolException);
+                    TrySetException(_rejoinCompletion, protocolException);
+                    if (NetService?.IsConnected == true)
+                    {
+                        NetService.Disconnect(NetError.InternalError);
+                    }
+                }
                 Log.Error(ex.ToString());
             }
 

@@ -44,7 +44,7 @@ internal static class LanConnectHostFlow
 
         try
         {
-            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, "start_lan_host");
+            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, maxPlayers, "start_lan_host");
             NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, maxPlayers);
             if (error.HasValue)
             {
@@ -95,7 +95,7 @@ internal static class LanConnectHostFlow
 
         try
         {
-            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, "start_lobby_host");
+            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, maxPlayers, "start_lobby_host");
             NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, maxPlayers);
             if (error.HasValue)
             {
@@ -195,7 +195,7 @@ internal static class LanConnectHostFlow
 
         try
         {
-            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, $"publish_existing_host:{publishSource}");
+            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, maxPlayers, $"publish_existing_host:{publishSource}");
             apiClient = LobbyApiClient.CreateConfigured();
             LobbyCreateRoomResponse registration = await apiClient.CreateRoomAsync(new LobbyCreateRoomRequest
             {
@@ -295,10 +295,7 @@ internal static class LanConnectHostFlow
                 NCharacterSelectScreen submenu = stack.GetSubmenuType<NCharacterSelectScreen>();
                 submenu.InitializeMultiplayerAsHost(netService, maxPlayers);
                 stack.Push(submenu);
-                if (OperatingSystem.IsAndroid())
-                {
-                    LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(submenu, "push_host_screen");
-                }
+                LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(submenu, "push_host_screen");
                 break;
             }
             case GameMode.Daily:

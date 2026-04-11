@@ -91,21 +91,19 @@ internal static class LanConnectLobbyCapacityPatches
 
     private static void StartENetHostPrefix(ref int maxClients)
     {
-        int effective = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
-        maxClients = Math.Max(maxClients, effective);
+        maxClients = ResolveRoomScopedMaxPlayers(maxClients);
     }
 
     private static void StartSteamHostPrefix(ref int maxClients)
     {
-        int effective = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
-        maxClients = Math.Max(maxClients, effective);
+        maxClients = ResolveRoomScopedMaxPlayers(maxClients);
     }
 
     private static void StartRunLobbyCtorPostfix(StartRunLobby __instance, INetGameService netService)
     {
-        int effective = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
+        int effective = ResolveRoomScopedMaxPlayers(__instance.MaxPlayers);
         if (netService.Type == NetGameType.Host
-            && __instance.MaxPlayers < effective
+            && __instance.MaxPlayers != effective
             && MaxPlayersField != null)
         {
             MaxPlayersField.SetValue(__instance, effective);
@@ -119,11 +117,22 @@ internal static class LanConnectLobbyCapacityPatches
             return;
         }
 
-        int effective = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
+        int effective = ResolveRoomScopedMaxPlayers(__instance.MaxPlayers);
         if (__instance.MaxPlayers != effective)
         {
             MaxPlayersField.SetValue(__instance, effective);
         }
+    }
+
+    private static int ResolveRoomScopedMaxPlayers(int requestedMaxPlayers)
+    {
+        int active = LanConnectProtocolProfiles.GetActiveMaxPlayers();
+        if (active > 0)
+        {
+            return Math.Clamp(active, LanConnectConstants.MinMaxPlayers, LanConnectConstants.MaxMaxPlayers);
+        }
+
+        return Math.Clamp(requestedMaxPlayers, LanConnectConstants.MinMaxPlayers, LanConnectConstants.MaxMaxPlayers);
     }
 
     // ReSharper restore UnusedMember.Local
