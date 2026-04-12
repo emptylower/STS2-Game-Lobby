@@ -1,126 +1,237 @@
-# STS2 LAN Connect 客户端安装说明
+<div align="center">
 
-这是 `STS2 LAN Connect` 的客户端发布包。
+**[中文](#中文) · [English](#english)**
+
+</div>
+
+---
+
+## 中文
+
+# STS2 LAN Connect 客户端安装说明
 
 ## 当前版本
 
-- 当前客户端版本：`0.2.3`
-- 运行时安装从常驻扫描器改为场景 `_Ready` hook，不再每 `0.25s` 扫描节点树；单人和移动端的额外性能损耗与耗电明显下降
-- `4` 人大厅房间会自动启用 `0.2.2` 兼容协议；`5-8` 人房间继续使用扩展协议，仅支持 `0.2.3+`
-- 修复 `0.2.2 ↔ 0.2.3` 私房仍提示协议不兼容的问题：`legacy_4p` 现对齐历史 `0.2.2` 线格式（`slotId` 位宽 `8`），避免握手反序列化错位导致的伪“缺模型”报错
-- 加入进度弹窗现在支持超时后手动取消；如果是协议/兼容性错误，客户端会提前停止长时间重试
-- 同步上游 `sts2-RMP-Mods 0.0.6` 两项关键修复：遗物房 `skip` 改为独立网络动作；兼容读取外部 RMP `0.0.6` 的人数配置
-- 改善安卓端 Harmony 补丁加载稳定性：所有 Harmony patch 调用改为逐个隔离（try-catch），单个 patch 失败不再导致整个 MOD 初始化崩溃
-- 修复部分安卓机型启动即弹出“致命错误”的问题：`NDailyRunLoadScreen._Ready` 不再在 MOD 初始化阶段提前 patch，改为主菜单界面 ready 后再延后安装
-- 修复安卓端成功进入主菜单后，打开多人页面 / 游戏大厅时报 `MethodAccessException` 的问题：`NMultiplayerSubmenu` 改为在菜单栈返回子页面实例后再 deferred 注入大厅入口
-- 修复安卓端房主准备页面邀请码按钮偶发缺失或页面初始化异常：邀请码按钮不再依赖 `NCharacterSelectScreen._Ready` patch，改为房主页面入栈后再延后安装
-- 安卓端跳过不适用的 Steam 主机补丁，减少 native detour 数量以降低 ARM64 I-cache 相关 SIGSEGV 闪退概率
-- MOD 启动时新增平台诊断日志（OS、架构、是否安卓），便于远程排查
-- 大厅顶部新增公告轮播栏，支持更新、活动、警告、信息四类公告，并使用左亮右暗的暖色渐变底
-- 大厅整体改为暗金游戏风格，房间主区与侧栏使用半透明卡片层次
-- 房间内新增右上角聊天面板，可直接和同房间玩家收发消息，并显示未读角标
-- 聊天面板支持长按拖动，位置会写入本地配置，下次进房自动恢复
-- 大厅支持搜索、分页和可叠加筛选
-- 筛选支持 `公开`、`上锁`、`可加入`
-- 标题栏提供 `切换服务器`，可从中心服务器拉取可用大厅并直接切服
-- 建房弹窗支持 `标准模式`、`多人每日挑战`、`自定义模式`
-- 开发网络设置支持单独覆盖中心服务器地址
-- 大厅延迟显示基于独立 `probe` 探测
-- 房间显示真实游戏版本、真实 MOD 版本、`relay` 状态和是否已开局
-- 建房弹窗最大人数默认 8 人（可手动修改，上限 8 人），自动适配难度缩放、营地座位、商店布局和宝箱分配；检测到 RMP 等外部扩展人数 MOD 时自动跳过内置补丁
-- 建房弹窗会明确提示：`4` 人房自动启用 `0.2.2` 兼容协议，`5-8` 人房仅支持 `0.2.3+`
-- 建房、续局自动回挂和手动 LAN Host 会自动对齐扩展人数补丁的 `maxPlayers`
-- 加入失败会细分为版本不一致、MOD 不一致、房间已开局、房间已满等原因
-- 多人续局存档会自动和大厅房间绑定，房主重新进入续局时会自动重新发布
-- 续局接管弹窗同时显示角色名和玩家名（如"铁甲战士（小明）"），方便多人选同角色时准确找回自己的槽位
-- 设置区提供“复制本地调试报告”按钮，方便把 `roomId`、玩家 ID 和本地失败日志一键发给开发者
-- 安装包内的默认大厅地址、兼容档位和连接策略以 `lobby-defaults.json` 为准
-- 当前公开包默认指向阿里云大厅 `47.111.146.69:8787`，公共服务器目录是 `47.111.146.69:18787`，并固定使用 `test_relaxed + relay-only`
-- 如果默认大厅拥堵或不可用，可在游戏内通过 `快速切换服务器` 改写当前客户端的 HTTP 覆盖地址
-- 如果你是自建大厅服，想让 `0.2.2` 与 `0.2.3` 通过大厅兼容联机，关键是大厅服务已经放宽版本校验；如果你的服务端已经是 relaxed 配置，这次客户端刷新不需要再同步更新服务端
-- 如果当前服务器配置了大厅公告，客户端会在顶部自动轮播展示；桌面端使用点状页码，窄屏横屏模式下改为 `1/N` 数字指示
-- 如果需要切到其他中心目录服务，可在开发网络设置里填写 `中心服务器覆盖`
-- `sts2_lan_connect.json` 是当前发布包内的 MOD 版本单一真源
+| 项目 | 内容 |
+|------|------|
+| 客户端版本 | `0.2.3` |
+| 默认大厅 | `47.111.146.69:8787` |
+| 公共服务器目录 | `47.111.146.69:18787` |
+| 连接策略 | `test_relaxed + relay-only` |
+
+`0.2.3` 主要改进：运行时从常驻扫描器改为场景 `_Ready` hook，降低单人与移动端性能消耗；4 人房间自动启用 `0.2.2` 兼容协议，5-8 人房间使用扩展协议（仅支持 `0.2.3+`）；大幅改善安卓端稳定性，修复多处启动崩溃与 `MethodAccessException`；大厅新增公告轮播、聊天面板、搜索筛选与切换服务器功能。版本单一真源为发布包内的 `sts2_lan_connect.json`。
+
+---
 
 ## 安装前
 
-- 先关闭《Slay the Spire 2》
-- 保证所有联机玩家使用同一版 MOD
-- 如果发布包里已经包含 `lobby-defaults.json`，普通玩家不需要手动填写大厅地址
-- 如果你正在使用 `Clash`、`Surge`、系统全局代理或 `TUN`，请让大厅服务器 IP 走 `DIRECT`
+- 关闭《Slay the Spire 2》
+- 确保所有联机玩家使用同一版本 MOD
+- 发布包内已包含 `lobby-defaults.json`，普通玩家无需手动填写大厅地址
+- 如使用 `Clash`、`Surge`、全局代理或 `TUN`，请将大厅服务器 IP 设为 `DIRECT`
+
+---
 
 ## 一键安装 / 卸载
 
-macOS：
+### macOS
 
-- 双击 `install-sts2-lan-connect-macos.command`
-- 如果已安装 MOD，则自动卸载
-- 如果未安装 MOD，则自动安装
-- 安装 / 卸载后会自动刷新 `SlayTheSpire2.app` 的 macOS 签名
+双击 `install-sts2-lan-connect-macos.command`
 
-Windows：
+- 已安装 MOD 则自动卸载；未安装则自动安装
+- 安装 / 卸载后自动刷新 `SlayTheSpire2.app` 的 macOS 签名
 
-- 双击 `install-sts2-lan-connect-windows.bat`
-- 如果已安装 MOD，则自动卸载
-- 如果未安装 MOD，则自动安装
+### Windows
+
+双击 `install-sts2-lan-connect-windows.bat`
+
+- 已安装 MOD 则自动卸载；未安装则自动安装
+
+---
 
 ## 命令行安装
 
-macOS：
+**macOS**
 
 ```bash
 ./install-sts2-lan-connect-macos.sh --install --package-dir .
 ```
 
-Windows：
+**Windows**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 -Action Install -PackageDir .
 ```
 
+---
+
 ## 命令行卸载
 
-macOS：
+**macOS**
 
 ```bash
 ./install-sts2-lan-connect-macos.sh --uninstall --package-dir .
 ```
 
-Windows：
+**Windows**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 -Action Uninstall -PackageDir .
 ```
 
-## 切换行为
+---
 
-- 未安装时会复制 `sts2_lan_connect.dll`、`sts2_lan_connect.pck`、`sts2_lan_connect.json`
-- 如果包里存在 `lobby-defaults.json`，会一并复制到游戏 `mods/sts2_lan_connect/`
-- macOS 安装 / 卸载时会自动刷新 app 签名
-- 安装时会执行一次 vanilla 到 modded 的单向存档同步
+## 安装行为说明
 
-如果只想安装 MOD、不做存档同步：
+安装时会复制以下文件到游戏 `mods/sts2_lan_connect/` 目录：`sts2_lan_connect.dll`、`sts2_lan_connect.pck`、`sts2_lan_connect.json`；如包内存在 `lobby-defaults.json` 也会一并复制。macOS 安装 / 卸载时自动刷新 app 签名，并执行一次 vanilla 到 modded 的单向存档同步。
 
-macOS：
+如需跳过存档同步，仅安装 MOD：
+
+**macOS**
 
 ```bash
 ./install-sts2-lan-connect-macos.sh --install --package-dir . --no-save-sync
 ```
 
-Windows：
+**Windows**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 -Action Install -PackageDir . -NoSaveSync
 ```
 
+---
+
 ## 使用要点
 
-- 房间列表支持关键词搜索、分页和筛选
-- `公开` / `上锁` 互斥，`可加入` 可叠加
-- 进入房间后可通过右上角 `房间聊天` 按钮展开聊天面板
-- 顶部公告栏默认每 6 秒轮播一条，鼠标悬停时会暂停，底部进度条会从左往右累积后切换
-- 刷新失败或延迟异常时，可优先尝试 `切换服务器`
-- 单击房间卡片会选中目标房间，双击会直接尝试加入
-- 如果加入时间较长，界面会显示阶段化进度提示
-- 如果加入时间过长，进度弹窗右上角会出现取消按钮；点击后会停止当前加入流程
-- 如果提示 `MOD 不一致`，当前版本会直接弹窗告诉你缺少哪些 MOD，即使在宽松兼容模式下连接失败也会给出具体的 MOD 名称
+- 房间列表支持关键词搜索、分页和筛选；`公开` / `上锁` 互斥，`可加入` 可叠加
+- 单击房间卡片选中，双击直接尝试加入
+- 进入房间后可通过右上角按钮展开聊天面板；面板支持长按拖动，位置自动保存
+- 顶部公告栏每 6 秒轮播，鼠标悬停时暂停
+- 加入进度较长时会显示阶段化提示；超时后进度弹窗右上角出现取消按钮
+- 提示 `MOD 不一致` 时，会弹窗列出缺少的具体 MOD 名称
+- 刷新失败或延迟异常，可优先通过标题栏 `切换服务器` 切换到其他可用大厅
+- 如需切换中心目录服务，可在开发网络设置中填写 `中心服务器覆盖`
+
+---
+
+## 自建大厅服说明
+
+如需让 `0.2.2` 与 `0.2.3` 兼容联机，关键在于大厅服已放宽版本校验。若服务端已为 relaxed 配置，本次客户端更新无需同步更新服务端。
+
+---
+
+<br>
+
+---
+
+## English
+
+# STS2 LAN Connect — Client Installation Guide
+
+## Current Version
+
+| Field | Value |
+|-------|-------|
+| Client version | `0.2.3` |
+| Default lobby | `47.111.146.69:8787` |
+| Public server directory | `47.111.146.69:18787` |
+| Connection policy | `test_relaxed + relay-only` |
+
+`0.2.3` key changes: the runtime hook is now scene-based (`_Ready`) instead of a polling scanner, reducing CPU and battery usage on solo play and mobile. 4-player rooms automatically use the `0.2.2` compatibility protocol; 5-8 player rooms use the extended protocol and require `0.2.3+`. Android stability is significantly improved, fixing startup crashes and `MethodAccessException` errors. The lobby UI gains an announcement carousel, an in-room chat panel, room search and filtering, and a server-switch button. The authoritative version source is `sts2_lan_connect.json` in the release package.
+
+---
+
+## Before Installing
+
+- Close Slay the Spire 2 before proceeding.
+- All players in a session must use the same MOD version.
+- The release package includes `lobby-defaults.json`; most players do not need to enter a lobby address manually.
+- If you use Clash, Surge, a system-wide proxy, or TUN mode, route the lobby server IP as `DIRECT`.
+
+---
+
+## One-Click Install / Uninstall
+
+### macOS
+
+Double-click `install-sts2-lan-connect-macos.command`
+
+- Installs the MOD if it is not present; uninstalls it if it is already installed.
+- Automatically re-signs `SlayTheSpire2.app` after install or uninstall.
+
+### Windows
+
+Double-click `install-sts2-lan-connect-windows.bat`
+
+- Installs the MOD if it is not present; uninstalls it if it is already installed.
+
+---
+
+## Command-Line Install
+
+**macOS**
+
+```bash
+./install-sts2-lan-connect-macos.sh --install --package-dir .
+```
+
+**Windows**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 -Action Install -PackageDir .
+```
+
+---
+
+## Command-Line Uninstall
+
+**macOS**
+
+```bash
+./install-sts2-lan-connect-macos.sh --uninstall --package-dir .
+```
+
+**Windows**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 -Action Uninstall -PackageDir .
+```
+
+---
+
+## What the Installer Does
+
+The installer copies `sts2_lan_connect.dll`, `sts2_lan_connect.pck`, and `sts2_lan_connect.json` into the game's `mods/sts2_lan_connect/` directory. If `lobby-defaults.json` is present in the package, it is copied there as well. On macOS, the app signature is refreshed automatically. Install also performs a one-way save sync from the vanilla save location to the modded one.
+
+To install without the save sync step:
+
+**macOS**
+
+```bash
+./install-sts2-lan-connect-macos.sh --install --package-dir . --no-save-sync
+```
+
+**Windows**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 -Action Install -PackageDir . -NoSaveSync
+```
+
+---
+
+## Usage Tips
+
+- The room list supports keyword search, pagination, and filters. `Public` and `Locked` are mutually exclusive; `Joinable` can be combined with either.
+- Single-click a room card to select it; double-click to join immediately.
+- Once inside a room, open the chat panel from the button in the top-right corner. The panel can be repositioned by long-pressing and dragging; its position is saved between sessions.
+- The announcement carousel at the top rotates every 6 seconds and pauses on hover.
+- A progress dialog appears for long join attempts; a cancel button appears in its top-right corner if the attempt takes too long.
+- If a `MOD mismatch` error occurs, a dialog will list the specific missing MOD names.
+- If the lobby feels slow or unavailable, use the `Switch Server` button in the title bar to move to another available lobby.
+- To switch the central directory service, enter a value in the `Central Server Override` field in the developer network settings.
+
+---
+
+## Self-Hosted Lobby Notes
+
+To allow `0.2.2` and `0.2.3` clients to play together through your own lobby, the lobby server must have version checking set to relaxed mode. If your server is already in relaxed mode, this client update does not require a server-side update.

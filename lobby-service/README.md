@@ -1,45 +1,57 @@
+<div align="center">
+
+**[中文](#中文) · [English](#english)**
+
+</div>
+
+---
+
+## 中文
+
 # STS2 Lobby Service
 
-`STS2 Lobby Service` 是 `STS2 LAN Connect` 的大厅服务端，负责：
+`STS2 Lobby Service` 是 `STS2 LAN Connect` 的大厅服务端，负责以下功能：
 
-- 房间目录
+- 房间目录管理
 - 房间密码校验
 - 房主心跳与僵尸房间清理
 - 控制通道握手与广播
-- 控制通道会按房间透明广播聊天 envelope，可直接承载房间聊天
+- 控制通道按房间透明广播聊天 envelope，可直接承载房间聊天
 - 控制通道支持房主踢人（`kick_player`）：服务端主动关闭被踢玩家的 WebSocket 并阻止其重新加入
-- 控制通道支持房间设置同步（`room_settings`）：房主可开关聊天，新加入的客户端会自动收到当前设置
+- 控制通道支持房间设置同步（`room_settings`）：房主可开关聊天，新加入的客户端自动收到当前设置
 - 向客户端返回 `ENet` 直连优先、失败时自动切 relay 的连接计划
 - 保存续局大厅房间的 `savedRun` 元数据与可接管角色槽位
 - `maxPlayers/currentPlayers` 上限已放宽，用于兼容扩展人数房间元数据
-- 房间会持久化并回显 `protocolProfile`；`4` 人房会自动发布为 `legacy_4p` 用于兼容 `0.2.2`，`5-8` 人房保持 `extended_8p`
-- 对旧 `0.2.2` 四人房，如果没有显式 `protocolProfile`，服务端会按 `maxPlayers + modVersion + modList` 自动推断兼容档位
+- 房间持久化并回显 `protocolProfile`；4 人房自动发布为 `legacy_4p` 兼容 `0.2.2`，5-8 人房保持 `extended_8p`
+- 对旧 `0.2.2` 四人房，若无显式 `protocolProfile`，服务端按 `maxPlayers + modVersion + modList` 自动推断兼容档位
 - 在 join 前置校验里区分 `version_mismatch`、`mod_version_mismatch`、`mod_mismatch`、`room_started`、`room_full`
 - 记录 `direct_timeout` / `relay_success` / `relay_failure` 等连接阶段日志
 - 内置子服务器控制面板 `/server-admin`
 - 子服务器控制面板可维护大厅公告，并通过 `GET /announcements` 下发给客户端
-- 子服务器控制面板会显式展示 `未申请`、`已提交待审`、`已加入公开列表`、`已拒绝`、`配置错误`、`同步失败` 等状态，并在异常时弹出提醒
-- 子服务器控制面板的 header 与状态区已补齐响应式布局，移动端和桌面端窄窗口下不再互相挤压
-- 子服务器控制面板自动轮询状态时不会再覆盖未保存的显示名称、带宽上限和公告草稿；手动重新加载配置前会先提示确认
+- 子服务器控制面板显示 `未申请`、`已提交待审`、`已加入公开列表`、`已拒绝`、`配置错误`、`同步失败` 等状态，异常时弹出提醒
+- 子服务器控制面板 header 与状态区支持响应式布局，移动端和桌面端窄窗口下正常显示
+- 子服务器控制面板自动轮询状态时不会覆盖未保存的显示名称、带宽上限和公告草稿；手动重新加载配置前会先提示确认
 - 向官方母面板自动上报公开申请、claim 令牌和 3 分钟心跳
 
-它不负责：
+不负责以下功能：
 
 - 战斗同步
 - 账号系统
 - NAT 必成功穿透
 
-当前 relay 的定位是“直连失败时的房间级兜底路径”，不是完整的独立联机协议。
+当前 relay 的定位是"直连失败时的房间级兜底路径"，不是完整的独立联机协议。
 
 说明：
 
-- 官方公共服务器母面板不再随公开仓库一起发布
+- 官方公共服务器母面板不随公开仓库一起发布
 - 当前公开仓库只保留 `lobby-service` 本体
-- 如果你要进入官方公开列表，只需要把 `SERVER_REGISTRY_BASE_URL` 指向官方母面板，并在 `/server-admin` 中打开“公开列表申请”
+- 如需进入官方公开列表，只需将 `SERVER_REGISTRY_BASE_URL` 指向官方母面板，并在 `/server-admin` 中打开"公开列表申请"
+
+---
 
 ## Docker 部署
 
-如果只想单独容器化当前 `lobby-service`，也可以直接在本目录下使用：
+在本目录下执行：
 
 ```bash
 cp deploy/lobby-service.docker.env.example deploy/lobby-service.docker.env
@@ -49,21 +61,23 @@ docker compose -f deploy/docker-compose.lobby-service.yml build
 docker compose -f deploy/docker-compose.lobby-service.yml up -d
 ```
 
-默认会把 `./deploy/data/lobby-service` 挂到容器内 `/app/data`，并把 `SERVER_ADMIN_STATE_FILE` 指向 `/app/data/server-admin.json`。
+默认将 `./deploy/data/lobby-service` 挂载到容器内 `/app/data`，并将 `SERVER_ADMIN_STATE_FILE` 指向 `/app/data/server-admin.json`。
 
-如果部署机器拉 Docker Hub 很慢，可以先复制 `deploy/.env.example` 为 `deploy/.env`，再把 `STS2_NODE_IMAGE` 改成国内镜像。
+如果部署机器拉取 Docker Hub 较慢，可复制 `deploy/.env.example` 为 `deploy/.env`，再将 `STS2_NODE_IMAGE` 改成国内镜像。
 
-注意：
+注意事项：
 
-- Docker 方式也一样需要把 `RELAY_PUBLIC_HOST` 或 `SERVER_REGISTRY_PUBLIC_*` 改成公网 IP / 域名
-- 这三个 `SERVER_REGISTRY_PUBLIC_*` 不是 Docker 自动推导出来的；如果它们仍是 `127.0.0.1`、`0.0.0.0`、`localhost` 或占位值，母面板无法反向探测这台子服
+- Docker 方式同样需要将 `RELAY_PUBLIC_HOST` 或 `SERVER_REGISTRY_PUBLIC_*` 改成公网 IP / 域名
+- `SERVER_REGISTRY_PUBLIC_*` 不是 Docker 自动推导的；若仍为 `127.0.0.1`、`0.0.0.0`、`localhost` 或占位值，母面板无法反向探测此子服
 
-日志维护默认由 Docker `json-file` 轮转处理：
+日志轮转由 Docker `json-file` 驱动处理，默认配置：
 
-- `10MB` 单文件上限
-- `5` 个历史文件
+- 单文件上限：`10MB`
+- 历史文件数：`5`
 
-## systemd 一键部署
+---
+
+## systemd 部署
 
 从仓库根目录执行：
 
@@ -71,7 +85,7 @@ docker compose -f deploy/docker-compose.lobby-service.yml up -d
 sudo ./scripts/install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 ```
 
-这个脚本会自动：
+安装脚本会自动执行以下操作：
 
 - 复制服务文件到 `/opt/sts2-lobby/lobby-service`
 - 执行 `npm ci`
@@ -86,7 +100,7 @@ sudo ./scripts/install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 curl http://127.0.0.1:8787/health
 ```
 
-如果你准备让这台 `systemd` 子服务进入官方公开列表，建议首次安装时直接带上公网主机名：
+如需让此子服进入官方公开列表，建议首次安装时带上公网主机名：
 
 ```bash
 sudo ./scripts/install-lobby-service-linux.sh \
@@ -94,65 +108,69 @@ sudo ./scripts/install-lobby-service-linux.sh \
   --relay-public-host <你的公网 IP 或域名>
 ```
 
-这样安装脚本会自动把 `SERVER_REGISTRY_PUBLIC_BASE_URL`、`SERVER_REGISTRY_PUBLIC_WS_URL`、`SERVER_REGISTRY_BANDWIDTH_PROBE_URL` 写成同一套公网地址。
+安装脚本会自动将 `SERVER_REGISTRY_PUBLIC_BASE_URL`、`SERVER_REGISTRY_PUBLIC_WS_URL`、`SERVER_REGISTRY_BANDWIDTH_PROBE_URL` 写成对应的公网地址。
 
-如果你已经装好了，再手动编辑：
-
-- `/opt/sts2-lobby/lobby-service/.env`
-
-至少保证下面两种方式之一成立：
+如已完成安装，可手动编辑 `/opt/sts2-lobby/lobby-service/.env`，至少满足以下两种方式之一：
 
 - 方式 A：配置 `RELAY_PUBLIC_HOST=<公网 IP 或域名>`
 - 方式 B：显式配置全部 `SERVER_REGISTRY_PUBLIC_*`
 
-否则子面板虽然可能仍能向母面板发出申请请求，但母面板回头探测时拿到的是本机地址，公开申请就会失败。
+否则母面板在收到申请后反向探测时将拿到本机地址，公开申请将失败。
+
+---
 
 ## 生成 SERVER_ADMIN_PASSWORD_HASH
 
-`SERVER_ADMIN_PASSWORD_HASH` 不是明文密码，格式是 `salt:hash`。
+`SERVER_ADMIN_PASSWORD_HASH` 格式为 `salt:hash`，不是明文密码。
 
-仓库已经内置了生成脚本：
+使用内置脚本生成：
 
 ```bash
 cd lobby-service
 npm run hash-admin-password -- '你的面板密码'
 ```
 
-输出结果直接填进 `.env`：
+将输出结果填入 `.env`：
 
 ```text
 SERVER_ADMIN_PASSWORD_HASH=<上一步输出的整串内容>
 ```
 
-会话密钥可以单独生成：
+单独生成会话密钥：
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-再填入：
+将结果填入 `.env`：
 
 ```text
 SERVER_ADMIN_SESSION_SECRET=<上一步输出的随机字符串>
 ```
 
-## 外部页面怎么打开
+---
 
-当前 `lobby-service` 对外提供的是接口和管理面板，不提供给玩家直接浏览房间的独立网页大厅。
+## 外部访问地址
 
-自部署后，浏览器里最常用的外部地址是：
+`lobby-service` 对外提供接口和管理面板，不提供供玩家直接浏览房间的独立网页大厅。
 
-- 子服务管理面板：`http://<你的公网 IP 或域名>:8787/server-admin`
-- 健康检查：`http://<你的公网 IP 或域名>:8787/health`
-- 公告公开接口：`http://<你的公网 IP 或域名>:8787/announcements`
-- 房间列表接口：`http://<你的公网 IP 或域名>:8787/rooms`
+自部署后，常用的外部访问地址如下：
+
+| 用途 | 地址 |
+|------|------|
+| 子服务管理面板 | `http://<公网 IP 或域名>:8787/server-admin` |
+| 健康检查 | `http://<公网 IP 或域名>:8787/health` |
+| 公告接口 | `http://<公网 IP 或域名>:8787/announcements` |
+| 房间列表接口 | `http://<公网 IP 或域名>:8787/rooms` |
 
 说明：
 
-- 要让外部浏览器能打开，至少需要放行 `8787/TCP`
-- 如果你用了域名，直接把上面的 `<你的公网 IP 或域名>` 替换成域名即可
-- `/server-admin` 页面能打开，不代表一定能修改设置；如果没配置 `SERVER_ADMIN_PASSWORD_HASH` 和 `SERVER_ADMIN_SESSION_SECRET`，它只能浏览，不能登录保存
-- 玩家平时不需要打开这些网页；玩家加入房间走的是游戏客户端，浏览器页面主要给服主做健康检查和管理
+- 外部访问需放行 `8787/TCP`
+- 如果使用域名，将上面的 `<公网 IP 或域名>` 替换成域名即可
+- `/server-admin` 页面可直接打开，但未配置 `SERVER_ADMIN_PASSWORD_HASH` 和 `SERVER_ADMIN_SESSION_SECRET` 时无法登录修改设置
+- 玩家不需要打开这些地址；玩家通过游戏客户端加入房间，浏览器页面供服主进行健康检查和管理
+
+---
 
 ## 手动运行
 
@@ -169,14 +187,16 @@ npm start
 - WebSocket: `ws://0.0.0.0:8787/control`
 - Relay UDP: `udp://0.0.0.0:39000-39149`
 
-公网部署时至少需要放行：
+公网部署时需放行：
 
 - `8787/TCP`
 - `39000-39149/UDP`
 
+---
+
 ## 打包分发
 
-如果要把服务端单独打包给部署机器：
+将服务端单独打包：
 
 ```bash
 ./scripts/package-lobby-service.sh
@@ -187,125 +207,175 @@ npm start
 - `lobby-service/release/sts2_lobby_service/`
 - `lobby-service/release/sts2_lobby_service.zip`
 
-打包结果现在也会包含：
+打包结果包含：
 
 - `Dockerfile`
 - `.dockerignore`
 - `deploy/docker-compose.lobby-service.yml`
 - `deploy/lobby-service.docker.env.example`
 
-如果这个服务是放进公共双服务 Docker 栈里运行，当前推荐直接使用宿主机网络，而不是再让 Docker bridge 发布整段 relay UDP 端口。
+如果将此服务放进公共双服务 Docker 栈运行，推荐使用宿主机网络，而非通过 Docker bridge 发布整段 relay UDP 端口。这是为了规避已在线上复现过的问题：某些云主机上，通过 bridge 映射大段 UDP relay 端口可能同时拖慢 `8787`、`18787`，甚至导致 SSH 只剩 TCP 连接而不回 banner。
 
-这是为了规避已在线上复现过的问题：某些云主机上，`lobby-service` 一旦通过 bridge 映射大段 UDP relay 端口，可能会同时拖慢 `8787`、`18787`，甚至让 SSH 只剩 TCP 连接但不回 banner。
+---
 
 ## 环境变量
 
-- `HOST`
-- `PORT`
-- `HEARTBEAT_TIMEOUT_SECONDS`
-- `TICKET_TTL_SECONDS`
-- `WS_PATH`
-- `RELAY_BIND_HOST`
-- `RELAY_PUBLIC_HOST`
-- `RELAY_PORT_START`
-- `RELAY_PORT_END`
-- `RELAY_HOST_IDLE_SECONDS`
-- `RELAY_CLIENT_IDLE_SECONDS`
-- `STRICT_GAME_VERSION_CHECK`
-- `STRICT_MOD_VERSION_CHECK`
-- `CONNECTION_STRATEGY`
-- `SERVER_ADMIN_USERNAME`
-- `SERVER_ADMIN_PASSWORD_HASH`
-- `SERVER_ADMIN_SESSION_SECRET`
-- `SERVER_ADMIN_SESSION_TTL_HOURS`
-- `SERVER_ADMIN_STATE_FILE`
-- `SERVER_REGISTRY_BASE_URL`
-- `SERVER_REGISTRY_SYNC_INTERVAL_SECONDS`
-- `SERVER_REGISTRY_SYNC_TIMEOUT_MS`
-- `SERVER_REGISTRY_PUBLIC_BASE_URL`
-- `SERVER_REGISTRY_PUBLIC_WS_URL`
-- `SERVER_REGISTRY_BANDWIDTH_PROBE_URL`
-- `SERVER_REGISTRY_PROBE_FILE_BYTES`
-
 示例见 [`.env.example`](./.env.example)。
 
-这些开关的含义：
+### 网络
 
-- `STRICT_GAME_VERSION_CHECK=false` 时，服务端不会因为游戏版本字符串不同而拒绝 join
-- `STRICT_MOD_VERSION_CHECK=false` 时，服务端不会因为 MOD 版本字符串不同而拒绝 join
-- 如果客户端和房主都上报了 `modList`，服务端会额外比较双方缺失项，并在 `mod_mismatch` 里返回 `missingModsOnLocal` / `missingModsOnHost`
-- `CONNECTION_STRATEGY` 可选 `direct-first`、`relay-first`、`relay-only`
-- 当前公开服部署默认使用 `relay-only`；如果要回到其他策略，请显式覆盖 `CONNECTION_STRATEGY`
-- `SERVER_ADMIN_*` 控制子面板登录，不配置密码哈希和会话密钥时，`/server-admin` 页面仍可打开，但无法登录修改设置
-- `SERVER_ADMIN_STATE_FILE` 默认保存这台子服的显示名称、公开设置、公告配置和同步状态
-- `SERVER_REGISTRY_BASE_URL` 只负责“把申请和心跳发到哪台母面板”；当前默认写成官方母面板 `http://47.111.146.69:18787`
-- 只要 `/server-admin` 里打开了“公开列表申请”，子服务就会自动创建申请、自动 claim 审核结果，并持续同步心跳
-- `SERVER_REGISTRY_PUBLIC_*` 用于告诉母面板“这台子服务器对外的 HTTP / WS / 带宽探针地址”
-- 如果 `SERVER_REGISTRY_PUBLIC_*` 留空，服务端会先尝试用 `RELAY_PUBLIC_HOST` 推导；如果连 `RELAY_PUBLIC_HOST` 也没配，最终会退回本机地址，母面板无法从公网访问
-- 现在如果你打开了公开申请，但上报地址仍是 `127.0.0.1`、`0.0.0.0`、`localhost` 这类本机地址，子面板会直接把同步状态标成 `公网地址配置错误`
+| 变量 | 说明 |
+|------|------|
+| `HOST` | 服务监听地址 |
+| `PORT` | 服务监听端口 |
+| `WS_PATH` | WebSocket 路径 |
+
+### 房间与心跳
+
+| 变量 | 说明 |
+|------|------|
+| `HEARTBEAT_TIMEOUT_SECONDS` | 房主心跳超时时间 |
+| `TICKET_TTL_SECONDS` | 加入票据有效期 |
+
+### Relay
+
+| 变量 | 说明 |
+|------|------|
+| `RELAY_BIND_HOST` | relay 监听地址 |
+| `RELAY_PUBLIC_HOST` | relay 对外公网地址；若 `SERVER_REGISTRY_PUBLIC_*` 留空，服务端优先从此字段推导；未配置时退回本机地址 |
+| `RELAY_PORT_START` | relay UDP 端口段起始 |
+| `RELAY_PORT_END` | relay UDP 端口段结束 |
+| `RELAY_HOST_IDLE_SECONDS` | relay 房主空闲超时 |
+| `RELAY_CLIENT_IDLE_SECONDS` | relay 客户端空闲超时 |
+
+### 版本与连接策略
+
+| 变量 | 说明 |
+|------|------|
+| `STRICT_GAME_VERSION_CHECK` | `false` 时不因游戏版本字符串不同拒绝 join |
+| `STRICT_MOD_VERSION_CHECK` | `false` 时不因 MOD 版本字符串不同拒绝 join |
+| `CONNECTION_STRATEGY` | 可选 `direct-first`、`relay-first`、`relay-only`；当前公开服默认 `relay-only` |
+
+说明：若客户端和房主均上报 `modList`，服务端会额外比对双方缺失项，并在 `mod_mismatch` 里返回 `missingModsOnLocal` / `missingModsOnHost`。
+
+### 子服务管理面板
+
+| 变量 | 说明 |
+|------|------|
+| `SERVER_ADMIN_USERNAME` | 管理面板用户名 |
+| `SERVER_ADMIN_PASSWORD_HASH` | 管理面板密码哈希（`salt:hash` 格式） |
+| `SERVER_ADMIN_SESSION_SECRET` | 会话密钥 |
+| `SERVER_ADMIN_SESSION_TTL_HOURS` | 会话有效期（小时） |
+| `SERVER_ADMIN_STATE_FILE` | 持久化文件路径；保存显示名称、公开设置、公告配置和同步状态 |
+
+未配置 `SERVER_ADMIN_PASSWORD_HASH` 和 `SERVER_ADMIN_SESSION_SECRET` 时，`/server-admin` 页面可打开但无法登录修改。
+
+### 母面板同步
+
+| 变量 | 说明 |
+|------|------|
+| `SERVER_REGISTRY_BASE_URL` | 母面板地址；申请和心跳发送目标；默认为官方母面板 `http://47.111.146.69:18787` |
+| `SERVER_REGISTRY_SYNC_INTERVAL_SECONDS` | 心跳同步间隔 |
+| `SERVER_REGISTRY_SYNC_TIMEOUT_MS` | 同步请求超时时间 |
+| `SERVER_REGISTRY_PUBLIC_BASE_URL` | 此子服对外的 HTTP 地址，上报给母面板 |
+| `SERVER_REGISTRY_PUBLIC_WS_URL` | 此子服对外的 WebSocket 地址，上报给母面板 |
+| `SERVER_REGISTRY_BANDWIDTH_PROBE_URL` | 带宽探针地址，上报给母面板 |
+| `SERVER_REGISTRY_PROBE_FILE_BYTES` | 带宽探针文件大小 |
+
+说明：`SERVER_REGISTRY_PUBLIC_*` 留空时，服务端先尝试用 `RELAY_PUBLIC_HOST` 推导；如果打开了公开申请但上报地址仍是 `127.0.0.1`、`0.0.0.0`、`localhost` 等本机地址，子面板会将同步状态标为 `公网地址配置错误`。
+
+---
 
 ## API
+
+### 通用
 
 - `GET /health`
 - `GET /probe`
 - `GET /registry/bandwidth-probe.bin`
-- `GET /server-admin`
-- `POST /server-admin/login`
-- `GET /server-admin/settings`
-- `PATCH /server-admin/settings`
-- `GET /rooms`
 - `GET /announcements`
+- `GET /rooms`
+
+### 房间管理
+
 - `POST /rooms`
 - `POST /rooms/:id/join`
 - `POST /rooms/:id/heartbeat`
 - `POST /rooms/:id/connection-events`
 - `DELETE /rooms/:id`
+
+### 管理面板
+
+- `GET /server-admin`
+- `POST /server-admin/login`
+- `GET /server-admin/settings`
+- `PATCH /server-admin/settings`
+
+### WebSocket
+
 - `WS /control`
 
-当前和续局联机相关的关键字段：
+### 续局联机相关字段
 
-- `POST /rooms`
-  - 支持可选的 `savedRun`
-  - `savedRun.saveKey` 用于把续局存档和大厅房间绑定
-  - `savedRun.slots` 描述每个可接管角色槽位及其 `netId`
-- `POST /rooms/:id/join`
-  - 支持可选的 `desiredSavePlayerNetId`
-  - 支持可选的 `modList`
-  - 当续局房间存在多个空闲角色槽位时，客户端必须显式选择一个槽位再加入
-  - 失败时会明确返回 `version_mismatch`、`mod_version_mismatch`、`mod_mismatch`、`room_started`、`room_full` 等错误码
-- `POST /rooms/:id/heartbeat`
-  - 支持上报 `connectedPlayerNetIds`
-  - 服务端会据此更新哪些续局角色槽位当前已被占用
-- `POST /rooms/:id/connection-events`
-  - 客户端会上报 `direct_timeout`、`relay_success`、`relay_failure` 等阶段事件
-  - 这些记录会进入服务端日志，便于排查公网联机失败原因
+**`POST /rooms`**
 
-## 控制通道约定
+- 支持可选的 `savedRun`
+- `savedRun.saveKey`：将续局存档与大厅房间绑定
+- `savedRun.slots`：描述每个可接管角色槽位及其 `netId`
 
-查询参数：
+**`POST /rooms/:id/join`**
 
-- `roomId`
-- `controlChannelId`
-- `role=host|client`
-- `token` 或 `ticketId`
+- 支持可选的 `desiredSavePlayerNetId`
+- 支持可选的 `modList`
+- 当续局房间存在多个空闲角色槽位时，客户端必须显式选择一个槽位才能加入
+- 失败时明确返回 `version_mismatch`、`mod_version_mismatch`、`mod_mismatch`、`room_started`、`room_full` 等错误码
 
-当前实现包括：
+**`POST /rooms/:id/heartbeat`**
+
+- 支持上报 `connectedPlayerNetIds`，服务端据此更新续局角色槽位的占用状态
+
+**`POST /rooms/:id/connection-events`**
+
+- 客户端上报 `direct_timeout`、`relay_success`、`relay_failure` 等阶段事件，进入服务端日志以便排查公网联机失败
+
+---
+
+## 控制通道协议
+
+### 连接参数
+
+| 参数 | 说明 |
+|------|------|
+| `roomId` | 房间 ID |
+| `controlChannelId` | 控制通道 ID |
+| `role` | `host` 或 `client` |
+| `token` 或 `ticketId` | 鉴权凭据 |
+
+### 当前实现
 
 - host/client 握手校验
 - ping/pong 保活
 - 同房间 peers 广播
 
-这已经足够支撑当前大厅模式，但整体联机仍以游戏原生 `ENet` 直连为主。
+整体联机以游戏原生 `ENet` 直连为主；控制通道已足够支撑当前大厅模式。
+
+---
 
 ## 日志排查
 
-推荐直接看 systemd journal：
+### systemd 部署
 
 ```bash
 journalctl -u sts2-lobby.service -n 100 --no-pager
 ```
 
-常见日志包括：
+### Docker 部署
+
+```bash
+docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
+```
+
+### 常见日志条目
 
 - `create room`
 - `join ticket issued`
@@ -317,13 +387,401 @@ journalctl -u sts2-lobby.service -n 100 --no-pager
 - `relay_allocated`
 - `relay_removed`
 
-如果日志里能看到 `create room`、`join ticket issued`，却始终没有 `relay_host_registered`，通常不是服务端 API 挂了，而是客户端到 relay 端口段的 UDP 没有真正打到服务器。常见原因包括：
+### 排查要点
 
-- 服务器公网 `39000-39149/UDP` 没有放行
-- 客户端启用了 `Clash`、`Surge`、系统全局代理或 `TUN`，大厅服务器 IP 没有走 `DIRECT`
+如果日志中出现 `create room`、`join ticket issued`，但始终没有 `relay_host_registered`，通常不是服务端 API 问题，而是客户端到 relay 端口段的 UDP 未能到达服务器。常见原因：
 
-如果当前是 Docker 部署，则改看：
+- 服务器公网 `39000-39149/UDP` 未放行
+- 客户端使用了 `Clash`、`Surge`、系统全局代理或 `TUN`，且大厅服务器 IP 未走 `DIRECT`
+
+---
+
+---
+
+## English
+
+# STS2 Lobby Service
+
+`STS2 Lobby Service` is the lobby server for `STS2 LAN Connect`. It is responsible for:
+
+- Room directory management
+- Room password validation
+- Host heartbeat monitoring and stale room cleanup
+- Control channel handshake and broadcast
+- Transparent per-room broadcast of chat envelopes over the control channel
+- Host kick support via the control channel (`kick_player`): the server closes the kicked player's WebSocket and prevents them from rejoining
+- Room settings sync via the control channel (`room_settings`): the host can toggle chat; newly joined clients receive the current settings automatically
+- Returning a connection plan to clients that prefers `ENet` direct connection with automatic relay fallback on failure
+- Storing `savedRun` metadata and takeover character slots for save-continue lobby rooms
+- Relaxed `maxPlayers/currentPlayers` limits for compatibility with extended-player-count room metadata
+- Persistent `protocolProfile` echo; 4-player rooms are automatically published as `legacy_4p` for `0.2.2` compatibility, and 5-8 player rooms remain `extended_8p`
+- Automatic compatibility-tier inference for legacy `0.2.2` 4-player rooms without an explicit `protocolProfile`, based on `maxPlayers + modVersion + modList`
+- Pre-join validation that distinguishes `version_mismatch`, `mod_version_mismatch`, `mod_mismatch`, `room_started`, and `room_full`
+- Connection phase logging: `direct_timeout`, `relay_success`, `relay_failure`
+- Built-in sub-server admin panel at `/server-admin`
+- Admin panel for managing lobby announcements delivered to clients via `GET /announcements`
+- Admin panel status display covering `未申请`, `已提交待审`, `已加入公开列表`, `已拒绝`, `配置错误`, `同步失败`, with alerts on abnormal states
+- Responsive layout for the admin panel header and status area, working correctly on mobile and narrow desktop windows
+- Auto-polling that does not overwrite unsaved display name, bandwidth limit, or announcement drafts; a confirmation prompt is shown before manually reloading configuration
+- Automatic reporting of public listing applications, claim tokens, and 3-minute heartbeats to the official master panel
+
+It does not handle:
+
+- Battle synchronization
+- Account systems
+- Guaranteed NAT traversal
+
+The current relay is a per-room fallback path for when direct connection fails, not a standalone multiplayer protocol.
+
+Notes:
+
+- The official public server master panel is not published with the public repository
+- The public repository contains only the `lobby-service` itself
+- To join the official public listing, point `SERVER_REGISTRY_BASE_URL` at the official master panel and enable the "Public Listing Application" in `/server-admin`
+
+---
+
+## Docker Deployment
+
+From this directory:
+
+```bash
+cp deploy/lobby-service.docker.env.example deploy/lobby-service.docker.env
+$EDITOR deploy/lobby-service.docker.env
+
+docker compose -f deploy/docker-compose.lobby-service.yml build
+docker compose -f deploy/docker-compose.lobby-service.yml up -d
+```
+
+By default, `./deploy/data/lobby-service` is mounted to `/app/data` inside the container, with `SERVER_ADMIN_STATE_FILE` pointing to `/app/data/server-admin.json`.
+
+If Docker Hub pulls are slow, copy `deploy/.env.example` to `deploy/.env` and set `STS2_NODE_IMAGE` to a mirror registry.
+
+Notes:
+
+- Docker deployments still require setting `RELAY_PUBLIC_HOST` or `SERVER_REGISTRY_PUBLIC_*` to your public IP or domain
+- The `SERVER_REGISTRY_PUBLIC_*` values are not derived automatically by Docker; if they remain as `127.0.0.1`, `0.0.0.0`, `localhost`, or placeholder values, the master panel cannot probe this sub-server from the public network
+
+Log rotation is handled by the Docker `json-file` driver with these defaults:
+
+- Max file size: `10MB`
+- Retained history files: `5`
+
+---
+
+## systemd Deployment
+
+From the repository root:
+
+```bash
+sudo ./scripts/install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
+```
+
+The install script automatically:
+
+- Copies service files to `/opt/sts2-lobby/lobby-service`
+- Runs `npm ci`
+- Runs `npm run build`
+- Generates a `.env` file on first install
+- Generates `/opt/sts2-lobby/start-lobby-service.sh`
+- Installs and starts `sts2-lobby.service` via systemd when run as root with systemd available
+
+Post-install health check:
+
+```bash
+curl http://127.0.0.1:8787/health
+```
+
+To join the official public listing, pass your public hostname at install time:
+
+```bash
+sudo ./scripts/install-lobby-service-linux.sh \
+  --install-dir /opt/sts2-lobby \
+  --relay-public-host <your public IP or domain>
+```
+
+The script will write `SERVER_REGISTRY_PUBLIC_BASE_URL`, `SERVER_REGISTRY_PUBLIC_WS_URL`, and `SERVER_REGISTRY_BANDWIDTH_PROBE_URL` using the same public address.
+
+If already installed, manually edit `/opt/sts2-lobby/lobby-service/.env` and ensure at least one of the following:
+
+- Option A: Set `RELAY_PUBLIC_HOST=<public IP or domain>`
+- Option B: Explicitly set all `SERVER_REGISTRY_PUBLIC_*` variables
+
+Without this, the master panel will receive a local address when probing your sub-server, causing the public listing application to fail.
+
+---
+
+## Generating SERVER_ADMIN_PASSWORD_HASH
+
+`SERVER_ADMIN_PASSWORD_HASH` is not a plaintext password; the format is `salt:hash`.
+
+Use the built-in script to generate it:
+
+```bash
+cd lobby-service
+npm run hash-admin-password -- 'your-admin-password'
+```
+
+Write the output directly to `.env`:
+
+```text
+SERVER_ADMIN_PASSWORD_HASH=<output from the previous step>
+```
+
+To generate a session secret separately:
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+Write the output to `.env`:
+
+```text
+SERVER_ADMIN_SESSION_SECRET=<random string from the previous step>
+```
+
+---
+
+## External Access URLs
+
+`lobby-service` exposes an API and an admin panel. It does not provide a player-facing room browser.
+
+After self-hosting, the commonly used external addresses are:
+
+| Purpose | URL |
+|---------|-----|
+| Sub-server admin panel | `http://<public IP or domain>:8787/server-admin` |
+| Health check | `http://<public IP or domain>:8787/health` |
+| Announcements endpoint | `http://<public IP or domain>:8787/announcements` |
+| Room list endpoint | `http://<public IP or domain>:8787/rooms` |
+
+Notes:
+
+- External access requires opening port `8787/TCP`
+- Replace `<public IP or domain>` with your domain name if applicable
+- The `/server-admin` page is accessible without credentials, but login and configuration changes require `SERVER_ADMIN_PASSWORD_HASH` and `SERVER_ADMIN_SESSION_SECRET` to be set
+- Players do not need to access these URLs; they join rooms through the game client. The browser pages are for server operators to perform health checks and administration
+
+---
+
+## Manual Run
+
+```bash
+cd /path/to/STS2_Learner/lobby-service
+npm ci
+npm run build
+npm start
+```
+
+Default listeners:
+
+- HTTP: `http://0.0.0.0:8787`
+- WebSocket: `ws://0.0.0.0:8787/control`
+- Relay UDP: `udp://0.0.0.0:39000-39149`
+
+Required open ports for public deployment:
+
+- `8787/TCP`
+- `39000-39149/UDP`
+
+---
+
+## Packaging for Distribution
+
+To package the server for deployment to another machine:
+
+```bash
+./scripts/package-lobby-service.sh
+```
+
+Output artifacts:
+
+- `lobby-service/release/sts2_lobby_service/`
+- `lobby-service/release/sts2_lobby_service.zip`
+
+The package includes:
+
+- `Dockerfile`
+- `.dockerignore`
+- `deploy/docker-compose.lobby-service.yml`
+- `deploy/lobby-service.docker.env.example`
+
+If running this service inside a shared dual-service Docker stack, using host networking is recommended over Docker bridge for the relay UDP port range. This avoids a known issue observed in production where mapping a large UDP relay port range through bridge can simultaneously degrade `8787`, `18787`, and even cause SSH connections to stall without returning a banner.
+
+---
+
+## Environment Variables
+
+See [`.env.example`](./.env.example) for a full example.
+
+### Network
+
+| Variable | Description |
+|----------|-------------|
+| `HOST` | Service bind address |
+| `PORT` | Service listen port |
+| `WS_PATH` | WebSocket path |
+
+### Rooms and Heartbeat
+
+| Variable | Description |
+|----------|-------------|
+| `HEARTBEAT_TIMEOUT_SECONDS` | Host heartbeat timeout |
+| `TICKET_TTL_SECONDS` | Join ticket validity period |
+
+### Relay
+
+| Variable | Description |
+|----------|-------------|
+| `RELAY_BIND_HOST` | Relay bind address |
+| `RELAY_PUBLIC_HOST` | Relay public address; used to derive `SERVER_REGISTRY_PUBLIC_*` if those are unset; falls back to localhost if not configured |
+| `RELAY_PORT_START` | Relay UDP port range start |
+| `RELAY_PORT_END` | Relay UDP port range end |
+| `RELAY_HOST_IDLE_SECONDS` | Relay host idle timeout |
+| `RELAY_CLIENT_IDLE_SECONDS` | Relay client idle timeout |
+
+### Version and Connection Strategy
+
+| Variable | Description |
+|----------|-------------|
+| `STRICT_GAME_VERSION_CHECK` | When `false`, game version string differences do not cause join rejection |
+| `STRICT_MOD_VERSION_CHECK` | When `false`, mod version string differences do not cause join rejection |
+| `CONNECTION_STRATEGY` | One of `direct-first`, `relay-first`, `relay-only`; public servers default to `relay-only` |
+
+Note: if both the client and host report a `modList`, the server additionally compares missing entries on each side and returns `missingModsOnLocal` / `missingModsOnHost` in the `mod_mismatch` response.
+
+### Admin Panel
+
+| Variable | Description |
+|----------|-------------|
+| `SERVER_ADMIN_USERNAME` | Admin panel username |
+| `SERVER_ADMIN_PASSWORD_HASH` | Admin panel password hash (`salt:hash` format) |
+| `SERVER_ADMIN_SESSION_SECRET` | Session signing secret |
+| `SERVER_ADMIN_SESSION_TTL_HOURS` | Session validity period in hours |
+| `SERVER_ADMIN_STATE_FILE` | Persistence file path; stores display name, public settings, announcements, and sync state |
+
+Without `SERVER_ADMIN_PASSWORD_HASH` and `SERVER_ADMIN_SESSION_SECRET`, the `/server-admin` page can be opened but login is not possible.
+
+### Master Panel Sync
+
+| Variable | Description |
+|----------|-------------|
+| `SERVER_REGISTRY_BASE_URL` | Master panel URL; the target for applications and heartbeats; defaults to the official master panel at `http://47.111.146.69:18787` |
+| `SERVER_REGISTRY_SYNC_INTERVAL_SECONDS` | Heartbeat sync interval |
+| `SERVER_REGISTRY_SYNC_TIMEOUT_MS` | Sync request timeout |
+| `SERVER_REGISTRY_PUBLIC_BASE_URL` | This sub-server's public HTTP URL, reported to the master panel |
+| `SERVER_REGISTRY_PUBLIC_WS_URL` | This sub-server's public WebSocket URL, reported to the master panel |
+| `SERVER_REGISTRY_BANDWIDTH_PROBE_URL` | Bandwidth probe URL, reported to the master panel |
+| `SERVER_REGISTRY_PROBE_FILE_BYTES` | Bandwidth probe file size |
+
+Note: if `SERVER_REGISTRY_PUBLIC_*` are unset, the server attempts to derive them from `RELAY_PUBLIC_HOST`. If the public listing application is enabled but the reported address is still `127.0.0.1`, `0.0.0.0`, or `localhost`, the admin panel will mark the sync status as a public address configuration error.
+
+---
+
+## API
+
+### General
+
+- `GET /health`
+- `GET /probe`
+- `GET /registry/bandwidth-probe.bin`
+- `GET /announcements`
+- `GET /rooms`
+
+### Room Management
+
+- `POST /rooms`
+- `POST /rooms/:id/join`
+- `POST /rooms/:id/heartbeat`
+- `POST /rooms/:id/connection-events`
+- `DELETE /rooms/:id`
+
+### Admin Panel
+
+- `GET /server-admin`
+- `POST /server-admin/login`
+- `GET /server-admin/settings`
+- `PATCH /server-admin/settings`
+
+### WebSocket
+
+- `WS /control`
+
+### Save-Continue Room Fields
+
+**`POST /rooms`**
+
+- Accepts optional `savedRun`
+- `savedRun.saveKey`: binds the save file to the lobby room
+- `savedRun.slots`: describes each takeover character slot and its `netId`
+
+**`POST /rooms/:id/join`**
+
+- Accepts optional `desiredSavePlayerNetId`
+- Accepts optional `modList`
+- When multiple free character slots exist in a save-continue room, the client must explicitly select one before joining
+- On failure, returns one of: `version_mismatch`, `mod_version_mismatch`, `mod_mismatch`, `room_started`, `room_full`
+
+**`POST /rooms/:id/heartbeat`**
+
+- Accepts `connectedPlayerNetIds`; the server updates which save-continue character slots are currently occupied
+
+**`POST /rooms/:id/connection-events`**
+
+- Clients report phase events: `direct_timeout`, `relay_success`, `relay_failure`; these are written to server logs for diagnosing public network connectivity failures
+
+---
+
+## Control Channel Protocol
+
+### Connection Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `roomId` | Room ID |
+| `controlChannelId` | Control channel ID |
+| `role` | `host` or `client` |
+| `token` or `ticketId` | Authentication credential |
+
+### Current Implementation
+
+- Host/client handshake validation
+- ping/pong keepalive
+- Per-room peer broadcast
+
+The overall multiplayer experience is driven primarily by the game's native `ENet` direct connection. The control channel provides sufficient infrastructure for the current lobby mode.
+
+---
+
+## Log Troubleshooting
+
+### systemd Deployment
+
+```bash
+journalctl -u sts2-lobby.service -n 100 --no-pager
+```
+
+### Docker Deployment
 
 ```bash
 docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 ```
+
+### Common Log Entries
+
+- `create room`
+- `join ticket issued`
+- `relay_host_registered`
+- `relay_client_connected`
+- `connection_event ... phase=direct_timeout`
+- `connection_event ... phase=relay_success`
+- `connection_event ... phase=relay_failure`
+- `relay_allocated`
+- `relay_removed`
+
+### Diagnosis
+
+If `create room` and `join ticket issued` appear in the logs but `relay_host_registered` never does, the issue is typically not a server API failure but rather UDP traffic from the client not reaching the relay port range. Common causes:
+
+- The server's public port range `39000-39149/UDP` is not open
+- The client is running `Clash`, `Surge`, a system-wide proxy, or a TUN interface without routing the lobby server IP through `DIRECT`

@@ -1,45 +1,39 @@
+<div align="center">
+
+**[中文](#中文) · [English](#english)**
+
+</div>
+
+---
+
+<a name="中文"></a>
+
 # STS2 游戏大厅部署指南
 
-这份文档对应当前公开仓库里的两部分：
+本文档对应公开仓库中的两个组件：
 
 - 服务端：`lobby-service/`
 - 客户端：`sts2-lan-connect/`
 
 说明：
 
-- 官方公共服务器母面板为私有服务，不再包含在公开仓库中
-- 公开仓库里的子服务仍然可以接入官方母面板
-- 当前客户端默认大厅固定为阿里云：`http://47.111.146.69:8787`
+- 官方公共服务器母面板为私有服务，不包含在公开仓库中
+- 公开仓库内的子服务可以接入官方母面板
+- 当前客户端默认大厅：`http://47.111.146.69:8787`
 
-当前推荐版本：
+推荐版本：
 
 - 客户端：`0.2.3`
 - 子服务：`0.2.2`
 
-目标结果：
+部署目标：
 
 1. 在 Linux 机器上部署并启动 `lobby-service`
-2. 让这台子服务在需要时自动向官方母面板申请公开展示
+2. 按需向官方母面板申请公开展示
 3. 生成带默认大厅绑定的客户端发布包
 4. 在公开仓库中同步源码和发布产物
 
-本次版本新增：
-
-- 房间聊天面板与控制通道聊天消息
-- 客户端 / 子服务对扩展人数房间元数据的统一兼容
-- `4` 人大厅房间自动启用 `legacy_4p` 协议，用于兼容 `0.2.2`；`5-8` 人房间保持 `extended_8p`
-- 子服务会持久化并回显 `protocolProfile`，对旧 `0.2.2` 四人房执行缺省兼容推断
-- 客户端加入弹窗支持超时后手动取消，遇到协议/兼容错误时会提前停止无意义重试
-- 修复部分安卓机型在启动阶段因 `NDailyRunLoadScreen` 过早 patch 而直接弹出“致命错误”的问题
-- 修复安卓端成功进入主菜单后，打开多人页面 / 游戏大厅时的 `MethodAccessException`；客户端改为在菜单栈拿到 `NMultiplayerSubmenu` 实例后再延后注入大厅入口
-- 子服务器控制台响应式布局修复，移动端和桌面端窄窗口下不再出现 header / 登录状态 / 退出按钮互相挤压
-- 子服务器控制台自动轮询状态时不再覆盖未保存的设置和公告草稿；手动重新加载配置前会先要求确认
-- 客户端建房支持选择 5-8 人房间，包含难度缩放、营地座位、商店布局和宝箱分配适配
-- 续局接管弹窗现在同时显示角色名和玩家名，方便准确找回槽位
-
-这次兼容修复有一个部署前提：
-
-- 如果你希望通过大厅让 `0.2.2` 与 `0.2.3` 兼容联机，关键是大厅服务已经放宽版本检查；如果服务端已经是 relaxed 配置，这次 Android 客户端刷新不需要再同步更新服务端
+---
 
 ## 一、服务端部署
 
@@ -49,28 +43,26 @@
 sudo ./scripts/install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 ```
 
-脚本会自动：
+脚本会自动执行以下操作：
 
-- 复制源码到 `/opt/sts2-lobby/lobby-service`
-- 首次安装生成 `.env`
-- 执行 `npm ci`
-- 执行 `npm run build`
-- 生成启动脚本
-- 在 root + systemd 环境下自动安装并启动 `sts2-lobby.service`
+- 将源码复制到 `/opt/sts2-lobby/lobby-service`
+- 首次安装时生成 `.env`
+- 执行 `npm ci` 和 `npm run build`
+- 生成启动脚本并在 systemd 下安装和启动 `sts2-lobby.service`
 
-默认需要放行：
+默认需要放行的端口：
 
 - `8787/TCP`
 - `39000-39149/UDP`
 
-部署完成后检查：
+部署完成后验证：
 
 ```bash
 curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/probe
 ```
 
-如果你准备让这台 `systemd` 子服务进入官方公开列表，建议首次安装时直接写上公网主机名：
+若需要将此子服务加入官方公开列表，建议在安装时直接指定公网主机名：
 
 ```bash
 sudo ./scripts/install-lobby-service-linux.sh \
@@ -78,58 +70,60 @@ sudo ./scripts/install-lobby-service-linux.sh \
   --relay-public-host <你的公网 IP 或域名>
 ```
 
-这样安装脚本会自动补出：
+安装脚本将自动填入以下环境变量：
 
 - `SERVER_REGISTRY_PUBLIC_BASE_URL`
 - `SERVER_REGISTRY_PUBLIC_WS_URL`
 - `SERVER_REGISTRY_BANDWIDTH_PROBE_URL`
 
-如果你已经安装完了，也可以后补 `/opt/sts2-lobby/lobby-service/.env`，至少保证下面二选一：
+若已完成安装，也可以事后手动编辑 `/opt/sts2-lobby/lobby-service/.env`，至少配置以下二选一：
 
-- 配 `RELAY_PUBLIC_HOST=<公网 IP 或域名>`
-- 或显式填写全部 `SERVER_REGISTRY_PUBLIC_*`
+- `RELAY_PUBLIC_HOST=<公网 IP 或域名>`
+- 或显式填写全部 `SERVER_REGISTRY_PUBLIC_*` 字段
 
-如果这几项都没配，子服务会把本机地址上报给母面板，母面板无法从公网反向探测。
+若以上字段均未配置，子服务将向母面板上报本机地址，母面板将无法从公网反向探测。
 
-### 管理面板登录哈希怎么生成
+### 管理面板密码哈希生成
 
-`SERVER_ADMIN_PASSWORD_HASH` 不是明文密码，必须填 `salt:hash`。
+`SERVER_ADMIN_PASSWORD_HASH` 需填入 `salt:hash` 格式，而非明文密码。
 
-仓库自带生成脚本：
+使用仓库内置脚本生成：
 
 ```bash
 cd lobby-service
 npm run hash-admin-password -- '你的面板密码'
 ```
 
-把输出整串填进 `.env`：
+将输出内容填入 `.env`：
 
 ```text
-SERVER_ADMIN_PASSWORD_HASH=<上一步输出的整串内容>
+SERVER_ADMIN_PASSWORD_HASH=<上一步输出的完整内容>
 ```
 
-`SERVER_ADMIN_SESSION_SECRET` 可以这样生成：
+`SERVER_ADMIN_SESSION_SECRET` 的生成方式：
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-### 对外页面如何打开
+### 对外端点
 
-如果这台子服务已经绑定了公网 IP 或域名，并且安全组 / 防火墙已经放行 `8787/TCP`，外部浏览器可直接访问：
+在安全组 / 防火墙放行 `8787/TCP` 后，以下地址可从外部浏览器访问：
 
-- 管理面板：`http://<你的公网 IP 或域名>:8787/server-admin`
-- 健康检查：`http://<你的公网 IP 或域名>:8787/health`
-- 公告接口：`http://<你的公网 IP 或域名>:8787/announcements`
-- 房间列表接口：`http://<你的公网 IP 或域名>:8787/rooms`
+- 管理面板：`http://<公网 IP 或域名>:8787/server-admin`
+- 健康检查：`http://<公网 IP 或域名>:8787/health`
+- 公告接口：`http://<公网 IP 或域名>:8787/announcements`
+- 房间列表接口：`http://<公网 IP 或域名>:8787/rooms`
 
 说明：
 
-- `lobby-service` 没有给玩家直接浏览房间的独立网页大厅；玩家联机仍通过游戏客户端完成
-- 服主如果要维护公告、公开列表申请和带宽设置，打开的是 `/server-admin`
-- 如果页面能打开但无法登录，优先检查 `.env` 里的 `SERVER_ADMIN_PASSWORD_HASH` 和 `SERVER_ADMIN_SESSION_SECRET`
+- `lobby-service` 没有独立的网页大厅，玩家联机通过游戏客户端完成
+- 服主通过 `/server-admin` 管理公告、公开列表申请和带宽设置
+- 若页面可打开但无法登录，优先检查 `.env` 中的 `SERVER_ADMIN_PASSWORD_HASH` 和 `SERVER_ADMIN_SESSION_SECRET`
 
-### 方式 B：先打包再发到服务器
+### 方式 B：先打包再上传到服务器
+
+在本地执行打包：
 
 ```bash
 ./scripts/package-lobby-service.sh
@@ -146,7 +140,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 sudo ./install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 ```
 
-### 方式 C：先清理旧版本再重装
+### 方式 C：清理旧版本后重装
 
 ```bash
 sudo systemctl stop sts2-lobby || true
@@ -155,92 +149,76 @@ sudo find /opt/sts2-lobby -maxdepth 1 -type f \( -name 'sts2_lobby_service*.zip'
 sudo ./install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 ```
 
-## 二、官方公开列表说明
+---
 
-官方公共服务器母面板不在公开仓库里，但公开仓库内的子服务默认已经准备好接入它。
+## 二、官方公开列表
 
-当前默认配置：
+官方公共服务器母面板不在公开仓库中，但子服务默认已准备好接入。
+
+默认配置：
 
 - 官方母面板：`http://47.111.146.69:18787`
 - 官方默认大厅：`http://47.111.146.69:8787`
 
-如果你使用仓库默认配置或安装脚本默认配置：
+`SERVER_REGISTRY_BASE_URL` 默认写为 `http://47.111.146.69:18787`，表示"申请发往哪台母面板"，不代表母面板可以自动访问到你的子服务。
 
-- `SERVER_REGISTRY_BASE_URL` 会默认写成 `http://47.111.146.69:18787`
-- 这只表示“申请发往哪台母面板”，不表示母面板就一定能访问到你的子服务
-- 当你在 `/server-admin` 里打开“公开列表申请”后，子服务会自动：
-  - 创建申请
-  - claim 审核结果
-  - 按固定周期发送心跳
+在 `/server-admin` 中开启"公开列表申请"后，子服务会自动创建申请、获取审核结果并按周期发送心跳。
 
-要让公开申请真正成立，还必须保证母面板能拿到这台子服的公网地址：
+要让申请真正生效，必须确保母面板能访问到子服务的公网地址：
 
 - `SERVER_REGISTRY_PUBLIC_BASE_URL`
 - `SERVER_REGISTRY_PUBLIC_WS_URL`
 - `SERVER_REGISTRY_BANDWIDTH_PROBE_URL`
 
-如果这三项留空，服务端会优先尝试从 `RELAY_PUBLIC_HOST` 推导；如果连 `RELAY_PUBLIC_HOST` 也没配，就会退回 `127.0.0.1` / `0.0.0.0` 这种本机绑定地址。
+若这三项留空，服务端会尝试从 `RELAY_PUBLIC_HOST` 推导；若后者也未配置，则回退到 `127.0.0.1` / `0.0.0.0` 等本机绑定地址。
 
-因此第 2 个问题的结论是：
+当前版本已加入显式校验：若公开申请上报的是本机地址，`/server-admin` 会直接显示 `公网地址配置错误`。
 
-- 不是只有 `systemd` 才会出问题，Docker 也一样会出问题
-- 真正的关键不是“是不是 Docker”，而是“上报给母面板的公网地址是否可达”
-- 当前版本已经补了显式校验：如果公开申请上报的是本机地址，`/server-admin` 会直接显示 `公网地址配置错误`
-- `/server-admin` 现在会显式展示 `未申请`、`已提交待审`、`已加入公开列表`、`已拒绝`、`申请发送失败`、`同步失败` 等状态，并对异常弹出提醒
+`/server-admin` 会展示以下申请状态：`未申请`、`已提交待审`、`已加入公开列表`、`已拒绝`、`申请发送失败`、`同步失败`，并在异常时弹出提醒。
 
-如果你不想接入官方公开列表，可以清空：
+若不需要接入官方公开列表，将以下配置留空即可：
 
 ```text
 SERVER_REGISTRY_BASE_URL=
 ```
 
-或者直接不要打开 `/server-admin` 里的“公开列表申请”。
+### Docker 部署额外说明
 
-### Docker 方式的额外说明
-
-Docker 并不会自动替你填公网地址。
-
-如果你使用：
+Docker 不会自动填入公网地址。使用以下文件时：
 
 - `deploy/lobby-service.docker.env.example`
 - `deploy/docker-compose.lobby-service.yml`
 
-仍然需要把下面这些占位值改成真实公网 IP / 域名：
+需手动将以下占位值替换为真实公网 IP 或域名：
 
 - `RELAY_PUBLIC_HOST`
 - `SERVER_REGISTRY_PUBLIC_BASE_URL`
 - `SERVER_REGISTRY_PUBLIC_WS_URL`
 - `SERVER_REGISTRY_BANDWIDTH_PROBE_URL`
 
-如果你用了反向代理、HTTPS 或非 `8787` 外部端口，也要按真实外网地址手动改，不要保留默认值。
+若使用了反向代理、HTTPS 或非 `8787` 的外部端口，也需按实际情况修改。
 
-### 线上故障记录
+### Docker 网络注意事项
 
-这次线上迁移时，实际遇到过一个和 Docker 网络模型相关的问题：
+在小规格 ECS 上通过 Docker bridge 模式映射大段 UDP relay 端口时，可能出现 `8787` 空响应、`18787` 超时，严重时甚至导致 SSH banner 无法返回。
 
-- 当 `lobby-service` 在小规格阿里云 ECS 上通过 Docker bridge 发布大段 UDP relay 端口时
-- 可能同时出现 `8787` 空响应、`18787` 超时
-- 更严重时，`22` 端口只剩 TCP 连接，但 SSH banner 不返回
+根本原因在于 "Docker bridge + 大段 UDP 端口映射" 这一网络模型本身，而非业务逻辑问题。
 
-最终结论：
+建议将 `lobby-service` 改为使用宿主机网络（`--network host`），以避免此类故障。在私有环境中同机部署"子服务 + 私有母面板"时，同样建议避开大段 UDP bridge 发布方式。
 
-- 问题不在子服务的业务逻辑
-- 问题点在“Docker bridge + 大段 UDP 端口映射”这层
-- 官方线上已经改为让 `lobby-service` 走宿主机网络，避免再触发这一类故障
-
-如果你将来在自己的私有环境中也部署“子服务 + 私有母面板”的同机栈，建议优先避开这类大段 UDP bridge 发布方式。
+---
 
 ## 三、客户端打包
 
 ### 1. 使用仓库默认大厅
 
-当前仓库内的 [`lobby-defaults.json`](../sts2-lan-connect/lobby-defaults.json) 已经固定指向：
+仓库内的 [`lobby-defaults.json`](../sts2-lan-connect/lobby-defaults.json) 默认指向：
 
 - `baseUrl`: `http://47.111.146.69:8787`
 - `registryBaseUrl`: `http://47.111.146.69:18787`
 - `wsUrl`: `ws://47.111.146.69:8787/control`
 
-所以如果你不额外设置环境变量，打出来的客户端默认大厅就是阿里云这台。
+若不设置额外的环境变量，打包出的客户端将使用上述默认大厅。
 
 ### 2. 生成客户端包
 
@@ -253,7 +231,7 @@ Docker 并不会自动替你填公网地址。
 - `sts2-lan-connect/release/sts2_lan_connect/`
 - `sts2-lan-connect/release/sts2_lan_connect-release.zip`
 
-### 3. 如需临时覆盖默认大厅
+### 3. 临时覆盖默认大厅
 
 ```bash
 export STS2_LOBBY_DEFAULT_BASE_URL="http://<your-host-or-domain>:8787"
@@ -263,31 +241,33 @@ export STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL="http://<your-registry-host-or-domai
 ./scripts/package-sts2-lan-connect.sh
 ```
 
-如果不显式设置 `STS2_LOBBY_DEFAULT_WS_URL`，打包脚本会根据 `STS2_LOBBY_DEFAULT_BASE_URL` 自动推导。
+若不显式设置 `STS2_LOBBY_DEFAULT_WS_URL`，打包脚本会根据 `STS2_LOBBY_DEFAULT_BASE_URL` 自动推导。
 
-## 四、客户端安装 / 卸载
+---
 
-### macOS 玩家
+## 四、客户端安装与卸载
 
-- 双击 `install-sts2-lan-connect-macos.command`
-- 或命令行执行：
+### macOS
+
+双击 `install-sts2-lan-connect-macos.command`，或在命令行执行：
 
 ```bash
 ./install-sts2-lan-connect-macos.sh --install --package-dir .
 ```
 
-### Windows 玩家
+### Windows
 
-- 双击 `install-sts2-lan-connect-windows.bat`
-- 或 PowerShell 执行：
+双击 `install-sts2-lan-connect-windows.bat`，或在 PowerShell 执行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 -Action Install -PackageDir .
 ```
 
+---
+
 ## 五、公开仓库同步
 
-如果你本地已经 clone 了公开仓库 `STS-Game-Lobby`：
+本地已 clone 公开仓库 `STS-Game-Lobby` 后执行：
 
 ```bash
 ./scripts/sync-release-repo.sh --repo-dir ~/Desktop/STS-Game-Lobby
@@ -295,20 +275,313 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 同步结果：
 
-- 源码目录会同步到公开仓库根目录
-- 发布产物会集中同步到公开仓库 `releases/`
-- 私有母面板源码、脚本和 release 产物不会再同步到公开仓库
+- 源码目录同步至公开仓库根目录
+- 发布产物集中同步至公开仓库 `releases/`
+- 私有母面板的源码、脚本和 release 产物不会同步
+
+---
 
 ## 六、游戏内验证
 
-建议至少验证：
+部署完成后，建议在游戏内确认以下项目：
 
-1. 大厅刷新是否正常
-2. 顶部公告轮播是否正常
-3. 搜索、分页、筛选是否正常
-4. 进房后 `房间聊天` 是否能双向收发消息，未读角标和拖动保存位置是否正常
-5. 建房和加入是否正常；如果使用扩展人数补丁，确认房间人数元数据与实际配置一致
-6. `复制本地调试报告` 是否可用
-7. 外部浏览器是否能打开 `http://<公网 IP 或域名>:8787/server-admin`
-8. 子服 `/server-admin` 是否可登录并维护大厅公告
-9. 如果打开了“公开列表申请”，检查同步状态是否进入 `pending_review`、`approved` 或 `heartbeat_ok`
+1. 大厅刷新正常
+2. 顶部公告轮播正常
+3. 搜索、分页、筛选正常
+4. 进房后房间聊天可双向收发消息，未读角标和拖动保存位置正常
+5. 建房和加入房间正常；使用扩展人数补丁时，确认房间人数元数据与实际配置一致
+6. `复制本地调试报告` 功能可用
+7. 外部浏览器可访问 `http://<公网 IP 或域名>:8787/server-admin`
+8. 子服 `/server-admin` 可登录并维护大厅公告
+9. 若已开启"公开列表申请"，确认同步状态为 `pending_review`、`approved` 或 `heartbeat_ok`
+
+---
+
+<a name="english"></a>
+
+# STS2 Game Lobby Deployment Guide
+
+This document covers two components in the public repository:
+
+- Server: `lobby-service/`
+- Client: `sts2-lan-connect/`
+
+Notes:
+
+- The official public server master panel is a private service and is not included in the public repository
+- Sub-services in the public repository can connect to the official master panel
+- Current client default lobby: `http://47.111.146.69:8787`
+
+Recommended versions:
+
+- Client: `0.2.3`
+- Sub-service: `0.2.2`
+
+Deployment goals:
+
+1. Deploy and start `lobby-service` on a Linux machine
+2. Register with the official master panel for public listing when needed
+3. Generate a client release package with a bound default lobby
+4. Sync source code and release artifacts to the public repository
+
+---
+
+## 1. Server Deployment
+
+### Method A: Deploy Directly from Repository
+
+```bash
+sudo ./scripts/install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
+```
+
+The script automatically:
+
+- Copies source to `/opt/sts2-lobby/lobby-service`
+- Generates `.env` on first install
+- Runs `npm ci` and `npm run build`
+- Generates a startup script and installs and starts `sts2-lobby.service` under systemd
+
+Default ports to open:
+
+- `8787/TCP`
+- `39000-39149/UDP`
+
+Verify after deployment:
+
+```bash
+curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:8787/probe
+```
+
+If you plan to join the official public listing, specify the public hostname at install time:
+
+```bash
+sudo ./scripts/install-lobby-service-linux.sh \
+  --install-dir /opt/sts2-lobby \
+  --relay-public-host <your-public-ip-or-domain>
+```
+
+The install script will automatically populate:
+
+- `SERVER_REGISTRY_PUBLIC_BASE_URL`
+- `SERVER_REGISTRY_PUBLIC_WS_URL`
+- `SERVER_REGISTRY_BANDWIDTH_PROBE_URL`
+
+If you have already installed, you can edit `/opt/sts2-lobby/lobby-service/.env` manually. Set at least one of the following:
+
+- `RELAY_PUBLIC_HOST=<public-ip-or-domain>`
+- Or explicitly fill in all `SERVER_REGISTRY_PUBLIC_*` fields
+
+If none of these are set, the sub-service will report its local address to the master panel, making reverse probing from the internet impossible.
+
+### Admin Panel Password Hash
+
+`SERVER_ADMIN_PASSWORD_HASH` must be set in `salt:hash` format, not as a plaintext password.
+
+Generate it using the bundled script:
+
+```bash
+cd lobby-service
+npm run hash-admin-password -- 'your-panel-password'
+```
+
+Paste the full output into `.env`:
+
+```text
+SERVER_ADMIN_PASSWORD_HASH=<full output from the previous step>
+```
+
+Generate `SERVER_ADMIN_SESSION_SECRET`:
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+### External Endpoints
+
+Once `8787/TCP` is open in your firewall or security group, the following are accessible from an external browser:
+
+- Admin panel: `http://<public-ip-or-domain>:8787/server-admin`
+- Health check: `http://<public-ip-or-domain>:8787/health`
+- Announcements: `http://<public-ip-or-domain>:8787/announcements`
+- Room list: `http://<public-ip-or-domain>:8787/rooms`
+
+Notes:
+
+- `lobby-service` does not provide a standalone web lobby for players; multiplayer is handled through the game client
+- Server operators manage announcements, public listing, and bandwidth settings via `/server-admin`
+- If the page loads but login fails, check `SERVER_ADMIN_PASSWORD_HASH` and `SERVER_ADMIN_SESSION_SECRET` in `.env`
+
+### Method B: Package Locally, Then Deploy to Server
+
+Run the packaging script locally:
+
+```bash
+./scripts/package-lobby-service.sh
+```
+
+Artifacts:
+
+- `lobby-service/release/sts2_lobby_service/`
+- `lobby-service/release/sts2_lobby_service.zip`
+
+After uploading and extracting on the server, run:
+
+```bash
+sudo ./install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
+```
+
+### Method C: Remove Old Version and Reinstall
+
+```bash
+sudo systemctl stop sts2-lobby || true
+sudo rm -rf /opt/sts2-lobby/lobby-service /opt/sts2-lobby/start-lobby-service.sh
+sudo find /opt/sts2-lobby -maxdepth 1 -type f \( -name 'sts2_lobby_service*.zip' -o -name '*.tgz' \) -delete
+sudo ./install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
+```
+
+---
+
+## 2. Official Public Listing
+
+The official master panel is not in the public repository, but sub-services are ready to connect to it by default.
+
+Default configuration:
+
+- Official master panel: `http://47.111.146.69:18787`
+- Official default lobby: `http://47.111.146.69:8787`
+
+`SERVER_REGISTRY_BASE_URL` defaults to `http://47.111.146.69:18787`, indicating where registration requests are sent. It does not guarantee the master panel can reach your sub-service.
+
+When "Public Listing" is enabled in `/server-admin`, the sub-service automatically creates a registration request, retrieves the review result, and sends heartbeats on a fixed interval.
+
+For the registration to succeed, the master panel must be able to reach the sub-service's public address via:
+
+- `SERVER_REGISTRY_PUBLIC_BASE_URL`
+- `SERVER_REGISTRY_PUBLIC_WS_URL`
+- `SERVER_REGISTRY_BANDWIDTH_PROBE_URL`
+
+If these are left empty, the server will try to derive them from `RELAY_PUBLIC_HOST`. If that is also unset, it falls back to local bind addresses like `127.0.0.1` / `0.0.0.0`.
+
+The current version includes explicit validation: if the reported address is a local address, `/server-admin` will show `Public address misconfigured`.
+
+`/server-admin` displays the following listing states: `Not registered`, `Submitted, pending review`, `Approved and listed`, `Rejected`, `Submission failed`, `Sync failed`, with alerts on errors.
+
+To opt out of the official public listing, leave the following empty:
+
+```text
+SERVER_REGISTRY_BASE_URL=
+```
+
+### Docker Deployment Notes
+
+Docker does not automatically populate public addresses. When using:
+
+- `deploy/lobby-service.docker.env.example`
+- `deploy/docker-compose.lobby-service.yml`
+
+Replace all placeholder values with real public IPs or domain names:
+
+- `RELAY_PUBLIC_HOST`
+- `SERVER_REGISTRY_PUBLIC_BASE_URL`
+- `SERVER_REGISTRY_PUBLIC_WS_URL`
+- `SERVER_REGISTRY_BANDWIDTH_PROBE_URL`
+
+If you use a reverse proxy, HTTPS, or an external port other than `8787`, update these fields accordingly.
+
+### Docker Network Warning
+
+When publishing a large range of UDP relay ports through Docker bridge mode on a small-spec ECS instance, you may encounter empty responses on `8787`, timeouts on `18787`, and in severe cases, an SSH connection that hangs without returning a banner.
+
+The root cause is the "Docker bridge + large UDP port range" network model, not the application logic.
+
+It is recommended to run `lobby-service` using host networking (`--network host`) to avoid this class of failure. The same applies when co-deploying a sub-service and a private master panel on the same host.
+
+---
+
+## 3. Client Packaging
+
+### 1. Using the Repository Default Lobby
+
+The repository's [`lobby-defaults.json`](../sts2-lan-connect/lobby-defaults.json) points to:
+
+- `baseUrl`: `http://47.111.146.69:8787`
+- `registryBaseUrl`: `http://47.111.146.69:18787`
+- `wsUrl`: `ws://47.111.146.69:8787/control`
+
+Without additional environment variables, packaged clients will use these defaults.
+
+### 2. Build the Client Package
+
+```bash
+./scripts/package-sts2-lan-connect.sh
+```
+
+Artifacts:
+
+- `sts2-lan-connect/release/sts2_lan_connect/`
+- `sts2-lan-connect/release/sts2_lan_connect-release.zip`
+
+### 3. Override the Default Lobby
+
+```bash
+export STS2_LOBBY_DEFAULT_BASE_URL="http://<your-host-or-domain>:8787"
+export STS2_LOBBY_DEFAULT_WS_URL="ws://<your-host-or-domain>:8787/control"
+export STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL="http://<your-registry-host-or-domain>:18787"
+
+./scripts/package-sts2-lan-connect.sh
+```
+
+If `STS2_LOBBY_DEFAULT_WS_URL` is not set, the packaging script will derive it from `STS2_LOBBY_DEFAULT_BASE_URL`.
+
+---
+
+## 4. Client Installation and Uninstallation
+
+### macOS
+
+Double-click `install-sts2-lan-connect-macos.command`, or run from the command line:
+
+```bash
+./install-sts2-lan-connect-macos.sh --install --package-dir .
+```
+
+### Windows
+
+Double-click `install-sts2-lan-connect-windows.bat`, or run in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 -Action Install -PackageDir .
+```
+
+---
+
+## 5. Public Repository Sync
+
+Once you have cloned the `STS-Game-Lobby` public repository locally:
+
+```bash
+./scripts/sync-release-repo.sh --repo-dir ~/Desktop/STS-Game-Lobby
+```
+
+Sync results:
+
+- Source directories are synced to the root of the public repository
+- Release artifacts are collected into `releases/` in the public repository
+- Private master panel source, scripts, and release artifacts are excluded
+
+---
+
+## 6. In-Game Verification Checklist
+
+After deployment, verify the following in the game client:
+
+1. Lobby refreshes correctly
+2. Top announcement carousel displays correctly
+3. Search, pagination, and filtering work correctly
+4. Room chat sends and receives messages in both directions; unread badge and drag-to-reposition work correctly
+5. Room creation and joining work correctly; if using the extended player count patch, confirm room size metadata matches the actual configuration
+6. "Copy local debug report" is functional
+7. External browser can open `http://<public-ip-or-domain>:8787/server-admin`
+8. Sub-service `/server-admin` login works and announcements can be managed
+9. If public listing is enabled, confirm the sync state reaches `pending_review`, `approved`, or `heartbeat_ok`
