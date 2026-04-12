@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Entities.Multiplayer;
@@ -18,7 +19,19 @@ using MegaCrit.Sts2.Core.Runs;
 
 namespace Sts2LanConnect.Scripts;
 
-internal readonly record struct LobbyJoinAttemptResult(bool Joined, string? FailureMessage = null);
+internal enum LobbyJoinAttemptKind
+{
+    Joined,
+    Failed,
+    Canceled
+}
+
+internal readonly record struct LobbyJoinAttemptResult(LobbyJoinAttemptKind Kind, string? FailureMessage = null)
+{
+    public bool Joined => Kind == LobbyJoinAttemptKind.Joined;
+
+    public bool Canceled => Kind == LobbyJoinAttemptKind.Canceled;
+}
 
 internal static class LanConnectLobbyJoinFlow
 {
@@ -27,6 +40,7 @@ internal static class LanConnectLobbyJoinFlow
         Control loadingOverlay,
         LobbyJoinRoomResponse joinResponse,
         string? desiredSavePlayerNetId,
+        CancellationToken cancellationToken,
         Action<string>? reportProgress = null)
     {
         List<JoinAttemptCandidate> candidates = BuildCandidates(joinResponse);
@@ -34,7 +48,7 @@ internal static class LanConnectLobbyJoinFlow
         if (candidates.Count == 0)
         {
             LanConnectPopupUtil.ShowInfo("大厅服务没有返回可用的连接地址，无法加入该房间。");
-            return new LobbyJoinAttemptResult(false, "大厅服务没有返回可用的连接地址。");
+            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, "大厅服务没有返回可用的连接地址。");
         }
 
         loadingOverlay.Visible = true;
@@ -43,12 +57,21 @@ internal static class LanConnectLobbyJoinFlow
 
         try
         {
+            LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, joinResponse.Room.MaxPlayers, "join_room");
             ulong netId = ResolveJoinNetId(joinResponse, desiredSavePlayerNetId);
             for (int index = 0; index < candidates.Count; index++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 JoinAttemptCandidate candidate = candidates[index];
                 reportProgress?.Invoke(BuildCandidateProgressMessage(candidate, index + 1, candidates.Count));
                 LanConnectLobbyManagedJoinFlow joinFlow = new(LanConnectLobbyEndpointDefaults.GetCompatibilityProfile());
+                using CancellationTokenRegistration cancelRegistration = cancellationToken.Register(static state =>
+                {
+                    if (state is CancellationTokenSource source && !source.IsCancellationRequested)
+                    {
+                        source.Cancel();
+                    }
+                }, joinFlow.CancelToken);
                 try
                 {
                     ENetClientConnectionInitializer initializer = new(netId, candidate.Host, candidate.Port);
@@ -68,7 +91,7 @@ internal static class LanConnectLobbyJoinFlow
 
                     PushJoinedScreen(stack, joinFlow.NetService, joinResult);
                     LanConnectLobbyRuntime.Instance?.AttachJoinedClient(joinFlow.NetService, joinResponse);
-                    return new LobbyJoinAttemptResult(true);
+                    return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Joined);
                 }
                 catch (ClientConnectionFailedException ex)
                 {
@@ -81,7 +104,13 @@ internal static class LanConnectLobbyJoinFlow
                         BuildFailurePhase(candidate, ex.info),
                         candidate,
                         BuildFailureDetail(ex)));
-                    if (index + 1 < candidates.Count)
+
+                    if (ShouldStopRetryingAfterFailure(ex))
+                    {
+                        break;
+                    }
+
+                    if (index + 1 < candidates.Count && !cancellationToken.IsCancellationRequested)
                     {
                         reportProgress?.Invoke($"当前连接未成功，正在尝试下一个地址 ({index + 2}/{candidates.Count})");
                     }
@@ -95,7 +124,7 @@ internal static class LanConnectLobbyJoinFlow
                         candidate.IsRelay ? "relay_canceled" : "direct_canceled",
                         candidate,
                         "join_canceled"));
-                    return new LobbyJoinAttemptResult(false, "加入操作已取消。");
+                    return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Canceled, "加入操作已取消。");
                 }
                 catch (Exception ex)
                 {
@@ -117,7 +146,7 @@ internal static class LanConnectLobbyJoinFlow
                 if (!string.IsNullOrWhiteSpace(customMessage))
                 {
                     LanConnectPopupUtil.ShowInfo(customMessage);
-                    return new LobbyJoinAttemptResult(false, customMessage);
+                    return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, customMessage);
                 }
 
                 NErrorPopup? popup = NErrorPopup.Create(lastConnectionFailure.info);
@@ -126,7 +155,7 @@ internal static class LanConnectLobbyJoinFlow
                     NModalContainer.Instance?.Add(popup);
                 }
 
-                return new LobbyJoinAttemptResult(false, lastConnectionFailure.Message);
+                return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, lastConnectionFailure.Message);
             }
 
             if (lastUnexpectedFailure != null)
@@ -137,10 +166,14 @@ internal static class LanConnectLobbyJoinFlow
                     NModalContainer.Instance?.Add(popup);
                 }
 
-                return new LobbyJoinAttemptResult(false, lastUnexpectedFailure.Message);
+                return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, lastUnexpectedFailure.Message);
             }
 
-            return new LobbyJoinAttemptResult(false, "请查看错误弹窗或连接日志。");
+            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, "请查看错误弹窗或连接日志。");
+        }
+        catch (OperationCanceledException)
+        {
+            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Canceled, "加入操作已取消。");
         }
         finally
         {
@@ -255,6 +288,11 @@ internal static class LanConnectLobbyJoinFlow
     private static bool IsLanCandidate(JoinAttemptCandidate candidate)
     {
         return candidate.Label.StartsWith("lan_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ShouldStopRetryingAfterFailure(ClientConnectionFailedException ex)
+    {
+        return !string.IsNullOrWhiteSpace(DescribeJoinFailure(ex));
     }
 
     private static ulong ResolveJoinNetId(LobbyJoinRoomResponse joinResponse, string? desiredSavePlayerNetId)

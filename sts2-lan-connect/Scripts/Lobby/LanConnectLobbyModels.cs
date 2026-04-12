@@ -25,6 +25,8 @@ internal sealed class LobbyRoomSummary
 
     public string ModVersion { get; set; } = string.Empty;
 
+    public string ProtocolProfile { get; set; } = LanConnectProtocolProfiles.Extended8p;
+
     public string RelayState { get; set; } = "disabled";
 
     public DateTimeOffset CreatedAt { get; set; }
@@ -134,6 +136,8 @@ internal sealed class LobbySavedRunSlot
 
     public string CharacterName { get; set; } = string.Empty;
 
+    public string PlayerName { get; set; } = string.Empty;
+
     public bool IsHost { get; set; }
 
     public bool IsConnected { get; set; }
@@ -161,6 +165,8 @@ internal sealed class LobbyCreateRoomRequest
     public string ModVersion { get; set; } = string.Empty;
 
     public List<string> ModList { get; set; } = new();
+
+    public string? ProtocolProfile { get; set; }
 
     public int MaxPlayers { get; set; } = LanConnectConstants.DefaultMaxPlayers;
 
@@ -197,6 +203,8 @@ internal sealed class LobbyJoinRoomRequest
     public List<string> ModList { get; set; } = new();
 
     public string? DesiredSavePlayerNetId { get; set; }
+
+    public string? PlayerNetId { get; set; }
 }
 
 internal sealed class LobbyDirectEndpoint
@@ -295,6 +303,16 @@ internal sealed class LobbyControlEnvelope
     public string? MessageText { get; set; }
 
     public long? SentAtUnixMs { get; set; }
+
+    public string? TargetPlayerNetId { get; set; }
+
+    public string? TargetPlayerName { get; set; }
+
+    public string? Reason { get; set; }
+
+    public string? Message { get; set; }
+
+    public bool? ChatEnabled { get; set; }
 }
 
 internal sealed class LobbyRoomChatEntry

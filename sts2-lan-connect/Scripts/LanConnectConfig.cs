@@ -25,6 +25,10 @@ internal sealed class LanConnectConfigData
     public float? RoomChatOffsetY { get; set; }
 
     public List<LanConnectSavedRoomBinding> SaveRoomBindings { get; set; } = new();
+
+    public int? MaxPlayers { get; set; }
+
+    public bool? DifficultyScalingEnabled { get; set; }
 }
 
 internal static class LanConnectConfig
@@ -204,6 +208,57 @@ internal static class LanConnectConfig
         }
     }
 
+    public static int? MaxPlayers
+    {
+        get
+        {
+            lock (Sync)
+            {
+                return _data.MaxPlayers;
+            }
+        }
+        set
+        {
+            lock (Sync)
+            {
+                int? clamped = value.HasValue
+                    ? Math.Clamp(value.Value, LanConnectConstants.MinMaxPlayers, LanConnectConstants.MaxMaxPlayers)
+                    : null;
+                if (_data.MaxPlayers == clamped)
+                {
+                    return;
+                }
+
+                _data.MaxPlayers = clamped;
+                SaveUnsafe();
+            }
+        }
+    }
+
+    public static bool DifficultyScalingEnabled
+    {
+        get
+        {
+            lock (Sync)
+            {
+                return _data.DifficultyScalingEnabled ?? true;
+            }
+        }
+        set
+        {
+            lock (Sync)
+            {
+                if (_data.DifficultyScalingEnabled == value)
+                {
+                    return;
+                }
+
+                _data.DifficultyScalingEnabled = value;
+                SaveUnsafe();
+            }
+        }
+    }
+
     public static LanConnectSavedRoomBinding? TryGetSaveRoomBinding(string saveKey)
     {
         lock (Sync)
@@ -348,6 +403,11 @@ internal static class LanConnectConfig
             _data.RoomChatOffsetY = null;
         }
 
+        if (_data.MaxPlayers.HasValue)
+        {
+            _data.MaxPlayers = Math.Clamp(_data.MaxPlayers.Value, LanConnectConstants.MinMaxPlayers, LanConnectConstants.MaxMaxPlayers);
+        }
+
         _data.SaveRoomBindings = _data.SaveRoomBindings
             .Where(binding => !string.IsNullOrWhiteSpace(binding.SaveKey) && !string.IsNullOrWhiteSpace(binding.RoomName))
             .Select(CloneBinding)
@@ -373,6 +433,7 @@ internal static class LanConnectConfig
             RunStartTime = binding.RunStartTime,
             PlayerCount = binding.PlayerCount,
             PlayerSignature = binding.PlayerSignature,
+            PlayerNames = binding.PlayerNames,
             UpdatedAtUnixSeconds = binding.UpdatedAtUnixSeconds
         };
     }

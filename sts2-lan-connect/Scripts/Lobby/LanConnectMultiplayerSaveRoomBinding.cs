@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
@@ -29,6 +30,8 @@ internal sealed class LanConnectSavedRoomBinding
     public int PlayerCount { get; set; }
 
     public string PlayerSignature { get; set; } = string.Empty;
+
+    public string PlayerNames { get; set; } = string.Empty;
 
     public long UpdatedAtUnixSeconds { get; set; }
 }
@@ -127,6 +130,7 @@ internal static class LanConnectMultiplayerSaveRoomBinding
             RunStartTime = run.StartTime,
             PlayerCount = run.Players.Count,
             PlayerSignature = BuildPlayerSignature(run),
+            PlayerNames = BuildPlayerNamesForPersist(run),
             UpdatedAtUnixSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
         };
 
@@ -172,7 +176,7 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         return run.DailyTime.HasValue ? "daily" : "custom";
     }
 
-    public static LobbySavedRunInfo BuildSavedRunInfo(SerializableRun run, ulong hostNetId)
+    public static LobbySavedRunInfo BuildSavedRunInfo(SerializableRun run, ulong hostNetId, Dictionary<ulong, string>? storedPlayerNames = null)
     {
         return new LobbySavedRunInfo
         {
@@ -180,7 +184,7 @@ internal static class LanConnectMultiplayerSaveRoomBinding
             ConnectedPlayerNetIds = new() { hostNetId.ToString(CultureInfo.InvariantCulture) },
             Slots = run.Players
                 .OrderBy(player => player.NetId)
-                .Select(player => BuildSavedRunSlot(player, hostNetId))
+                .Select(player => BuildSavedRunSlot(player, hostNetId, storedPlayerNames))
                 .ToList()
         };
     }
@@ -223,13 +227,20 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         };
     }
 
-    private static LobbySavedRunSlot BuildSavedRunSlot(SerializablePlayer player, ulong hostNetId)
+    private static LobbySavedRunSlot BuildSavedRunSlot(SerializablePlayer player, ulong hostNetId, Dictionary<ulong, string>? storedPlayerNames)
     {
+        string? playerName = LanConnectLobbyPlayerNameDirectory.TryGetPlayerName(player.NetId);
+        if (string.IsNullOrWhiteSpace(playerName))
+        {
+            storedPlayerNames?.TryGetValue(player.NetId, out playerName);
+        }
+
         return new LobbySavedRunSlot
         {
             NetId = player.NetId.ToString(CultureInfo.InvariantCulture),
             CharacterId = player.CharacterId?.Entry ?? string.Empty,
             CharacterName = ResolveCharacterName(player),
+            PlayerName = playerName ?? string.Empty,
             IsHost = player.NetId == hostNetId,
             IsConnected = player.NetId == hostNetId
         };
@@ -300,5 +311,61 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         }
 
         return run.Players.First().NetId;
+    }
+
+    public static Dictionary<ulong, string> ParsePlayerNames(string? playerNames)
+    {
+        var result = new Dictionary<ulong, string>();
+        if (string.IsNullOrWhiteSpace(playerNames))
+        {
+            return result;
+        }
+
+        foreach (string entry in playerNames.Split(','))
+        {
+            int sep = entry.IndexOf(':');
+            if (sep <= 0 || sep >= entry.Length - 1)
+            {
+                continue;
+            }
+
+            if (ulong.TryParse(entry[..sep], NumberStyles.None, CultureInfo.InvariantCulture, out ulong netId))
+            {
+                string name = LanConnectConfig.SanitizePlayerDisplayName(entry[(sep + 1)..]);
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    result[netId] = name;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static string BuildPlayerNamesForPersist(SerializableRun run)
+    {
+        string fromDirectory = BuildPlayerNamesFromDirectory(run);
+        if (!string.IsNullOrWhiteSpace(fromDirectory))
+        {
+            return fromDirectory;
+        }
+
+        LanConnectSavedRoomBinding? existing = LanConnectConfig.TryGetSaveRoomBinding(BuildSaveKey(run));
+        return existing?.PlayerNames ?? string.Empty;
+    }
+
+    private static string BuildPlayerNamesFromDirectory(SerializableRun run)
+    {
+        var entries = run.Players
+            .OrderBy(player => player.NetId)
+            .Select(player =>
+            {
+                string? name = LanConnectLobbyPlayerNameDirectory.TryGetPlayerName(player.NetId);
+                return string.IsNullOrWhiteSpace(name)
+                    ? null
+                    : $"{player.NetId}:{name}";
+            })
+            .Where(entry => entry != null);
+        return string.Join(",", entries);
     }
 }

@@ -1,0 +1,18 @@
+{
+  "displayName": "",
+  "publicListingEnabled": false,
+  "bandwidthCapacityMbps": null,
+  "probePeak7dCapacityMbps": null,
+  "resolvedCapacityMbps": null,
+  "capacitySource": "unknown",
+  "announcements": [],
+  "extraMetadata": {},
+  "submissionId": "",
+  "submissionClaimSecret": "",
+  "serverId": "",
+  "serverToken": "",
+  "lastSyncAt": "2026-03-24T04:18:42.911Z",
+  "lastSyncStatus": "registry_disabled",
+  "lastSyncError": "SERVER_REGISTRY_BASE_URL 未配置。",
+  "lastReviewNote": ""
+}

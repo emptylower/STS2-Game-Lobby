@@ -7,7 +7,11 @@ export function renderServerAdminPage() {
     <title>STS2 服务器控制台</title>
     <link rel="stylesheet" href="https://unpkg.com/antd@5.22.6/dist/reset.css" />
     <style>
-      html, body, #root { min-height: 100%; }
+      html, body, #root {
+        min-height: 100%;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+      }
       body {
         margin: 0;
         background:
@@ -23,6 +27,10 @@ export function renderServerAdminPage() {
         position: sticky;
         top: 0;
         z-index: 8;
+        height: auto;
+        min-height: 0;
+        line-height: normal;
+        padding: 0;
         background: rgba(255,255,255,0.86);
         backdrop-filter: blur(10px);
         border-bottom: 1px solid rgba(5, 5, 5, 0.06);
@@ -32,7 +40,8 @@ export function renderServerAdminPage() {
         margin: 0 auto;
         padding: 20px 24px;
         display: flex;
-        align-items: center;
+        flex-wrap: wrap;
+        align-items: flex-start;
         justify-content: space-between;
         gap: 16px;
       }
@@ -40,6 +49,26 @@ export function renderServerAdminPage() {
         display: flex;
         flex-direction: column;
         gap: 4px;
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+      .page-brand-title {
+        margin: 0 !important;
+        line-height: 1.15;
+        overflow-wrap: anywhere;
+      }
+      .page-brand-subtitle {
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+      .page-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 12px;
+        flex: 0 0 auto;
+        margin-left: auto;
       }
       .page-content {
         max-width: 1280px;
@@ -124,6 +153,49 @@ export function renderServerAdminPage() {
         }
         .announcement-grid.two-columns {
           grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 640px) {
+        .page-header-inner {
+          flex-direction: column;
+          align-items: stretch;
+          padding-top: 16px;
+          padding-bottom: 16px;
+          gap: 12px;
+        }
+        .page-brand-title {
+          font-size: 24px !important;
+        }
+        .page-brand-subtitle {
+          font-size: 12px;
+        }
+        .page-actions {
+          width: 100%;
+        }
+        .section-title,
+        .announcement-card-header {
+          flex-wrap: wrap;
+        }
+        .status-block .ant-descriptions-item-label {
+          width: 120px;
+        }
+      }
+      @media (max-width: 480px) {
+        .page-content {
+          padding-top: 16px;
+          padding-bottom: 16px;
+        }
+        .page-brand-subtitle {
+          display: none;
+        }
+        .page-actions {
+          justify-content: space-between;
+        }
+        .page-actions .ant-badge-status-text {
+          font-size: 12px;
+        }
+        .status-block .ant-descriptions-item-label {
+          width: 108px;
         }
       }
     </style>
@@ -640,30 +712,56 @@ export function renderServerAdminPage() {
           const [session, setSession] = React.useState(null);
           const [settings, setSettings] = React.useState(null);
           const [announcements, setAnnouncements] = React.useState([]);
+          const [hasUnsavedDrafts, setHasUnsavedDrafts] = React.useState(false);
+          const [pollRefreshDeferred, setPollRefreshDeferred] = React.useState(false);
           const [loginLoading, setLoginLoading] = React.useState(false);
           const [settingsLoading, setSettingsLoading] = React.useState(false);
           const [saveLoading, setSaveLoading] = React.useState(false);
           const [loginForm] = Form.useForm();
           const [settingsForm] = Form.useForm();
           const settingsRef = React.useRef(null);
+          const draftDirtyRef = React.useRef(false);
           const statusAlert = settings ? buildStatusAlert(settings) : null;
+
+          const clearDraftDirty = React.useCallback(function () {
+            draftDirtyRef.current = false;
+            setHasUnsavedDrafts(false);
+            setPollRefreshDeferred(false);
+          }, []);
+
+          const markDraftDirty = React.useCallback(function () {
+            if (draftDirtyRef.current) {
+              return;
+            }
+
+            draftDirtyRef.current = true;
+            setHasUnsavedDrafts(true);
+          }, []);
 
           const applySettingsSnapshot = React.useCallback(function (next, source) {
             const previous = settingsRef.current;
             settingsRef.current = next;
             setSettings(next);
-            setAnnouncements(normalizeAnnouncements(next.announcements));
-            settingsForm.setFieldsValue({
-              displayName: next.displayName || "",
-              publicListingEnabled: Boolean(next.publicListingEnabled),
-              bandwidthCapacityMbps: next.bandwidthCapacityMbps,
-            });
+            if (source === "poll" && draftDirtyRef.current) {
+              setPollRefreshDeferred(true);
+            } else {
+              setAnnouncements(normalizeAnnouncements(next.announcements));
+              settingsForm.setFieldsValue({
+                displayName: next.displayName || "",
+                publicListingEnabled: Boolean(next.publicListingEnabled),
+                bandwidthCapacityMbps: next.bandwidthCapacityMbps,
+              });
+              clearDraftDirty();
+            }
             notifySyncState(next, previous, source || "refresh");
-          }, [settingsForm]);
+          }, [clearDraftDirty, settingsForm]);
 
           const refreshSettings = React.useCallback(async function (options) {
             const source = options && options.source ? options.source : "refresh";
-            setSettingsLoading(true);
+            const showLoading = source !== "poll";
+            if (showLoading) {
+              setSettingsLoading(true);
+            }
             try {
               const next = await readJson("/server-admin/settings");
               applySettingsSnapshot(next, source);
@@ -681,7 +779,9 @@ export function renderServerAdminPage() {
                 throw error;
               }
             } finally {
-              setSettingsLoading(false);
+              if (showLoading) {
+                setSettingsLoading(false);
+              }
             }
           }, [applySettingsSnapshot]);
 
@@ -696,10 +796,11 @@ export function renderServerAdminPage() {
               setSettings(null);
               setAnnouncements([]);
               settingsRef.current = null;
+              clearDraftDirty();
             } finally {
               setBooting(false);
             }
-          }, [refreshSettings]);
+          }, [clearDraftDirty, refreshSettings]);
 
           React.useEffect(function () {
             void refreshSession();
@@ -744,6 +845,7 @@ export function renderServerAdminPage() {
             setSettings(null);
             setAnnouncements([]);
             settingsRef.current = null;
+            clearDraftDirty();
             message.success("已退出登录");
           }
 
@@ -771,7 +873,19 @@ export function renderServerAdminPage() {
             await handleSave(settingsForm.getFieldsValue());
           }
 
+          async function handleManualRefresh() {
+            if (draftDirtyRef.current && typeof window !== "undefined" && typeof window.confirm === "function") {
+              const confirmed = window.confirm("当前有未保存的修改。重新加载会覆盖左侧设置和公告草稿，是否继续？");
+              if (!confirmed) {
+                return;
+              }
+            }
+
+            await refreshSettings({ source: "manual" });
+          }
+
           function addAnnouncement() {
+            markDraftDirty();
             setAnnouncements(function (current) {
               return current.concat([createAnnouncementDraft({
                 type: "info",
@@ -783,6 +897,7 @@ export function renderServerAdminPage() {
           }
 
           function updateAnnouncement(index, patch) {
+            markDraftDirty();
             setAnnouncements(function (current) {
               return current.map(function (item, itemIndex) {
                 return itemIndex === index ? { ...item, ...patch } : item;
@@ -791,6 +906,7 @@ export function renderServerAdminPage() {
           }
 
           function moveAnnouncement(index, direction) {
+            markDraftDirty();
             setAnnouncements(function (current) {
               const nextIndex = index + direction;
               if (nextIndex < 0 || nextIndex >= current.length) {
@@ -805,6 +921,7 @@ export function renderServerAdminPage() {
           }
 
           function removeAnnouncement(index) {
+            markDraftDirty();
             setAnnouncements(function (current) {
               return current.filter(function (_item, itemIndex) {
                 return itemIndex !== index;
@@ -877,14 +994,14 @@ export function renderServerAdminPage() {
                   "div",
                   { className: "page-header-inner" },
                   h(
-                    "div",
-                    { className: "page-brand" },
-                    h(Title, { level: 3, style: { margin: 0 } }, "服务器控制台"),
-                    h(Text, { type: "secondary" }, "管理公开列表申请、显示名称和与公共服务器控制台的同步状态")
+                  "div",
+                  { className: "page-brand" },
+                    h(Title, { level: 3, className: "page-brand-title" }, "服务器控制台"),
+                    h(Text, { type: "secondary", className: "page-brand-subtitle" }, "管理公开列表申请、显示名称和与公共服务器控制台的同步状态")
                   ),
                   h(
-                    Space,
-                    { size: 12 },
+                    "div",
+                    { className: "page-actions" },
                     h(Badge, { status: "processing", text: "已登录" }),
                     h(Button, { onClick: handleLogout }, "退出")
                   )
@@ -902,6 +1019,16 @@ export function renderServerAdminPage() {
                     h(
                       Space,
                       { direction: "vertical", size: 16, style: { width: "100%" } },
+                      hasUnsavedDrafts
+                        ? h(Alert, {
+                            type: pollRefreshDeferred ? "warning" : "info",
+                            showIcon: true,
+                            message: pollRefreshDeferred ? "有未保存修改，自动刷新不会覆盖当前草稿" : "有未保存修改",
+                            description: pollRefreshDeferred
+                              ? "右侧状态仍会自动刷新；左侧设置和公告草稿会继续保留，直到你保存或手动重新加载配置。"
+                              : "右侧状态仍会自动刷新；左侧设置和公告草稿在保存前不会被自动覆盖。",
+                          })
+                        : null,
                       h(
                         Card,
                         { className: "console-card", title: "公开设置" },
@@ -920,6 +1047,7 @@ export function renderServerAdminPage() {
                               form: settingsForm,
                               layout: "vertical",
                               onFinish: handleSave,
+                              onValuesChange: function () { markDraftDirty(); },
                               initialValues: {
                                 displayName: settings.displayName || "",
                                 publicListingEnabled: Boolean(settings.publicListingEnabled),
@@ -951,7 +1079,7 @@ export function renderServerAdminPage() {
                                 Space,
                                 { size: 12 },
                                 h(Button, { type: "primary", htmlType: "submit", loading: saveLoading }, "保存设置"),
-                                h(Button, { onClick: function () { void refreshSettings({ source: "manual" }); }, loading: settingsLoading }, "刷新状态")
+                                h(Button, { onClick: function () { void handleManualRefresh(); }, loading: settingsLoading }, "重新加载配置")
                               )
                             )
                           )

@@ -3,6 +3,12 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypt
 export type RoomStatus = "open" | "starting" | "full" | "closed";
 export type RelayState = "disabled" | "planned" | "ready";
 export type ConnectionStrategy = "direct-first" | "relay-first" | "relay-only";
+export type ProtocolProfile = "legacy_4p" | "extended_8p";
+
+const Legacy4pProtocolProfile: ProtocolProfile = "legacy_4p";
+const Extended8pProtocolProfile: ProtocolProfile = "extended_8p";
+const LegacyCompatibleModVersion = "0.2.2";
+const RmpAdvertisedModId = "RemoveMultiplayerPlayerLimit";
 
 export interface HostConnectionInfo {
   enetPort: number;
@@ -33,6 +39,7 @@ export interface SavedRunSlotInput {
   netId: string;
   characterId?: string | undefined;
   characterName?: string | undefined;
+  playerName?: string | undefined;
   isHost?: boolean | undefined;
 }
 
@@ -40,6 +47,7 @@ export interface SavedRunSlot {
   netId: string;
   characterId: string;
   characterName: string;
+  playerName: string;
   isHost: boolean;
   isConnected: boolean;
 }
@@ -61,6 +69,7 @@ export interface RoomSummary {
   maxPlayers: number;
   version: string;
   modVersion: string;
+  protocolProfile: ProtocolProfile;
   relayState: RelayState;
   createdAt: Date;
   lastHeartbeatAt: Date;
@@ -81,12 +90,18 @@ export interface JoinTicket {
   connectionPlan: ConnectionPlan;
 }
 
+export interface RoomSettings {
+  chatEnabled: boolean;
+}
+
 export interface HostSession {
   roomId: string;
   controlChannelId: string;
   hostToken: string;
   relayState: RelayState;
   lastSeenAt: Date;
+  kickedPlayerNetIds: Set<string>;
+  roomSettings: RoomSettings;
 }
 
 export interface CreateRoomInput {
@@ -97,6 +112,7 @@ export interface CreateRoomInput {
   version: string;
   modVersion: string;
   modList?: string[] | undefined;
+  protocolProfile?: ProtocolProfile | string | undefined;
   maxPlayers: number;
   hostConnectionInfo: {
     enetPort: number;
@@ -116,6 +132,7 @@ export interface JoinRoomInput {
   modVersion: string;
   modList?: string[] | undefined;
   desiredSavePlayerNetId?: string | undefined;
+  playerNetId?: string | undefined;
 }
 
 export interface HeartbeatInput {
@@ -209,6 +226,13 @@ export class LobbyStore {
     const controlChannelId = randomUUID();
     const hostToken = randomToken();
     const password = input.password?.trim();
+    const modList = normalizeModList(input.modList ?? []);
+    const protocolProfile = normalizeProtocolProfile(
+      input.protocolProfile,
+      input.maxPlayers,
+      input.modVersion,
+      modList,
+    );
     const room: Room = {
       roomId,
       roomName: input.roomName.trim(),
@@ -221,7 +245,8 @@ export class LobbyStore {
       maxPlayers: input.maxPlayers,
       version: input.version.trim(),
       modVersion: input.modVersion.trim(),
-      modList: normalizeModList(input.modList ?? []),
+      modList,
+      protocolProfile,
       relayState: "disabled",
       createdAt: now,
       lastHeartbeatAt: now,
@@ -239,6 +264,8 @@ export class LobbyStore {
       hostToken,
       relayState: "disabled",
       lastSeenAt: now,
+      kickedPlayerNetIds: new Set(),
+      roomSettings: { chatEnabled: true },
     };
 
     this.rooms.set(roomId, room);
@@ -261,6 +288,11 @@ export class LobbyStore {
     const requestedModList = normalizeModList(input.modList ?? []);
     const availableSavedRunSlots = getAvailableSavedRunSlots(room);
     const canResumeSavedRun = room.savedRun !== undefined && availableSavedRunSlots.length > 0;
+
+    const playerNetId = input.playerNetId?.trim();
+    if (playerNetId && hostSession.kickedPlayerNetIds.has(playerNetId)) {
+      throw new LobbyStoreError(403, "kicked", "你已被房主移出该房间，无法重新加入。");
+    }
 
     if (room.status === "closed") {
       throw new LobbyStoreError(410, "room_closed", "该房间已经关闭。");
@@ -445,6 +477,40 @@ export class LobbyStore {
     return true;
   }
 
+  kickPlayer(roomId: string, hostToken: string, playerNetId: string) {
+    const hostSession = this.requireHostSession(roomId);
+    this.assertHostToken(hostSession, hostToken);
+    hostSession.kickedPlayerNetIds.add(playerNetId);
+  }
+
+  isPlayerKicked(roomId: string, playerNetId: string) {
+    const hostSession = this.hostSessions.get(roomId);
+    if (!hostSession) {
+      return false;
+    }
+
+    return hostSession.kickedPlayerNetIds.has(playerNetId);
+  }
+
+  updateRoomSettings(roomId: string, hostToken: string, settings: Partial<RoomSettings>): RoomSettings {
+    const hostSession = this.requireHostSession(roomId);
+    this.assertHostToken(hostSession, hostToken);
+    if (settings.chatEnabled !== undefined) {
+      hostSession.roomSettings.chatEnabled = settings.chatEnabled;
+    }
+
+    return { ...hostSession.roomSettings };
+  }
+
+  getRoomSettings(roomId: string): RoomSettings {
+    const hostSession = this.hostSessions.get(roomId);
+    if (!hostSession) {
+      return { chatEnabled: true };
+    }
+
+    return { ...hostSession.roomSettings };
+  }
+
   private requireRoom(roomId: string) {
     const room = this.rooms.get(roomId);
     if (!room) {
@@ -482,6 +548,7 @@ export class LobbyStore {
   private toRoomSummary(room: Room): RoomSummary {
     const relayState = this.hostSessions.get(room.roomId)?.relayState ?? "disabled";
     const visibleStatus = getPublicRoomStatus(room);
+    const protocolProfile = resolveRoomProtocolProfile(room);
     return {
       roomId: room.roomId,
       roomName: room.roomName,
@@ -493,6 +560,7 @@ export class LobbyStore {
       maxPlayers: room.maxPlayers,
       version: room.version,
       modVersion: room.modVersion,
+      protocolProfile,
       relayState,
       createdAt: room.createdAt,
       lastHeartbeatAt: room.lastHeartbeatAt,
@@ -616,11 +684,14 @@ function normalizeComparableVersion(value: string) {
     return trimmed;
   }
 
-  const segments = trimmed.split(".");
-  if (segments.some((segment) => !/^\d+$/.test(segment))) {
+  const comparableSource = /^\d+(?:\.\d+)*$/.test(trimmed)
+    ? trimmed
+    : extractEmbeddedComparableVersion(trimmed);
+  if (!comparableSource) {
     return trimmed;
   }
 
+  const segments = comparableSource.split(".");
   const normalized = segments.map((segment) => String(Number.parseInt(segment, 10)));
   let end = normalized.length - 1;
   while (end > 0 && normalized[end] === "0") {
@@ -628,6 +699,67 @@ function normalizeComparableVersion(value: string) {
   }
 
   return normalized.slice(0, end + 1).join(".");
+}
+
+function extractEmbeddedComparableVersion(value: string) {
+  const match = value.match(/\d+(?:\.\d+)+/);
+  return match?.[0];
+}
+
+function compareComparableVersions(left: string, right: string) {
+  const leftNormalized = normalizeComparableVersion(left);
+  const rightNormalized = normalizeComparableVersion(right);
+  if (!/^\d+(?:\.\d+)*$/.test(leftNormalized) || !/^\d+(?:\.\d+)*$/.test(rightNormalized)) {
+    return null;
+  }
+
+  const leftParts = leftNormalized.split(".").map((segment) => Number.parseInt(segment, 10));
+  const rightParts = rightNormalized.split(".").map((segment) => Number.parseInt(segment, 10));
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = leftParts[index] ?? 0;
+    const rightValue = rightParts[index] ?? 0;
+    if (leftValue !== rightValue) {
+      return leftValue < rightValue ? -1 : 1;
+    }
+  }
+
+  return 0;
+}
+
+function isLegacyCompatibleModVersion(modVersion: string) {
+  const comparison = compareComparableVersions(modVersion, LegacyCompatibleModVersion);
+  return comparison != null && comparison <= 0;
+}
+
+function advertisesRmpMod(modList: string[]) {
+  return modList.some((value) => value.localeCompare(RmpAdvertisedModId, "en", { sensitivity: "accent" }) === 0);
+}
+
+function normalizeProtocolProfile(
+  requestedProfile: string | undefined,
+  maxPlayers: number,
+  modVersion: string,
+  modList: string[],
+): ProtocolProfile {
+  const normalized = requestedProfile?.trim().toLowerCase();
+  if (normalized === Legacy4pProtocolProfile) {
+    return Legacy4pProtocolProfile;
+  }
+
+  if (normalized === Extended8pProtocolProfile) {
+    return Extended8pProtocolProfile;
+  }
+
+  if (maxPlayers === 4 && isLegacyCompatibleModVersion(modVersion) && !advertisesRmpMod(modList)) {
+    return Legacy4pProtocolProfile;
+  }
+
+  return Extended8pProtocolProfile;
+}
+
+function resolveRoomProtocolProfile(room: Pick<Room, "protocolProfile" | "maxPlayers" | "modVersion" | "modList">) {
+  return normalizeProtocolProfile(room.protocolProfile, room.maxPlayers, room.modVersion, room.modList);
 }
 
 function hashPassword(password: string) {
@@ -711,6 +843,7 @@ function normalizeSavedRunInput(savedRun: CreateRoomInput["savedRun"]): SavedRun
       netId: normalizeNetId(slot.netId),
       characterId: slot.characterId?.trim() ?? "",
       characterName: slot.characterName?.trim() ?? "",
+      playerName: slot.playerName?.trim() ?? "",
       isHost: Boolean(slot.isHost),
       isConnected: false,
     }))

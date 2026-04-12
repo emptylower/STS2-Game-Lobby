@@ -114,7 +114,9 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
     private static async System.Threading.Tasks.Task PublishAsync(Control screen, ContinuedRunHostContext context, string source)
     {
         LanConnectResolvedRoomBinding binding = LanConnectMultiplayerSaveRoomBinding.Resolve(context.Run);
-        LobbySavedRunInfo savedRunInfo = LanConnectMultiplayerSaveRoomBinding.BuildSavedRunInfo(context.Run, context.NetService.NetId);
+        LanConnectSavedRoomBinding? storedBinding = LanConnectConfig.TryGetSaveRoomBinding(binding.SaveKey);
+        Dictionary<ulong, string> storedPlayerNames = LanConnectMultiplayerSaveRoomBinding.ParsePlayerNames(storedBinding?.PlayerNames);
+        LobbySavedRunInfo savedRunInfo = LanConnectMultiplayerSaveRoomBinding.BuildSavedRunInfo(context.Run, context.NetService.NetId, storedPlayerNames);
         GD.Print(
             $"sts2_lan_connect continue_run_publish: attempt screen={context.ScreenType}, source={source}, saveKey={binding.SaveKey}, storedBinding={binding.HasStoredBinding}, roomName='{binding.RoomName}', passwordSet={!string.IsNullOrWhiteSpace(binding.Password)}");
 

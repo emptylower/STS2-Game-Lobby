@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Helpers;
@@ -35,6 +36,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private const int FilterModeStandardId = 200;
     private const int FilterModeDailyId = 201;
     private const int FilterModeCustomId = 202;
+    private const double JoinCancelRevealDelaySeconds = 3d;
 
     // ── Retro pixel-art palette (converted from reference UI oklch values) ──
     private static readonly Color BackdropColor = new(0.97f, 0.95f, 0.89f, 1f);        // #F8F1E3 oklch(0.96,0.02,85)
@@ -130,6 +132,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private LineEdit? _roomNameInput;
     private OptionButton? _roomTypeOption;
     private LineEdit? _roomPasswordInput;
+    private SpinBox? _maxPlayersSpinBox;
+    private Label? _maxPlayersHintLabel;
     private Control? _createGuardDialogContainer;
     private Label? _createGuardDialogTitle;
     private Label? _createGuardDialogMessage;
@@ -144,10 +148,14 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Label? _progressDialogTitle;
     private Label? _progressDialogMessage;
     private Label? _progressDialogHint;
+    private Button? _progressDialogCancelButton;
     private Control? _resumeSlotDialogContainer;
     private Label? _resumeSlotDialogTitle;
     private Label? _resumeSlotDialogErrorLabel;
     private VBoxContainer? _resumeSlotDialogOptions;
+    private Control? _inviteConfirmDialogContainer;
+    private Label? _inviteConfirmDialogMessage;
+    private LanConnectInvitePayload? _pendingInvitePayload;
     private Control? _directoryServerDialogContainer;
     private Label? _directoryServerDialogTitle;
     private Label? _directoryServerDialogStatusLabel;
@@ -161,6 +169,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private bool _actionInFlight;
     private double _timeUntilAutoRefresh;
     private double _progressDialogTick;
+    private double _progressDialogVisibleDuration;
     private int _progressDialogDotCount;
     private int _currentPageIndex;
     private int _consecutiveRefreshFailures;
@@ -182,8 +191,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private bool _showStandardMode = true;
     private bool _showDailyMode = true;
     private bool _showCustomMode = true;
+    private bool _progressDialogAllowCancel;
     private double _healthPulseTime;
     private Color _healthIndicatorDotColor = SuccessColor;
+    private CancellationTokenSource? _activeJoinCancellationSource;
 
     public void Initialize(NMultiplayerSubmenu submenu, NSubmenuButton templateButton, NSubmenuStack stack, Control loadingOverlay)
     {
@@ -222,6 +233,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         EnsureAnnouncementFallback();
         RebuildRoomStage();
         UpdateActionButtons();
+        CheckClipboardForInviteCode();
         TaskHelper.RunSafely(CheckConnectivityAndRefreshAsync());
     }
 
@@ -295,6 +307,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _directoryServerDialogContainer.Visible = false;
         }
 
+        if (_inviteConfirmDialogContainer != null)
+        {
+            _inviteConfirmDialogContainer.Visible = false;
+        }
+
         HideProgressDialog();
     }
 
@@ -347,6 +364,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         AddChild(BuildResumeSlotDialog());
         AddChild(BuildDirectoryServerDialog());
         AddChild(BuildFilterDialog());
+        AddChild(BuildInviteConfirmDialog());
         ApplyResponsiveLayout();
     }
 
@@ -450,9 +468,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _settingsButton = CreateToolbarIconButton("展开或收起设置", ToggleSettingsVisibility, GlyphIconKind.Gear);
         _headerToolbar.AddChild(_settingsButton);
 
-        // Close button hidden in reference design — keep for functionality but start invisible
-        _closeButton = CreateToolbarIconButton("返回上一级菜单", HideOverlay, GlyphIconKind.Back, accent: true);
-        _closeButton.Visible = false;
+        _closeButton = CreateDestructiveToolbarIconButton("返回上一级菜单", HideOverlay, GlyphIconKind.XClose);
         _headerToolbar.AddChild(_closeButton);
 
         // Remove the old hero section — the reference design places title in the header itself.
@@ -1112,11 +1128,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         body.AddChild(CreateSectionLabel("创建房间"));
 
-        Label description = CreateBodyLabel("房间会先在本地起 ENet Host，再向大厅注册。你可以在这里直接选择标准模式、多人每日挑战或自定义模式。当前入口只做房间目录与连接编排，不重写原生联机逻辑。");
-        description.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-        description.AddThemeColorOverride("font_color", TextMutedColor);
-        body.AddChild(description);
-
         body.AddChild(BuildLabeledInputRow("房间名", GetSuggestedRoomName(), out _roomNameInput, "房间列表里展示的名称", showLengthCounter: true, maxLength: LanConnectConfig.MaxRoomNameLength));
         body.AddChild(BuildLabeledOptionRow(
             "房间类型",
@@ -1125,6 +1136,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             ("多人每日挑战", 1),
             ("自定义模式", 2)));
         body.AddChild(BuildLabeledInputRow("可选密码", string.Empty, out _roomPasswordInput, "留空表示公开房间", showLengthCounter: true, maxLength: LanConnectConfig.MaxRoomPasswordLength));
+        body.AddChild(BuildMaxPlayersRow());
 
         if (_roomNameInput != null)
         {
@@ -1285,8 +1297,21 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Control shell = CreateDialogShell(out VBoxContainer body);
         _progressDialogContainer = shell;
 
+        HBoxContainer header = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        header.AddThemeConstantOverride("separation", 12);
+        body.AddChild(header);
+
         _progressDialogTitle = CreateSectionLabel("正在处理");
-        body.AddChild(_progressDialogTitle);
+        _progressDialogTitle.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        header.AddChild(_progressDialogTitle);
+
+        _progressDialogCancelButton = CreateDestructiveToolbarIconButton("取消当前连接", CancelActiveJoinRequest, GlyphIconKind.XClose);
+        _progressDialogCancelButton.CustomMinimumSize = new Vector2(42f, 42f);
+        _progressDialogCancelButton.Visible = false;
+        header.AddChild(_progressDialogCancelButton);
 
         _progressDialogMessage = CreateTitleLabel("正在连接房间", 24);
         _progressDialogMessage.AutowrapMode = TextServer.AutowrapMode.WordSmart;
@@ -1642,6 +1667,53 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         ApplyInputStyle(option);
         row.AddChild(option);
+        return row;
+    }
+
+    private Control BuildMaxPlayersRow()
+    {
+        VBoxContainer row = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        row.AddThemeConstantOverride("separation", 6);
+
+        Label label = CreateBodyLabel("最大人数");
+        label.AddThemeColorOverride("font_color", TextStrongColor);
+        row.AddChild(label);
+
+        _maxPlayersSpinBox = new SpinBox
+        {
+            MinValue = LanConnectConstants.MinMaxPlayers,
+            MaxValue = 8,
+            Value = 8,
+            Step = 1,
+            AllowGreater = true,
+            AllowLesser = false,
+            Rounded = true,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(0f, 48f),
+            Suffix = "人"
+        };
+        LineEdit innerLineEdit = _maxPlayersSpinBox.GetLineEdit();
+        innerLineEdit.AddThemeColorOverride("font_color", TextStrongColor);
+        innerLineEdit.AddThemeFontSizeOverride("font_size", 16);
+        innerLineEdit.SelectAllOnFocus = true;
+        _maxPlayersSpinBox.AddThemeStyleboxOverride("up_down", new StyleBoxEmpty());
+        _maxPlayersSpinBox.AddThemeColorOverride("up_down", AccentColor);
+        StyleBoxFlat spinNormal = CreatePixelStyle(InputBgColor, BorderColor, borderWidth: 2, padding: 12, shadowSize: 0);
+        StyleBoxFlat spinFocus = CreatePixelStyle(CardColor, AccentColor, borderWidth: 2, padding: 12, shadowSize: 0);
+        innerLineEdit.AddThemeStyleboxOverride("normal", spinNormal);
+        innerLineEdit.AddThemeStyleboxOverride("focus", spinFocus);
+        row.AddChild(_maxPlayersSpinBox);
+
+        _maxPlayersHintLabel = CreateBodyLabel(string.Empty);
+        _maxPlayersHintLabel.AddThemeColorOverride("font_color", TextMutedColor);
+        row.AddChild(_maxPlayersHintLabel);
+
+        _maxPlayersSpinBox.Connect(Godot.Range.SignalName.ValueChanged, Callable.From<double>(_ => UpdateMaxPlayersHint()));
+        UpdateMaxPlayersHint();
+
         return row;
     }
 
@@ -2469,6 +2541,18 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
+        int? selectedMaxPlayers = null;
+        if (_maxPlayersSpinBox != null)
+        {
+            int parsedMaxPlayers = (int)_maxPlayersSpinBox.Value;
+            if (parsedMaxPlayers > 8)
+            {
+                ShowCreateDialogError("房间最大人数不能超过 8 人。");
+                return;
+            }
+            selectedMaxPlayers = parsedMaxPlayers;
+        }
+
         _actionInFlight = true;
         UpdateActionButtons();
         ShowCreateDialogError(string.Empty, visible: false);
@@ -2476,7 +2560,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         try
         {
-            bool created = await LanConnectHostFlow.StartLobbyHostAsync(roomName, password, gameMode, _loadingOverlay, _stack);
+            bool created = await LanConnectHostFlow.StartLobbyHostAsync(roomName, password, gameMode, _loadingOverlay, _stack, selectedMaxPlayers);
             if (created)
             {
                 CloseCreateDialog();
@@ -2517,10 +2601,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _actionInFlight = true;
         UpdateActionButtons();
         SetStatus($"正在请求加入 {FormatRoomName(room.RoomName, 24)}...");
+        CancellationTokenSource joinCancellationSource = new();
+        ReplaceJoinCancellationSource(joinCancellationSource);
         ShowProgressDialog(
             "正在加入房间",
             $"正在向大厅申请进入 {FormatRoomName(room.RoomName, 24)}",
-            "连接较慢时请稍候，期间不要重复点击按钮。");
+            "连接较慢时请稍候，期间不要重复点击按钮。",
+            allowCancel: true);
 
         try
         {
@@ -2533,35 +2620,52 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                 ModVersion = LanConnectBuildInfo.GetModVersion(),
                 ModList = LanConnectBuildInfo.GetModList(),
                 DesiredSavePlayerNetId = string.IsNullOrWhiteSpace(desiredSavePlayerNetId) ? null : desiredSavePlayerNetId
-            });
+            }, joinCancellationSource.Token);
 
             UpdateProgressDialog(
                 "正在建立联机连接",
                 $"大厅已响应，正在连接 {FormatRoomName(room.RoomName, 24)}",
-                "如果房主在外网环境，首次握手通常会比刷新大厅更慢。");
+                "如果房主在外网环境，首次握手通常会比刷新大厅更慢。",
+                allowCancel: true);
 
             LobbyJoinAttemptResult joinResult = await LanConnectLobbyJoinFlow.JoinAsync(
                 _stack,
                 _loadingOverlay,
                 joinResponse,
                 desiredSavePlayerNetId,
-                message => UpdateProgressDialog("正在建立联机连接", message));
+                joinCancellationSource.Token,
+                message => UpdateProgressDialog("正在建立联机连接", message, allowCancel: true));
             if (joinResult.Joined)
             {
-                UpdateProgressDialog("正在进入房间", $"已连接 {FormatRoomName(room.RoomName, 24)}，正在切换到联机界面");
+                UpdateProgressDialog("正在进入房间", $"已连接 {FormatRoomName(room.RoomName, 24)}，正在切换到联机界面", allowCancel: false);
                 SetStatus($"已加入 {FormatRoomName(room.RoomName, 24)}。");
                 HideOverlay();
                 return true;
             }
 
+            if (joinResult.Canceled)
+            {
+                LanConnectProtocolProfiles.ResetActiveProfile("join_canceled_overlay");
+                SetStatus($"已取消加入 {FormatRoomName(room.RoomName, 24)}。");
+                return false;
+            }
+
             string failureMessage = string.IsNullOrWhiteSpace(joinResult.FailureMessage)
                 ? "请查看错误弹窗或连接日志。"
                 : joinResult.FailureMessage;
+            LanConnectProtocolProfiles.ResetActiveProfile("join_failed_overlay");
             SetStatus($"加入 {FormatRoomName(room.RoomName, 24)} 失败：{failureMessage}");
+            return false;
+        }
+        catch (OperationCanceledException) when (joinCancellationSource.IsCancellationRequested)
+        {
+            LanConnectProtocolProfiles.ResetActiveProfile("join_canceled_request");
+            SetStatus($"已取消加入 {FormatRoomName(room.RoomName, 24)}。");
             return false;
         }
         catch (LobbyServiceException ex)
         {
+            LanConnectProtocolProfiles.ResetActiveProfile("join_service_exception");
             string message = DescribeJoinFailure(ex);
             if (_resumeSlotDialogContainer != null && _resumeSlotDialogContainer.Visible)
             {
@@ -2580,11 +2684,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
         catch (Exception ex)
         {
+            LanConnectProtocolProfiles.ResetActiveProfile("join_exception");
             SetStatus($"加入房间失败：{DescribeGenericJoinFailure(ex)}");
             return false;
         }
         finally
         {
+            ClearJoinCancellationSource(joinCancellationSource);
             HideProgressDialog();
             _actionInFlight = false;
             UpdateActionButtons();
@@ -2744,6 +2850,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (blockReason != null)
         {
             SetStatus($"当前无法打开建房：{blockReason}");
+            LanConnectPopupUtil.ShowInfo($"无法创建房间\n\n{blockReason}");
             return;
         }
 
@@ -2809,6 +2916,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             : LanConnectConfig.LastRoomName;
         _roomTypeOption.Select(0);
         _roomPasswordInput.Text = string.Empty;
+        if (_maxPlayersSpinBox != null)
+        {
+            int effectiveMax = Math.Clamp(LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(), LanConnectConstants.MinMaxPlayers, 8);
+            _maxPlayersSpinBox.Value = effectiveMax;
+            UpdateMaxPlayersHint();
+        }
         ShowCreateDialogError(string.Empty, visible: false);
         _createDialogContainer.Visible = true;
         _roomNameInput.GrabFocus();
@@ -2957,8 +3070,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             string selectedNetId = slot.NetId;
             Button option = CreateActionButton(
-                string.IsNullOrWhiteSpace(slot.CharacterName) ? slot.CharacterId : slot.CharacterName,
-                $"接管该续局角色并使用已保存的玩家槽位加入。存档角色 ID：{slot.CharacterId}",
+                FormatSlotLabel(slot),
+                string.IsNullOrWhiteSpace(slot.PlayerName)
+                    ? $"接管该续局角色并使用已保存的玩家槽位加入。存档角色 ID：{slot.CharacterId}"
+                    : $"接管 {slot.PlayerName} 的续局角色（{slot.CharacterId}）并使用已保存的玩家槽位加入。",
                 () => TaskHelper.RunSafely(SubmitResumeSlotAsync(selectedNetId)),
                 primary: _resumeSlotDialogOptions.GetChildCount() == 0);
             option.SizeFlagsHorizontal = SizeFlags.ExpandFill;
@@ -2993,6 +3108,17 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _pendingResumeJoinRoom = null;
         _pendingResumeJoinPassword = null;
+    }
+
+    private static string FormatSlotLabel(LobbySavedRunSlot slot)
+    {
+        string characterLabel = string.IsNullOrWhiteSpace(slot.CharacterName)
+            ? slot.CharacterId
+            : slot.CharacterName;
+
+        return string.IsNullOrWhiteSpace(slot.PlayerName)
+            ? characterLabel
+            : $"{characterLabel}（{slot.PlayerName}）";
     }
 
     private async Task OpenDirectoryServerDialogAsync()
@@ -3382,7 +3508,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (_createButton != null)
         {
-            _createButton.Disabled = createDisabledReason != null;
+            _createButton.Disabled = actionBusy;
         }
 
         if (_joinButton != null)
@@ -3742,24 +3868,198 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
     }
 
-    private void ShowProgressDialog(string title, string message, string? hint = null)
+    private void CheckClipboardForInviteCode()
+    {
+        try
+        {
+            string clipboardText = DisplayServer.ClipboardGet();
+            if (!LanConnectInviteCode.TryDecode(clipboardText, out LanConnectInvitePayload? payload) || payload == null)
+            {
+                return;
+            }
+
+            GD.Print($"sts2_lan_connect overlay: detected invite code in clipboard, server={payload.S}, roomId={payload.R}");
+
+            if (_actionInFlight)
+            {
+                return;
+            }
+
+            if (LanConnectLobbyRuntime.Instance?.ActiveRoomId == payload.R)
+            {
+                GD.Print("sts2_lan_connect overlay: invite code targets own hosted room, ignoring");
+                return;
+            }
+
+            ShowInviteConfirmDialog(payload);
+        }
+        catch (Exception ex)
+        {
+            GD.Print($"sts2_lan_connect overlay: clipboard invite check failed -> {ex.Message}");
+        }
+    }
+
+    private void ShowInviteConfirmDialog(LanConnectInvitePayload payload)
+    {
+        _pendingInvitePayload = payload;
+
+        bool serverDiffers = !string.Equals(
+            payload.S.TrimEnd('/'),
+            LanConnectConfig.LobbyServerBaseUrl.TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase);
+
+        string roomIdPreview = payload.R.Length > 8 ? payload.R[..8] + "..." : payload.R;
+        string message = $"剪贴板中包含一个房间邀请码。\n房间ID：{roomIdPreview}";
+        if (serverDiffers)
+        {
+            message += $"\n\n注意：该邀请指向不同的服务器（{payload.S}），加入时会临时切换。";
+        }
+        if (!string.IsNullOrWhiteSpace(payload.P))
+        {
+            message += "\n邀请码中已包含房间密码，无需手动输入。";
+        }
+
+        SetLabelText(_inviteConfirmDialogMessage, message);
+
+        if (_inviteConfirmDialogContainer != null)
+        {
+            _inviteConfirmDialogContainer.Visible = true;
+            _inviteConfirmDialogContainer.MoveToFront();
+        }
+    }
+
+    private void CloseInviteConfirmDialog()
+    {
+        if (_inviteConfirmDialogContainer != null)
+        {
+            _inviteConfirmDialogContainer.Visible = false;
+        }
+        _pendingInvitePayload = null;
+    }
+
+    private async Task AcceptInviteAsync()
+    {
+        LanConnectInvitePayload? payload = _pendingInvitePayload;
+        CloseInviteConfirmDialog();
+
+        if (payload == null) return;
+
+        bool serverDiffers = !string.Equals(
+            payload.S.TrimEnd('/'),
+            LanConnectConfig.LobbyServerBaseUrl.TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase);
+
+        string originalServerUrl = LanConnectConfig.LobbyServerBaseUrl;
+        string? originalInputText = _serverBaseUrlInput?.Text;
+
+        if (serverDiffers)
+        {
+            // Update both config AND the settings input field.
+            // PersistSettings() (called by JoinRoomAsync) reads from the input field
+            // and writes it back to config — if we only set the config, the input field
+            // still holds the old URL and PersistSettings() would revert our switch.
+            LanConnectConfig.LobbyServerBaseUrl = payload.S;
+            if (_serverBaseUrlInput != null)
+            {
+                _serverBaseUrlInput.Text = payload.S;
+            }
+            GD.Print($"sts2_lan_connect overlay: switched server for invite join: {originalServerUrl} -> {payload.S}");
+        }
+
+        try
+        {
+            using LobbyApiClient apiClient = LobbyApiClient.CreateConfigured();
+            IReadOnlyList<LobbyRoomSummary> rooms = await apiClient.GetRoomsAsync();
+            LobbyRoomSummary? targetRoom = null;
+            foreach (LobbyRoomSummary r in rooms)
+            {
+                if (string.Equals(r.RoomId, payload.R, StringComparison.Ordinal))
+                {
+                    targetRoom = r;
+                    break;
+                }
+            }
+
+            if (targetRoom == null)
+            {
+                SetStatus("邀请码对应的房间不存在或已关闭。");
+                LanConnectPopupUtil.ShowInfo("邀请码对应的房间不存在或已关闭，可能房主已经关闭了房间。");
+                RevertInviteServerSwitch(serverDiffers, originalServerUrl, originalInputText);
+                return;
+            }
+
+            await BeginJoinRoomAsync(targetRoom, payload.P);
+        }
+        catch (Exception ex)
+        {
+            GD.Print($"sts2_lan_connect overlay: invite join failed -> {ex}");
+            SetStatus($"通过邀请码加入失败：{ex.Message}");
+            RevertInviteServerSwitch(serverDiffers, originalServerUrl, originalInputText);
+        }
+    }
+
+    private void RevertInviteServerSwitch(bool serverDiffers, string originalServerUrl, string? originalInputText)
+    {
+        if (!serverDiffers) return;
+        LanConnectConfig.LobbyServerBaseUrl = originalServerUrl;
+        if (_serverBaseUrlInput != null && originalInputText != null)
+        {
+            _serverBaseUrlInput.Text = originalInputText;
+        }
+    }
+
+    private Control BuildInviteConfirmDialog()
+    {
+        Control shell = CreateDialogShell(out VBoxContainer body);
+        _inviteConfirmDialogContainer = shell;
+
+        body.AddChild(CreateSectionLabel("检测到邀请码"));
+
+        _inviteConfirmDialogMessage = CreateBodyLabel("");
+        _inviteConfirmDialogMessage.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        _inviteConfirmDialogMessage.AddThemeColorOverride("font_color", TextMutedColor);
+        body.AddChild(_inviteConfirmDialogMessage);
+
+        HBoxContainer buttons = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        buttons.AddThemeConstantOverride("separation", 10);
+        body.AddChild(buttons);
+
+        Button cancel = CreateActionButton("忽略", "忽略该邀请码，继续浏览大厅。", CloseInviteConfirmDialog);
+        cancel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        buttons.AddChild(cancel);
+
+        Button accept = CreateActionButton("加入房间", "根据邀请码自动加入该房间。", () => TaskHelper.RunSafely(AcceptInviteAsync()), primary: true);
+        accept.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        buttons.AddChild(accept);
+
+        return shell;
+    }
+
+    private void ShowProgressDialog(string title, string message, string? hint = null, bool allowCancel = false)
     {
         if (_progressDialogContainer == null)
         {
             return;
         }
 
+        _progressDialogVisibleDuration = 0d;
+        ConfigureProgressDialogCancel(allowCancel);
         SetProgressDialogContent(title, message, hint);
         _progressDialogContainer.Visible = true;
         _progressDialogContainer.MoveToFront();
         GD.Print($"sts2_lan_connect overlay: progress dialog shown -> {title} | {message}");
     }
 
-    private void UpdateProgressDialog(string title, string message, string? hint = null)
+    private void UpdateProgressDialog(string title, string message, string? hint = null, bool? allowCancel = null)
     {
         if (_progressDialogContainer == null || !_progressDialogContainer.Visible)
         {
             return;
+        }
+
+        if (allowCancel.HasValue)
+        {
+            ConfigureProgressDialogCancel(allowCancel.Value);
         }
 
         SetProgressDialogContent(title, message, hint);
@@ -3776,6 +4076,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _progressDialogBaseMessage = string.Empty;
         _progressDialogTick = 0d;
         _progressDialogDotCount = 0;
+        _progressDialogVisibleDuration = 0d;
+        ConfigureProgressDialogCancel(false);
     }
 
     private void SetProgressDialogContent(string title, string message, string? hint)
@@ -3801,6 +4103,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
+        _progressDialogVisibleDuration += delta;
+        RefreshProgressDialogCancelButton();
         _progressDialogTick += delta;
         if (_progressDialogTick < 0.45d)
         {
@@ -3821,6 +4125,76 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         string suffix = _progressDialogDotCount == 0 ? string.Empty : new string('.', _progressDialogDotCount);
         SetLabelText(_progressDialogMessage, _progressDialogBaseMessage + suffix);
+    }
+
+    private void UpdateMaxPlayersHint()
+    {
+        if (_maxPlayersHintLabel == null || _maxPlayersSpinBox == null)
+        {
+            return;
+        }
+
+        int selectedMaxPlayers = (int)_maxPlayersSpinBox.Value;
+        string message = selectedMaxPlayers <= LanConnectConstants.MinMaxPlayers
+            ? "4 人房会自动启用 0.2.2 兼容协议，可与 0.2.2 玩家共同游玩。"
+            : "5-8 人房仅支持 0.2.3+ 客户端，不兼容 0.2.2。";
+        SetLabelText(_maxPlayersHintLabel, message);
+    }
+
+    private void ReplaceJoinCancellationSource(CancellationTokenSource cancellationTokenSource)
+    {
+        _activeJoinCancellationSource?.Dispose();
+        _activeJoinCancellationSource = cancellationTokenSource;
+        RefreshProgressDialogCancelButton();
+    }
+
+    private void ClearJoinCancellationSource(CancellationTokenSource cancellationTokenSource)
+    {
+        if (!ReferenceEquals(_activeJoinCancellationSource, cancellationTokenSource))
+        {
+            cancellationTokenSource.Dispose();
+            return;
+        }
+
+        _activeJoinCancellationSource?.Dispose();
+        _activeJoinCancellationSource = null;
+        RefreshProgressDialogCancelButton();
+    }
+
+    private void CancelActiveJoinRequest()
+    {
+        if (_activeJoinCancellationSource == null || _activeJoinCancellationSource.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _activeJoinCancellationSource.Cancel();
+        ConfigureProgressDialogCancel(false);
+        UpdateProgressDialog(
+            "正在取消连接",
+            "正在取消当前联机连接",
+            "正在通知房主停止本次连接申请，请稍候。",
+            allowCancel: false);
+    }
+
+    private void ConfigureProgressDialogCancel(bool allowCancel)
+    {
+        _progressDialogAllowCancel = allowCancel;
+        RefreshProgressDialogCancelButton();
+    }
+
+    private void RefreshProgressDialogCancelButton()
+    {
+        if (_progressDialogCancelButton == null)
+        {
+            return;
+        }
+
+        bool hasCancelableJoin = _progressDialogAllowCancel
+            && _activeJoinCancellationSource != null
+            && !_activeJoinCancellationSource.IsCancellationRequested
+            && _progressDialogVisibleDuration >= JoinCancelRevealDelaySeconds;
+        _progressDialogCancelButton.Visible = hasCancelableJoin;
     }
 
     private void ShowCreateDialogError(string message, bool visible = true)
@@ -4105,6 +4479,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                && left.MaxPlayers == right.MaxPlayers
                && string.Equals(left.Version, right.Version, StringComparison.Ordinal)
                && string.Equals(left.ModVersion, right.ModVersion, StringComparison.Ordinal)
+               && string.Equals(left.ProtocolProfile, right.ProtocolProfile, StringComparison.Ordinal)
                && string.Equals(left.RelayState, right.RelayState, StringComparison.Ordinal)
                && AreSavedRunsEquivalent(left.SavedRun, right.SavedRun);
     }
@@ -4138,6 +4513,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             if (!string.Equals(leftSlot.NetId, rightSlot.NetId, StringComparison.Ordinal) ||
                 !string.Equals(leftSlot.CharacterId, rightSlot.CharacterId, StringComparison.Ordinal) ||
                 !string.Equals(leftSlot.CharacterName, rightSlot.CharacterName, StringComparison.Ordinal) ||
+                !string.Equals(leftSlot.PlayerName, rightSlot.PlayerName, StringComparison.Ordinal) ||
                 leftSlot.IsHost != rightSlot.IsHost ||
                 leftSlot.IsConnected != rightSlot.IsConnected)
             {
@@ -4431,6 +4807,25 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return button;
     }
 
+    private Button CreateDestructiveToolbarIconButton(string tooltip, Action onPressed, GlyphIconKind iconKind)
+    {
+        Button button = new()
+        {
+            Text = string.Empty,
+            TooltipText = UiText(tooltip),
+            CustomMinimumSize = new Vector2(50f, 50f),
+            Alignment = HorizontalAlignment.Center
+        };
+        ApplyDestructiveToolbarButtonStyle(button);
+        AttachToolbarIconContent(button, iconKind, CardColor);
+        button.Connect(Button.SignalName.Pressed, Callable.From(() =>
+        {
+            GD.Print($"sts2_lan_connect overlay: destructive toolbar icon button pressed");
+            onPressed();
+        }));
+        return button;
+    }
+
     private Button CreateInlineButton(string text, Action onPressed, bool accent = false)
     {
         Button button = new()
@@ -4498,6 +4893,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         center.SetAnchorsPreset(LayoutPreset.FullRect);
         button.AddChild(center);
+        SetupPressShift(button, center, 3);
 
         HBoxContainer row = new()
         {
@@ -4527,6 +4923,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         center.SetAnchorsPreset(LayoutPreset.FullRect);
         button.AddChild(center);
+        SetupPressShift(button, center, 3);
 
         HBoxContainer row = new()
         {
@@ -4552,7 +4949,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         row.AddChild(label);
     }
 
-    private static void AttachToolbarIconContent(Button button, GlyphIconKind iconKind)
+    private static void AttachToolbarIconContent(Button button, GlyphIconKind iconKind, Color? color = null)
     {
         CenterContainer center = new()
         {
@@ -4560,10 +4957,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         center.SetAnchorsPreset(LayoutPreset.FullRect);
         button.AddChild(center);
+        SetupPressShift(button, center, 3);
         center.AddChild(new GlyphIcon
         {
             Kind = iconKind,
-            GlyphColor = TextStrongColor,
+            GlyphColor = color ?? TextStrongColor,
             CustomMinimumSize = new Vector2(19f, 19f)
         });
     }
@@ -4676,7 +5074,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             ExpandMarginTop = -depth,
             ExpandMarginRight = maxShadow + depth,
             ExpandMarginBottom = maxShadow + depth,
-            ShadowColor = new Color(border, 0.55f),
+            ShadowColor = new Color(0.15f, 0.10f, 0.08f, 0.45f),
             ShadowSize = shadow,
             ShadowOffset = new Vector2(shadow, shadow)
         };
@@ -4691,9 +5089,46 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private static void SetupChildHoverTint(Button button, Color normalColor, Color hoverColor)
     {
         button.Connect(Control.SignalName.MouseEntered, Callable.From(() =>
-            TintButtonChildrenRecursive(button, hoverColor)));
+        {
+            if (!button.Disabled)
+                TintButtonChildrenRecursive(button, hoverColor);
+        }));
         button.Connect(Control.SignalName.MouseExited, Callable.From(() =>
             TintButtonChildrenRecursive(button, normalColor)));
+    }
+
+    /// <summary>
+    /// Shifts a FullRect-anchored content host to follow the CreatePixelPressStyle
+    /// expand-margin animation on hover (depth=1) and press (depth=maxShadow).
+    /// Without this, child icons/labels stay fixed while the background sinks.
+    /// </summary>
+    private static void SetupPressShift(Button button, Control contentHost, int maxShadow)
+    {
+        bool hovering = false;
+        button.Connect(Control.SignalName.MouseEntered, Callable.From(() =>
+        {
+            hovering = true;
+            if (!button.ButtonPressed)
+                ApplyContentShift(contentHost, 1);
+        }));
+        button.Connect(Control.SignalName.MouseExited, Callable.From(() =>
+        {
+            hovering = false;
+            if (!button.ButtonPressed)
+                ApplyContentShift(contentHost, 0);
+        }));
+        button.Connect(BaseButton.SignalName.ButtonDown, Callable.From(() =>
+            ApplyContentShift(contentHost, maxShadow)));
+        button.Connect(BaseButton.SignalName.ButtonUp, Callable.From(() =>
+            ApplyContentShift(contentHost, hovering ? 1 : 0)));
+    }
+
+    private static void ApplyContentShift(Control host, int depth)
+    {
+        host.OffsetLeft = depth;
+        host.OffsetTop = depth;
+        host.OffsetRight = depth;
+        host.OffsetBottom = depth;
     }
 
     private static void TintButtonChildrenRecursive(Node node, Color color)
@@ -4837,6 +5272,28 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         button.AddThemeFontSizeOverride("font_size", iconOnly ? 18 : 15);
         // Tint child icons/labels white on hover
         SetupChildHoverTint(button, TextStrongColor, CardColor);
+    }
+
+    private static void ApplyDestructiveToolbarButtonStyle(Button button)
+    {
+        int pad = 10;
+        Color bg = DangerColor;
+        Color hoverBg = new Color(0.65f, 0.10f, 0.12f, 1f);   // darker red on hover
+        Color pressedBg = new Color(0.55f, 0.08f, 0.10f, 1f);  // even darker on press
+
+        button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(bg, new Color(0.60f, 0.10f, 0.12f, 1f), 2, pad, 3, 0));
+        button.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(hoverBg, new Color(0.50f, 0.08f, 0.10f, 1f), 2, pad, 3, 1));
+        button.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(pressedBg, new Color(0.45f, 0.06f, 0.08f, 1f), 2, pad, 3, 3));
+        button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(WithAlpha(bg, 0.45f), WithAlpha(BorderColor, 0.4f), borderWidth: 2, padding: pad, shadowSize: 0));
+        button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, new Color(0.50f, 0.08f, 0.10f, 1f), 2, pad, 3, 1));
+        button.AddThemeColorOverride("font_color", CardColor);
+        button.AddThemeColorOverride("font_hover_color", CardColor);
+        button.AddThemeColorOverride("font_pressed_color", CardColor);
+        button.AddThemeColorOverride("font_focus_color", CardColor);
+        button.AddThemeColorOverride("font_disabled_color", WithAlpha(CardColor, 0.65f));
+        button.AddThemeFontSizeOverride("font_size", 18);
+        // Icon starts white on red bg — stays white on hover
+        SetupChildHoverTint(button, CardColor, CardColor);
     }
 
     private static void ApplyInlineButtonStyle(Button button, bool accent)
@@ -5089,7 +5546,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Lock,
         Globe,
         Zap,
-        Users
+        Users,
+        Share2,
+        XClose
     }
 
     private sealed partial class GlyphIcon : Control
@@ -5175,6 +5634,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             GlyphIconKind.Globe => SvgGlobe,
             GlyphIconKind.Zap => SvgZap,
             GlyphIconKind.Users => SvgUsers,
+            GlyphIconKind.Share2 => SvgShare2,
+            GlyphIconKind.XClose => SvgXClose,
             _ => null,
         };
 
@@ -5305,6 +5766,23 @@ internal sealed partial class LanConnectLobbyOverlay : Control
               <path d="M16 3.128a4 4 0 0 1 0 7.744"/>
               <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
               <circle cx="9" cy="7" r="4"/>
+            </svg>
+            """;
+
+        private const string SvgShare2 = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/>
+              <line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>
+            </svg>
+            """;
+
+        private const string SvgXClose = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 6 6 18"/>
+              <path d="m6 6 12 12"/>
             </svg>
             """;
     }
