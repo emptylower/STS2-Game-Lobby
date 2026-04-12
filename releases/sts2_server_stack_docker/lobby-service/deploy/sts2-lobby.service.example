@@ -1,0 +1,16 @@
+[Unit]
+Description=STS2 Lobby Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sts2-lobby/lobby-service
+EnvironmentFile=/opt/sts2-lobby/lobby-service/.env
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=3
+User=sts2
+Group=sts2
+
+[Install]
+WantedBy=multi-user.target

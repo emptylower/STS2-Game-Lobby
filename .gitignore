@@ -15,17 +15,3 @@ server-registry/node_modules/
 server-registry/dist/
 server-registry/release/
 server-registry/.env
-
-# Local-only private registry / private deployment assets
-server-registry/
-deploy/
-docs/STS2_SERVER_DOCKER_OPERATION_GUIDE_ZH.md
-scripts/install-server-registry-linux.sh
-scripts/install-server-stack-docker-linux.sh
-scripts/maintain-server-stack-docker.sh
-scripts/package-server-registry.sh
-scripts/package-server-stack-docker.sh
-releases/sts2_server_registry/
-releases/sts2_server_registry.zip
-releases/sts2_server_stack_docker/
-releases/sts2_server_stack_docker.zip

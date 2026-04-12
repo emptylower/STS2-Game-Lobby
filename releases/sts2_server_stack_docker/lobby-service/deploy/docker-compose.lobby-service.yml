@@ -1,0 +1,34 @@
+services:
+  lobby-service:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${STS2_NODE_IMAGE:-node:20-bookworm-slim}
+    image: sts2-lobby-service:local
+    container_name: sts2-lobby-service
+    env_file:
+      - ./lobby-service.docker.env
+    ports:
+      - "8787:8787/tcp"
+      - "${STS2_RELAY_PORT_START:-39000}-${STS2_RELAY_PORT_END:-39149}:${STS2_RELAY_PORT_START:-39000}-${STS2_RELAY_PORT_END:-39149}/udp"
+    volumes:
+      - ./data/lobby-service:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/health').then((res)=>process.exit(res.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

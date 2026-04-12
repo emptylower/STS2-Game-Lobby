@@ -1,0 +1,90 @@
+services:
+  postgres:
+    image: ${STS2_POSTGRES_IMAGE:-postgres:16-alpine}
+    container_name: sts2-server-registry-postgres
+    env_file:
+      - ./postgres.env
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  server-registry:
+    build:
+      context: ../server-registry
+      dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${STS2_NODE_IMAGE:-node:20-bookworm-slim}
+    image: sts2-server-registry:local
+    container_name: sts2-server-registry
+    env_file:
+      - ./server-registry.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "18787:18787/tcp"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18787/health').then((res)=>process.exit(res.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  lobby-service:
+    build:
+      context: ../lobby-service
+      dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${STS2_NODE_IMAGE:-node:20-bookworm-slim}
+    image: sts2-lobby-service:local
+    container_name: sts2-lobby-service
+    network_mode: host
+    env_file:
+      - ./lobby-service.env
+    depends_on:
+      server-registry:
+        condition: service_healthy
+    volumes:
+      - ./data/lobby-service:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/health').then((res)=>process.exit(res.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
