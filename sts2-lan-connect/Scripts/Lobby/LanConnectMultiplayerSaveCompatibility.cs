@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Daily;
@@ -29,6 +30,8 @@ internal static class LanConnectMultiplayerSaveCompatibility
     private static int _cachedProfileId = -1;
     private static bool _cachedHasRunSave;
     private static long _cachedSaveWriteTicks = long.MinValue;
+    private static readonly FieldInfo? MultiplayerSubmenuLoadingOverlayField = typeof(NMultiplayerSubmenu).GetField("_loadingOverlay", BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly FieldInfo? MultiplayerSubmenuStackField = typeof(NSubmenu).GetField("_stack", BindingFlags.Instance | BindingFlags.NonPublic);
 
     public static bool ShouldInterceptOfficialLoadButtons()
     {
@@ -110,6 +113,29 @@ internal static class LanConnectMultiplayerSaveCompatibility
         }
 
         return Task.CompletedTask;
+    }
+
+    public static bool TryResolveMultiplayerSubmenuContext(
+        NMultiplayerSubmenu submenu,
+        out Control? loadingOverlay,
+        out NSubmenuStack? stack)
+    {
+        loadingOverlay = MultiplayerSubmenuLoadingOverlayField?.GetValue(submenu) as Control;
+        stack = MultiplayerSubmenuStackField?.GetValue(submenu) as NSubmenuStack;
+        return loadingOverlay != null && stack != null;
+    }
+
+    public static bool TryStartLoadedRunAsLanHostFromSubmenu(NMultiplayerSubmenu submenu)
+    {
+        if (!TryResolveMultiplayerSubmenuContext(submenu, out Control? loadingOverlay, out NSubmenuStack? stack)
+            || loadingOverlay == null
+            || stack == null)
+        {
+            return false;
+        }
+
+        TaskHelper.RunSafely(StartLoadedRunAsLanHostAsync(loadingOverlay, stack));
+        return true;
     }
 
     public static async Task AbandonCurrentRunAsync(NMultiplayerSubmenu submenu)

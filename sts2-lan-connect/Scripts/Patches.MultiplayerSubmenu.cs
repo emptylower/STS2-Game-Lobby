@@ -180,15 +180,11 @@ internal static class MultiplayerSubmenuPatches
 
     private static void OnSafeLoadPressed(NMultiplayerSubmenu submenu)
     {
-        Control? loadingOverlay = LoadingOverlayField?.GetValue(submenu) as Control;
-        NSubmenuStack? stack = StackField?.GetValue(submenu) as NSubmenuStack;
-        if (loadingOverlay == null || stack == null)
+        if (!LanConnectMultiplayerSaveCompatibility.TryStartLoadedRunAsLanHostFromSubmenu(submenu))
         {
             LanConnectPopupUtil.ShowInfo("多人续局页面上下文未就绪，请重新打开多人页面后再试。");
             return;
         }
-
-        TaskHelper.RunSafely(LanConnectMultiplayerSaveCompatibility.StartLoadedRunAsLanHostAsync(loadingOverlay, stack));
     }
 
     private static void OnSafeAbandonPressed(NMultiplayerSubmenu submenu)

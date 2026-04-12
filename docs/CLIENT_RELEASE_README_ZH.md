@@ -19,7 +19,7 @@
 | 公共服务器目录 | `47.111.146.69:18787` |
 | 连接策略 | `test_relaxed + relay-only` |
 
-`0.2.3` 主要改进：运行时从常驻扫描器改为场景 `_Ready` hook，降低单人与移动端性能消耗；4 人房间自动启用 `0.2.2` 兼容协议，5-8 人房间使用扩展协议（仅支持 `0.2.3+`）；大幅改善安卓端稳定性，修复多处启动崩溃与 `MethodAccessException`；大厅新增公告轮播、聊天面板、搜索筛选与切换服务器功能。版本单一真源为发布包内的 `sts2_lan_connect.json`。
+`0.2.3` 主要改进：运行时从常驻扫描器改为场景 `_Ready` hook，降低单人与移动端性能消耗；4 人房间自动启用 `0.2.2` 兼容协议，5-8 人房间使用扩展协议（仅支持 `0.2.3+`）；大幅改善安卓端稳定性，修复多处启动崩溃与 `MethodAccessException`；大厅新增公告轮播、聊天面板、搜索筛选与切换服务器功能；房主在暂停菜单可执行 `重开一局`，自动重启当前多人续局并让队友自动重连。版本单一真源为发布包内的 `sts2_lan_connect.json`。
 
 ---
 
@@ -106,6 +106,8 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 - 房间列表支持关键词搜索、分页和筛选；`公开` / `上锁` 互斥，`可加入` 可叠加
 - 单击房间卡片选中，双击直接尝试加入
 - 进入房间后可通过右上角按钮展开聊天面板；面板支持长按拖动，位置自动保存
+- 房主可在暂停菜单 `房间管理` 中点击 `重开一局`，自动重启当前多人续局
+- 队友端在重开期间会自动回主菜单并尝试自动重连；超时可手动从 `游戏大厅` 加入
 - 顶部公告栏每 6 秒轮播，鼠标悬停时暂停
 - 加入进度较长时会显示阶段化提示；超时后进度弹窗右上角出现取消按钮
 - 提示 `MOD 不一致` 时，会弹窗列出缺少的具体 MOD 名称
@@ -137,7 +139,7 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 | Public server directory | `47.111.146.69:18787` |
 | Connection policy | `test_relaxed + relay-only` |
 
-`0.2.3` key changes: the runtime hook is now scene-based (`_Ready`) instead of a polling scanner, reducing CPU and battery usage on solo play and mobile. 4-player rooms automatically use the `0.2.2` compatibility protocol; 5-8 player rooms use the extended protocol and require `0.2.3+`. Android stability is significantly improved, fixing startup crashes and `MethodAccessException` errors. The lobby UI gains an announcement carousel, an in-room chat panel, room search and filtering, and a server-switch button. The authoritative version source is `sts2_lan_connect.json` in the release package.
+`0.2.3` key changes: the runtime hook is now scene-based (`_Ready`) instead of a polling scanner, reducing CPU and battery usage on solo play and mobile. 4-player rooms automatically use the `0.2.2` compatibility protocol; 5-8 player rooms use the extended protocol and require `0.2.3+`. Android stability is significantly improved, fixing startup crashes and `MethodAccessException` errors. The lobby UI gains an announcement carousel, an in-room chat panel, room search and filtering, and a server-switch button. The host can now trigger `Restart Run` from pause-menu room management to restart the current multiplayer save flow and auto-rejoin teammates. The authoritative version source is `sts2_lan_connect.json` in the release package.
 
 ---
 
@@ -224,6 +226,8 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 - The room list supports keyword search, pagination, and filters. `Public` and `Locked` are mutually exclusive; `Joinable` can be combined with either.
 - Single-click a room card to select it; double-click to join immediately.
 - Once inside a room, open the chat panel from the button in the top-right corner. The panel can be repositioned by long-pressing and dragging; its position is saved between sessions.
+- The host can click `Restart Run` from pause-menu `Room Management` to restart the current multiplayer save quickly.
+- During restart, teammates are auto-routed back to main menu and auto-rejoin; if timeout occurs, manual join from `Game Lobby` remains available.
 - The announcement carousel at the top rotates every 6 seconds and pauses on hover.
 - A progress dialog appears for long join attempts; a cancel button appears in its top-right corner if the attempt takes too long.
 - If a `MOD mismatch` error occurs, a dialog will list the specific missing MOD names.

@@ -58,6 +58,7 @@
 - 房主在游戏内暂停菜单中可找到 `房间管理` 按钮（位于"百科大全"和"放弃"之间），点击后可：
   - **聊天开关**：启用或禁用房间聊天；关闭后所有成员的聊天面板自动隐藏
   - **在线玩家列表**：查看当前房间内所有在线玩家；房主可点击 `移出` 踢出玩家
+  - **重开一局**：自动通知队友进入重开流程，并将房主带回主菜单重启当前多人续局
 - 普通成员可查看面板，但无法操作
 - 在准备页面，远程玩家名旁有红色 `X` 踢出按钮，房主可在开局前直接移除玩家
 - 被踢出的玩家会收到提示且无法重新加入同一房间
@@ -65,6 +66,9 @@
 ## 多人续局
 
 - 房主重新进入已存在的多人续局存档时，续局会自动重新发布到大厅，沿用原有房间信息，无需重新手动建房
+- 房主点击 `重开一局` 后，会短暂断开并自动回到多人续局载入页面
+- 队友会自动回主菜单并按自己的 `desiredSavePlayerNetId` 轮询重连同一续局房间
+- 若自动重连超时，可在 `游戏大厅` 手动加入作为兜底
 - 如续局仍有空闲角色槽位，加入方会先看到角色选择，再进入联机
 - 角色选择弹窗同时显示角色名和原玩家名（如"铁甲战士（小明）"），方便准确找回自己的槽位
 
@@ -195,6 +199,7 @@
 - The host can find the `Room Management` button in the in-game pause menu (between "Compendium" and "Abandon"); clicking it opens a panel with:
   - **Chat Toggle**: enable or disable room chat; disabling it hides the chat panel for all members
   - **Online Player List**: view all players currently in the room; the host can click `Remove` to kick a player
+  - **Restart Run**: notify teammates, return the host to main menu, and restart the current multiplayer save flow
 - Regular members can view the panel but cannot make changes
 - On the ready screen, a red `X` kick button appears next to each remote player's name; the host can remove players before the run starts
 - Kicked players receive a notification and cannot rejoin the same room
@@ -202,6 +207,9 @@
 ## Save-Run Multiplayer
 
 - When a host re-enters an existing multiplayer save, the run is automatically re-published to the lobby using the original room info — no need to create a new room manually
+- After the host clicks `Restart Run`, the host briefly disconnects and is auto-routed back to multiplayer save-load
+- Teammates are auto-routed to main menu and rejoin by polling with their own `desiredSavePlayerNetId`
+- If auto-rejoin times out, manual join from `Game Lobby` remains the fallback path
 - If the save still has open character slots, joining players will see a character selection screen before entering the session
 - The character selection dialog shows both the character name and the original player's name (e.g., "Ironclad (Alice)") to help players accurately reclaim their slots
 

@@ -42,6 +42,8 @@
 - 4 人房自动发布为 `legacy_4p`，与 `0.2.2` 兼容；5–8 人房发布为 `extended_8p`
 - 房主可踢人（WebSocket 控制通道 + ENet 直连双通道执行）
 - 房间设置同步（开关聊天室等），新加入客户端自动获取当前设置
+- 房主可在暂停菜单执行 `重开一局`：自动返回主菜单并重启当前多人续局
+- 队友在重开期间自动回到主菜单并按原续局槽位尝试自动重连；超时可手动从大厅加入
 - 大厅邀请码：自动生成包含服务器地址、房间 ID 和密码的邀请码，支持跨服务器自动切换
 
 **续局联机**
@@ -187,6 +189,8 @@ Current versions: Client `0.2.3` · Lobby Service `0.2.2`
 - 4-player rooms are published as `legacy_4p` (compatible with `0.2.2`); 5–8 player rooms use `extended_8p`
 - Host kick via dual channel: WebSocket control channel + ENet direct disconnect
 - Room settings sync (toggle chat, etc.); new joiners auto-receive current settings
+- Host can trigger `Restart Run` from the pause-menu room panel to return to main menu and restart the current multiplayer save
+- Teammates are auto-routed back to main menu and auto-rejoin using their original save slot mapping; manual lobby join remains as fallback on timeout
 - Lobby invite code: auto-generates a code containing server address, room ID, and password; supports cross-server auto-switching
 
 **Save-Run Multiplayer**

@@ -33,7 +33,9 @@ internal static class LanConnectSceneReadyPatches
         TryPatchReady(typeof(NMultiplayerLoadGameScreen), nameof(OnMultiplayerLoadScreenReady), "NMultiplayerLoadGameScreen._Ready");
         TryPatchReady(typeof(NCustomRunLoadScreen), nameof(OnCustomRunLoadScreenReady), "NCustomRunLoadScreen._Ready");
         TryPatchReady(typeof(NPauseMenu), nameof(OnPauseMenuReady), "NPauseMenu._Ready");
+        TryPatchReady(typeof(NMainMenu), nameof(OnMainMenuReady), "NMainMenu._Ready");
         TryPatchReady(typeof(NRemoteLobbyPlayer), nameof(OnRemoteLobbyPlayerReady), "NRemoteLobbyPlayer._Ready");
+        TryPatchMainMenuSubmenuLookup();
 
         if (isAndroid)
         {
@@ -43,7 +45,6 @@ internal static class LanConnectSceneReadyPatches
             Log.Info("sts2_lan_connect scene_ready: deferring NDailyRunLoadScreen._Ready patch on Android.");
             Log.Info("sts2_lan_connect scene_ready: skipping NMultiplayerSubmenu._Ready patch on Android.");
             Log.Info("sts2_lan_connect scene_ready: skipping NCharacterSelectScreen._Ready patch on Android.");
-            TryPatchMainMenuSubmenuLookup();
             return;
         }
 
@@ -120,6 +121,7 @@ internal static class LanConnectSceneReadyPatches
         }
 
         MultiplayerSubmenuPatches.ScheduleEnsureLobbyEntry(submenu, "main_menu_stack_get_submenu_type");
+        LanConnectLobbyRuntime.Instance?.OnMultiplayerSubmenuReady(submenu);
     }
 
     private static void OnHostSubmenuReady(NMultiplayerHostSubmenu __instance)
@@ -138,6 +140,7 @@ internal static class LanConnectSceneReadyPatches
     {
         EnsureDeferredAndroidPatches();
         MultiplayerSubmenuPatches.ScheduleEnsureLobbyEntry(__instance, "ready_postfix");
+        LanConnectLobbyRuntime.Instance?.OnMultiplayerSubmenuReady(__instance);
     }
 
     private static void OnMultiplayerLoadScreenReady(NMultiplayerLoadGameScreen __instance)
@@ -167,6 +170,12 @@ internal static class LanConnectSceneReadyPatches
     {
         EnsureDeferredAndroidPatches();
         PauseMenuPatches.ScheduleEnsureRoomManagementButton(__instance, "ready_postfix");
+    }
+
+    private static void OnMainMenuReady(NMainMenu __instance)
+    {
+        EnsureDeferredAndroidPatches();
+        LanConnectLobbyRuntime.Instance?.OnMainMenuReady(__instance);
     }
 
     private static void OnRemoteLobbyPlayerReady(NRemoteLobbyPlayer __instance)

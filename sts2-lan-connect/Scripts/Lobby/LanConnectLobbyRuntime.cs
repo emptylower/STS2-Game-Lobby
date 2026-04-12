@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Godot;
@@ -8,6 +9,9 @@ using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Nodes.Multiplayer;
+using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
 
@@ -17,6 +21,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node
 {
     private const string RuntimeName = "Sts2LanConnectLobbyRuntime";
     private const int MaxChatMessages = 60;
+    private const double RestartSubmenuRetryIntervalSeconds = 0.6d;
+    private const int RestartContextRetryDelayMs = 250;
+    private const int RestartRoomPollDelayMs = 2000;
+    private const int RestartOpenSubmenuDebounceMs = 1500;
 
     private HostedRoomSession? _activeSession;
     private JoinedClientSession? _activeClientSession;
@@ -26,6 +34,12 @@ internal sealed partial class LanConnectLobbyRuntime : Node
     private int _chatRevision;
     private bool _chatEnabled = true;
     private int _chatEnabledRevision;
+    private PendingHostRestart? _pendingHostRestart;
+    private PendingClientReconnect? _pendingClientReconnect;
+    private string? _hostRestartInFlightToken;
+    private string? _clientReconnectInFlightToken;
+    private double _timeUntilRestartSubmenuAttempt;
+    private long _lastRestartSubmenuOpenAtUnixMs;
 
     internal static LanConnectLobbyRuntime? Instance { get; private set; }
 
@@ -40,6 +54,23 @@ internal sealed partial class LanConnectLobbyRuntime : Node
     internal bool ChatEnabled => _chatEnabled;
 
     internal int ChatEnabledRevision => _chatEnabledRevision;
+
+    private sealed record PendingHostRestart(
+        string RestartToken,
+        string SaveKey,
+        string RoomName,
+        string? RoomPassword,
+        string HostPlayerName,
+        long ExpiresAtUnixMs);
+
+    private sealed record PendingClientReconnect(
+        string RestartToken,
+        string SaveKey,
+        string DesiredSavePlayerNetId,
+        string? RoomPassword,
+        string? HostPlayerName,
+        string? RoomName,
+        long ExpiresAtUnixMs);
 
     internal IReadOnlyList<LobbyRoomChatEntry> GetChatMessagesSnapshot()
     {
@@ -70,6 +101,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node
     {
         ProcessMode = ProcessModeEnum.Always;
         _timeUntilHeartbeat = 0d;
+        _timeUntilRestartSubmenuAttempt = 0d;
+        _lastRestartSubmenuOpenAtUnixMs = 0;
         Instance = this;
         LanConnectProtocolProfiles.ResetActiveProfile("runtime_ready");
         SaveManager.Instance.Saved += OnRunSaved;
@@ -79,6 +112,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
 
     public override void _Process(double delta)
     {
+        DrivePendingRestartNavigation(delta);
         if (_activeSession == null)
         {
             return;
@@ -141,6 +175,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         netService.ClientDisconnected += session.OnClientDisconnected;
         TaskHelper.RunSafely(ConnectHostedControlAsync(session));
         PersistBindingForCurrentSave("attach");
+        _pendingHostRestart = null;
     }
 
     public void AttachJoinedClient(NetClientGameService netService, LobbyJoinRoomResponse joinResponse)
@@ -172,6 +207,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         LanConnectLobbyPlayerNameDirectory.Upsert(joinResponse.Room.RoomId, netService.NetId, LanConnectConfig.GetEffectivePlayerDisplayName());
         netService.Disconnected += session.OnDisconnected;
         TaskHelper.RunSafely(ConnectJoinedClientControlAsync(session));
+        _pendingClientReconnect = null;
     }
 
     public Task CloseActiveHostedRoomAsync(bool suppressErrors = false)
@@ -425,6 +461,113 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         }, CancellationToken.None);
     }
 
+    internal async Task<bool> StartHostedRunRestartAsync()
+    {
+        HostedRoomSession? session = _activeSession;
+        if (session == null)
+        {
+            LanConnectPopupUtil.ShowInfo("当前没有可重开的托管房间。");
+            return false;
+        }
+
+        if (_hostRestartInFlightToken != null)
+        {
+            LanConnectPopupUtil.ShowInfo("已经在执行重开流程，请稍候。");
+            return false;
+        }
+
+        if (!SaveManager.Instance.HasMultiplayerRunSave)
+        {
+            LanConnectPopupUtil.ShowInfo("当前没有多人续局存档，无法执行重开。");
+            return false;
+        }
+
+        if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out SerializableRun? run, out string failureReason) || run == null)
+        {
+            LanConnectPopupUtil.ShowInfo($"读取多人续局存档失败：{failureReason}");
+            return false;
+        }
+
+        string restartToken = Guid.NewGuid().ToString("N");
+        PendingHostRestart pending = new(
+            restartToken,
+            LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run),
+            session.Metadata.RoomName,
+            session.Metadata.Password,
+            LanConnectConfig.GetEffectivePlayerDisplayName(),
+            DateTimeOffset.UtcNow.AddMinutes(3).ToUnixTimeMilliseconds());
+        _pendingHostRestart = pending;
+        _hostRestartInFlightToken = restartToken;
+
+        try
+        {
+            await session.ControlClient.SendAsync(new LobbyControlEnvelope
+            {
+                Type = "restart_prepare",
+                RoomId = session.RoomId,
+                ControlChannelId = session.ControlChannelId,
+                Role = "host",
+                SaveKey = pending.SaveKey,
+                RestartToken = pending.RestartToken,
+                ExpiresAtUnixMs = pending.ExpiresAtUnixMs,
+                HostPlayerName = pending.HostPlayerName,
+                RoomName = pending.RoomName,
+                RoomPassword = pending.RoomPassword
+            }, CancellationToken.None);
+
+            LanConnectPopupUtil.ShowInfo("已通知队友准备自动重连。\n正在返回主菜单并重开当前多人续局...");
+            _timeUntilRestartSubmenuAttempt = 0d;
+            await Task.Delay(200);
+            if (NGame.Instance == null)
+            {
+                throw new InvalidOperationException("NGame instance is unavailable.");
+            }
+
+            await NGame.Instance.ReturnToMainMenu();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _pendingHostRestart = null;
+            LanConnectPopupUtil.ShowInfo($"重开流程启动失败：{ex.Message}");
+            return false;
+        }
+        finally
+        {
+            if (_hostRestartInFlightToken == restartToken)
+            {
+                _hostRestartInFlightToken = null;
+            }
+        }
+    }
+
+    internal void OnMainMenuReady(NMainMenu mainMenu)
+    {
+        if (_pendingHostRestart == null && _pendingClientReconnect == null)
+        {
+            return;
+        }
+
+        Callable.From(() =>
+        {
+            TryOpenMultiplayerSubmenu(mainMenu, "main_menu_ready");
+        }).CallDeferred();
+    }
+
+    internal void OnMultiplayerSubmenuReady(NMultiplayerSubmenu submenu)
+    {
+        if (_pendingHostRestart != null)
+        {
+            TaskHelper.RunSafely(TryStartPendingHostRestartAsync(submenu, _pendingHostRestart));
+            return;
+        }
+
+        if (_pendingClientReconnect != null)
+        {
+            TaskHelper.RunSafely(TryStartPendingClientReconnectAsync(submenu, _pendingClientReconnect));
+        }
+    }
+
     internal IReadOnlyCollection<ulong> GetHostedRoomPeerIds()
     {
         return _activeSession?.ConnectedPeerIds ?? (IReadOnlyCollection<ulong>)Array.Empty<ulong>();
@@ -541,7 +684,311 @@ internal sealed partial class LanConnectLobbyRuntime : Node
                     $"玩家 {envelope.TargetPlayerName ?? envelope.TargetPlayerNetId} 已被移出房间。",
                     DateTimeOffset.UtcNow, isLocal: false);
                 break;
+            case "restart_prepare":
+                TaskHelper.RunSafely(HandleRestartPrepareAsync(session, envelope));
+                break;
         }
+    }
+
+    private async Task TryStartPendingHostRestartAsync(NMultiplayerSubmenu submenu, PendingHostRestart pending)
+    {
+        if (_pendingHostRestart?.RestartToken != pending.RestartToken)
+        {
+            return;
+        }
+
+        if (_hostRestartInFlightToken == pending.RestartToken)
+        {
+            return;
+        }
+
+        _hostRestartInFlightToken = pending.RestartToken;
+        try
+        {
+            if (!SaveManager.Instance.HasMultiplayerRunSave)
+            {
+                _pendingHostRestart = null;
+                LanConnectPopupUtil.ShowInfo("多人续局存档不存在，无法自动重开。");
+                return;
+            }
+
+            while (_pendingHostRestart?.RestartToken == pending.RestartToken
+                && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() <= pending.ExpiresAtUnixMs)
+            {
+                if (LanConnectMultiplayerSaveCompatibility.TryStartLoadedRunAsLanHostFromSubmenu(submenu))
+                {
+                    _pendingHostRestart = null;
+                    LanConnectPopupUtil.ShowInfo("正在自动重开多人续局，房间会在载入页自动恢复。");
+                    return;
+                }
+
+                await Task.Delay(RestartContextRetryDelayMs);
+            }
+
+            if (_pendingHostRestart?.RestartToken == pending.RestartToken)
+            {
+                _pendingHostRestart = null;
+                LanConnectPopupUtil.ShowInfo("自动重开等待超时，请手动在多人页面点击“载入”。");
+            }
+        }
+        finally
+        {
+            if (_hostRestartInFlightToken == pending.RestartToken)
+            {
+                _hostRestartInFlightToken = null;
+            }
+        }
+    }
+
+    private async Task HandleRestartPrepareAsync(JoinedClientSession session, LobbyControlEnvelope envelope)
+    {
+        if (string.IsNullOrWhiteSpace(envelope.RestartToken) ||
+            string.IsNullOrWhiteSpace(envelope.SaveKey) ||
+            !envelope.ExpiresAtUnixMs.HasValue ||
+            string.IsNullOrWhiteSpace(session.PlayerNetId))
+        {
+            return;
+        }
+
+        PendingClientReconnect pending = new(
+            envelope.RestartToken.Trim(),
+            envelope.SaveKey.Trim(),
+            session.PlayerNetId.Trim(),
+            string.IsNullOrWhiteSpace(envelope.RoomPassword) ? null : envelope.RoomPassword,
+            string.IsNullOrWhiteSpace(envelope.HostPlayerName) ? null : envelope.HostPlayerName.Trim(),
+            string.IsNullOrWhiteSpace(envelope.RoomName) ? null : envelope.RoomName.Trim(),
+            envelope.ExpiresAtUnixMs.Value);
+        if (_pendingClientReconnect?.RestartToken == pending.RestartToken)
+        {
+            return;
+        }
+
+        _pendingClientReconnect = pending;
+        _timeUntilRestartSubmenuAttempt = 0d;
+        GD.Print($"sts2_lan_connect restart_prepare: queued auto reconnect saveKey={pending.SaveKey}, desiredNetId={pending.DesiredSavePlayerNetId}");
+        LanConnectPopupUtil.ShowInfo(
+            $"房主正在重开一局。\n正在准备自动重连：{pending.RoomName ?? "续局房间"}");
+
+        try
+        {
+            session.NetService.Disconnect(NetError.Quit, now: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"sts2_lan_connect restart_prepare: client disconnect failed: {ex.Message}");
+        }
+
+        await CloseJoinedClientAsync(session);
+        GD.Print("sts2_lan_connect restart_prepare: waiting for game to return to main menu after disconnect.");
+    }
+
+    private async Task TryStartPendingClientReconnectAsync(NMultiplayerSubmenu submenu, PendingClientReconnect pending)
+    {
+        if (_pendingClientReconnect?.RestartToken != pending.RestartToken)
+        {
+            return;
+        }
+
+        if (_clientReconnectInFlightToken == pending.RestartToken)
+        {
+            return;
+        }
+
+        _clientReconnectInFlightToken = pending.RestartToken;
+        try
+        {
+            while (_pendingClientReconnect?.RestartToken == pending.RestartToken
+                && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() <= pending.ExpiresAtUnixMs)
+            {
+                if (!LanConnectMultiplayerSaveCompatibility.TryResolveMultiplayerSubmenuContext(submenu, out Control? loadingOverlay, out NSubmenuStack? stack)
+                    || loadingOverlay == null
+                    || stack == null)
+                {
+                    await Task.Delay(RestartContextRetryDelayMs);
+                    continue;
+                }
+
+                try
+                {
+                    using LobbyApiClient apiClient = LobbyApiClient.CreateConfigured();
+                    IReadOnlyList<LobbyRoomSummary> rooms = await apiClient.GetRoomsAsync();
+                    LobbyRoomSummary? room = FindRestartTargetRoom(rooms, pending);
+                    if (room == null)
+                    {
+                        await Task.Delay(RestartRoomPollDelayMs);
+                        continue;
+                    }
+
+                    LobbyJoinRoomResponse joinResponse = await apiClient.JoinRoomAsync(room.RoomId, new LobbyJoinRoomRequest
+                    {
+                        PlayerName = LanConnectConfig.GetEffectivePlayerDisplayName(),
+                        Password = string.IsNullOrWhiteSpace(pending.RoomPassword) ? null : pending.RoomPassword,
+                        Version = LanConnectBuildInfo.GetGameVersion(),
+                        ModVersion = LanConnectBuildInfo.GetModVersion(),
+                        ModList = LanConnectBuildInfo.GetModList(),
+                        DesiredSavePlayerNetId = pending.DesiredSavePlayerNetId,
+                        PlayerNetId = pending.DesiredSavePlayerNetId
+                    });
+                    LobbyJoinAttemptResult joinResult = await LanConnectLobbyJoinFlow.JoinAsync(
+                        stack,
+                        loadingOverlay,
+                        joinResponse,
+                        pending.DesiredSavePlayerNetId,
+                        CancellationToken.None);
+                    if (joinResult.Joined)
+                    {
+                        _pendingClientReconnect = null;
+                        LanConnectPopupUtil.ShowInfo("已自动重新加入房间。");
+                        return;
+                    }
+
+                    Log.Warn(
+                        $"sts2_lan_connect restart_rejoin: join attempt failed roomId={room.RoomId}, reason={(string.IsNullOrWhiteSpace(joinResult.FailureMessage) ? "<none>" : joinResult.FailureMessage)}");
+                    await Task.Delay(RestartRoomPollDelayMs);
+                }
+                catch (LobbyServiceException ex) when (string.Equals(ex.Code, "room_not_found", StringComparison.Ordinal))
+                {
+                    await Task.Delay(RestartRoomPollDelayMs);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"sts2_lan_connect restart_rejoin: attempt failed: {ex.Message}");
+                    await Task.Delay(RestartRoomPollDelayMs);
+                }
+            }
+
+            if (_pendingClientReconnect?.RestartToken == pending.RestartToken)
+            {
+                _pendingClientReconnect = null;
+                LanConnectPopupUtil.ShowInfo("等待房主重开超时。请稍后手动从“游戏大厅”重新加入。");
+            }
+        }
+        finally
+        {
+            if (_clientReconnectInFlightToken == pending.RestartToken)
+            {
+                _clientReconnectInFlightToken = null;
+            }
+        }
+    }
+
+    private void DrivePendingRestartNavigation(double delta)
+    {
+        if (_pendingHostRestart == null && _pendingClientReconnect == null)
+        {
+            return;
+        }
+
+        if (_activeSession != null || _activeClientSession != null)
+        {
+            return;
+        }
+
+        if (_hostRestartInFlightToken != null || _clientReconnectInFlightToken != null)
+        {
+            return;
+        }
+
+        _timeUntilRestartSubmenuAttempt -= delta;
+        if (_timeUntilRestartSubmenuAttempt > 0d)
+        {
+            return;
+        }
+
+        _timeUntilRestartSubmenuAttempt = RestartSubmenuRetryIntervalSeconds;
+        NMainMenu? mainMenu = FindMainMenuNode();
+        if (mainMenu == null)
+        {
+            return;
+        }
+
+        TryOpenMultiplayerSubmenu(mainMenu, "runtime_drive");
+    }
+
+    private void TryOpenMultiplayerSubmenu(NMainMenu mainMenu, string source)
+    {
+        if (!GodotObject.IsInstanceValid(mainMenu) || !mainMenu.IsInsideTree())
+        {
+            return;
+        }
+
+        if (_pendingHostRestart == null && _pendingClientReconnect == null)
+        {
+            return;
+        }
+
+        if (_hostRestartInFlightToken != null || _clientReconnectInFlightToken != null)
+        {
+            return;
+        }
+
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (now - _lastRestartSubmenuOpenAtUnixMs < RestartOpenSubmenuDebounceMs)
+        {
+            return;
+        }
+
+        try
+        {
+            _lastRestartSubmenuOpenAtUnixMs = now;
+            mainMenu.OpenMultiplayerSubmenu();
+            GD.Print($"sts2_lan_connect restart_nav: open multiplayer submenu source={source}");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"sts2_lan_connect restart_nav: failed to open multiplayer submenu source={source}: {ex.Message}");
+        }
+    }
+
+    private NMainMenu? FindMainMenuNode()
+    {
+        SceneTree? tree = GetTree();
+        if (tree?.Root == null)
+        {
+            return null;
+        }
+
+        return FindNodeByType<NMainMenu>(tree.Root);
+    }
+
+    private static T? FindNodeByType<T>(Node node) where T : class
+    {
+        if (node is T target)
+        {
+            return target;
+        }
+
+        foreach (Node child in node.GetChildren())
+        {
+            T? found = FindNodeByType<T>(child);
+            if (found != null)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    private static LobbyRoomSummary? FindRestartTargetRoom(IReadOnlyList<LobbyRoomSummary> rooms, PendingClientReconnect pending)
+    {
+        IEnumerable<LobbyRoomSummary> matches = rooms.Where(room =>
+            string.Equals(room.SavedRun?.SaveKey, pending.SaveKey, StringComparison.Ordinal));
+        if (!string.IsNullOrWhiteSpace(pending.HostPlayerName))
+        {
+            matches = matches.Where(room =>
+                string.Equals(room.HostPlayerName, pending.HostPlayerName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(pending.RoomName))
+        {
+            matches = matches.Where(room =>
+                string.Equals(room.RoomName, pending.RoomName, StringComparison.Ordinal));
+        }
+
+        return matches
+            .OrderByDescending(room => room.LastHeartbeatAt)
+            .FirstOrDefault();
     }
 
     private void TryAppendRemoteChatMessage(string roomId, LobbyControlEnvelope envelope)

@@ -313,6 +313,18 @@ internal sealed class LobbyControlEnvelope
     public string? Message { get; set; }
 
     public bool? ChatEnabled { get; set; }
+
+    public string? SaveKey { get; set; }
+
+    public string? RestartToken { get; set; }
+
+    public long? ExpiresAtUnixMs { get; set; }
+
+    public string? HostPlayerName { get; set; }
+
+    public string? RoomName { get; set; }
+
+    public string? RoomPassword { get; set; }
 }
 
 internal sealed class LobbyRoomChatEntry

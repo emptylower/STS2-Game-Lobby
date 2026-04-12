@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Logging;
@@ -26,6 +27,8 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
     private VBoxContainer? _playerList;
     private CheckButton? _chatToggle;
     private Label? _statusLabel;
+    private Button? _restartButton;
+    private bool _restartInFlight;
     private int _lastChatEnabledRevision = -1;
     private int _lastPlayerListHash = -1;
 
@@ -212,6 +215,14 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
         body.AddChild(_statusLabel);
 
         body.AddChild(CreateSeparator());
+
+        if (isHost)
+        {
+            _restartButton = CreatePixelButton("重开一局", AccentColor, DangerHoverColor, CardColor);
+            _restartButton.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+            _restartButton.Pressed += OnRestartPressed;
+            body.AddChild(_restartButton);
+        }
 
         // Close button
         Button closeButton = CreatePixelButton("关闭", SecondaryColor, SurfaceMutedColor, TextStrongColor);
@@ -418,6 +429,53 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
         }
 
         _lastPlayerListHash = -1;
+    }
+
+    private void OnRestartPressed()
+    {
+        LanConnectLobbyRuntime? runtime = LanConnectLobbyRuntime.Instance;
+        if (runtime == null || !runtime.HasActiveHostedRoom)
+        {
+            return;
+        }
+
+        if (_restartInFlight)
+        {
+            return;
+        }
+
+        _restartInFlight = true;
+        if (_restartButton != null)
+        {
+            _restartButton.Disabled = true;
+        }
+
+        if (_statusLabel != null)
+        {
+            _statusLabel.Text = "正在准备重开并通知队友...";
+        }
+
+        TaskHelper.RunSafely(StartRestartFlowAsync(runtime));
+    }
+
+    private async Task StartRestartFlowAsync(LanConnectLobbyRuntime runtime)
+    {
+        try
+        {
+            bool started = await runtime.StartHostedRunRestartAsync();
+            if (!started && _statusLabel != null)
+            {
+                _statusLabel.Text = "重开启动失败，请查看提示信息。";
+            }
+        }
+        finally
+        {
+            _restartInFlight = false;
+            if (_restartButton != null && GodotObject.IsInstanceValid(_restartButton))
+            {
+                _restartButton.Disabled = false;
+            }
+        }
     }
 
     private void ClosePanel()
