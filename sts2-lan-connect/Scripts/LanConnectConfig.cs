@@ -178,7 +178,8 @@ internal static class LanConnectConfig
         {
             lock (Sync)
             {
-                return !string.IsNullOrWhiteSpace(_data.LobbyServerBaseUrl);
+                return !string.IsNullOrWhiteSpace(_data.LobbyServerBaseUrl)
+                    || !string.IsNullOrWhiteSpace(_data.LobbyCreateRoomToken);
             }
         }
     }
@@ -431,7 +432,9 @@ internal static class LanConnectConfig
         _data.LastRoomName = SanitizeRoomName(_data.LastRoomName);
         _data.PlayerDisplayName = SanitizePlayerDisplayName(_data.PlayerDisplayName);
         _data.LobbyReadAccessToken = string.Empty;
-        _data.LobbyCreateRoomToken = NormalizeLobbyAccessToken(_data.LobbyCreateRoomToken);
+        _data.LobbyCreateRoomToken = string.IsNullOrWhiteSpace(_data.LobbyCreateRoomToken)
+            ? string.Empty
+            : NormalizeLobbyAccessToken(_data.LobbyCreateRoomToken);
         if (_data.RoomChatOffsetX.HasValue && !float.IsFinite(_data.RoomChatOffsetX.Value))
         {
             _data.RoomChatOffsetX = null;

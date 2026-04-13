@@ -238,9 +238,10 @@ Docker 不会自动填入公网地址。使用以下文件时：
 
 - `baseUrl`: `http://47.111.146.69:8787`
 - `registryBaseUrl`: `http://47.111.146.69:18787`
+- `createRoomToken`: `Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E`
 - `wsUrl`: `ws://47.111.146.69:8787/control`
 
-若不设置额外的环境变量，打包出的客户端将使用上述默认大厅。
+若不设置额外的环境变量，打包出的客户端将使用上述默认大厅与默认建房令牌。
 
 ### 2. 生成客户端包
 
@@ -259,11 +260,13 @@ Docker 不会自动填入公网地址。使用以下文件时：
 export STS2_LOBBY_DEFAULT_BASE_URL="http://<your-host-or-domain>:8787"
 export STS2_LOBBY_DEFAULT_WS_URL="ws://<your-host-or-domain>:8787/control"
 export STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL="http://<your-registry-host-or-domain>:18787"
+export STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN="<your-create-room-token>"
 
 ./scripts/package-sts2-lan-connect.sh
 ```
 
 若不显式设置 `STS2_LOBBY_DEFAULT_WS_URL`，打包脚本会根据 `STS2_LOBBY_DEFAULT_BASE_URL` 自动推导。
+如需让分发给客户端的默认建房令牌与服务端一致，可同时设置 `STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN`，并在服务端 `.env` 中保持 `CREATE_ROOM_TOKEN` 同值。
 
 ---
 

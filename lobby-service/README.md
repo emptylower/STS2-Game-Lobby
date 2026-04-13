@@ -271,7 +271,7 @@ npm start
 | `ENFORCE_LOBBY_ACCESS_TOKEN` | 是否强制校验读取令牌；默认 `true`。关闭后可兼容不会发送读取令牌的老版本 mod |
 | `ENFORCE_CREATE_ROOM_TOKEN` | 是否强制校验建房令牌；默认 `true`。关闭后可兼容不会发送建房令牌的老版本 mod |
 | `LOBBY_ACCESS_TOKEN` | 私有/半私有模式下的读取令牌；用于 `GET /rooms` 与详细 `GET /health`，未设置时回退到 `CREATE_ROOM_TOKEN` |
-| `CREATE_ROOM_TOKEN` | 私有/半私有模式下的建房令牌；用于 `POST /rooms`，未设置时回退到 `LOBBY_ACCESS_TOKEN` |
+| `CREATE_ROOM_TOKEN` | 私有/半私有模式下的建房令牌；用于 `POST /rooms`。公开分发客户端时，建议与打包进 `lobby-defaults.json` 的 `createRoomToken` 保持一致；未设置时回退到 `LOBBY_ACCESS_TOKEN` |
 | `CREATE_ROOM_TRUSTED_PROXIES` | 可绕过 `CREATE_ROOM_TOKEN` 的受信来源 IP/CIDR；支持 IPv4 / IPv6 / IPv4-mapped IPv6，且仅按真实 TCP 来源地址判断，不信任 `x-forwarded-for` |
 | `CREATE_JOIN_RATE_LIMIT_WINDOW_MS` | 建房/加房请求限流窗口，默认 `60000` 毫秒 |
 | `CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS` | 单个来源 IP 在窗口内允许的建房/加房总请求数，默认 `30` |
