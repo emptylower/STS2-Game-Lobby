@@ -1,6 +1,8 @@
 {
   "baseUrl": "http://47.111.146.69:8787",
   "registryBaseUrl": "http://47.111.146.69:18787",
+  "readAccessToken": "",
+  "createRoomToken": "Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E",
   "wsUrl": "ws://47.111.146.69:8787/control",
   "compatibilityProfile": "test_relaxed",
   "connectionStrategy": "relay-only"

@@ -16,6 +16,10 @@ internal sealed class LanConnectConfigData
 
     public string LobbyRegistryBaseUrl { get; set; } = string.Empty;
 
+    public string LobbyReadAccessToken { get; set; } = string.Empty;
+
+    public string LobbyCreateRoomToken { get; set; } = string.Empty;
+
     public string LastRoomName { get; set; } = string.Empty;
 
     public string PlayerDisplayName { get; set; } = string.Empty;
@@ -128,6 +132,46 @@ internal static class LanConnectConfig
         }
     }
 
+    public static string LobbyReadAccessToken
+    {
+        get
+        {
+            lock (Sync)
+            {
+                return string.IsNullOrWhiteSpace(_data.LobbyReadAccessToken)
+                    ? LanConnectLobbyEndpointDefaults.GetReadAccessToken()
+                    : _data.LobbyReadAccessToken;
+            }
+        }
+        set
+        {
+            SetString(
+                static (data, next) => data.LobbyReadAccessToken = next,
+                static data => data.LobbyReadAccessToken,
+                NormalizeLobbyAccessToken(value));
+        }
+    }
+
+    public static string LobbyCreateRoomToken
+    {
+        get
+        {
+            lock (Sync)
+            {
+                return string.IsNullOrWhiteSpace(_data.LobbyCreateRoomToken)
+                    ? LanConnectLobbyEndpointDefaults.GetCreateRoomToken()
+                    : _data.LobbyCreateRoomToken;
+            }
+        }
+        set
+        {
+            SetString(
+                static (data, next) => data.LobbyCreateRoomToken = next,
+                static data => data.LobbyCreateRoomToken,
+                NormalizeLobbyAccessToken(value));
+        }
+    }
+
     public static bool HasLobbyServerOverrides
     {
         get
@@ -135,7 +179,7 @@ internal static class LanConnectConfig
             lock (Sync)
             {
                 return !string.IsNullOrWhiteSpace(_data.LobbyServerBaseUrl)
-                    || !string.IsNullOrWhiteSpace(_data.LobbyRegistryBaseUrl);
+                    || !string.IsNullOrWhiteSpace(_data.LobbyCreateRoomToken);
             }
         }
     }
@@ -384,16 +428,13 @@ internal static class LanConnectConfig
             _data.LobbyServerBaseUrl = string.Empty;
         }
 
-        if (string.Equals(
-                NormalizeLobbyEndpointOverride(_data.LobbyRegistryBaseUrl),
-                LanConnectLobbyEndpointDefaults.GetRegistryBaseUrl(),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            _data.LobbyRegistryBaseUrl = string.Empty;
-        }
-
+        _data.LobbyRegistryBaseUrl = string.Empty;
         _data.LastRoomName = SanitizeRoomName(_data.LastRoomName);
         _data.PlayerDisplayName = SanitizePlayerDisplayName(_data.PlayerDisplayName);
+        _data.LobbyReadAccessToken = string.Empty;
+        _data.LobbyCreateRoomToken = string.IsNullOrWhiteSpace(_data.LobbyCreateRoomToken)
+            ? string.Empty
+            : NormalizeLobbyAccessToken(_data.LobbyCreateRoomToken);
         if (_data.RoomChatOffsetX.HasValue && !float.IsFinite(_data.RoomChatOffsetX.Value))
         {
             _data.RoomChatOffsetX = null;
@@ -416,6 +457,13 @@ internal static class LanConnectConfig
     }
 
     private static string NormalizeLobbyEndpointOverride(string value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim();
+    }
+
+    private static string NormalizeLobbyAccessToken(string? value)
     {
         return string.IsNullOrWhiteSpace(value)
             ? string.Empty

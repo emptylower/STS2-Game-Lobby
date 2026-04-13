@@ -10,6 +10,10 @@ internal static class LanConnectConstants
 
     public const int MaxMaxPlayers = 16;
 
+    public const int LegacyMatrixMaxPlayers = 4;
+
+    public const int ExtendedMatrixMaxPlayers = 8;
+
     public const int VanillaSlotIdBits = 2;
 
     // Historical 0.2.2 releases used this slot bit-width on the wire.

@@ -85,7 +85,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Button? _clearNetworkOverridesButton;
     private Button? _chooseDirectoryServerButton;
     private LineEdit? _serverBaseUrlInput;
-    private LineEdit? _registryBaseUrlInput;
+    private LineEdit? _createRoomTokenInput;
     private Label? _statusLabel;
     private Label? _healthIndicatorLabel;
     private Label? _healthIndicatorLatencyLabel;
@@ -507,7 +507,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         body.AddChild(CreateSectionLabel("玩家与网络"));
 
-        Label intro = CreateBodyLabel("普通玩家默认走内置大厅服务。开发网络覆盖仅用于排障或临时切服，默认不会在界面里明文回显。");
+        Label intro = CreateBodyLabel("普通玩家默认走内置大厅服务。开发网络设置仅保留 HTTP 覆盖与建房令牌，默认不会在界面里明文回显。\n中心服务器地址已内置，不再提供 UI 入口。 ");
         intro.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         intro.AddThemeColorOverride("font_color", TextMutedColor);
         body.AddChild(intro);
@@ -529,22 +529,22 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _networkSettingsContainer.AddThemeConstantOverride("separation", 12);
         body.AddChild(_networkSettingsContainer);
 
-        Label networkHint = CreateBodyLabel("这些字段只保存自定义覆盖值。留空表示继续使用打包时附带的默认大厅，不会把默认地址写入 config.json。");
+        Label networkHint = CreateBodyLabel("这些字段只保存自定义覆盖值。留空表示继续使用打包时附带的默认大厅，不会把默认地址写入 config.json。建房令牌留空时继续使用打包默认值。\n中心服务器地址固定走内置默认，不提供单独覆盖入口。");
         networkHint.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         networkHint.AddThemeColorOverride("font_color", TextMutedColor);
         _networkSettingsContainer.AddChild(networkHint);
 
         _networkSettingsContainer.AddChild(BuildLabeledInputRow("HTTP 覆盖", LanConnectConfig.LobbyServerBaseUrlOverride, out _serverBaseUrlInput, "留空则继续使用内置大厅；WS 会自动从 HTTP 地址推导"));
-        _networkSettingsContainer.AddChild(BuildLabeledInputRow("中心服务器覆盖", LanConnectConfig.LobbyRegistryBaseUrlOverride, out _registryBaseUrlInput, "留空则继续使用默认中心服务器；用于拉取公共大厅列表"));
+        _networkSettingsContainer.AddChild(BuildLabeledInputRow("建房令牌", LanConnectConfig.LobbyCreateRoomToken, out _createRoomTokenInput, "留空则继续使用打包内置建房令牌；用于创建房间", maxLength: 256));
 
         if (_serverBaseUrlInput != null)
         {
             _serverBaseUrlInput.Secret = true;
         }
 
-        if (_registryBaseUrlInput != null)
+        if (_createRoomTokenInput != null)
         {
-            _registryBaseUrlInput.Secret = true;
+            _createRoomTokenInput.Secret = true;
         }
 
         HBoxContainer networkActions = new();
@@ -2520,7 +2520,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
         string gameModeLabel = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameModeLabel(gameMode);
         GD.Print(
-            $"sts2_lan_connect overlay: create requested roomName='{roomName}', passwordSet={!string.IsNullOrWhiteSpace(password)}, gameMode={LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode)}, hasRunSave={SaveManager.Instance.HasMultiplayerRunSave}, hasActiveRoom={LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true}, endpointAvailable={HasAvailableLobbyEndpoint()}");
+            $"sts2_lan_connect overlay: create requested roomName='{roomName}', passwordSet={!string.IsNullOrWhiteSpace(password)}, gameMode={LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode)}, hasRunSave={SaveManager.Instance.HasMultiplayerRunSave}, hasActiveRoom={LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true}, endpointAvailable={HasAvailableLobbyEndpoint()}, matrix={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()}");
         if (string.IsNullOrWhiteSpace(roomName))
         {
             ShowCreateDialogError("请输入房间名。");
@@ -2598,6 +2598,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         password = string.IsNullOrWhiteSpace(password) ? null : LanConnectConfig.SanitizeRoomPassword(password);
 
         PersistSettings();
+        GD.Print($"sts2_lan_connect overlay: join requested roomId={room.RoomId}, roomName='{room.RoomName}', requiresPassword={room.RequiresPassword}, desiredSavePlayerNetId={(string.IsNullOrWhiteSpace(desiredSavePlayerNetId) ? "<none>" : desiredSavePlayerNetId)}, roomCompatibility={LanConnectCompatibilityMatrix.DescribeRoomCompatibility(room)}, matrix={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()}");
         _actionInFlight = true;
         UpdateActionButtons();
         SetStatus($"正在请求加入 {FormatRoomName(room.RoomName, 24)}...");
@@ -3374,9 +3375,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             LanConnectConfig.LobbyServerBaseUrl = _serverBaseUrlInput.Text.Trim();
         }
 
-        if (_registryBaseUrlInput != null)
+        if (_createRoomTokenInput != null)
         {
-            LanConnectConfig.LobbyRegistryBaseUrl = _registryBaseUrlInput.Text.Trim();
+            LanConnectConfig.LobbyCreateRoomToken = _createRoomTokenInput.Text.Trim();
         }
 
         UpdateNetworkSummary();
@@ -3394,9 +3395,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
         }
 
-        if (_registryBaseUrlInput != null)
+        if (_createRoomTokenInput != null)
         {
-            _registryBaseUrlInput.Text = LanConnectConfig.LobbyRegistryBaseUrlOverride;
+            _createRoomTokenInput.Text = LanConnectConfig.LobbyCreateRoomToken;
         }
 
         UpdateNetworkSummary();
@@ -3416,9 +3417,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _serverBaseUrlInput.Secret = !_networkFieldsRevealed;
         }
 
-        if (_registryBaseUrlInput != null)
+        if (_createRoomTokenInput != null)
         {
-            _registryBaseUrlInput.Secret = !_networkFieldsRevealed;
+            _createRoomTokenInput.Secret = !_networkFieldsRevealed;
         }
 
         if (_toggleSensitiveNetworkButton != null)
@@ -3434,9 +3435,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _serverBaseUrlInput.Text = string.Empty;
         }
 
-        if (_registryBaseUrlInput != null)
+        if (_createRoomTokenInput != null)
         {
-            _registryBaseUrlInput.Text = string.Empty;
+            _createRoomTokenInput.Text = string.Empty;
         }
 
         PersistSettings();
@@ -3557,7 +3558,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_clearNetworkOverridesButton != null)
         {
             bool hasOverrideText = !string.IsNullOrWhiteSpace(_serverBaseUrlInput?.Text)
-                || !string.IsNullOrWhiteSpace(_registryBaseUrlInput?.Text);
+                || !string.IsNullOrWhiteSpace(_createRoomTokenInput?.Text);
             _clearNetworkOverridesButton.Disabled = !(LanConnectConfig.HasLobbyServerOverrides || hasOverrideText);
         }
 
@@ -3812,12 +3813,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Color color;
         if (LanConnectConfig.HasLobbyServerOverrides)
         {
-            summary = "当前网络：已启用手动覆盖地址。大厅与中心服务器覆盖值默认遮罩显示，不会回显打包默认地址。";
+            summary = "当前网络：已启用手动覆盖地址或建房令牌。HTTP 覆盖与建房令牌默认遮罩显示，不会回显打包默认地址。";
             color = AccentColor;
         }
         else if (LanConnectLobbyEndpointDefaults.HasBundledDefaults())
         {
-            summary = "当前网络：使用打包内置大厅服务和默认中心服务器。默认地址仅在运行时读取，不会写进 config.json，也不会在这里明文显示。";
+            summary = "当前网络：使用打包内置大厅服务、固定中心服务器与默认建房令牌。默认值仅在运行时读取，不会写进 config.json，也不会在这里明文显示。";
             color = SuccessColor;
         }
         else
@@ -4556,18 +4557,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         return ex.Code switch
         {
-            "room_started" => "房间已经开始游戏，不能再加入。",
-            "room_full" => "房间已经满员。",
-            "room_closed" => "房间已经关闭。",
-            "relay_host_not_ready" => "房主 relay 尚未注册完成，请稍后刷新后再试。",
             "version_mismatch" => ex.Message,
             "mod_mismatch" => LanConnectLobbyModMismatchFormatter.FormatFromDetails(ex.Details, ex.Message),
             "mod_version_mismatch" => LanConnectLobbyModMismatchFormatter.FormatFromDetails(ex.Details, ex.Message),
-            "invalid_password" => "房间密码错误。",
-            "save_slot_required" => "这是续局房间，需要先选择一个可接管角色。",
-            "save_slot_invalid" => "所选续局角色不存在。",
-            "save_slot_unavailable" => "所选续局角色已被其他玩家接管，或当前没有可接管角色。",
-            _ => ex.Message
+            _ => LanConnectCompatibilityMatrix.DescribeJoinFailureCode(ex.Code, ex.Message)
         };
     }
 
