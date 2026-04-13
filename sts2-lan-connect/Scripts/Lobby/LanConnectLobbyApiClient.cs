@@ -15,23 +15,32 @@ internal sealed class LobbyApiClient : IDisposable
     private readonly HttpClient _httpClient;
     private readonly Uri _baseUri;
     private readonly Uri _controlUri;
+    private readonly string? _readAccessToken;
+    private readonly string? _createRoomToken;
 
-    public LobbyApiClient(string baseUrl)
+    public LobbyApiClient(string baseUrl, string? readAccessToken = null, string? createRoomToken = null)
     {
         string normalizedBaseUrl = NormalizeBaseUrl(baseUrl);
         string normalizedWsUrl = NormalizeWsUrl(normalizedBaseUrl);
         _baseUri = new Uri(normalizedBaseUrl, UriKind.Absolute);
         _controlUri = new Uri(normalizedWsUrl, UriKind.Absolute);
+        _readAccessToken = string.IsNullOrWhiteSpace(readAccessToken) ? null : readAccessToken.Trim();
+        _createRoomToken = string.IsNullOrWhiteSpace(createRoomToken) ? null : createRoomToken.Trim();
         _httpClient = new HttpClient
         {
             BaseAddress = _baseUri,
             Timeout = TimeSpan.FromSeconds(10d)
         };
+
+        GD.Print($"sts2_lan_connect lobby api: configured client {DescribeResolvedConfiguration()}");
     }
 
     public static LobbyApiClient CreateConfigured()
     {
-        return new LobbyApiClient(LanConnectConfig.LobbyServerBaseUrl);
+        return new LobbyApiClient(
+            LanConnectConfig.LobbyServerBaseUrl,
+            LanConnectConfig.LobbyReadAccessToken,
+            LanConnectConfig.LobbyCreateRoomToken);
     }
 
     public Uri BuildHostControlUri(string controlChannelId, string roomId, string hostToken)
@@ -58,7 +67,7 @@ internal sealed class LobbyApiClient : IDisposable
     public async Task<double> MeasureProbeRttAsync(CancellationToken cancellationToken = default)
     {
         Uri requestUri = new(_baseUri, "probe");
-        GD.Print($"sts2_lan_connect lobby api: GET {requestUri} via {GetEndpointSource()} (probe)");
+        GD.Print($"sts2_lan_connect lobby api: GET {requestUri} via {GetEndpointSource()} (probe) config={DescribeResolvedConfiguration()}");
         using HttpRequestMessage request = new(HttpMethod.Get, "probe");
         Stopwatch stopwatch = Stopwatch.StartNew();
         using HttpResponseMessage response = await _httpClient.SendAsync(
@@ -109,8 +118,9 @@ internal sealed class LobbyApiClient : IDisposable
     private async Task<T> SendAsync<T>(string path, HttpMethod method, object? payload, CancellationToken cancellationToken)
     {
         Uri requestUri = new(_baseUri, path);
-        GD.Print($"sts2_lan_connect lobby api: {method.Method} {requestUri} via {GetEndpointSource()} ({DescribePayload(payload)})");
+        GD.Print($"sts2_lan_connect lobby api: {method.Method} {requestUri} via {GetEndpointSource()} ({DescribePayload(payload)}) config={DescribeResolvedConfiguration()}");
         using HttpRequestMessage request = new(method, path);
+        ApplyAuthorizationHeaders(request);
         if (payload != null)
         {
             string json = JsonSerializer.Serialize(payload, LanConnectJson.Options);
@@ -137,6 +147,19 @@ internal sealed class LobbyApiClient : IDisposable
         }
 
         return parsed;
+    }
+
+    private void ApplyAuthorizationHeaders(HttpRequestMessage request)
+    {
+        if (!string.IsNullOrWhiteSpace(_readAccessToken))
+        {
+            request.Headers.TryAddWithoutValidation("x-lobby-access-token", _readAccessToken);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_createRoomToken))
+        {
+            request.Headers.TryAddWithoutValidation("x-create-room-token", _createRoomToken);
+        }
     }
 
     private Uri BuildControlUri(string controlChannelId, string role, string roomId, string credentialName, string credentialValue)
@@ -194,6 +217,17 @@ internal sealed class LobbyApiClient : IDisposable
         return LanConnectLobbyEndpointDefaults.HasBundledDefaults()
             ? "bundled"
             : "missing";
+    }
+
+    private static string DescribeResolvedConfiguration()
+    {
+        string source = GetEndpointSource();
+        string baseUrl = LanConnectConfig.LobbyServerBaseUrl;
+        string registryBaseUrl = LanConnectConfig.LobbyRegistryBaseUrl;
+        string wsUrl = LanConnectLobbyEndpointDefaults.DeriveWsUrl(baseUrl);
+        bool hasReadToken = !string.IsNullOrWhiteSpace(LanConnectConfig.LobbyReadAccessToken);
+        bool hasCreateToken = !string.IsNullOrWhiteSpace(LanConnectConfig.LobbyCreateRoomToken);
+        return $"source={source}, baseUrl={baseUrl}, wsUrl={wsUrl}, registryBaseUrl={registryBaseUrl}, hasLobbyReadAccessToken={hasReadToken}, hasCreateRoomToken={hasCreateToken}, matrix={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()}";
     }
 
     private static string DescribePayload(object? payload)

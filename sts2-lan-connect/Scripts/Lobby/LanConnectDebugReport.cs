@@ -60,6 +60,7 @@ internal static class LanConnectDebugReport
         builder.AppendLine($"has_bundled_defaults: {LanConnectLobbyEndpointDefaults.HasBundledDefaults()}");
         builder.AppendLine($"compatibility_profile: {LanConnectLobbyEndpointDefaults.GetCompatibilityProfile()}");
         builder.AppendLine($"connection_strategy: {LanConnectLobbyEndpointDefaults.GetConnectionStrategy()}");
+        builder.AppendLine($"compatibility_matrix_policy: {LanConnectCompatibilityMatrix.BuildHumanSummary()}");
         builder.AppendLine($"last_manual_endpoint: {FormatValue(LanConnectConfig.LastEndpoint)}");
         builder.AppendLine($"last_room_name: {FormatValue(LanConnectConfig.LastRoomName)}");
         builder.AppendLine($"active_hosted_room: {LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true}");
@@ -78,6 +79,7 @@ internal static class LanConnectDebugReport
         builder.AppendLine($"selected_room_version: {FormatValue(overlayState.SelectedRoom?.Version)}");
         builder.AppendLine($"selected_room_mod_version: {FormatValue(overlayState.SelectedRoom?.ModVersion)}");
         builder.AppendLine($"selected_room_players: {FormatPlayerCounts(overlayState.SelectedRoom)}");
+        builder.AppendLine($"selected_room_compatibility: {FormatSelectedRoomCompatibility(overlayState.SelectedRoom)}");
         builder.AppendLine($"selected_room_save_key: {FormatValue(overlayState.SelectedRoom?.SavedRun?.SaveKey)}");
         builder.AppendLine($"selected_room_connected_player_net_ids: {FormatList(overlayState.SelectedRoom?.SavedRun?.ConnectedPlayerNetIds)}");
         builder.AppendLine($"selected_room_saved_run_slots: {FormatSavedRunSlots(overlayState.SelectedRoom?.SavedRun?.Slots)}");
@@ -201,6 +203,13 @@ internal static class LanConnectDebugReport
         return room == null
             ? "<none>"
             : $"{room.CurrentPlayers}/{room.MaxPlayers}";
+    }
+
+    private static string FormatSelectedRoomCompatibility(LobbyRoomSummary? room)
+    {
+        return room == null
+            ? "<none>"
+            : LanConnectCompatibilityMatrix.DescribeRoomCompatibility(room);
     }
 
     private static string FormatSavedRunSlots(IReadOnlyCollection<LobbySavedRunSlot>? slots)
