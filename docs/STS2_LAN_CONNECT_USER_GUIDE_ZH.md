@@ -93,6 +93,10 @@
 
 - 默认连接策略由安装包内的 `lobby-defaults.json` 决定，可选 `direct-first`、`relay-first` 或 `relay-only`
 - 公开包默认使用阿里云大厅 `47.111.146.69:8787`，公共服务器目录为 `47.111.146.69:18787`，固定策略为 `test_relaxed + relay-only`
+- 兼容矩阵当前统一规则为：
+  - `4` 人房发布 `legacy_4p`，用于兼容 `0.2.2`
+  - `5-8` 人房发布 `extended_8p`，仅支持 `0.2.3+`
+  - 客户端实际日志 / 调试报告会同时记录 `compatibilityProfile`、`connectionStrategy`、`effectiveMaxPlayers`、`publishedProtocolProfile`
 - MOD 内置 5-8 人支持；`4` 人房自动启用 `legacy_4p` 兼容协议，可与 `0.2.2` 联机；`5-8` 人房仅支持 `0.2.3+`
 - 检测到 RMP 等外部扩展人数 MOD 时，内置补丁会自动跳过以避免冲突
 - `切换服务器` 从中心服务器拉取可用大厅列表，并将选择写入客户端覆盖设置
@@ -104,8 +108,8 @@
 
 - 普通玩家通常只需填写 `玩家名`
 - 切换环境时优先使用 `切换服务器`；仅在排障时才展开 `开发网络设置`
-- 如需切换公共服务器目录来源，在开发网络设置里修改 `中心服务器覆盖`
-- 安装包附带 `lobby-defaults.json` 时，默认大厅地址自动生效，不在 UI 中明文展示
+- 开发网络设置默认只保留大厅 `HTTP 覆盖` 与 `建房令牌` 覆盖；中心服务器与读取令牌由安装包内置，不在普通 UI 中暴露
+- 安装包附带 `lobby-defaults.json` 时，默认大厅地址、中心服务器和内置令牌会自动生效，不在 UI 中明文展示
 - 当前 MOD 版本号以 `mods/sts2_lan_connect/sts2_lan_connect.json` 为准
 
 ## 常见问题
@@ -122,6 +126,28 @@
 - 建房、刷新、加入申请等控制面请求走 `HTTP/TCP`；直连和 relay fallback 走 `UDP`
 - 先尝试 `切换服务器`，排除单个节点拥堵或抖动
 - 如启用了 Clash、Surge、TUN、系统全局代理或本地网络过滤工具，必须让大厅服务器 IP 走 `DIRECT`
+- 如房间详情显示 `relay` 尚未就绪，先刷新后再重试；此时常见提示是“房主 relay 尚未注册完成，请稍后刷新后再试”
+- 向开发者反馈时，优先附上本地调试报告；其中会带 `compatibility_matrix_policy`、选中房间兼容摘要与最近连接日志
+
+### 提示版本不一致 / MOD 不一致
+
+- `version_mismatch` 通常表示游戏版本、协议版本或关键数据版本不一致
+- `mod_mismatch` / `mod_version_mismatch` 表示双方 STS2 LAN Connect 或相关联机 MOD 组合不一致
+- 所有联机玩家应尽量使用同一批 release，并核对 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号
+- `4` 人房兼容 `0.2.2` 的 `legacy_4p`；`5-8` 人房要求 `0.2.3+` 的 `extended_8p`
+
+### 提示房间已满 / 已关闭 / 已开局
+
+- `room_full`：房间人数已满，只能等待空位或让房主调整房间
+- `room_closed`：房主已关闭房间，或该房间已经从大厅下线
+- `room_started`：该房间已经进入游戏，不能再以新玩家身份加入
+
+### 提示续局角色不可用
+
+- `save_slot_required`：这是续局房间，必须先选择一个可接管角色
+- `save_slot_invalid`：所选角色槽位不存在，通常是房间状态已变化
+- `save_slot_unavailable`：该角色已被其他玩家接管，或当前已没有可接管角色
+- 此类问题优先刷新房间列表后重试，必要时让房主重新确认当前续局槽位状态
 
 ### 提示 MOD 不一致
 
@@ -223,6 +249,7 @@
   - Connection successful; entering multiplayer
 - If joining takes too long, a cancel button appears in the top-right of the dialog
 - On failure, the dialog distinguishes between version mismatch, MOD mismatch, game already started, room full, and specific network errors
+- The client debug report and runtime logs now record the effective compatibility matrix summary, including `compatibilityProfile`, `connectionStrategy`, `effectiveMaxPlayers`, and `publishedProtocolProfile`
 
 ## Debug Report
 
@@ -234,6 +261,10 @@
 
 - The default connection strategy is determined by `lobby-defaults.json` in the installation package: `direct-first`, `relay-first`, or `relay-only`
 - The public release defaults to the Alibaba Cloud lobby at `47.111.146.69:8787`, with the public server directory at `47.111.146.69:18787`, using `test_relaxed + relay-only`
+- The compatibility matrix is currently unified as:
+  - `4`-player rooms publish `legacy_4p` for `0.2.2` compatibility
+  - `5-8`-player rooms publish `extended_8p` and require `0.2.3+`
+  - Client runtime logs and debug reports record `compatibilityProfile`, `connectionStrategy`, `effectiveMaxPlayers`, and `publishedProtocolProfile`
 - MOD supports 2-8 players natively; 4-player rooms automatically use the `legacy_4p` compatibility protocol for `0.2.2` clients; 5-8 player rooms require `0.2.3+`
 - If external player-count expansion MODs such as RMP are detected, the built-in patch skips automatically to avoid conflicts
 - `Switch Server` fetches the available lobby list from the central server and writes the selection to client override settings
@@ -263,6 +294,28 @@
 - Room creation, refresh, and join requests use `HTTP/TCP`; direct connections and relay fallback use `UDP`
 - Try `Switch Server` first to rule out congestion or instability on a single node
 - If you are using Clash, Surge, TUN, a system-wide proxy, or a local network filter, ensure the lobby server IP is routed `DIRECT`
+- If the room shows relay as not ready yet, refresh and retry later; the common server-side error is `relay_host_not_ready`
+- When reporting issues, include the local debug report first; it now contains `compatibility_matrix_policy`, selected-room compatibility, and recent connection logs
+
+### Version mismatch / MOD mismatch errors
+
+- `version_mismatch` usually means the game version, protocol layer, or critical data version does not line up
+- `mod_mismatch` / `mod_version_mismatch` means the STS2 LAN Connect build or related multiplayer MOD set differs between peers
+- All players should use the same release batch whenever possible, and verify the version in `mods/sts2_lan_connect/sts2_lan_connect.json`
+- `4`-player rooms use the `legacy_4p` compatibility path for `0.2.2`; `5-8`-player rooms require `0.2.3+` with `extended_8p`
+
+### Room full / closed / already started
+
+- `room_full`: the room has no free slot
+- `room_closed`: the host already closed the room or the listing went offline
+- `room_started`: the run has already started and new players cannot join as fresh participants
+
+### Save-slot unavailable errors
+
+- `save_slot_required`: this is a save-run room and you must pick a reclaimable character first
+- `save_slot_invalid`: the selected slot no longer exists
+- `save_slot_unavailable`: the slot has already been reclaimed by someone else, or no reclaimable slot is currently available
+- Refresh the room list first; if it still fails, ask the host to confirm the current save-slot state
 
 ### MOD version mismatch error
 

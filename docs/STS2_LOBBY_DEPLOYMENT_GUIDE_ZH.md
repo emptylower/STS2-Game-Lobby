@@ -120,6 +120,10 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 - `lobby-service` 没有独立的网页大厅，玩家联机通过游戏客户端完成
 - 服主通过 `/server-admin` 管理公告、公开列表申请和带宽设置
 - 若页面可打开但无法登录，优先检查 `.env` 中的 `SERVER_ADMIN_PASSWORD_HASH` 和 `SERVER_ADMIN_SESSION_SECRET`
+- 默认情况下，`/health` 只公开基础 `{ ok: true }` 响应；详细健康信息需要受信来源或有效 `LOBBY_ACCESS_TOKEN`（未设置时向后兼容回退到 `CREATE_ROOM_TOKEN`）
+- 默认情况下，`/rooms` 不公开；若 `PUBLIC_ROOM_LIST_ENABLED=false`，则需要受信来源或有效 `LOBBY_ACCESS_TOKEN`（未设置时向后兼容回退到 `CREATE_ROOM_TOKEN`）
+- `POST /rooms` 需要受信来源或有效 `CREATE_ROOM_TOKEN`（未设置时向后兼容回退到 `LOBBY_ACCESS_TOKEN`）
+- 建议通过请求头 `x-lobby-access-token` / `x-create-room-token`（或 `Authorization: Bearer <token>`）传递 token，避免 query string 泄露到日志或浏览器历史
 
 ### 方式 B：先打包再上传到服务器
 
@@ -181,6 +185,35 @@ sudo ./install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 ```text
 SERVER_REGISTRY_BASE_URL=
 ```
+
+### 私有/半私有访问收口
+
+若不希望公开房间列表和详细健康信息，可保持以下默认值：
+
+```text
+PUBLIC_ROOM_LIST_ENABLED=false
+PUBLIC_DETAILED_HEALTH_ENABLED=false
+```
+
+此时：
+
+- `GET /rooms` 需要受信来源或有效 `LOBBY_ACCESS_TOKEN`（未设置时回退到 `CREATE_ROOM_TOKEN`）
+- `GET /health` 默认仅返回基础 `{ ok: true }`，详细字段需要受信来源或有效 `LOBBY_ACCESS_TOKEN`（未设置时回退到 `CREATE_ROOM_TOKEN`）
+- `POST /rooms` 需要受信来源或有效 `CREATE_ROOM_TOKEN`（未设置时回退到 `LOBBY_ACCESS_TOKEN`）
+- 非受信来源的 `POST /rooms` / `POST /rooms/:id/join` 会受到基于来源 IP 的轻量限流
+- 公共房间列表会对续局敏感字段做裁剪；受信 / token 访问可看到完整 `savedRun` 信息
+
+推荐同时配置：
+
+```text
+LOBBY_ACCESS_TOKEN=<strong-random-read-token>
+CREATE_ROOM_TOKEN=<strong-random-create-token>
+CREATE_ROOM_TRUSTED_PROXIES=127.0.0.1,::1
+CREATE_JOIN_RATE_LIMIT_WINDOW_MS=60000
+CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS=30
+```
+
+注意：`CREATE_ROOM_TRUSTED_PROXIES` 现在只按真实 TCP 来源地址判断，不再信任 `x-forwarded-for`，并支持 IPv4 / IPv6 / IPv4-mapped IPv6 来源；token 也建议只通过请求头传递，不要放到 query string。若只配置其中一个 token，服务端会向后兼容地回退到该 token。
 
 ### Docker 部署额外说明
 
