@@ -110,10 +110,10 @@ sudo ./scripts/install-lobby-service-linux.sh \
 
 安装脚本会自动将 `SERVER_REGISTRY_PUBLIC_BASE_URL`、`SERVER_REGISTRY_PUBLIC_WS_URL`、`SERVER_REGISTRY_BANDWIDTH_PROBE_URL` 写成对应的公网地址。
 
-如已完成安装，可手动编辑 `/opt/sts2-lobby/lobby-service/.env`，至少满足以下两种方式之一：
+如已完成安装，可手动编辑 `/opt/sts2-lobby/lobby-service/.env`，至少满足以下任一配置：
 
-- 方式 A：配置 `RELAY_PUBLIC_HOST=<公网 IP 或域名>`
-- 方式 B：显式配置全部 `SERVER_REGISTRY_PUBLIC_*`
+- `RELAY_PUBLIC_HOST=<公网 IP 或域名>`
+- 显式配置全部 `SERVER_REGISTRY_PUBLIC_*`
 
 否则母面板在收到申请后反向探测时将拿到本机地址，公开申请将失败。
 

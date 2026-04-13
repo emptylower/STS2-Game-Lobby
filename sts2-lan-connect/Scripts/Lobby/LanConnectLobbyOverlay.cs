@@ -85,7 +85,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Button? _clearNetworkOverridesButton;
     private Button? _chooseDirectoryServerButton;
     private LineEdit? _serverBaseUrlInput;
-    private LineEdit? _lobbyCreateRoomTokenInput;
+    private LineEdit? _registryBaseUrlInput;
     private Label? _statusLabel;
     private Label? _healthIndicatorLabel;
     private Label? _healthIndicatorLatencyLabel;
@@ -529,22 +529,22 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _networkSettingsContainer.AddThemeConstantOverride("separation", 12);
         body.AddChild(_networkSettingsContainer);
 
-        Label networkHint = CreateBodyLabel("这里只保存大厅 HTTP 覆盖地址和建房令牌。中心服务器与读取令牌默认随安装包内置，不对普通玩家开放 UI 编辑。");
+        Label networkHint = CreateBodyLabel("这些字段只保存自定义覆盖值。留空表示继续使用打包时附带的默认大厅，不会把默认地址写入 config.json。");
         networkHint.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         networkHint.AddThemeColorOverride("font_color", TextMutedColor);
         _networkSettingsContainer.AddChild(networkHint);
 
         _networkSettingsContainer.AddChild(BuildLabeledInputRow("HTTP 覆盖", LanConnectConfig.LobbyServerBaseUrlOverride, out _serverBaseUrlInput, "留空则继续使用内置大厅；WS 会自动从 HTTP 地址推导"));
-        _networkSettingsContainer.AddChild(BuildLabeledInputRow("建房令牌", LanConnectConfig.LobbyCreateRoomToken, out _lobbyCreateRoomTokenInput, "留空则继续使用安装包内置建房令牌；如管理员临时更换令牌，可在这里覆盖", showLengthCounter: false));
+        _networkSettingsContainer.AddChild(BuildLabeledInputRow("中心服务器覆盖", LanConnectConfig.LobbyRegistryBaseUrlOverride, out _registryBaseUrlInput, "留空则继续使用默认中心服务器；用于拉取公共大厅列表"));
 
         if (_serverBaseUrlInput != null)
         {
             _serverBaseUrlInput.Secret = true;
         }
 
-        if (_lobbyCreateRoomTokenInput != null)
+        if (_registryBaseUrlInput != null)
         {
-            _lobbyCreateRoomTokenInput.Secret = true;
+            _registryBaseUrlInput.Secret = true;
         }
 
         HBoxContainer networkActions = new();
@@ -3375,9 +3375,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             LanConnectConfig.LobbyServerBaseUrl = _serverBaseUrlInput.Text.Trim();
         }
 
-        if (_lobbyCreateRoomTokenInput != null)
+        if (_registryBaseUrlInput != null)
         {
-            LanConnectConfig.LobbyCreateRoomToken = _lobbyCreateRoomTokenInput.Text.Trim();
+            LanConnectConfig.LobbyRegistryBaseUrl = _registryBaseUrlInput.Text.Trim();
         }
 
         UpdateNetworkSummary();
@@ -3395,11 +3395,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
         }
 
-        if (_lobbyCreateRoomTokenInput != null)
+        if (_registryBaseUrlInput != null)
         {
-            _lobbyCreateRoomTokenInput.Text = LanConnectConfig.LobbyCreateRoomToken == LanConnectLobbyEndpointDefaults.GetCreateRoomToken()
-                ? string.Empty
-                : LanConnectConfig.LobbyCreateRoomToken;
+            _registryBaseUrlInput.Text = LanConnectConfig.LobbyRegistryBaseUrlOverride;
         }
 
         UpdateNetworkSummary();
@@ -3419,9 +3417,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _serverBaseUrlInput.Secret = !_networkFieldsRevealed;
         }
 
-        if (_lobbyCreateRoomTokenInput != null)
+        if (_registryBaseUrlInput != null)
         {
-            _lobbyCreateRoomTokenInput.Secret = !_networkFieldsRevealed;
+            _registryBaseUrlInput.Secret = !_networkFieldsRevealed;
         }
 
         if (_toggleSensitiveNetworkButton != null)
@@ -3437,9 +3435,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _serverBaseUrlInput.Text = string.Empty;
         }
 
-        if (_lobbyCreateRoomTokenInput != null)
+        if (_registryBaseUrlInput != null)
         {
-            _lobbyCreateRoomTokenInput.Text = string.Empty;
+            _registryBaseUrlInput.Text = string.Empty;
         }
 
         PersistSettings();
@@ -3560,7 +3558,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_clearNetworkOverridesButton != null)
         {
             bool hasOverrideText = !string.IsNullOrWhiteSpace(_serverBaseUrlInput?.Text)
-                || !string.IsNullOrWhiteSpace(_lobbyCreateRoomTokenInput?.Text);
+                || !string.IsNullOrWhiteSpace(_registryBaseUrlInput?.Text);
             _clearNetworkOverridesButton.Disabled = !(LanConnectConfig.HasLobbyServerOverrides || hasOverrideText);
         }
 
@@ -3815,12 +3813,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Color color;
         if (LanConnectConfig.HasLobbyServerOverrides)
         {
-            summary = "当前网络：已启用手动大厅覆盖地址。中心服务器与读取令牌继续使用打包内置值；建房令牌默认随包内置，也可在此页临时覆盖。";
+            summary = "当前网络：已启用手动覆盖地址。大厅与中心服务器覆盖值默认遮罩显示，不会回显打包默认地址。";
             color = AccentColor;
         }
         else if (LanConnectLobbyEndpointDefaults.HasBundledDefaults())
         {
-            summary = "当前网络：使用打包内置大厅、中心服务器与访问令牌。默认值仅在运行时读取，不会写进 config.json，也不会在这里明文显示。";
+            summary = "当前网络：使用打包内置大厅服务和默认中心服务器。默认地址仅在运行时读取，不会写进 config.json，也不会在这里明文显示。";
             color = SuccessColor;
         }
         else

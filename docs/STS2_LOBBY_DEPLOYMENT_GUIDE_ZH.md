@@ -37,7 +37,7 @@
 
 ## 一、服务端部署
 
-### 方式 A：直接从仓库部署
+### 直接从仓库部署
 
 ```bash
 sudo ./scripts/install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
@@ -125,26 +125,15 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 - `POST /rooms` 需要受信来源或有效 `CREATE_ROOM_TOKEN`（未设置时向后兼容回退到 `LOBBY_ACCESS_TOKEN`）
 - 建议通过请求头 `x-lobby-access-token` / `x-create-room-token`（或 `Authorization: Bearer <token>`）传递 token，避免 query string 泄露到日志或浏览器历史
 
-### 方式 B：先打包再上传到服务器
+### 服务器上直接安装 / 升级
 
-在本地执行打包：
-
-```bash
-./scripts/package-lobby-service.sh
-```
-
-产物：
-
-- `lobby-service/release/sts2_lobby_service/`
-- `lobby-service/release/sts2_lobby_service.zip`
-
-上传并解压后，在服务器执行：
+将打包产物上传并解压后，在服务器执行：
 
 ```bash
 sudo ./install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 ```
 
-### 方式 C：清理旧版本后重装
+### 清理旧版本后重装
 
 ```bash
 sudo systemctl stop sts2-lobby || true
