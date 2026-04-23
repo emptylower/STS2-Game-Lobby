@@ -59,6 +59,7 @@ internal static class LanConnectLobbyJoinFlow
         {
             LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, joinResponse.Room.MaxPlayers, "join_room");
             ulong netId = ResolveJoinNetId(joinResponse, desiredSavePlayerNetId);
+            Log.Info($"sts2_lan_connect join_flow: policy={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()} roomCompatibility={LanConnectCompatibilityMatrix.DescribeRoomCompatibility(joinResponse.Room)} strategy={joinResponse.ConnectionPlan.Strategy} directCandidates={joinResponse.ConnectionPlan.DirectCandidates.Count} relayAllowed={joinResponse.ConnectionPlan.RelayAllowed}");
             for (int index = 0; index < candidates.Count; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();

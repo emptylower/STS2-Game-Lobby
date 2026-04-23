@@ -37,6 +37,7 @@ Environment:
   STS2_LOBBY_DEFAULT_BASE_URL
   STS2_LOBBY_DEFAULT_WS_URL
   STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL
+  STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN
   STS2_LOBBY_COMPATIBILITY_PROFILE
   STS2_LOBBY_CONNECTION_STRATEGY
 EOF
@@ -74,6 +75,7 @@ write_lobby_defaults() {
   local registry_base_url="${STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL:-}"
   local compatibility_profile="${STS2_LOBBY_COMPATIBILITY_PROFILE:-}"
   local connection_strategy="${STS2_LOBBY_CONNECTION_STRATEGY:-}"
+  local create_room_token="${STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN:-}"
   local default_registry_base_url
   local default_compatibility_profile
   local default_connection_strategy
@@ -82,6 +84,7 @@ write_lobby_defaults() {
     default_registry_base_url="$(read_default_value "registryBaseUrl")"
     default_compatibility_profile="$(read_default_value "compatibilityProfile")"
     default_connection_strategy="$(read_default_value "connectionStrategy")"
+    create_room_token="${create_room_token:-$(read_default_value "createRoomToken")}" 
     registry_base_url="${registry_base_url:-$default_registry_base_url}"
     compatibility_profile="${compatibility_profile:-${default_compatibility_profile:-test_relaxed}}"
     connection_strategy="${connection_strategy:-${default_connection_strategy:-relay-only}}"
@@ -102,6 +105,7 @@ write_lobby_defaults() {
 {
   "baseUrl": "$base_url",
   "registryBaseUrl": "${registry_base_url:-}",
+  "createRoomToken": "${create_room_token:-}",
   "wsUrl": "$ws_url",
   "compatibilityProfile": "$compatibility_profile",
   "connectionStrategy": "$connection_strategy"

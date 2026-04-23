@@ -110,10 +110,10 @@ sudo ./scripts/install-lobby-service-linux.sh \
 
 安装脚本会自动将 `SERVER_REGISTRY_PUBLIC_BASE_URL`、`SERVER_REGISTRY_PUBLIC_WS_URL`、`SERVER_REGISTRY_BANDWIDTH_PROBE_URL` 写成对应的公网地址。
 
-如已完成安装，可手动编辑 `/opt/sts2-lobby/lobby-service/.env`，至少满足以下两种方式之一：
+如已完成安装，可手动编辑 `/opt/sts2-lobby/lobby-service/.env`，至少满足以下任一配置：
 
-- 方式 A：配置 `RELAY_PUBLIC_HOST=<公网 IP 或域名>`
-- 方式 B：显式配置全部 `SERVER_REGISTRY_PUBLIC_*`
+- `RELAY_PUBLIC_HOST=<公网 IP 或域名>`
+- 显式配置全部 `SERVER_REGISTRY_PUBLIC_*`
 
 否则母面板在收到申请后反向探测时将拿到本机地址，公开申请将失败。
 
@@ -169,6 +169,10 @@ SERVER_ADMIN_SESSION_SECRET=<上一步输出的随机字符串>
 - 如果使用域名，将上面的 `<公网 IP 或域名>` 替换成域名即可
 - `/server-admin` 页面可直接打开，但未配置 `SERVER_ADMIN_PASSWORD_HASH` 和 `SERVER_ADMIN_SESSION_SECRET` 时无法登录修改设置
 - 玩家不需要打开这些地址；玩家通过游戏客户端加入房间，浏览器页面供服主进行健康检查和管理
+- 默认情况下，`/health` 只公开基础 `{ ok: true }` 响应；详细健康信息需要受信来源或有效 `LOBBY_ACCESS_TOKEN`（未设置时向后兼容回退到 `CREATE_ROOM_TOKEN`）。若 `ENFORCE_LOBBY_ACCESS_TOKEN=false`，则关闭读取令牌校验，用于兼容老版本 mod。
+- 默认情况下，`/rooms` 不公开；若 `PUBLIC_ROOM_LIST_ENABLED=false`，则需要受信来源或有效 `LOBBY_ACCESS_TOKEN`（未设置时向后兼容回退到 `CREATE_ROOM_TOKEN`）。若 `ENFORCE_LOBBY_ACCESS_TOKEN=false`，则关闭读取令牌校验，用于兼容老版本 mod。
+- `POST /rooms` 需要受信来源或有效 `CREATE_ROOM_TOKEN`（未设置时向后兼容回退到 `LOBBY_ACCESS_TOKEN`）。若 `ENFORCE_CREATE_ROOM_TOKEN=false`，则关闭建房令牌校验，用于兼容老版本 mod。
+- 建议通过请求头 `x-lobby-access-token` / `x-create-room-token`（或 `Authorization: Bearer <token>`）传递 token，避免使用 query string 泄露到日志/历史记录
 
 ---
 
@@ -258,6 +262,20 @@ npm start
 
 说明：若客户端和房主均上报 `modList`，服务端会额外比对双方缺失项，并在 `mod_mismatch` 里返回 `missingModsOnLocal` / `missingModsOnHost`。
 
+### 房间访问收口
+
+| 变量 | 说明 |
+|------|------|
+| `PUBLIC_ROOM_LIST_ENABLED` | 是否公开 `GET /rooms`；默认 `false` |
+| `PUBLIC_DETAILED_HEALTH_ENABLED` | 是否公开详细 `GET /health`；默认 `false` |
+| `ENFORCE_LOBBY_ACCESS_TOKEN` | 是否强制校验读取令牌；默认 `true`。关闭后可兼容不会发送读取令牌的老版本 mod |
+| `ENFORCE_CREATE_ROOM_TOKEN` | 是否强制校验建房令牌；默认 `true`。关闭后可兼容不会发送建房令牌的老版本 mod |
+| `LOBBY_ACCESS_TOKEN` | 私有/半私有模式下的读取令牌；用于 `GET /rooms` 与详细 `GET /health`，未设置时回退到 `CREATE_ROOM_TOKEN` |
+| `CREATE_ROOM_TOKEN` | 私有/半私有模式下的建房令牌；用于 `POST /rooms`。公开分发客户端时，建议与打包进 `lobby-defaults.json` 的 `createRoomToken` 保持一致；未设置时回退到 `LOBBY_ACCESS_TOKEN` |
+| `CREATE_ROOM_TRUSTED_PROXIES` | 可绕过 `CREATE_ROOM_TOKEN` 的受信来源 IP/CIDR；支持 IPv4 / IPv6 / IPv4-mapped IPv6，且仅按真实 TCP 来源地址判断，不信任 `x-forwarded-for` |
+| `CREATE_JOIN_RATE_LIMIT_WINDOW_MS` | 建房/加房请求限流窗口，默认 `60000` 毫秒 |
+| `CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS` | 单个来源 IP 在窗口内允许的建房/加房总请求数，默认 `30` |
+
 ### 子服务管理面板
 
 | 变量 | 说明 |
@@ -296,6 +314,15 @@ npm start
 - `GET /announcements`
 - `GET /rooms`
 
+说明：
+
+- `GET /announcements` 默认公开
+- `GET /health` 默认仅返回基础 `{ ok: true }`；详细字段需公开开关或受信访问
+- `GET /rooms` 默认不公开；需开启 `PUBLIC_ROOM_LIST_ENABLED` 或通过受信来源 / `LOBBY_ACCESS_TOKEN` 访问（未设置时回退到 `CREATE_ROOM_TOKEN`）。如果要兼容老版本 mod，可将 `ENFORCE_LOBBY_ACCESS_TOKEN=false`。
+- 访问 token 推荐放在 `x-lobby-access-token` / `x-create-room-token` 请求头，或 `Authorization: Bearer <token>`；不建议放到 query string
+- 非受信来源的 `POST /rooms` / `POST /rooms/:id/join` 会受到基于来源 IP 的轻量限流
+- 公共房间列表会对续局敏感字段做裁剪；受信 / token 访问可看到完整 `savedRun` 信息
+
 ### 房间管理
 
 - `POST /rooms`
@@ -322,6 +349,8 @@ npm start
 - 支持可选的 `savedRun`
 - `savedRun.saveKey`：将续局存档与大厅房间绑定
 - `savedRun.slots`：描述每个可接管角色槽位及其 `netId`
+- 当请求不是受信来源时，需要有效 `CREATE_ROOM_TOKEN`
+- 如需兼容不会发送建房令牌的老版本 mod，可将 `ENFORCE_CREATE_ROOM_TOKEN=false`
 
 **`POST /rooms/:id/join`**
 
@@ -561,6 +590,8 @@ Notes:
 - Replace `<public IP or domain>` with your domain name if applicable
 - The `/server-admin` page is accessible without credentials, but login and configuration changes require `SERVER_ADMIN_PASSWORD_HASH` and `SERVER_ADMIN_SESSION_SECRET` to be set
 - Players do not need to access these URLs; they join rooms through the game client. The browser pages are for server operators to perform health checks and administration
+- By default, `/health` only exposes a minimal `{ ok: true }` response; detailed health fields require a trusted source or a valid `LOBBY_ACCESS_TOKEN` (and fall back to `CREATE_ROOM_TOKEN` for backward compatibility if the read token is unset)
+- By default, `/rooms` is not public; when `PUBLIC_ROOM_LIST_ENABLED=false`, access requires a trusted source or a valid `LOBBY_ACCESS_TOKEN` (and falls back to `CREATE_ROOM_TOKEN` for backward compatibility if the read token is unset)
 
 ---
 
@@ -648,7 +679,19 @@ See [`.env.example`](./.env.example) for a full example.
 | `STRICT_MOD_VERSION_CHECK` | When `false`, mod version string differences do not cause join rejection |
 | `CONNECTION_STRATEGY` | One of `direct-first`, `relay-first`, `relay-only`; public servers default to `relay-only` |
 
-Note: if both the client and host report a `modList`, the server additionally compares missing entries on each side and returns `missingModsOnLocal` / `missingModsOnHost` in the `mod_mismatch` response.
+### Access Hardening
+
+| Variable | Description |
+|----------|-------------|
+| `PUBLIC_ROOM_LIST_ENABLED` | Whether `GET /rooms` is public; defaults to `false` |
+| `PUBLIC_DETAILED_HEALTH_ENABLED` | Whether detailed `GET /health` is public; defaults to `false` |
+| `ENFORCE_LOBBY_ACCESS_TOKEN` | Whether to enforce the read token; defaults to `true`. Set to `false` to stay compatible with older mods that do not send a read token |
+| `ENFORCE_CREATE_ROOM_TOKEN` | Whether to enforce the create-room token; defaults to `true`. Set to `false` to stay compatible with older mods that do not send a create token |
+| `LOBBY_ACCESS_TOKEN` | Read token for private/semi-private mode; used for `GET /rooms` and detailed `GET /health`, and falls back to `CREATE_ROOM_TOKEN` when unset |
+| `CREATE_ROOM_TOKEN` | Create-room token for private/semi-private mode; used for `POST /rooms`, and falls back to `LOBBY_ACCESS_TOKEN` when unset |
+| `CREATE_ROOM_TRUSTED_PROXIES` | Trusted source IPs/CIDRs allowed to bypass `CREATE_ROOM_TOKEN`; supports IPv4 / IPv6 / IPv4-mapped IPv6 and is evaluated only against the real TCP peer address, not `x-forwarded-for` |
+| `CREATE_JOIN_RATE_LIMIT_WINDOW_MS` | Rate-limit window for create/join requests; defaults to `60000` ms |
+| `CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS` | Max create/join requests allowed per source IP within the window; defaults to `30` |
 
 ### Admin Panel
 
@@ -688,6 +731,14 @@ Note: if `SERVER_REGISTRY_PUBLIC_*` are unset, the server attempts to derive the
 - `GET /announcements`
 - `GET /rooms`
 
+Notes:
+
+- `GET /announcements` is public by default
+- `GET /health` returns only a minimal `{ ok: true }` response by default; detailed fields require the public flag or trusted/token-based access
+- `GET /rooms` is private by default; it requires `PUBLIC_ROOM_LIST_ENABLED=true` or trusted/token-based access
+- Non-trusted `POST /rooms` / `POST /rooms/:id/join` requests are subject to a lightweight per-IP rate limit
+- Public room lists now redact sensitive `savedRun` fields; trusted/token-authenticated requests can still access the full `savedRun` payload
+
 ### Room Management
 
 - `POST /rooms`
@@ -714,6 +765,9 @@ Note: if `SERVER_REGISTRY_PUBLIC_*` are unset, the server attempts to derive the
 - Accepts optional `savedRun`
 - `savedRun.saveKey`: binds the save file to the lobby room
 - `savedRun.slots`: describes each takeover character slot and its `netId`
+- When the request is not from a trusted source, `GET /rooms` / detailed `GET /health` require a valid `LOBBY_ACCESS_TOKEN`, and `POST /rooms` requires a valid `CREATE_ROOM_TOKEN`
+- If only one of the two tokens is configured, the service falls back to that token for backward compatibility
+- Prefer sending the token in `x-lobby-access-token` / `x-create-room-token` headers (or `Authorization: Bearer <token>`) instead of query strings
 
 **`POST /rooms/:id/join`**
 

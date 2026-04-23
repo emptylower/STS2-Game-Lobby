@@ -91,7 +91,7 @@ internal static class LanConnectHostFlow
         string gameModeLabel = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameModeLabel(gameMode);
 
         GD.Print(
-            $"sts2_lan_connect host_flow: start lobby host roomName='{roomName}', passwordSet={!string.IsNullOrWhiteSpace(password)}, gameMode={lobbyGameMode}, player='{LanConnectConfig.GetEffectivePlayerDisplayName()}', localAddressCount={LanConnectNetUtil.GetLanAddressStrings().Count}");
+            $"sts2_lan_connect host_flow: start lobby host roomName='{roomName}', passwordSet={!string.IsNullOrWhiteSpace(password)}, gameMode={lobbyGameMode}, player='{LanConnectConfig.GetEffectivePlayerDisplayName()}', localAddressCount={LanConnectNetUtil.GetLanAddressStrings().Count}, matrix={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()}");
 
         try
         {
@@ -191,7 +191,7 @@ internal static class LanConnectHostFlow
         string protocolProfile = LanConnectProtocolProfiles.DetermineProfileForMaxPlayers(maxPlayers);
 
         GD.Print(
-            $"sts2_lan_connect host_flow: publish existing host source={publishSource}, roomName='{trimmedRoomName}', passwordSet={!string.IsNullOrWhiteSpace(trimmedPassword)}, gameMode={lobbyGameMode}, player='{playerName}', platform={netService.Platform}, localAddressCount={localAddressCount}, saveKey={(boundSaveKey ?? "<none>")}");
+            $"sts2_lan_connect host_flow: publish existing host source={publishSource}, roomName='{trimmedRoomName}', passwordSet={!string.IsNullOrWhiteSpace(trimmedPassword)}, gameMode={lobbyGameMode}, player='{playerName}', platform={netService.Platform}, localAddressCount={localAddressCount}, saveKey={(boundSaveKey ?? "<none>")}, matrix={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()}");
 
         try
         {
