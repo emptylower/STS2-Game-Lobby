@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "updated_at": "2026-05-08T00:00:00Z",
+  "seeds": [
+    { "address": "http://lt.syx2023.icu:52000",  "note": "" },
+    { "address": "http://223.167.230.132:52000", "note": "" },
+    { "address": "https://120.55.3.230",         "note": "" },
+    { "address": "http://112.74.164.10",         "note": "" },
+    { "address": "http://106.75.7.210:8787",     "note": "" },
+    { "address": "http://110.42.9.59:37000",     "note": "" }
+  ]
+}
