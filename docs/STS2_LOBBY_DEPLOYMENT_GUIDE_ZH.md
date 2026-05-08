@@ -142,6 +142,48 @@ sudo find /opt/sts2-lobby -maxdepth 1 -type f \( -name 'sts2_lobby_service*.zip'
 sudo ./install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 ```
 
+### v0.3 升级 — 加入去中心化 peer 发现
+
+> v0.3 引入了 peer 协议，让多台 lobby 互相发现并由 CF Workers 聚合给客户端，不再依赖中心化 server-registry。
+> 推荐路径：升级 lobby-service 到 v0.3；不便升级的可暂用 [peer sidecar](./STS2_PEER_SIDECAR_GUIDE_ZH.md) 过渡。
+
+**强制环境变量（v0.3 启用 peer 网络的开关）：**
+
+- `PEER_SELF_ADDRESS=https://<lobby-public-url>`
+  - 留空时 v0.3 默认禁用 peer 网络（兼容旧部署）
+  - 设置后才会挂载 `/peers/*` 路由并加入 gossip
+- `PEER_CF_DISCOVERY_BASE_URL=https://<cf-domain>`（推荐）
+  - 启动时拉取 CF Worker `/v1/seeds` 作为引导列表
+- `PEER_NETWORK_ENABLED=false`
+  - 显式关闭 peer 网络（默认 true，仅在 `PEER_SELF_ADDRESS` 已设时生效）
+- `PEER_STATE_DIR=./data/peer`
+  - 节点 ed25519 身份与 known-peers 状态目录
+
+**升级步骤：**
+
+```bash
+cd /opt/sts2-lobby/lobby-service
+git pull   # 或重新解压 v0.3.0 tarball
+npm ci
+npm run build
+# 编辑 .env 加入 PEER_SELF_ADDRESS / PEER_CF_DISCOVERY_BASE_URL
+sudo systemctl restart sts2-lobby
+journalctl -u sts2-lobby -f | grep '\[peer\]'
+```
+
+成功标志：日志出现
+
+```
+[peer] mounted; self=https://your-lobby.example.com cf=https://discovery.example
+```
+
+**端口与防火墙：** peer 协议复用 lobby-service 的 8787/TCP，无需开新端口。
+但要确保 `PEER_SELF_ADDRESS` 指向的端口可被其它 peer 从公网到达
+（用于 ed25519 challenge 探活和 heartbeat）。
+
+**关停旧 server-registry 上报：** v0.3 启动时若未设置 `SERVER_REGISTRY_BASE_URL` 会自动跳过中心化上报循环，
+日志会打印 `[server-admin] registry sync disabled until SERVER_REGISTRY_BASE_URL is configured`，无需额外操作。
+
 ---
 
 ## 二、官方公开列表
