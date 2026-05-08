@@ -1,0 +1,10 @@
+name = "sts2-discovery"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+
+[[kv_namespaces]]
+binding = "DISCOVERY_KV"
+id = "REPLACE_WITH_PRODUCTION_ID"
+
+[triggers]
+crons = ["*/10 * * * *"]
