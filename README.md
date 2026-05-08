@@ -3,7 +3,7 @@
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-![Client](https://img.shields.io/badge/client-v0.2.3-green)
+![Client](https://img.shields.io/badge/client-v0.3.0-green)
 ![Service](https://img.shields.io/badge/service-v0.3.0-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
@@ -26,7 +26,7 @@
 | 客户端 MOD | `sts2-lan-connect/` | 游戏内大厅 UI、建房/加房、续局绑定、调试报告 |
 | 大厅服务 | `lobby-service/` | 房间目录、密码校验、心跳、控制通道、relay fallback |
 
-当前版本：客户端 `0.2.3` · 大厅服务 `0.2.2`
+当前版本：客户端 `0.3.0` · 大厅服务 `0.3.0`
 
 ### 主要特性
 
@@ -173,7 +173,7 @@ npm run hash-admin-password -- '你的面板密码'
 | Client MOD | `sts2-lan-connect/` | In-game lobby UI, room create/join, save-run binding, debug report |
 | Lobby Service | `lobby-service/` | Room directory, password validation, heartbeat, control channel, relay fallback |
 
-Current versions: Client `0.2.3` · Lobby Service `0.3.0`
+Current versions: Client `0.3.0` · Lobby Service `0.3.0`
 
 ### Key Features
 
