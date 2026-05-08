@@ -19,6 +19,16 @@ import {
   type HeartbeatInput,
   type JoinRoomInput,
 } from "./store.js";
+import { join } from "node:path";
+import { loadOrCreateIdentity } from "./peer/identity.js";
+import { PeerStore } from "./peer/store.js";
+import { mountHealth } from "./peer/handlers/health.js";
+import { mountList } from "./peer/handlers/list.js";
+import { mountAnnounce } from "./peer/handlers/announce.js";
+import { mountHeartbeat } from "./peer/handlers/heartbeat.js";
+import { GossipScheduler } from "./peer/gossip.js";
+import { loadSeedsFromCf } from "./peer/seeds-loader.js";
+import { bootstrapPeers } from "./peer/bootstrap.js";
 
 const MaxLobbyPlayers = 256;
 const MaxRoomNameLength = 80;
@@ -74,6 +84,13 @@ const env = {
   serverRegistryPublicWsUrl: process.env.SERVER_REGISTRY_PUBLIC_WS_URL ?? buildRegistryPublicWsUrl(),
   serverRegistryBandwidthProbeUrl: process.env.SERVER_REGISTRY_BANDWIDTH_PROBE_URL ?? buildRegistryBandwidthProbeUrl(),
   serverRegistryProbeFileBytes: Number.parseInt(process.env.SERVER_REGISTRY_PROBE_FILE_BYTES ?? String(100 * 1024 * 1024), 10),
+};
+
+const peerEnv = {
+  enabled: process.env.PEER_NETWORK_ENABLED !== "false",
+  selfAddress: process.env.PEER_SELF_ADDRESS ?? "",
+  cfDiscoveryBaseUrl: process.env.PEER_CF_DISCOVERY_BASE_URL ?? "",
+  stateDir: process.env.PEER_STATE_DIR ?? "./data/peer",
 };
 
 const store = new LobbyStore({
@@ -718,6 +735,37 @@ const cleanupInterval = setInterval(() => {
 const serverRegistrySyncInterval = setInterval(() => {
   void serverRegistrySync.runNow();
 }, env.serverRegistrySyncIntervalMs);
+
+if (peerEnv.enabled && peerEnv.selfAddress) {
+  const identity = await loadOrCreateIdentity(peerEnv.stateDir);
+  const peerStore = new PeerStore(join(peerEnv.stateDir, "peers.json"));
+  await peerStore.load();
+  mountHealth(app, { identity, address: peerEnv.selfAddress });
+  mountList(app, { store: peerStore });
+  mountAnnounce(app, { store: peerStore });
+  mountHeartbeat(app, { store: peerStore });
+
+  if (peerEnv.cfDiscoveryBaseUrl) {
+    const seeds = await loadSeedsFromCf(peerEnv.cfDiscoveryBaseUrl);
+    await bootstrapPeers({ store: peerStore, selfAddress: peerEnv.selfAddress, seeds });
+  }
+
+  const scheduler = new GossipScheduler({
+    store: peerStore,
+    selfAddress: peerEnv.selfAddress,
+    selfPublicKey: identity.publicKey,
+    seedAddresses: [],
+    postHeartbeat: async (addr, body) => {
+      await fetch(`${addr.replace(/\/+$/, "")}/peers/heartbeat`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+    },
+  });
+  scheduler.start();
+  console.log(`[peer] mounted; self=${peerEnv.selfAddress} cf=${peerEnv.cfDiscoveryBaseUrl || "(none)"}`);
+} else {
+  console.log("[peer] disabled (set PEER_SELF_ADDRESS to enable)");
+}
 
 server.listen(env.port, env.host, () => {
   console.log(`[lobby] listening on http://${env.host}:${env.port} (ws path ${env.wsPath})`);
