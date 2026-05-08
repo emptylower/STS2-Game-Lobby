@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -25,6 +26,12 @@ internal sealed class LanConnectBundledLobbyDefaults
 
     [JsonPropertyName("connectionStrategy")]
     public string ConnectionStrategy { get; set; } = string.Empty;
+
+    [JsonPropertyName("seedPeers")]
+    public List<string> SeedPeers { get; set; } = new();
+
+    [JsonPropertyName("cfDiscoveryBaseUrl")]
+    public string CfDiscoveryBaseUrl { get; set; } = string.Empty;
 }
 
 internal static class LanConnectLobbyEndpointDefaults
@@ -41,6 +48,8 @@ internal static class LanConnectLobbyEndpointDefaults
     private static string _createRoomToken = string.Empty;
     private static string _compatibilityProfile = LanConnectConstants.DefaultCompatibilityProfile;
     private static string _connectionStrategy = LanConnectConstants.DefaultConnectionStrategy;
+    private static List<string> _seedPeers = new();
+    private static string _cfDiscoveryBaseUrl = string.Empty;
 
     public static string GetDefaultBaseUrl()
     {
@@ -82,6 +91,18 @@ internal static class LanConnectLobbyEndpointDefaults
     {
         EnsureLoaded();
         return _connectionStrategy;
+    }
+
+    public static IReadOnlyList<string> GetSeedPeers()
+    {
+        EnsureLoaded();
+        return _seedPeers;
+    }
+
+    public static string GetCfDiscoveryBaseUrl()
+    {
+        EnsureLoaded();
+        return _cfDiscoveryBaseUrl;
     }
 
     public static bool MatchesBundledDefaultBaseUrl(string? value)
@@ -149,6 +170,8 @@ internal static class LanConnectLobbyEndpointDefaults
             _createRoomToken = NormalizeToken(defaults?.CreateRoomToken);
             _compatibilityProfile = NormalizeCompatibilityProfile(defaults?.CompatibilityProfile);
             _connectionStrategy = NormalizeConnectionStrategy(defaults?.ConnectionStrategy);
+            _seedPeers = defaults?.SeedPeers ?? new List<string>();
+            _cfDiscoveryBaseUrl = (defaults?.CfDiscoveryBaseUrl ?? string.Empty).Trim().TrimEnd('/');
         }
         catch (Exception ex)
         {
@@ -159,6 +182,8 @@ internal static class LanConnectLobbyEndpointDefaults
             _createRoomToken = string.Empty;
             _compatibilityProfile = LanConnectConstants.DefaultCompatibilityProfile;
             _connectionStrategy = LanConnectConstants.DefaultConnectionStrategy;
+            _seedPeers = new List<string>();
+            _cfDiscoveryBaseUrl = string.Empty;
         }
     }
 
