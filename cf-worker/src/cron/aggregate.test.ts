@@ -42,6 +42,26 @@ test("aggregate writes merged peers from seed list", async () => {
   assert.deepEqual(addrs, ["https://a.example", "https://b.example", "https://c.example"]);
 });
 
+test("aggregate keeps previous active when all peers respond with empty lists", async () => {
+  const kv = new FakeKV();
+  await kv.put("peers:active", JSON.stringify({
+    version: 1, updated_at: "2026-05-08T00:00:00Z",
+    servers: [{ address: "https://prev.example", lastSeen: "2026-05-08T00:00:00Z" }],
+  }));
+  await kv.put("peers:seeds", JSON.stringify({
+    version: 1, updated_at: "2026-05-08T00:00:00Z",
+    seeds: [{ address: "https://empty.example" }],
+  }));
+
+  const fetchMock = async (): Promise<Response> =>
+    new Response(JSON.stringify({ peers: [] }), { status: 200 });
+
+  await aggregateActivePeers({ DISCOVERY_KV: kv as unknown as KVNamespace }, fetchMock);
+  const written = JSON.parse(kv.read("peers:active")!);
+  assert.equal(written.servers.length, 1);
+  assert.equal(written.servers[0].address, "https://prev.example");
+});
+
 test("aggregate keeps previous active when all peers fail", async () => {
   const kv = new FakeKV();
   await kv.put("peers:active", JSON.stringify({

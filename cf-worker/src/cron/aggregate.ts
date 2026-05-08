@@ -29,17 +29,15 @@ export async function aggregateActivePeers(env: Env, fetchImpl: FetchLike = fetc
   );
 
   const merged = new Map<string, PeerEntry>();
-  let anySuccess = false;
 
   for (const r of fetched) {
     if (r.status !== "fulfilled") continue;
-    anySuccess = true;
     for (const peer of r.value) {
       merged.set(peer.address, peer);
     }
   }
 
-  if (!anySuccess && previous.length > 0) {
+  if (merged.size === 0 && previous.length > 0) {
     return;
   }
 
