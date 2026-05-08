@@ -1,6 +1,7 @@
 import { handleGetSeeds } from "./handlers/seeds.js";
 import { handleGetServers } from "./handlers/servers.js";
 import { handleGetAnnouncements } from "./handlers/announcements.js";
+import { aggregateActivePeers } from "./cron/aggregate.js";
 
 export interface Env {
   DISCOVERY_KV: KVNamespace;
@@ -20,5 +21,7 @@ export default {
     }
     return new Response("not found", { status: 404 });
   },
-  async scheduled(_event: ScheduledEvent, _env: Env, _ctx: ExecutionContext): Promise<void> {},
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(aggregateActivePeers(env));
+  },
 };
