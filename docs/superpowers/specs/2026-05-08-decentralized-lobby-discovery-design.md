@@ -265,6 +265,25 @@ PEER_LISTEN_PORT=18800
 | `peers:seeds` | 维护者手填的 5–8 个老牌服主，永不被 cron 覆盖 | 维护者（KV 直写或简易管理 UI） |
 | `announcements` | 公告条目 | 维护者（KV 直写） |
 
+#### 5.4.1.1 初始 `peers:seeds` 内容（P0 第一晚写入）
+
+```json
+{
+  "version": 1,
+  "updated_at": "2026-05-08T00:00:00Z",
+  "seeds": [
+    { "address": "http://lt.syx2023.icu:52000",  "note": "" },
+    { "address": "http://223.167.230.132:52000", "note": "" },
+    { "address": "https://120.55.3.230",         "note": "" },
+    { "address": "http://112.74.164.10",         "note": "" },
+    { "address": "http://106.75.7.210:8787",     "note": "" },
+    { "address": "http://110.42.9.59:37000",     "note": "" }
+  ]
+}
+```
+
+P0 部署 CF Worker 之前，需先验证以上 6 个地址当下都能响应 `/peers/health`（v0.3 上线后）或至少能响应 `/healthz`（兼容旧版用作占位探活）；任何未响应的地址记入 P5 协调推送阶段的"催升级名单"。Hardcoded 种子在客户端打包阶段从该列表生成。
+
 #### 5.4.2 公开端点
 
 | 端点 | Edge 缓存 | 行为 |
@@ -341,12 +360,47 @@ P5 那天评估剩余工作，必要时按以下顺序砍：
 [ ] 客户端连上任意 peer 后，本地缓存条目被它的 /peers 数据扩充
 ```
 
-## 8. 设计要素与待跟踪事项
+## 8. 设计要素决议
 
-- **Hardcoded 种子的滚动刷新策略**：每次客户端发版前，从当前 `peers:seeds` 拷贝 5–8 个长期稳定的服主写入二进制。后续是否做成构建脚本自动化抓取，留待实施阶段决定。
-- **Node 身份与签名密钥**：`/peers/health` challenge 的签名机制需要每台节点持有一对密钥。最简方案为每台 lobby 启动时自生成并持久化到本地；不引入中心 CA。Sidecar 与新 v0.3 lobby 的密钥互相独立。
-- **Peer 表持久化具体形态**：JSON 文件 vs SQLite，留待实施阶段根据 lobby-service 现有惯例敲定。
-- **客户端"按延迟排序"的 ping 实现**：HTTP HEAD vs ICMP vs UDP echo，留待实施阶段根据客户端运行时能力敲定（Godot/.NET 上 ICMP 受限，倾向 HTTP HEAD）。
+以下 4 条在 brainstorming 阶段一并敲定，实施阶段直接按此执行。
+
+### 8.1 Hardcoded 种子的滚动刷新
+
+**决议**：客户端打包脚本 `scripts/build-sts2-lan-connect.sh`（或其上游 `scripts/package-sts2-lan-connect.sh`）新增一步：从仓库内的 `data/seeds.json`（一份与 CF `peers:seeds` 同步的快照，纳入 git）读取最新种子列表，写入打包出的 `lobby-defaults.json` 的 `seedPeers` 字段。每次发新版客户端前，维护者只需手工把最新 `peers:seeds` 拷贝到 `data/seeds.json` 并提交 PR——一次复制粘贴。
+
+不做"打包时直接 fetch CF"——避免构建对网络可达性的依赖，也避免不同时段打出来的客户端种子不一致。
+
+### 8.2 节点身份与签名密钥
+
+**决议**：每台 lobby-service v0.3 / sidecar 在首次启动时，本地生成 ed25519 密钥对并持久化到 `<state-dir>/peer-identity.key`（`0600` 权限）。
+
+- 节点公钥作为 `/peers` 响应中每个 entry 的字段一并暴露
+- `/peers/health` 协议：requester 发 nonce → target 用私钥签名 → requester 用此前已知的目标公钥验证
+- 第一次接触某个新 peer 时采用 **TOFU**（Trust On First Use）：跟随首个 announce 它的 peer 给出的公钥
+- 公钥变化的处理：若 `/peers/health` 验签失败（公钥与本地记录不符），等同于 §5.2.2 中的"单次 liveness probe 失败"——累计 3 次失败后标记离线，TTL 之后自然脱网。不引入额外的剔除路径，保证规则面单一
+- 不引入任何中心 CA / 证书链
+
+Sidecar 与同机器上的 lobby-service v0.3 的身份独立——sidecar 代表的是其旁挂的老 lobby 的"对外身份"，不是 lobby 进程本身。
+
+### 8.3 Peer 表持久化形态
+
+**决议**：JSON 文件 + 原子写入（写临时文件 → fsync → rename）。
+
+- 路径：v0.3 内置 — `<lobby-data-dir>/peers.json`；sidecar — `<sidecar-data-dir>/peers.json`
+- 数据规模 10–500 条，JSON 完全够用；避免 sidecar 引入 SQLite 依赖（保持单文件部署目标）
+- 写入策略：每次 peer 表变更（announce / heartbeat / TTL 清理）后立即原子写盘；高频更新场景（heartbeat）用 100ms debounce 合并写
+- 启动时优先读盘恢复 peer 表，再叠加从 CF `/v1/seeds` 拉到的种子
+
+### 8.4 客户端"按延迟排序"的 ping 实现
+
+**决议**：HTTP HEAD `<peer-base-url>/peers/health?ping=1`（或老 lobby 兼容 `/healthz`），测量 TTFB。
+
+- ICMP 在 Godot/.NET 上需 root 权限或特定 socket 类型，跨平台不一致——放弃
+- UDP echo 没有现成端点，需要新增协议——不做
+- HTTP HEAD 复用现有可达性逻辑，5 秒超时，并发上限 10
+- 弹窗中并行 ping 全部已知 peer，500ms 内回的归"低延迟组"，500ms–2s 归"中延迟组"，2s 以上或失败的归"高延迟/不可达组"，分组内部按字母序
+
+带宽差的玩家可在设置里关掉自动 ping（弹窗回退到字母序）。
 
 ## 9. 不在本次范围内（明确不做）
 
