@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -381,4 +382,54 @@ internal sealed class LobbyErrorDetails
     public string? CapacitySource { get; set; }
 
     public double? CreateRoomThresholdRatio { get; set; }
+}
+
+// === Peer Network DTOs (mirror lobby-service/src/peer/types.ts) ===
+
+internal sealed class PeerListEntry
+{
+    [JsonPropertyName("address")]
+    public string Address { get; set; } = string.Empty;
+
+    [JsonPropertyName("publicKey")]
+    public string PublicKey { get; set; } = string.Empty;
+
+    [JsonPropertyName("displayName")]
+    public string? DisplayName { get; set; }
+
+    [JsonPropertyName("lastSeen")]
+    public string LastSeen { get; set; } = string.Empty;
+
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "active";
+}
+
+internal sealed class PeersListResponse
+{
+    [JsonPropertyName("version")]
+    public int Version { get; set; } = 1;
+
+    [JsonPropertyName("generatedAt")]
+    public string GeneratedAt { get; set; } = string.Empty;
+
+    [JsonPropertyName("peers")]
+    public List<PeerListEntry> Peers { get; set; } = new();
+}
+
+internal sealed class PeerHealthResponse
+{
+    [JsonPropertyName("address")]
+    public string Address { get; set; } = string.Empty;
+
+    [JsonPropertyName("publicKey")]
+    public string PublicKey { get; set; } = string.Empty;
+
+    [JsonPropertyName("challenge")]
+    public string Challenge { get; set; } = string.Empty;
+
+    [JsonPropertyName("signature")]
+    public string Signature { get; set; } = string.Empty;
+
+    [JsonPropertyName("serverTime")]
+    public string ServerTime { get; set; } = string.Empty;
 }
