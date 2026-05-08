@@ -10,6 +10,7 @@ public partial class LanConnectServerSelectionDialog : Window
     private VBoxContainer? _list;
     private Button? _refreshButton;
     private Button? _manualButton;
+    private Button? _resetButton;
     private LineEdit? _manualInput;
     private CheckBox? _autoConnectCheck;
     private Label? _statusLabel;
@@ -24,12 +25,21 @@ public partial class LanConnectServerSelectionDialog : Window
         _list = GetNode<VBoxContainer>("%ServerList");
         _refreshButton = GetNode<Button>("%RefreshButton");
         _manualButton = GetNode<Button>("%ManualButton");
+        _resetButton = GetNodeOrNull<Button>("%ResetButton");
         _manualInput = GetNode<LineEdit>("%ManualInput");
         _autoConnectCheck = GetNode<CheckBox>("%AutoConnectCheck");
         _statusLabel = GetNode<Label>("%StatusLabel");
 
         _refreshButton.Pressed += () => _ = RefreshAsync();
         _manualButton.Pressed += OnManualConnect;
+        if (_resetButton != null)
+        {
+            _resetButton.Pressed += () =>
+            {
+                LanConnectKnownPeersCache.Reset();
+                _ = RefreshAsync();
+            };
+        }
         CloseRequested += () => QueueFree();
 
         _ = RefreshAsync();

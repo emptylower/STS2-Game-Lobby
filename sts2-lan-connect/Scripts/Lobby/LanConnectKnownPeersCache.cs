@@ -74,6 +74,11 @@ internal static class LanConnectKnownPeersCache
         }
     }
 
+    public static void Reset()
+    {
+        lock (Sync) { if (File.Exists(PathFile)) File.Delete(PathFile); }
+    }
+
     public static List<KnownPeerEntry> Cleanup(IEnumerable<KnownPeerEntry> entries, DateTime now)
     {
         var staleCutoff = now - TimeSpan.FromDays(StaleDays);

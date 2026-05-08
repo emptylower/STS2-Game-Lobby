@@ -67,6 +67,11 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "刷新"
 
+[node name="ResetButton" type="Button" parent="MarginContainer/VBoxContainer/ActionsRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "重置本地列表"
+
 [node name="StatusLabel" type="Label" parent="MarginContainer/VBoxContainer"]
 unique_name_in_owner = true
 layout_mode = 2
