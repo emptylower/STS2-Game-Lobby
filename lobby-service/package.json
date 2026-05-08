@@ -12,7 +12,7 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "hash-admin-password": "node ./scripts/generate-server-admin-password-hash.mjs",
     "start": "node --enable-source-maps dist/server.js",
-    "test": "npm run build && node --test dist/**/*.test.js"
+    "test": "npm run build && find dist -name '*.test.js' -print0 | xargs -0 node --test"
   },
   "dependencies": {
     "express": "^5.1.0",
