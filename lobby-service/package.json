@@ -4,6 +4,13 @@
   "private": true,
   "license": "GPL-3.0-only",
   "type": "module",
+  "main": "dist/server.js",
+  "exports": {
+    "./peer/*": {
+      "import": "./dist/peer/*.js",
+      "types": "./dist/peer/*.d.ts"
+    }
+  },
   "engines": {
     "node": ">=20.11.0"
   },
