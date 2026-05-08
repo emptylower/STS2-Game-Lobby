@@ -1,0 +1,16 @@
+# sts2-peer-sidecar/deploy/sts2-peer-sidecar.service
+[Unit]
+Description=STS2 Lan Connect Peer Sidecar
+After=network.target
+
+[Service]
+Type=simple
+User=sts2sidecar
+EnvironmentFile=/etc/sts2-peer-sidecar/sidecar.env
+WorkingDirectory=/opt/sts2-peer-sidecar
+ExecStart=/usr/bin/node --enable-source-maps /opt/sts2-peer-sidecar/dist/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
