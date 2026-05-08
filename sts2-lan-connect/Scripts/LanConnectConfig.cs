@@ -33,6 +33,10 @@ internal sealed class LanConnectConfigData
     public int? MaxPlayers { get; set; }
 
     public bool? DifficultyScalingEnabled { get; set; }
+
+    public bool AutoConnectLastServer { get; set; } = true;
+
+    public string LastUsedServerAddress { get; set; } = string.Empty;
 }
 
 internal static class LanConnectConfig
@@ -300,6 +304,48 @@ internal static class LanConnectConfig
                 _data.DifficultyScalingEnabled = value;
                 SaveUnsafe();
             }
+        }
+    }
+
+    public static bool AutoConnectLastServer
+    {
+        get
+        {
+            lock (Sync)
+            {
+                return _data.AutoConnectLastServer;
+            }
+        }
+        set
+        {
+            lock (Sync)
+            {
+                if (_data.AutoConnectLastServer == value)
+                {
+                    return;
+                }
+
+                _data.AutoConnectLastServer = value;
+                SaveUnsafe();
+            }
+        }
+    }
+
+    public static string LastUsedServerAddress
+    {
+        get
+        {
+            lock (Sync)
+            {
+                return _data.LastUsedServerAddress;
+            }
+        }
+        set
+        {
+            SetString(
+                static (data, next) => data.LastUsedServerAddress = next,
+                static data => data.LastUsedServerAddress,
+                value?.Trim() ?? string.Empty);
         }
     }
 

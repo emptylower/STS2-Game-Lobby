@@ -108,6 +108,25 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         SaveManager.Instance.Saved += OnRunSaved;
         LanConnectSaveDiagnostics.LogNow("runtime_ready");
         Log.Info("sts2_lan_connect lobby runtime ready.");
+        ShowServerSelectionIfNeeded();
+    }
+
+    private void ShowServerSelectionIfNeeded()
+    {
+        if (LanConnectConfig.AutoConnectLastServer && !string.IsNullOrEmpty(LanConnectConfig.LastUsedServerAddress))
+        {
+            LanConnectConfig.LobbyServerBaseUrl = LanConnectConfig.LastUsedServerAddress;
+            Log.Info($"sts2_lan_connect: auto-connecting to last server: {LanConnectConfig.LastUsedServerAddress}");
+            return;
+        }
+
+        SceneTree? tree = GetTree();
+        if (tree == null)
+        {
+            return;
+        }
+
+        LanConnectServerSelectionStartup.Show(tree);
     }
 
     public override void _Process(double delta)
