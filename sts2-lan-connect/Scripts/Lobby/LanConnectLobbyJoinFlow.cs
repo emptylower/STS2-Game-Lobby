@@ -92,6 +92,7 @@ internal static class LanConnectLobbyJoinFlow
 
                     PushJoinedScreen(stack, joinFlow.NetService, joinResult);
                     LanConnectLobbyRuntime.Instance?.AttachJoinedClient(joinFlow.NetService, joinResponse);
+                    _ = TaskHelper.RunSafely(LanConnectPeerCacheExpander.ExpandAsync(LanConnectConfig.LobbyServerBaseUrl));
                     return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Joined);
                 }
                 catch (ClientConnectionFailedException ex)
