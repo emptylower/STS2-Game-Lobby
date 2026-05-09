@@ -1,9 +1,16 @@
 {
   "name": "sts2-lobby-service",
-  "version": "0.2.2",
+  "version": "0.3.1",
   "private": true,
   "license": "GPL-3.0-only",
   "type": "module",
+  "main": "dist/server.js",
+  "exports": {
+    "./peer/*": {
+      "import": "./dist/peer/*.js",
+      "types": "./dist/peer/*.d.ts"
+    }
+  },
   "engines": {
     "node": ">=20.11.0"
   },
@@ -12,7 +19,7 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "hash-admin-password": "node ./scripts/generate-server-admin-password-hash.mjs",
     "start": "node --enable-source-maps dist/server.js",
-    "test": "npm run build && node --test dist/**/*.test.js"
+    "test": "npm run build && find dist -name '*.test.js' -print0 | xargs -0 node --test"
   },
   "dependencies": {
     "express": "^5.1.0",

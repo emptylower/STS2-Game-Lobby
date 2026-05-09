@@ -158,6 +158,10 @@ sudo ./install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
   - 显式关闭 peer 网络（默认 true，仅在 `PEER_SELF_ADDRESS` 已设时生效）
 - `PEER_STATE_DIR=./data/peer`
   - 节点 ed25519 身份与 known-peers 状态目录
+- `PEER_DISPLAY_NAME="<服务器名>"`（v0.3.1+ 可选）
+  - 强制覆盖客户端 picker 看到的服务器名，优先级最高
+  - 留空时回退到 admin 面板里设置的 `displayName`，再回退到 `社区服务器 <host>`
+  - admin 面板改名后 60 秒内自动生效，无需重启
 
 **升级步骤：**
 
@@ -204,6 +208,38 @@ PUBLIC_ROOM_LIST_ENABLED=true
 > （`docker restart` 不会重读 env 文件）。
 >
 > 待所有客户端都升级到 v0.3+ 并自带令牌后，可以重新打开这三个开关，并设置 `LOBBY_ACCESS_TOKEN` / `CREATE_ROOM_TOKEN`。
+
+### v0.3.1 增量（2026-05-09）
+
+`v0.3.1` 在 v0.3.0 协议不变的前提下补齐了几条服务器主体验：
+
+- **服务器自定义名通过 peer 协议端到端打通**。lobby-service 启动时把 self
+  作为 `source:"self"` 插入本地 PeerStore，`/peers/health` 和 `/peers` 都会带上
+  `displayName`；客户端 picker 在每次刷新时实时拉取，admin 面板改名后 60s 内
+  自动反映到所有连进来的玩家界面，不需要重启。
+- 客户端 picker 改成进大厅时**每次都弹**（验证期），列表充满游戏窗口；
+  ping 走真实 `GET /peers/health?challenge=…`，对老 v0.2 服务器自动回退到
+  `/probe`。v0.2 服务器没有 peer 端点，picker 会显示其地址直到运维升级。
+- CF Worker 支持自定义域名。当前公共网格使用
+  `https://sts2-gamelobby-register.xyz`（apex）作为客户端
+  `cfDiscoveryBaseUrl` 默认值。
+
+升级路径：
+
+```bash
+cd /opt/sts2-server-stack-docker
+# 拉新代码
+git pull
+# 重建 lobby-service 镜像并重启（会重新读 env，picks up v0.3.1 自带的 self-entry）
+cd deploy
+docker compose -f docker-compose.public-stack.yml \
+  up -d --no-deps --force-recreate lobby-service
+# 看到 [peer] mounted ... displayName="<你的服务器名>" 即升级完成
+docker logs sts2-lobby-service 2>&1 | grep '\[peer\] mounted'
+```
+
+如果你只想换服务器名而不动其他东西，登 `http://<your-host>:8787/server-admin`
+改 `displayName`，60 秒内 `/peers` 列表 + 客户端 picker 就会刷新过来。
 
 ---
 
