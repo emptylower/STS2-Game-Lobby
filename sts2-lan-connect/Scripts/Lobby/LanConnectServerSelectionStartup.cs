@@ -12,7 +12,7 @@ internal static class LanConnectServerSelectionStartup
     {
         try
         {
-            var scene = GD.Load<PackedScene>("res://Scenes/Lobby/ServerSelectionDialog.tscn");
+            var scene = GD.Load<PackedScene>("res://scenes/Lobby/ServerSelectionDialog.tscn");
             if (scene == null)
             {
                 Log.Warn("sts2_lan_connect: missing ServerSelectionDialog.tscn — falling back to default lobby");

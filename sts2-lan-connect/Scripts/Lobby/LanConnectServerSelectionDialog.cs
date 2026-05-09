@@ -69,7 +69,7 @@ public partial class LanConnectServerSelectionDialog : Window
             {
                 Text = $"[{(e.PingMs.HasValue ? e.PingMs.Value.ToString() + "ms" : "—")}] {e.DisplayName ?? e.Address}",
                 CustomMinimumSize = new Vector2(560, 32),
-                ToolTipText = $"address: {e.Address}\nsource: {e.Source}",
+                TooltipText = $"address: {e.Address}\nsource: {e.Source}",
             };
             string addr = e.Address;
             btn.Pressed += () => { ServerChosen?.Invoke(addr); QueueFree(); };
