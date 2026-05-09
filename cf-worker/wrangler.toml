@@ -2,6 +2,18 @@ name = "sts2-discovery"
 main = "src/index.ts"
 compatibility_date = "2026-04-01"
 
+# Custom domain — owner-managed zone on Cloudflare.
+# Both apex and `discovery.<apex>` map to this Worker so clients can use the
+# short URL (`https://sts2-gamelobby-register.xyz/v1/...`) and the namespaced
+# subdomain interchangeably. Either is safe to bake into client builds.
+[[routes]]
+pattern = "sts2-gamelobby-register.xyz"
+custom_domain = true
+
+[[routes]]
+pattern = "discovery.sts2-gamelobby-register.xyz"
+custom_domain = true
+
 [[kv_namespaces]]
 binding = "DISCOVERY_KV"
 id = "70ab9448de16432e90a59a074a680ca0"
