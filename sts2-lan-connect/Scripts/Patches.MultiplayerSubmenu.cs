@@ -175,19 +175,17 @@ internal static class MultiplayerSubmenuPatches
             return;
         }
 
-        // First-launch / no-saved-server path: show the picker as a modal
-        // overlay before the lobby UI. After the user picks (or the user
-        // already auto-connects to a saved server) the overlay opens normally.
-        if (LanConnectLobbyRuntime.HasAutoConnectableServer())
-        {
-            LanConnectLobbyRuntime.ApplyAutoConnectServer();
-            overlay.ShowOverlay();
-            return;
-        }
-
+        // Verification-phase policy: always show the picker on every entry,
+        // even when the player already has a saved server. This makes the
+        // decentralized discovery path visible/auditable on each launch — we'd
+        // rather pay the extra click than silently keep falling back to the
+        // last URL. Once decentralized discovery has been validated in the
+        // wild, we can reintroduce an opt-in "auto-connect last" path here.
         SceneTree? tree = submenu.GetTree();
         if (tree == null)
         {
+            // Defensive — should never happen, but if it does, don't strand
+            // the player by failing to open the lobby.
             overlay.ShowOverlay();
             return;
         }

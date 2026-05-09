@@ -109,34 +109,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         LanConnectSaveDiagnostics.LogNow("runtime_ready");
         Log.Info("sts2_lan_connect lobby runtime ready.");
         // The picker is no longer triggered at runtime startup. It opens only
-        // when the user actually clicks the "游戏大厅" entry on the multiplayer
-        // submenu — see Patches.MultiplayerSubmenu.OnLobbyPressed.
-    }
-
-    /// <summary>
-    /// Returns true if the user already has a saved server they auto-connect
-    /// to, so the picker can be skipped. Otherwise the caller should invoke
-    /// <see cref="LanConnectServerSelectionStartup.Show"/> to let the user pick.
-    /// </summary>
-    internal static bool HasAutoConnectableServer()
-    {
-        return LanConnectConfig.AutoConnectLastServer
-               && !string.IsNullOrEmpty(LanConnectConfig.LastUsedServerAddress);
-    }
-
-    /// <summary>
-    /// Apply the saved server (if any) as the active lobby endpoint so existing
-    /// flows (LanConnectLobbyApiClient etc.) pick it up immediately.
-    /// </summary>
-    internal static void ApplyAutoConnectServer()
-    {
-        if (!HasAutoConnectableServer())
-        {
-            return;
-        }
-
-        LanConnectConfig.LobbyServerBaseUrl = LanConnectConfig.LastUsedServerAddress;
-        Log.Info($"sts2_lan_connect: auto-connecting to last server: {LanConnectConfig.LastUsedServerAddress}");
+        // when the user clicks the "游戏大厅" entry on the multiplayer submenu —
+        // see Patches.MultiplayerSubmenu.OnLobbyPressed. Verification-phase
+        // policy is "always show picker on entry", so there is no auto-connect
+        // shortcut here.
     }
 
     public override void _Process(double delta)

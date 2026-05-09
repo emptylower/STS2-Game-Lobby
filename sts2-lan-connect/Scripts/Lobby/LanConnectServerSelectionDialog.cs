@@ -29,7 +29,6 @@ public partial class LanConnectServerSelectionDialog : Control
 
     private VBoxContainer? _list;
     private LineEdit? _manualInput;
-    private CheckBox? _autoConnectCheck;
     private Label? _statusLabel;
 
     private System.Collections.Generic.List<ServerListEntry> _entries = new();
@@ -193,21 +192,15 @@ public partial class LanConnectServerSelectionDialog : Control
         manualButton.Pressed += OnManualConnect;
         manualRow.AddChild(manualButton);
 
-        // Actions row: auto-connect checkbox + refresh + reset
+        // Actions row — verification-phase policy is "always show picker", so
+        // the auto-connect-on-next-launch checkbox would be misleading and
+        // has been removed. The row keeps refresh + reset.
         var actionsRow = new HBoxContainer();
         actionsRow.AddThemeConstantOverride("separation", 12);
         inner.AddChild(actionsRow);
 
-        _autoConnectCheck = new CheckBox
-        {
-            Text = "下次自动连接当前选择",
-            ButtonPressed = LanConnectConfig.AutoConnectLastServer,
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-        };
-        _autoConnectCheck.AddThemeColorOverride("font_color", TextStrongColor);
-        _autoConnectCheck.AddThemeFontSizeOverride("font_size", 14);
-        _autoConnectCheck.Toggled += pressed => LanConnectConfig.AutoConnectLastServer = pressed;
-        actionsRow.AddChild(_autoConnectCheck);
+        var spacer = new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        actionsRow.AddChild(spacer);
 
         var refreshButton = new Button { Text = "刷新" };
         refreshButton.CustomMinimumSize = new Vector2(110f, 36f);
