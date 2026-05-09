@@ -5,6 +5,6 @@
   "wsUrl": "ws://47.111.146.69:8787/control",
   "compatibilityProfile": "test_relaxed",
   "connectionStrategy": "relay-only",
-  "cfDiscoveryBaseUrl": "https://sts2-discovery.2921419306.workers.dev",
+  "cfDiscoveryBaseUrl": "https://sts2-gamelobby-register.xyz",
   "seedPeers": ["http://lt.syx2023.icu:52000","http://223.167.230.132:52000","https://120.55.3.230","http://112.74.164.10","http://106.75.7.210:8787","http://110.42.9.59:37000"]
 }
