@@ -241,6 +241,27 @@ docker logs sts2-lobby-service 2>&1 | grep '\[peer\] mounted'
 如果你只想换服务器名而不动其他东西，登 `http://<your-host>:8787/server-admin`
 改 `displayName`，60 秒内 `/peers` 列表 + 客户端 picker 就会刷新过来。
 
+### v0.3.2 增量（2026-05-09）
+
+`v0.3.2` 是一个 federation 自加入的 bug fix：v0.3.1 及更早版本部署后，
+新 lobby 永远不会自动出现在公网格里——bootstrap 只能拉别人，gossip
+heartbeat 又被设计成只能 refresh 已经认识的对端，所以新服务器需要人工
+向某个已知节点 POST `/peers/announce` 才会被发现。
+
+v0.3.2 在 [`server.ts`](../lobby-service/src/server.ts) 的 bootstrap 之后
+追加了 `announceToBootstrappedPeers`（[`peer/auto-announce.ts`](../lobby-service/src/peer/auto-announce.ts)）：
+对每个 probe 通过的对端 POST 一次 `/peers/announce`，把 self 塞进它们
+的 PeerStore；下一次 CF cron 周期内（≤10 分钟）就会出现在
+`/v1/servers`，对运维完全透明。
+
+**协议 + 接口完全不变**，是纯单边升级——同时存在 v0.3.1 和 v0.3.2 节点
+不会互相干扰。升级路径同 v0.3.1 增量那一节，只把 release zip 换成 v0.3.2
+即可。日志多一行 `[peer] announced self to N bootstrapped peer(s)` 表示
+自动加入成功。
+
+详细操作（含 v0.3.1 及更老版本的手动 announce 兜底）见
+[`STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md`](./STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md)。
+
 ---
 
 ## 二、官方公开列表

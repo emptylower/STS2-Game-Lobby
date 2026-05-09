@@ -1,4 +1,4 @@
-# STS2 公共大厅 — 升级到 v0.3.1 运维手册
+# STS2 公共大厅 — 升级到 v0.3.2 运维手册
 
 > 这份文档面向**社区大厅运维**（也就是公共服务器列表里那几台 lobby
 > 的服主）。读完跟着做完，你的服务器就会出现在新版客户端 picker 里、
@@ -9,7 +9,7 @@
 
 ---
 
-## 0. 一句话介绍 v0.3 / v0.3.1 是什么
+## 0. 一句话介绍 v0.3 / v0.3.1 / v0.3.2 是什么
 
 我们把 server-registry 这个"中心目录"换成了**去中心化 peer 网络**。
 新协议：
@@ -19,8 +19,12 @@
 - v0.3.1 在此基础上把"服务器名"这条数据流也打通了：你在
   `/server-admin` 面板里设的 `displayName` 60 秒内会传到玩家端 picker，
   替代原来的"sts2-lobby-service (1.2.3.4)"
+- **v0.3.2 修复了"新部署的 lobby 永远不会自动加入公网格"这个 federation
+  死锁**：bootstrap 完成后会主动向每个 probed peer POST `/peers/announce`，
+  把自己塞进对方的 PeerStore，下一次 CF cron 周期内就会出现在公共列表里，
+  完全无需人工干预。
 
-**协议没变，v0.3.0 跑得动的 v0.3.1 也跑得动。** 升级是无缝增量。
+**协议没变，v0.3.0/0.3.1 跑得动的 v0.3.2 也跑得动。** 升级是无缝增量。
 
 ---
 
@@ -86,16 +90,16 @@ sudo git pull
 **方式 B：用 GitHub Release 的 tarball**
 
 在
-[Releases v0.3.1](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.3.1)
+[Releases v0.3.2](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.3.2)
 下载 `sts2_lobby_service.zip`，解压：
 
 ```bash
 cd /tmp
-wget https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.3.1/sts2_lobby_service.zip
-sudo unzip -o sts2_lobby_service.zip -d /tmp/sts2-lobby-v0.3.1
+wget https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.3.2/sts2_lobby_service.zip
+sudo unzip -o sts2_lobby_service.zip -d /tmp/sts2-lobby-v0.3.2
 sudo rsync -a --delete \
   --exclude=node_modules --exclude=dist --exclude=data \
-  /tmp/sts2-lobby-v0.3.1/sts2_lobby_service/lobby-service/ \
+  /tmp/sts2-lobby-v0.3.2/sts2_lobby_service/lobby-service/ \
   /opt/sts2-server-stack-docker/lobby-service/
 ```
 
@@ -115,7 +119,7 @@ PEER_SELF_ADDRESS=http://<你的公网IP或域名>:8787
 PEER_CF_DISCOVERY_BASE_URL=https://sts2-gamelobby-register.xyz
 PEER_STATE_DIR=/app/data/peer
 
-# ── 服务器名（v0.3.1，二选一）──
+# ── 服务器名（v0.3.1+，二选一）──
 # 路径 A：通过环境变量强制设置
 PEER_DISPLAY_NAME=<你想要的服务器名，例如：上海社区服>
 # 路径 B：留空 PEER_DISPLAY_NAME，等容器起来后在 admin 面板里改
@@ -149,8 +153,15 @@ sudo docker logs sts2-lobby-service 2>&1 | grep -E '\[peer\]|\[lobby\]'
 
 ```
 [peer] mounted; self=http://你的IP:8787 displayName="你设置的名字" cf=https://sts2-gamelobby-register.xyz
+[peer] announced self to N bootstrapped peer(s)
 [lobby] listening on http://0.0.0.0:8787 (ws path /control)
 ```
+
+`[peer] announced self to N ...` 这一行是 **v0.3.2 新增**——表示自动加入
+公网格成功，N 是 bootstrap 阶段 probe 通过的对端数量（通常是 2，即默认大厅
++ 微雨的香港大厅）。如果是 0，说明所有 seed 都 probe 失败，请检查
+`PEER_CF_DISCOVERY_BASE_URL` 是否指向 `https://sts2-gamelobby-register.xyz`
+（**不是** workers.dev 的旧 URL）。
 
 外部 curl 验证：
 
@@ -185,19 +196,65 @@ curl -sSI "http://<你的IP>:8787/rooms" | head -1
 
 ## 4. 让 CF 网格"认识"你的服务器
 
-升级后等 **最长 10 分钟**（CF Worker 聚合 cron 周期），客户端 picker 里就会
-出现你的服务器，并显示你设置的 displayName。
+### 4.1 v0.3.2+：自动加入，零操作
 
-如果想不等 cron，让我（或维护者）手动 ping 一下你的 `/peers/health` 加进
-KV 即可，但通常没必要 —— 等一次 cron 就行。
+v0.3.2 在 bootstrap 之后会主动 POST `/peers/announce` 到所有 probed
+peer，所以容器起来后**最长 10 分钟内自动出现在公共列表**。日志里会有：
 
-**怎么验证 CF 已经收到？**
+```
+[peer] announced self to N bootstrapped peer(s)
+```
+
+只需要等 ≤10 分钟（CF Worker cron 周期）后查：
 
 ```bash
 curl -sS https://sts2-gamelobby-register.xyz/v1/servers | python3 -m json.tool
 ```
 
-如果输出里出现你的 `address` 和你设置的 `displayName`，就 ✅。
+输出里出现你的 `address` 和你设置的 `displayName`，就 ✅，不需要任何
+手工动作。
+
+### 4.2 v0.3.1 及更老：必须手动 announce 一次
+
+v0.3.1 和更老版本**没有**自动 announce 逻辑——bootstrap 只能拉别人，
+push（heartbeat）只能 refresh **已经认识**的对端。所以 v0.3.1 部署完后，
+默认大厅、CF 聚合器都**不知道你存在**，自己客户端能看到别人，但别人
+看不到你。
+
+要让自己出现在公网格，从你的服务器手动 POST 一次到任意一台已活跃的
+公开大厅（推荐对默认大厅 + 微雨的香港大厅各发一次，多一个备份不强求）：
+
+```bash
+# Step 1: 拿自己的 publicKey（任选一种）
+# 方法 A：直接读 identity 文件（docker 默认部署路径）
+sudo cat /opt/sts2-server-stack-docker/deploy/data/lobby-service/peer/identity.json | jq -r .publicKey
+
+# 方法 B：从自己的 /peers self-entry 取
+curl -s http://127.0.0.1:8787/peers | jq -r '.peers[] | select(.source=="self") | .publicKey'
+
+# Step 2: 替换三个字段后发出去
+curl -X POST http://47.111.146.69:8787/peers/announce \
+  -H 'content-type: application/json' \
+  -d '{
+    "address": "<你的 PEER_SELF_ADDRESS，例如 https://your-lobby.example.com>",
+    "publicKey": "<上一步拿到的 publicKey>",
+    "displayName": "<想显示的服务器名>"
+  }'
+```
+
+成功响应是 `HTTP 202 {"accepted":true}`。常见错误：
+
+| 响应 | 意思 | 修复 |
+|---|---|---|
+| `400 address_and_publicKey_required` | body 字段写错 | 检查 JSON 格式 |
+| `422 probe_failed` | 对方反向连不上你 / publicKey 不匹配 | 99% 是 `address` 写错或 lobby 不可公网访问 |
+| `429 rate_limited` | 同一个公网 IP 一小时内已经 announce 过 5 次 | 等 1 小时再来；通常只在频繁重启时才会触发 |
+
+发完之后等 ≤10 分钟看 `/v1/servers`。
+
+> **强烈建议**：与其每次重启都手动 announce，直接升到 v0.3.2 一劳永逸。
+> 升级路径就是本文档剩下的步骤——只要把 release zip 换成 v0.3.2 那个
+> 即可，不用动 env、不用动协议。
 
 ---
 
@@ -250,16 +307,17 @@ cd /opt/sts2-server-stack-docker/deploy && \
 ## 6. 升级清单（Checklist）
 
 - [ ] 备份 lobby-service 源码 + env + data 目录
-- [ ] 拉 v0.3.1 源码（git pull 或下 release zip）
+- [ ] 拉 v0.3.2 源码（git pull 或下 release zip）
 - [ ] 在 env 里加 `PEER_SELF_ADDRESS`、`PEER_CF_DISCOVERY_BASE_URL`、`PEER_STATE_DIR`
 - [ ] 在 env 里加 `ENFORCE_LOBBY_ACCESS_TOKEN=false` 等三行兼容开关（除非你确定没有 v0.2.x 玩家）
 - [ ] 设 `PEER_DISPLAY_NAME` 或登 admin 面板设 `displayName`
 - [ ] `docker compose ... build lobby-service`
 - [ ] `docker compose ... up -d --no-deps --force-recreate lobby-service`
 - [ ] 日志里看到 `[peer] mounted ... displayName="<名字>"`
+- [ ] 日志里看到 `[peer] announced self to N bootstrapped peer(s)`（v0.3.2 新增；N>0 才算自动加入网格成功）
 - [ ] `curl /peers/health?challenge=...` 返回 200 + `displayName` 字段
 - [ ] `curl /rooms` 返回 200（不是 403）
-- [ ] 等 10 分钟，`curl https://sts2-gamelobby-register.xyz/v1/servers` 里能看到你
+- [ ] 等 ≤10 分钟，`curl https://sts2-gamelobby-register.xyz/v1/servers` 里能看到你
 
 ---
 
