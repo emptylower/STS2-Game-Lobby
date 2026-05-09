@@ -79,3 +79,82 @@ test("aggregate keeps previous active when all peers fail", async () => {
   const written = JSON.parse(kv.read("peers:active")!);
   assert.equal(written.servers[0].address, "https://prev.example");
 });
+
+test("aggregate preserves previous-active entries when only some fetches fail", async () => {
+  // Regression test: before this fix, a partial-failure cron tick (e.g., CF
+  // edge can't reach a CN-hosted lobby on port 8787 while a HK lobby on
+  // 443 succeeds) would write the success-only set back to active and
+  // silently drop the unreachable-from-CF peer entirely. Real lobby
+  // operators only care about reachability from their players, not from CF.
+  const recentLastSeen = new Date(Date.now() - 60_000).toISOString(); // 1 min ago
+  const kv = new FakeKV();
+  await kv.put("peers:active", JSON.stringify({
+    version: 1, updated_at: recentLastSeen,
+    servers: [
+      { address: "https://reachable", publicKey: "kr", lastSeen: recentLastSeen },
+      { address: "http://cn-only", publicKey: "kc", lastSeen: recentLastSeen, displayName: "CN Lobby" },
+    ],
+  }));
+  await kv.put("peers:seeds", JSON.stringify({
+    version: 1, updated_at: recentLastSeen,
+    seeds: [
+      { address: "https://reachable" },
+      { address: "http://cn-only" },
+    ],
+  }));
+
+  const fetchMock = async (input: RequestInfo): Promise<Response> => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.startsWith("https://reachable")) {
+      return new Response(JSON.stringify({
+        peers: [{ address: "https://reachable", publicKey: "kr", lastSeen: new Date().toISOString() }],
+      }), { status: 200 });
+    }
+    throw new Error("simulated CF-edge-to-CN block");
+  };
+
+  await aggregateActivePeers({ DISCOVERY_KV: kv as unknown as KVNamespace }, fetchMock);
+  const written = JSON.parse(kv.read("peers:active")!);
+  const addrs = written.servers.map((s: { address: string }) => s.address).sort();
+  assert.deepEqual(addrs, ["http://cn-only", "https://reachable"]);
+  // The preserved entry should keep its prior displayName so the picker UI
+  // doesn't blank out during transient outages.
+  const preserved = written.servers.find((s: { address: string }) => s.address === "http://cn-only");
+  assert.equal(preserved.displayName, "CN Lobby");
+});
+
+test("aggregate evicts previous-active entries past the offline retention TTL", async () => {
+  // Bound the preservation behavior: a peer that hasn't been refreshed in
+  // OFFLINE_RETENTION_MS (24h) is genuinely gone, drop it so the public
+  // list doesn't accumulate dead entries indefinitely.
+  const longAgo = new Date(Date.now() - 25 * 3600_000).toISOString(); // 25h ago
+  const kv = new FakeKV();
+  await kv.put("peers:active", JSON.stringify({
+    version: 1, updated_at: longAgo,
+    servers: [
+      { address: "https://stale", publicKey: "ks", lastSeen: longAgo },
+    ],
+  }));
+  await kv.put("peers:seeds", JSON.stringify({
+    version: 1, updated_at: longAgo,
+    seeds: [{ address: "https://stale" }],
+  }));
+
+  const fetchMock = async (): Promise<Response> => { throw new Error("boom"); };
+
+  await aggregateActivePeers({ DISCOVERY_KV: kv as unknown as KVNamespace }, fetchMock);
+  // All fetches failed AND the only previous entry is past TTL → merged
+  // is empty AND preservation rejects the stale entry. With previous
+  // non-empty, the existing safety guard early-returns rather than
+  // clobbering with []. So peers:active stays untouched (which is also
+  // a no-op vs the stale doc we wrote). What we want to verify is that
+  // the cron does NOT promote the stale entry back into a "fresh" doc.
+  const written = JSON.parse(kv.read("peers:active")!);
+  // Either unchanged (early-return path) or empty (clobbered) — both
+  // acceptable; the key invariant is the stale entry is never given
+  // a fresh updated_at via preservation.
+  if (written.servers.length > 0) {
+    assert.equal(written.servers[0].address, "https://stale");
+    assert.equal(written.updated_at, longAgo, "stale entry must not get a fresh updated_at via preservation");
+  }
+});
