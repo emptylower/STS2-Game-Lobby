@@ -184,6 +184,27 @@ journalctl -u sts2-lobby -f | grep '\[peer\]'
 **关停旧 server-registry 上报：** v0.3 启动时若未设置 `SERVER_REGISTRY_BASE_URL` 会自动跳过中心化上报循环，
 日志会打印 `[server-admin] registry sync disabled until SERVER_REGISTRY_BASE_URL is configured`，无需额外操作。
 
+**v0.2.x 客户端兼容（重要）：** v0.3 把 `ENFORCE_LOBBY_ACCESS_TOKEN` / `ENFORCE_CREATE_ROOM_TOKEN` 默认改成了 `true`。
+而 v0.2.x 客户端打包的 `lobby-defaults.json` 不含 `lobbyAccessToken`，结果是：
+
+- `GET /rooms` → **403** `room_list_disabled`
+- `POST /rooms` → **503** `create_room_token_not_configured`
+
+这会让所有还在用 v0.2.x 客户端的玩家在升级后立刻"无法连接"。
+若你打算继续接收 v0.2.x 客户端，**升级 v0.3 时必须显式关闭强制校验**：
+
+```dotenv
+# v0.2.x 客户端兼容三连，写进 lobby-service.env
+ENFORCE_LOBBY_ACCESS_TOKEN=false
+ENFORCE_CREATE_ROOM_TOKEN=false
+PUBLIC_ROOM_LIST_ENABLED=true
+```
+
+> 修改 env 后必须 `docker compose up -d --force-recreate --no-deps lobby-service`
+> （`docker restart` 不会重读 env 文件）。
+>
+> 待所有客户端都升级到 v0.3+ 并自带令牌后，可以重新打开这三个开关，并设置 `LOBBY_ACCESS_TOKEN` / `CREATE_ROOM_TOKEN`。
+
 ---
 
 ## 二、官方公开列表
