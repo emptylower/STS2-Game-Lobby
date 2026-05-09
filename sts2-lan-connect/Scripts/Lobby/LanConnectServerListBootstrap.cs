@@ -63,9 +63,17 @@ internal static class LanConnectServerListBootstrap
     {
         var tasks = entries.Select(async e =>
         {
-            var (ms, bucket) = await LanConnectPeerPing.PingAsync(e.Address, ct);
-            e.PingMs = ms >= 0 ? ms : null;
-            e.Bucket = bucket;
+            PeerProbeResult result = await LanConnectPeerPing.ProbeAsync(e.Address, ct);
+            e.PingMs = result.Ms >= 0 ? result.Ms : null;
+            e.Bucket = result.Bucket;
+            // Probe is the freshest source — it's a live round-trip to the
+            // server itself. Prefer it over the CF/cache value when present so
+            // operator name changes propagate immediately in the picker
+            // without waiting for the next CF aggregation cycle.
+            if (!string.IsNullOrWhiteSpace(result.DisplayName))
+            {
+                e.DisplayName = result.DisplayName;
+            }
         }).ToList();
         await Task.WhenAll(tasks);
     }

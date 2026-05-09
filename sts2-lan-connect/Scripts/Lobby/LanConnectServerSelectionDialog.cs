@@ -84,20 +84,26 @@ public partial class LanConnectServerSelectionDialog : Control
         };
         AddChild(backdrop);
 
-        // Centered panel — pixel-border surface, fixed size, doesn't fill the
-        // whole screen so the lobby feel of an inline modal panel comes through.
-        var center = new CenterContainer();
-        center.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
-        center.MouseFilter = MouseFilterEnum.Pass;
-        AddChild(center);
-
+        // Anchored panel — fills ~92% of the viewport with a small margin on
+        // each side. Scales naturally on phone screens (where 720x520 was
+        // unreadable in portrait) and on big desktops (where 720x520 was
+        // dwarfed by the surrounding game). Letting the backdrop peek through
+        // the 4% margin keeps the modal feel.
         var panel = new PanelContainer
         {
-            CustomMinimumSize = new Vector2(720f, 520f),
             MouseFilter = MouseFilterEnum.Stop,
         };
+        panel.SetAnchorsPreset(LayoutPreset.FullRect);
+        panel.AnchorLeft = 0.04f;
+        panel.AnchorTop = 0.04f;
+        panel.AnchorRight = 0.96f;
+        panel.AnchorBottom = 0.96f;
+        panel.OffsetLeft = 0f;
+        panel.OffsetTop = 0f;
+        panel.OffsetRight = 0f;
+        panel.OffsetBottom = 0f;
         panel.AddThemeStyleboxOverride("panel", BuildPixelStyle(SurfaceColor, BorderColor, borderWidth: 3, padding: 20, shadowSize: 4));
-        center.AddChild(panel);
+        AddChild(panel);
 
         var inner = new VBoxContainer();
         inner.AddThemeConstantOverride("separation", 14);
