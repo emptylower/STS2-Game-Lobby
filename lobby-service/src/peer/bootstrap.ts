@@ -20,6 +20,7 @@ export async function bootstrapPeers(deps: BootstrapDeps): Promise<void> {
     const now = new Date().toISOString();
     await deps.store.upsert({
       address: seed.address, publicKey: r.publicKey,
+      ...(r.displayName ? { displayName: r.displayName } : {}),
       firstSeen: now, lastSeen: now, consecutiveProbeFailures: 0,
       status: "active", source: "seed",
     });

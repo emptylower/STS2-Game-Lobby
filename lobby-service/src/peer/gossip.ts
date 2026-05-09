@@ -14,7 +14,7 @@ export interface GossipDeps {
   selfAddress: string;
   selfPublicKey?: string;
   seedAddresses: string[];
-  fetchPeers?: (address: string) => Promise<Array<{ address: string; publicKey: string; lastSeen: string }>>;
+  fetchPeers?: (address: string) => Promise<Array<{ address: string; publicKey: string; lastSeen: string; displayName?: string }>>;
   probeAndVerify?: (address: string, expectedKey?: string) => Promise<ProbeResult>;
   postHeartbeat?: (address: string, body: { address: string; publicKey: string }) => Promise<void>;
 }
@@ -37,7 +37,7 @@ export class GossipScheduler {
     if (sample.length === 0) return;
     const fetcher = this.deps.fetchPeers ?? defaultFetchPeers;
     const probe = this.deps.probeAndVerify ?? defaultProbe;
-    const merged = new Map<string, { address: string; publicKey: string; lastSeen: string }>();
+    const merged = new Map<string, { address: string; publicKey: string; lastSeen: string; displayName?: string }>();
     for (const addr of sample) {
       try {
         for (const p of await fetcher(addr)) merged.set(p.address, p);
@@ -48,8 +48,13 @@ export class GossipScheduler {
       if (this.deps.store.get(p.address)) continue;
       const probed = await probe(p.address, p.publicKey);
       if (!probed.ok) continue;
+      // Prefer the displayName we just verified directly from the peer's
+      // /peers/health response over the value forwarded by the gossip source,
+      // since the gossip-list copy can be stale.
+      const displayName = probed.displayName ?? p.displayName;
       await this.deps.store.upsert({
         address: p.address, publicKey: probed.publicKey,
+        ...(displayName ? { displayName } : {}),
         firstSeen: new Date().toISOString(), lastSeen: p.lastSeen,
         consecutiveProbeFailures: 0, status: "active", source: "gossip",
       });
@@ -90,13 +95,13 @@ function pickRandom<T>(arr: T[], n: number): T[] {
   return copy.slice(0, n);
 }
 
-async function defaultFetchPeers(address: string): Promise<Array<{ address: string; publicKey: string; lastSeen: string }>> {
+async function defaultFetchPeers(address: string): Promise<Array<{ address: string; publicKey: string; lastSeen: string; displayName?: string }>> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 5_000);
   try {
     const res = await fetch(`${address.replace(/\/+$/, "")}/peers`, { signal: ctrl.signal });
     if (!res.ok) return [];
-    const body = (await res.json()) as { peers?: Array<{ address: string; publicKey: string; lastSeen: string }> };
+    const body = (await res.json()) as { peers?: Array<{ address: string; publicKey: string; lastSeen: string; displayName?: string }> };
     return body.peers ?? [];
   } catch { return []; } finally { clearTimeout(t); }
 }

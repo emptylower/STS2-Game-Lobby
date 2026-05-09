@@ -7,6 +7,9 @@ import type { HealthResponse } from "../types.js";
 interface Deps {
   identity: NodeIdentity;
   address: string;
+  // Resolved at request time so the operator can change the display name via
+  // the admin panel without restarting the service.
+  getDisplayName?: () => string;
 }
 
 export function mountHealth(app: Express, deps: Deps): void {
@@ -23,6 +26,10 @@ export function mountHealth(app: Express, deps: Deps): void {
       signature: signChallenge(deps.identity, challenge),
       serverTime: new Date().toISOString(),
     };
+    const displayName = deps.getDisplayName?.().trim();
+    if (displayName) {
+      body.displayName = displayName;
+    }
     res.status(200).json(body);
   });
 }

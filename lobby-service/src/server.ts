@@ -91,6 +91,10 @@ const peerEnv = {
   selfAddress: process.env.PEER_SELF_ADDRESS ?? "",
   cfDiscoveryBaseUrl: process.env.PEER_CF_DISCOVERY_BASE_URL ?? "",
   stateDir: process.env.PEER_STATE_DIR ?? "./data/peer",
+  // Optional override for the public-facing server name. When unset, falls back
+  // to the admin-panel-managed displayName, which itself falls back to a host-
+  // based label. Resolved per-request so admin panel edits propagate live.
+  displayNameOverride: (process.env.PEER_DISPLAY_NAME ?? "").trim(),
 };
 
 const store = new LobbyStore({
@@ -740,7 +744,42 @@ if (peerEnv.enabled && peerEnv.selfAddress) {
   const identity = await loadOrCreateIdentity(peerEnv.stateDir);
   const peerStore = new PeerStore(join(peerEnv.stateDir, "peers.json"));
   await peerStore.load();
-  mountHealth(app, { identity, address: peerEnv.selfAddress });
+
+  // Resolved at request time so admin panel edits propagate live without a
+  // restart. PEER_DISPLAY_NAME wins if set, else the admin-panel name, else a
+  // host-based fallback so the field is never empty.
+  const resolvePeerDisplayName = (): string => {
+    if (peerEnv.displayNameOverride) return peerEnv.displayNameOverride;
+    const adminName = serverAdminStateStore.getState().displayName.trim();
+    if (adminName) return adminName;
+    try {
+      const url = new URL(peerEnv.selfAddress);
+      return `社区服务器 ${url.host}`;
+    } catch {
+      return "社区服务器";
+    }
+  };
+
+  // Self-entry — without this, the local /peers list never returns this node,
+  // so the CF aggregator and other peers can't learn this server's displayName
+  // from us. Mark it as `source: "self"` so it survives gossip churn.
+  const nowIso = new Date().toISOString();
+  await peerStore.upsert({
+    address: peerEnv.selfAddress,
+    publicKey: identity.publicKey,
+    displayName: resolvePeerDisplayName(),
+    firstSeen: nowIso,
+    lastSeen: nowIso,
+    consecutiveProbeFailures: 0,
+    status: "active",
+    source: "self",
+  });
+
+  mountHealth(app, {
+    identity,
+    address: peerEnv.selfAddress,
+    getDisplayName: resolvePeerDisplayName,
+  });
   mountList(app, { store: peerStore });
   mountAnnounce(app, { store: peerStore });
   mountHeartbeat(app, { store: peerStore });
@@ -762,7 +801,19 @@ if (peerEnv.enabled && peerEnv.selfAddress) {
     },
   });
   scheduler.start();
-  console.log(`[peer] mounted; self=${peerEnv.selfAddress} cf=${peerEnv.cfDiscoveryBaseUrl || "(none)"}`);
+  console.log(
+    `[peer] mounted; self=${peerEnv.selfAddress} displayName="${resolvePeerDisplayName()}" cf=${peerEnv.cfDiscoveryBaseUrl || "(none)"}`,
+  );
+
+  // Refresh the self-entry's displayName periodically so admin panel edits
+  // propagate without needing a restart. The /peers/health response already
+  // resolves live, but the local /peers list cache needs an explicit poke.
+  setInterval(() => {
+    const fresh = resolvePeerDisplayName();
+    const existing = peerStore.get(peerEnv.selfAddress);
+    if (!existing || existing.displayName === fresh) return;
+    void peerStore.upsert({ ...existing, displayName: fresh, lastSeen: new Date().toISOString() });
+  }, 60_000).unref();
 } else {
   console.log("[peer] disabled (set PEER_SELF_ADDRESS to enable)");
 }

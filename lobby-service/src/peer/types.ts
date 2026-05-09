@@ -39,4 +39,7 @@ export interface HealthResponse {
   challenge: string;
   signature: string;
   serverTime: string;
+  // Human-readable name set by the operator (admin panel or PEER_DISPLAY_NAME).
+  // Optional — older peers may not advertise it.
+  displayName?: string;
 }
