@@ -175,7 +175,27 @@ internal static class MultiplayerSubmenuPatches
             return;
         }
 
-        overlay.ShowOverlay();
+        // First-launch / no-saved-server path: show the picker as a modal
+        // overlay before the lobby UI. After the user picks (or the user
+        // already auto-connects to a saved server) the overlay opens normally.
+        if (LanConnectLobbyRuntime.HasAutoConnectableServer())
+        {
+            LanConnectLobbyRuntime.ApplyAutoConnectServer();
+            overlay.ShowOverlay();
+            return;
+        }
+
+        SceneTree? tree = submenu.GetTree();
+        if (tree == null)
+        {
+            overlay.ShowOverlay();
+            return;
+        }
+
+        LanConnectServerSelectionStartup.Show(
+            tree,
+            onPicked: _ => overlay.ShowOverlay(),
+            onCancelled: null);
     }
 
     private static void OnSafeLoadPressed(NMultiplayerSubmenu submenu)

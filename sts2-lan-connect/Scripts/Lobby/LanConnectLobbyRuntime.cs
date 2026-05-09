@@ -108,25 +108,35 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         SaveManager.Instance.Saved += OnRunSaved;
         LanConnectSaveDiagnostics.LogNow("runtime_ready");
         Log.Info("sts2_lan_connect lobby runtime ready.");
-        ShowServerSelectionIfNeeded();
+        // The picker is no longer triggered at runtime startup. It opens only
+        // when the user actually clicks the "游戏大厅" entry on the multiplayer
+        // submenu — see Patches.MultiplayerSubmenu.OnLobbyPressed.
     }
 
-    private void ShowServerSelectionIfNeeded()
+    /// <summary>
+    /// Returns true if the user already has a saved server they auto-connect
+    /// to, so the picker can be skipped. Otherwise the caller should invoke
+    /// <see cref="LanConnectServerSelectionStartup.Show"/> to let the user pick.
+    /// </summary>
+    internal static bool HasAutoConnectableServer()
     {
-        if (LanConnectConfig.AutoConnectLastServer && !string.IsNullOrEmpty(LanConnectConfig.LastUsedServerAddress))
+        return LanConnectConfig.AutoConnectLastServer
+               && !string.IsNullOrEmpty(LanConnectConfig.LastUsedServerAddress);
+    }
+
+    /// <summary>
+    /// Apply the saved server (if any) as the active lobby endpoint so existing
+    /// flows (LanConnectLobbyApiClient etc.) pick it up immediately.
+    /// </summary>
+    internal static void ApplyAutoConnectServer()
+    {
+        if (!HasAutoConnectableServer())
         {
-            LanConnectConfig.LobbyServerBaseUrl = LanConnectConfig.LastUsedServerAddress;
-            Log.Info($"sts2_lan_connect: auto-connecting to last server: {LanConnectConfig.LastUsedServerAddress}");
             return;
         }
 
-        SceneTree? tree = GetTree();
-        if (tree == null)
-        {
-            return;
-        }
-
-        LanConnectServerSelectionStartup.Show(tree);
+        LanConnectConfig.LobbyServerBaseUrl = LanConnectConfig.LastUsedServerAddress;
+        Log.Info($"sts2_lan_connect: auto-connecting to last server: {LanConnectConfig.LastUsedServerAddress}");
     }
 
     public override void _Process(double delta)
