@@ -4,7 +4,7 @@ compatibility_date = "2026-04-01"
 
 [[kv_namespaces]]
 binding = "DISCOVERY_KV"
-id = "REPLACE_WITH_PRODUCTION_ID"
+id = "70ab9448de16432e90a59a074a680ca0"
 
 [triggers]
 crons = ["*/10 * * * *"]
