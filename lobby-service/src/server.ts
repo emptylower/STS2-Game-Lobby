@@ -29,6 +29,7 @@ import { mountHeartbeat } from "./peer/handlers/heartbeat.js";
 import { GossipScheduler } from "./peer/gossip.js";
 import { loadSeedsFromCf } from "./peer/seeds-loader.js";
 import { bootstrapPeers } from "./peer/bootstrap.js";
+import { announceToBootstrappedPeers } from "./peer/auto-announce.js";
 
 const MaxLobbyPlayers = 256;
 const MaxRoomNameLength = 80;
@@ -787,6 +788,20 @@ if (peerEnv.enabled && peerEnv.selfAddress) {
   if (peerEnv.cfDiscoveryBaseUrl) {
     const seeds = await loadSeedsFromCf(peerEnv.cfDiscoveryBaseUrl);
     await bootstrapPeers({ store: peerStore, selfAddress: peerEnv.selfAddress, seeds });
+    // After bootstrap, push self into every probed peer's announce endpoint so
+    // a brand-new lobby becomes discoverable without manual KV ops. Without
+    // this, gossip can't propagate self outward (heartbeat only refreshes
+    // already-known peers) and the CF aggregator never learns new servers.
+    const announceTargets = peerStore.list().filter((p) => p.address !== peerEnv.selfAddress).length;
+    if (announceTargets > 0) {
+      await announceToBootstrappedPeers({
+        store: peerStore,
+        selfAddress: peerEnv.selfAddress,
+        selfPublicKey: identity.publicKey,
+        selfDisplayName: resolvePeerDisplayName(),
+      });
+      console.log(`[peer] announced self to ${announceTargets} bootstrapped peer(s)`);
+    }
   }
 
   const scheduler = new GossipScheduler({
