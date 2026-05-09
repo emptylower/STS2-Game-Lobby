@@ -12,14 +12,11 @@ internal static class LanConnectServerSelectionStartup
     {
         try
         {
-            var scene = GD.Load<PackedScene>("res://scenes/Lobby/ServerSelectionDialog.tscn");
-            if (scene == null)
-            {
-                Log.Warn("sts2_lan_connect: missing ServerSelectionDialog.tscn — falling back to default lobby");
-                return;
-            }
-
-            var dlg = (LanConnectServerSelectionDialog)scene.Instantiate();
+            // Construct the dialog directly in C# — do not load a packed scene.
+            // .tscn-based instantiation requires Godot to resolve the script
+            // via res:// at runtime, which is not reliable inside mod hosts
+            // where the .cs files live in the mod DLL but never on disk.
+            var dlg = new LanConnectServerSelectionDialog();
             dlg.ServerChosen += addr =>
             {
                 LanConnectConfig.LobbyServerBaseUrl = addr;

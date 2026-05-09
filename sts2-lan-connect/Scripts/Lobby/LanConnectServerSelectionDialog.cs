@@ -5,12 +5,14 @@ using Godot;
 
 namespace Sts2LanConnect.Scripts;
 
+// The dialog is built 100% programmatically — no .tscn resource is loaded at
+// runtime. Mod hosting environments do not always resolve `res://Scripts/.../X.cs`
+// references inside packed scenes (the .cs files live in the mod DLL, not in
+// the .pck), which would silently make GD.Load<PackedScene> return null and
+// suppress the picker. Constructing nodes in C# avoids that path entirely.
 public partial class LanConnectServerSelectionDialog : Window
 {
     private VBoxContainer? _list;
-    private Button? _refreshButton;
-    private Button? _manualButton;
-    private Button? _resetButton;
     private LineEdit? _manualInput;
     private CheckBox? _autoConnectCheck;
     private Label? _statusLabel;
@@ -19,29 +21,103 @@ public partial class LanConnectServerSelectionDialog : Window
 
     public event Action<string>? ServerChosen;
 
-    public override void _Ready()
+    public LanConnectServerSelectionDialog()
     {
         Title = "选择服务器";
-        _list = GetNode<VBoxContainer>("%ServerList");
-        _refreshButton = GetNode<Button>("%RefreshButton");
-        _manualButton = GetNode<Button>("%ManualButton");
-        _resetButton = GetNodeOrNull<Button>("%ResetButton");
-        _manualInput = GetNode<LineEdit>("%ManualInput");
-        _autoConnectCheck = GetNode<CheckBox>("%AutoConnectCheck");
-        _statusLabel = GetNode<Label>("%StatusLabel");
+        Size = new Vector2I(640, 480);
+        InitialPosition = WindowInitialPosition.CenterPrimaryScreen;
+        Exclusive = false;
+        Unresizable = false;
+        BuildUi();
+    }
 
-        _refreshButton.Pressed += () => _ = RefreshAsync();
-        _manualButton.Pressed += OnManualConnect;
-        if (_resetButton != null)
+    private void BuildUi()
+    {
+        var margin = new MarginContainer
         {
-            _resetButton.Pressed += () =>
-            {
-                LanConnectKnownPeersCache.Reset();
-                _ = RefreshAsync();
-            };
-        }
-        CloseRequested += () => QueueFree();
+            AnchorRight = 1f,
+            AnchorBottom = 1f,
+            GrowHorizontal = Control.GrowDirection.Both,
+            GrowVertical = Control.GrowDirection.Both,
+        };
+        margin.AddThemeConstantOverride("margin_left", 12);
+        margin.AddThemeConstantOverride("margin_top", 12);
+        margin.AddThemeConstantOverride("margin_right", 12);
+        margin.AddThemeConstantOverride("margin_bottom", 12);
+        AddChild(margin);
 
+        var vbox = new VBoxContainer();
+        vbox.AddThemeConstantOverride("separation", 8);
+        margin.AddChild(vbox);
+
+        var header = new Label { Text = "选择服务器" };
+        vbox.AddChild(header);
+
+        var scroll = new ScrollContainer
+        {
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        vbox.AddChild(scroll);
+
+        _list = new VBoxContainer
+        {
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        _list.AddThemeConstantOverride("separation", 4);
+        scroll.AddChild(_list);
+
+        var manualRow = new HBoxContainer();
+        manualRow.AddThemeConstantOverride("separation", 8);
+        vbox.AddChild(manualRow);
+
+        _manualInput = new LineEdit
+        {
+            PlaceholderText = "手动输入 https://...",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        manualRow.AddChild(_manualInput);
+
+        var manualButton = new Button { Text = "连接" };
+        manualButton.Pressed += OnManualConnect;
+        manualRow.AddChild(manualButton);
+
+        var actionsRow = new HBoxContainer();
+        actionsRow.AddThemeConstantOverride("separation", 8);
+        vbox.AddChild(actionsRow);
+
+        _autoConnectCheck = new CheckBox
+        {
+            Text = "自动连接上次使用",
+            ButtonPressed = LanConnectConfig.AutoConnectLastServer,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        _autoConnectCheck.Toggled += (bool pressed) =>
+        {
+            LanConnectConfig.AutoConnectLastServer = pressed;
+        };
+        actionsRow.AddChild(_autoConnectCheck);
+
+        var refreshButton = new Button { Text = "刷新" };
+        refreshButton.Pressed += () => _ = RefreshAsync();
+        actionsRow.AddChild(refreshButton);
+
+        var resetButton = new Button { Text = "重置本地列表" };
+        resetButton.Pressed += () =>
+        {
+            LanConnectKnownPeersCache.Reset();
+            _ = RefreshAsync();
+        };
+        actionsRow.AddChild(resetButton);
+
+        _statusLabel = new Label { Text = "" };
+        vbox.AddChild(_statusLabel);
+
+        CloseRequested += () => QueueFree();
+    }
+
+    public override void _Ready()
+    {
         _ = RefreshAsync();
     }
 
