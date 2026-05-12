@@ -54,3 +54,82 @@ test("/peers/announce rejects 400 if address missing", async () => {
     assert.equal(res.status, 400);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("/peers/announce bypasses per-IP rate limit when known publicKey re-announces", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "announce-"));
+  try {
+    const identity = await loadOrCreateIdentity(join(dir, "remote"));
+    const remote = express();
+    mountHealth(remote, { identity, address: "" });
+    const remoteServer = remote.listen(0);
+    const remotePort = (remoteServer.address() as { port: number }).port;
+    const remoteAddress = `http://127.0.0.1:${remotePort}`;
+
+    const store = new PeerStore(join(dir, "peers.json"));
+    await store.load();
+    const local = express();
+    local.use(express.json());
+    mountAnnounce(local, { store });
+    const localServer = local.listen(0);
+    const localPort = (localServer.address() as { port: number }).port;
+
+    // Twelve announces from the same source IP with the same (address, publicKey)
+    // — well past the 5/hour limit. All must succeed because the (address,
+    // publicKey) pair is already in the store after the first probe verifies it.
+    const statuses: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      const res = await fetch(`http://127.0.0.1:${localPort}/peers/announce`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ address: remoteAddress, publicKey: identity.publicKey }),
+      });
+      statuses.push(res.status);
+    }
+    remoteServer.close();
+    localServer.close();
+
+    for (const s of statuses) assert.equal(s, 202, `expected 202 for every known re-announce, got ${statuses.join(",")}`);
+    assert.equal(store.list().length, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("/peers/announce still rate-limits when same IP announces different new publicKeys", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "announce-"));
+  try {
+    // Six distinct identities, all reachable from the same loopback IP.
+    const identities = await Promise.all(
+      Array.from({ length: 6 }, (_, i) => loadOrCreateIdentity(join(dir, `remote-${i}`))),
+    );
+    const remoteServers = identities.map((identity) => {
+      const remote = express();
+      mountHealth(remote, { identity, address: "" });
+      return remote.listen(0);
+    });
+    const remoteAddrs = remoteServers.map(
+      (s) => `http://127.0.0.1:${(s.address() as { port: number }).port}`,
+    );
+
+    const store = new PeerStore(join(dir, "peers.json"));
+    await store.load();
+    const local = express();
+    local.use(express.json());
+    mountAnnounce(local, { store });
+    const localServer = local.listen(0);
+    const localPort = (localServer.address() as { port: number }).port;
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const res = await fetch(`http://127.0.0.1:${localPort}/peers/announce`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ address: remoteAddrs[i], publicKey: identities[i]!.publicKey }),
+      });
+      statuses.push(res.status);
+    }
+    for (const s of remoteServers) s.close();
+    localServer.close();
+
+    // First five new announces accepted, sixth (still a new publicKey from the
+    // same IP) trips the per-hour cap.
+    assert.deepEqual(statuses.slice(0, 5), [202, 202, 202, 202, 202]);
+    assert.equal(statuses[5], 429);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
