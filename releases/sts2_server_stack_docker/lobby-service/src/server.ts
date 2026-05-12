@@ -19,8 +19,35 @@ import {
   type HeartbeatInput,
   type JoinRoomInput,
 } from "./store.js";
+import { join } from "node:path";
+import { loadOrCreateIdentity } from "./peer/identity.js";
+import { PeerStore } from "./peer/store.js";
+import { mountHealth } from "./peer/handlers/health.js";
+import { mountList } from "./peer/handlers/list.js";
+import { mountAnnounce } from "./peer/handlers/announce.js";
+import { mountHeartbeat } from "./peer/handlers/heartbeat.js";
+import { GossipScheduler } from "./peer/gossip.js";
+import { loadSeedsFromCf } from "./peer/seeds-loader.js";
+import { bootstrapPeers } from "./peer/bootstrap.js";
+import { announceToBootstrappedPeers } from "./peer/auto-announce.js";
 
 const MaxLobbyPlayers = 256;
+const MaxRoomNameLength = 80;
+const MaxPlayerNameLength = 32;
+const MaxGameModeLength = 32;
+const MaxVersionLength = 32;
+const MaxModVersionLength = 32;
+const MaxProtocolProfileLength = 32;
+const MaxPasswordLength = 64;
+const MaxModListEntries = 128;
+const MaxModListEntryLength = 64;
+const MaxHostLocalAddressCount = 16;
+const MaxHostLocalAddressLength = 64;
+const MaxSavedRunSlots = 16;
+const MaxSavedRunConnectedNetIds = 16;
+const MaxNetIdLength = 64;
+const MaxCharacterIdLength = 64;
+const MaxCharacterNameLength = 64;
 
 const env = {
   host: process.env.HOST ?? "0.0.0.0",
@@ -37,6 +64,15 @@ const env = {
   strictGameVersionCheck: parseBooleanEnv(process.env.STRICT_GAME_VERSION_CHECK, true),
   strictModVersionCheck: parseBooleanEnv(process.env.STRICT_MOD_VERSION_CHECK, true),
   connectionStrategy: parseConnectionStrategyEnv(process.env.CONNECTION_STRATEGY),
+  publicRoomListEnabled: parseBooleanEnv(process.env.PUBLIC_ROOM_LIST_ENABLED, false),
+  publicDetailedHealthEnabled: parseBooleanEnv(process.env.PUBLIC_DETAILED_HEALTH_ENABLED, false),
+  enforceLobbyAccessToken: parseBooleanEnv(process.env.ENFORCE_LOBBY_ACCESS_TOKEN, true),
+  enforceCreateRoomToken: parseBooleanEnv(process.env.ENFORCE_CREATE_ROOM_TOKEN, true),
+  lobbyAccessToken: optionalEnv(process.env.LOBBY_ACCESS_TOKEN) ?? optionalEnv(process.env.CREATE_ROOM_TOKEN),
+  createRoomToken: optionalEnv(process.env.CREATE_ROOM_TOKEN) ?? optionalEnv(process.env.LOBBY_ACCESS_TOKEN),
+  createRoomTrustedProxies: parseTrustedProxyCidrs(process.env.CREATE_ROOM_TRUSTED_PROXIES),
+  createJoinRateLimitWindowMs: Number.parseInt(process.env.CREATE_JOIN_RATE_LIMIT_WINDOW_MS ?? "60000", 10),
+  createJoinRateLimitMaxRequests: Number.parseInt(process.env.CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS ?? "30", 10),
   serverAdminUsername: process.env.SERVER_ADMIN_USERNAME ?? "admin",
   serverAdminPasswordHash: optionalEnv(process.env.SERVER_ADMIN_PASSWORD_HASH),
   serverAdminSessionSecret: optionalEnv(process.env.SERVER_ADMIN_SESSION_SECRET),
@@ -49,6 +85,17 @@ const env = {
   serverRegistryPublicWsUrl: process.env.SERVER_REGISTRY_PUBLIC_WS_URL ?? buildRegistryPublicWsUrl(),
   serverRegistryBandwidthProbeUrl: process.env.SERVER_REGISTRY_BANDWIDTH_PROBE_URL ?? buildRegistryBandwidthProbeUrl(),
   serverRegistryProbeFileBytes: Number.parseInt(process.env.SERVER_REGISTRY_PROBE_FILE_BYTES ?? String(100 * 1024 * 1024), 10),
+};
+
+const peerEnv = {
+  enabled: process.env.PEER_NETWORK_ENABLED !== "false",
+  selfAddress: process.env.PEER_SELF_ADDRESS ?? "",
+  cfDiscoveryBaseUrl: process.env.PEER_CF_DISCOVERY_BASE_URL ?? "",
+  stateDir: process.env.PEER_STATE_DIR ?? "./data/peer",
+  // Optional override for the public-facing server name. When unset, falls back
+  // to the admin-panel-managed displayName, which itself falls back to a host-
+  // based label. Resolved per-request so admin panel edits propagate live.
+  displayNameOverride: (process.env.PEER_DISPLAY_NAME ?? "").trim(),
 };
 
 const store = new LobbyStore({
@@ -92,8 +139,10 @@ const serverRegistrySync = createServerRegistrySyncService({
   getGuardSnapshot: () => getCreateRoomGuardSnapshot(),
 });
 const serverAdminSessions = new Map<string, ServerAdminSession>();
+const createJoinRateLimitHits = new Map<string, RateLimitBucket>();
 
 const app = express();
+app.disable("x-powered-by");
 app.use(express.json({ limit: "32kb" }));
 app.use((req, res, next) => {
   const startedAt = Date.now();
@@ -106,8 +155,15 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get("/health", (_req, res) => {
+app.get("/health", (req, res) => {
   cleanupExpiredRoomsNow();
+  if (!env.publicDetailedHealthEnabled && !isTrustedOperationsRequest(req) && !hasLobbyReadAccessToken(req)) {
+    res.json({
+      ok: true,
+    });
+    return;
+  }
+
   const guardSnapshot = getCreateRoomGuardSnapshot();
   const relayTrafficSnapshot = relayManager.getTrafficSnapshot();
   res.json({
@@ -149,9 +205,14 @@ app.get("/registry/bandwidth-probe.bin", async (_req, res, next) => {
   }
 });
 
-app.get("/rooms", (_req, res) => {
+app.get("/rooms", (req, res) => {
   cleanupExpiredRoomsNow();
-  res.json(store.listRooms());
+  if (!env.publicRoomListEnabled && !isTrustedOperationsRequest(req) && !hasLobbyReadAccessToken(req)) {
+    throw new HttpError(403, "room_list_disabled", "房间列表未公开。请通过游戏客户端查询或使用受信请求。");
+  }
+
+  const trustedView = isTrustedOperationsRequest(req) || hasLobbyReadAccessToken(req);
+  res.json(store.listRooms().map((room) => toRoomListView(room, trustedView)));
 });
 
 app.get("/announcements", (_req, res) => {
@@ -169,6 +230,8 @@ app.post("/rooms", (req, res, next) => {
     | undefined;
 
   try {
+    assertCreateJoinRateLimit(req, "create_room");
+    assertCreateRoomAuthorized(req);
     cleanupExpiredRoomsNow();
     const guardSnapshot = getCreateRoomGuardSnapshot();
     if (guardSnapshot.createRoomGuardApplies && guardSnapshot.createRoomGuardStatus === "block") {
@@ -188,47 +251,53 @@ app.post("/rooms", (req, res, next) => {
     }
     const body = req.body as Partial<CreateRoomInput> | undefined;
     const roomInput: CreateRoomInput = {
-      roomName: requiredString(body?.roomName, "roomName"),
-      password: optionalString(body?.password),
-      hostPlayerName: requiredString(body?.hostPlayerName, "hostPlayerName"),
-      gameMode: requiredString(body?.gameMode, "gameMode"),
-      version: requiredString(body?.version, "version"),
-      modVersion: requiredString(body?.modVersion, "modVersion"),
-      modList: optionalStringArray(body?.modList),
-      protocolProfile: optionalString(body?.protocolProfile),
+      roomName: boundedString(body?.roomName, "roomName", MaxRoomNameLength),
+      password: optionalBoundedString(body?.password, "password", MaxPasswordLength),
+      hostPlayerName: boundedString(body?.hostPlayerName, "hostPlayerName", MaxPlayerNameLength),
+      gameMode: boundedString(body?.gameMode, "gameMode", MaxGameModeLength),
+      version: boundedString(body?.version, "version", MaxVersionLength),
+      modVersion: boundedString(body?.modVersion, "modVersion", MaxModVersionLength),
+      modList: boundedStringArray(body?.modList, "modList", MaxModListEntries, MaxModListEntryLength),
+      protocolProfile: optionalBoundedString(body?.protocolProfile, "protocolProfile", MaxProtocolProfileLength),
       maxPlayers: positiveInt(body?.maxPlayers, "maxPlayers", 1, MaxLobbyPlayers),
       hostConnectionInfo: {
         enetPort: positiveInt(body?.hostConnectionInfo?.enetPort, "hostConnectionInfo.enetPort", 1, 65535),
-        localAddresses: Array.isArray(body?.hostConnectionInfo?.localAddresses)
-          ? body?.hostConnectionInfo?.localAddresses
-              .filter((value): value is string => typeof value === "string")
-              .map((value) => value.trim())
-          : [],
+        localAddresses: boundedStringArray(
+          body?.hostConnectionInfo?.localAddresses,
+          "hostConnectionInfo.localAddresses",
+          MaxHostLocalAddressCount,
+          MaxHostLocalAddressLength),
       },
     };
 
     if (body?.savedRun) {
       roomInput.savedRun = {
-        saveKey: requiredString(body.savedRun.saveKey, "savedRun.saveKey"),
+        saveKey: boundedString(body.savedRun.saveKey, "savedRun.saveKey", MaxNetIdLength),
         slots: Array.isArray(body.savedRun.slots)
-          ? body.savedRun.slots
-              .filter((value) => Boolean(value) && typeof value === "object")
-              .map((slot, index) => {
-                const candidate = slot as unknown as Record<string, unknown>;
-                return {
-                  netId: requiredString(candidate.netId, `savedRun.slots[${index}].netId`),
-                  characterId: optionalString(candidate.characterId),
-                  characterName: optionalString(candidate.characterName),
-                  playerName: optionalString(candidate.playerName),
-                  isHost: Boolean(candidate.isHost),
-                };
-              })
+          ? (() => {
+              if (body.savedRun.slots.length > MaxSavedRunSlots) {
+                throw new InputError(`savedRun.slots 数量不能超过 ${MaxSavedRunSlots} 个。`);
+              }
+
+              return body.savedRun.slots
+                .filter((value) => Boolean(value) && typeof value === "object")
+                .map((slot, index) => {
+                  const candidate = slot as unknown as Record<string, unknown>;
+                  return {
+                    netId: boundedString(candidate.netId, `savedRun.slots[${index}].netId`, MaxNetIdLength),
+                    characterId: optionalBoundedString(candidate.characterId, `savedRun.slots[${index}].characterId`, MaxCharacterIdLength),
+                    characterName: optionalBoundedString(candidate.characterName, `savedRun.slots[${index}].characterName`, MaxCharacterNameLength),
+                    playerName: optionalBoundedString(candidate.playerName, `savedRun.slots[${index}].playerName`, MaxPlayerNameLength),
+                    isHost: Boolean(candidate.isHost),
+                  };
+                });
+            })()
           : [],
-        connectedPlayerNetIds: Array.isArray(body.savedRun.connectedPlayerNetIds)
-          ? body.savedRun.connectedPlayerNetIds
-              .filter((value): value is string => typeof value === "string")
-              .map((value) => value.trim())
-          : [],
+        connectedPlayerNetIds: boundedStringArray(
+          body.savedRun.connectedPlayerNetIds,
+          "savedRun.connectedPlayerNetIds",
+          MaxSavedRunConnectedNetIds,
+          MaxNetIdLength),
       };
     }
 
@@ -263,16 +332,17 @@ app.post("/rooms", (req, res, next) => {
 
 app.post("/rooms/:id/join", (req, res, next) => {
   try {
+    assertCreateJoinRateLimit(req, "join_room");
     cleanupExpiredRoomsNow();
     const body = req.body as Partial<JoinRoomInput> | undefined;
     const response = store.joinRoom(req.params.id, {
-      playerName: requiredString(body?.playerName, "playerName"),
-      password: optionalString(body?.password),
-      version: requiredString(body?.version, "version"),
-      modVersion: requiredString(body?.modVersion, "modVersion"),
-      modList: optionalStringArray(body?.modList),
-      desiredSavePlayerNetId: optionalString(body?.desiredSavePlayerNetId),
-      playerNetId: optionalString(body?.playerNetId),
+      playerName: boundedString(body?.playerName, "playerName", MaxPlayerNameLength),
+      password: optionalBoundedString(body?.password, "password", MaxPasswordLength),
+      version: boundedString(body?.version, "version", MaxVersionLength),
+      modVersion: boundedString(body?.modVersion, "modVersion", MaxModVersionLength),
+      modList: boundedStringArray(body?.modList, "modList", MaxModListEntries, MaxModListEntryLength),
+      desiredSavePlayerNetId: optionalBoundedString(body?.desiredSavePlayerNetId, "desiredSavePlayerNetId", MaxNetIdLength),
+      playerNetId: optionalBoundedString(body?.playerNetId, "playerNetId", MaxNetIdLength),
     });
     const relayEndpoint = relayManager.getRoomEndpoint(req.params.id, resolveAdvertisedRelayHost(req));
     if (relayEndpoint) {
@@ -671,6 +741,114 @@ const serverRegistrySyncInterval = setInterval(() => {
   void serverRegistrySync.runNow();
 }, env.serverRegistrySyncIntervalMs);
 
+if (peerEnv.enabled && peerEnv.selfAddress) {
+  const identity = await loadOrCreateIdentity(peerEnv.stateDir);
+  const peerStore = new PeerStore(join(peerEnv.stateDir, "peers.json"));
+  await peerStore.load();
+
+  // Resolved at request time so admin panel edits propagate live without a
+  // restart. PEER_DISPLAY_NAME wins if set, else the admin-panel name, else a
+  // host-based fallback so the field is never empty.
+  const resolvePeerDisplayName = (): string => {
+    if (peerEnv.displayNameOverride) return peerEnv.displayNameOverride;
+    const adminName = serverAdminStateStore.getState().displayName.trim();
+    if (adminName) return adminName;
+    try {
+      const url = new URL(peerEnv.selfAddress);
+      return `社区服务器 ${url.host}`;
+    } catch {
+      return "社区服务器";
+    }
+  };
+
+  // Self-entry — without this, the local /peers list never returns this node,
+  // so the CF aggregator and other peers can't learn this server's displayName
+  // from us. Mark it as `source: "self"` so it survives gossip churn.
+  const nowIso = new Date().toISOString();
+  await peerStore.upsert({
+    address: peerEnv.selfAddress,
+    publicKey: identity.publicKey,
+    displayName: resolvePeerDisplayName(),
+    firstSeen: nowIso,
+    lastSeen: nowIso,
+    consecutiveProbeFailures: 0,
+    status: "active",
+    source: "self",
+  });
+
+  mountHealth(app, {
+    identity,
+    address: peerEnv.selfAddress,
+    getDisplayName: resolvePeerDisplayName,
+  });
+  mountList(app, { store: peerStore });
+  mountAnnounce(app, { store: peerStore });
+  mountHeartbeat(app, { store: peerStore });
+
+  // Defer bootstrap + auto-announce to AFTER server.listen() succeeds.
+  // Load-bearing: if listen() fails (EADDRINUSE, perms, etc.) the process
+  // exits before announcing to upstream peers. Without this, systemd
+  // crash-loops would hammer /peers/announce on every seed lobby every
+  // few seconds, trip their per-IP rate limit (5/h), and lock the
+  // operator's IP out of legitimate re-announcement for an hour.
+  const cfDiscoveryBaseUrl = peerEnv.cfDiscoveryBaseUrl;
+  if (cfDiscoveryBaseUrl) {
+    server.once("listening", () => {
+      void (async () => {
+        try {
+          const seeds = await loadSeedsFromCf(cfDiscoveryBaseUrl);
+          await bootstrapPeers({ store: peerStore, selfAddress: peerEnv.selfAddress, seeds });
+          // After bootstrap, push self into every probed peer's announce endpoint
+          // so a brand-new lobby becomes discoverable without manual KV ops.
+          // Without this, gossip can't propagate self outward (heartbeat only
+          // refreshes already-known peers) and the CF aggregator never learns
+          // new servers.
+          const announceTargets = peerStore.list().filter((p) => p.address !== peerEnv.selfAddress).length;
+          if (announceTargets > 0) {
+            await announceToBootstrappedPeers({
+              store: peerStore,
+              selfAddress: peerEnv.selfAddress,
+              selfPublicKey: identity.publicKey,
+              selfDisplayName: resolvePeerDisplayName(),
+            });
+            console.log(`[peer] announced self to ${announceTargets} bootstrapped peer(s)`);
+          }
+        } catch (err) {
+          console.error("[peer] post-listen bootstrap/announce failed:", err);
+        }
+      })();
+    });
+  }
+
+  const scheduler = new GossipScheduler({
+    store: peerStore,
+    selfAddress: peerEnv.selfAddress,
+    selfPublicKey: identity.publicKey,
+    seedAddresses: [],
+    postHeartbeat: async (addr, body) => {
+      await fetch(`${addr.replace(/\/+$/, "")}/peers/heartbeat`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+    },
+  });
+  scheduler.start();
+  console.log(
+    `[peer] mounted; self=${peerEnv.selfAddress} displayName="${resolvePeerDisplayName()}" cf=${peerEnv.cfDiscoveryBaseUrl || "(none)"}`,
+  );
+
+  // Refresh the self-entry's displayName periodically so admin panel edits
+  // propagate without needing a restart. The /peers/health response already
+  // resolves live, but the local /peers list cache needs an explicit poke.
+  setInterval(() => {
+    const fresh = resolvePeerDisplayName();
+    const existing = peerStore.get(peerEnv.selfAddress);
+    if (!existing || existing.displayName === fresh) return;
+    void peerStore.upsert({ ...existing, displayName: fresh, lastSeen: new Date().toISOString() });
+  }, 60_000).unref();
+} else {
+  console.log("[peer] disabled (set PEER_SELF_ADDRESS to enable)");
+}
+
 server.listen(env.port, env.host, () => {
   console.log(`[lobby] listening on http://${env.host}:${env.port} (ws path ${env.wsPath})`);
   console.log(
@@ -775,12 +953,7 @@ function parseEnvelope(payload: WebSocket.RawData): Record<string, unknown> | nu
 }
 
 function requestIp(req: Request) {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.trim()) {
-    return forwarded.split(",")[0]!.trim();
-  }
-
-  return req.socket.remoteAddress ?? "";
+  return normalizeRemoteIp(req.socket.remoteAddress ?? "");
 }
 
 function parseCookies(header: string | undefined) {
@@ -933,6 +1106,249 @@ function requiredString(value: unknown, name: string) {
   return value.trim();
 }
 
+function boundedString(value: unknown, name: string, maxLength: number) {
+  const normalized = requiredString(value, name);
+  if (normalized.length > maxLength) {
+    throw new InputError(`${name} 长度不能超过 ${maxLength} 个字符。`);
+  }
+
+  return normalized;
+}
+
+function optionalBoundedString(value: unknown, name: string, maxLength: number) {
+  const normalized = optionalString(value);
+  if (normalized == null) {
+    return undefined;
+  }
+
+  if (normalized.length > maxLength) {
+    throw new InputError(`${name} 长度不能超过 ${maxLength} 个字符。`);
+  }
+
+  return normalized;
+}
+
+function parseTrustedProxyCidrs(value: string | undefined) {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function assertCreateRoomAuthorized(req: Request) {
+  if (isTrustedOperationsRequest(req)) {
+    return;
+  }
+
+  if (!env.enforceCreateRoomToken) {
+    return;
+  }
+
+  if (!env.createRoomToken) {
+    throw new HttpError(503, "create_room_token_not_configured", "服务端已开启建房令牌校验，但未配置建房访问令牌。请联系管理员；如需兼容老版本客户端，可将 ENFORCE_CREATE_ROOM_TOKEN=false。");
+  }
+
+  const providedToken = getCreateRoomToken(req)
+    ?? optionalString((req.body as { createRoomToken?: string } | undefined)?.createRoomToken);
+
+  if (!providedToken || providedToken !== env.createRoomToken) {
+    throw new HttpError(403, "create_room_forbidden", "当前服务器要求建房令牌。请通过受信代理或携带建房令牌访问；如需兼容老版本客户端，可由管理员关闭 ENFORCE_CREATE_ROOM_TOKEN。");
+  }
+}
+
+function hasLobbyReadAccessToken(req: Request) {
+  if (!env.enforceLobbyAccessToken) {
+    return true;
+  }
+
+  if (!env.lobbyAccessToken) {
+    return false;
+  }
+
+  const providedToken = getLobbyAccessToken(req);
+  return providedToken === env.lobbyAccessToken;
+}
+
+function getLobbyAccessToken(req: Request) {
+  return optionalString(req.header("x-lobby-access-token"))
+    ?? optionalString(req.header("authorization"))?.replace(/^Bearer\s+/i, "");
+}
+
+function getCreateRoomToken(req: Request) {
+  return optionalString(req.header("x-create-room-token"));
+}
+
+function isTrustedOperationsRequest(req: Request) {
+  const remote = requestIp(req);
+  if (!remote) {
+    return false;
+  }
+
+  return env.createRoomTrustedProxies.some((candidate: string) => ipMatchesCandidate(remote, candidate));
+}
+
+function ipMatchesCandidate(ip: string, candidate: string) {
+  const normalizedCandidate = candidate.trim();
+  if (!normalizedCandidate) {
+    return false;
+  }
+
+  if (normalizedCandidate === "*") {
+    return true;
+  }
+
+  const normalizedIp = normalizeRemoteIp(ip);
+  if (!normalizedIp) {
+    return false;
+  }
+
+  if (normalizedCandidate.includes("/")) {
+    const [base, prefix] = normalizedCandidate.split("/", 2);
+    const prefixLength = Number.parseInt(prefix ?? "", 10);
+    if (!Number.isInteger(prefixLength)) {
+      return false;
+    }
+
+    const normalizedBase = normalizeRemoteIp(base ?? "");
+    if (!normalizedBase) {
+      return false;
+    }
+
+    const ipBytes = ipToBytes(normalizedIp);
+    const baseBytes = ipToBytes(normalizedBase);
+    if (!ipBytes || !baseBytes || ipBytes.length !== baseBytes.length) {
+      return false;
+    }
+
+    return bytesMatchPrefix(ipBytes, baseBytes, prefixLength);
+  }
+
+  return normalizedIp === normalizeRemoteIp(normalizedCandidate);
+}
+
+function normalizeRemoteIp(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed.startsWith("::ffff:")) {
+    const mapped = trimmed.slice("::ffff:".length);
+    return mapped || trimmed;
+  }
+
+  return trimmed;
+}
+
+function ipToBytes(value: string) {
+  const normalized = normalizeRemoteIp(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const ipv4 = ipv4ToBytes(normalized);
+  if (ipv4) {
+    return ipv4;
+  }
+
+  return ipv6ToBytes(normalized);
+}
+
+function ipv4ToBytes(value: string) {
+  const parts = value.split(".");
+  if (parts.length !== 4) {
+    return null;
+  }
+
+  const bytes: number[] = [];
+  for (const part of parts) {
+    const parsed = Number.parseInt(part, 10);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 255) {
+      return null;
+    }
+
+    bytes.push(parsed);
+  }
+
+  return bytes;
+}
+
+function ipv6ToBytes(value: string) {
+  if (!value.includes(":")) {
+    return null;
+  }
+
+  const lower = value.toLowerCase();
+  const doubleColonIndex = lower.indexOf("::");
+  if (doubleColonIndex !== lower.lastIndexOf("::")) {
+    return null;
+  }
+
+  const expandPart = (part: string) => part.split(":").filter((segment) => segment.length > 0);
+  const left = doubleColonIndex >= 0 ? expandPart(lower.slice(0, doubleColonIndex)) : expandPart(lower);
+  const right = doubleColonIndex >= 0 ? expandPart(lower.slice(doubleColonIndex + 2)) : [];
+  if (doubleColonIndex < 0 && left.length !== 8) {
+    return null;
+  }
+
+  const missing = doubleColonIndex >= 0 ? 8 - (left.length + right.length) : 0;
+  if (missing < 0) {
+    return null;
+  }
+
+  const groups = [
+    ...left,
+    ...Array.from({ length: missing }, () => "0"),
+    ...right,
+  ];
+  if (groups.length !== 8) {
+    return null;
+  }
+
+  const bytes: number[] = [];
+  for (const group of groups) {
+    if (!/^[0-9a-f]{1,4}$/.test(group)) {
+      return null;
+    }
+
+    const parsed = Number.parseInt(group, 16);
+    bytes.push((parsed >> 8) & 0xff, parsed & 0xff);
+  }
+
+  return bytes;
+}
+
+function bytesMatchPrefix(ipBytes: number[], baseBytes: number[], prefixLength: number) {
+  if (prefixLength <= 0) {
+    return true;
+  }
+
+  const totalBits = ipBytes.length * 8;
+  if (prefixLength > totalBits) {
+    return false;
+  }
+
+  const fullBytes = Math.floor(prefixLength / 8);
+  const remainingBits = prefixLength % 8;
+
+  for (let index = 0; index < fullBytes; index++) {
+    if (ipBytes[index] !== baseBytes[index]) {
+      return false;
+    }
+  }
+
+  if (remainingBits === 0) {
+    return true;
+  }
+
+  const mask = (0xff << (8 - remainingBits)) & 0xff;
+  return (ipBytes[fullBytes]! & mask) === (baseBytes[fullBytes]! & mask);
+}
+
 function optionalString(value: unknown) {
   if (typeof value !== "string") {
     return undefined;
@@ -953,6 +1369,96 @@ function optionalStringArray(value: unknown) {
   }
 
   return value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim());
+}
+
+function boundedStringArray(value: unknown, name: string, maxEntries: number, maxEntryLength: number) {
+  const normalized = optionalStringArray(value) ?? [];
+  if (normalized.length > maxEntries) {
+    throw new InputError(`${name} 数量不能超过 ${maxEntries} 个。`);
+  }
+
+  for (const [index, entry] of normalized.entries()) {
+    if (!entry) {
+      throw new InputError(`${name}[${index}] 不能为空。`);
+    }
+    if (entry.length > maxEntryLength) {
+      throw new InputError(`${name}[${index}] 长度不能超过 ${maxEntryLength} 个字符。`);
+    }
+  }
+
+  return normalized;
+}
+
+function assertCreateJoinRateLimit(req: Request, scope: string) {
+  const now = Date.now();
+  const ip = requestIp(req) || "unknown";
+  const key = `${scope}:${ip}`;
+  const windowMs = Math.max(1000, env.createJoinRateLimitWindowMs);
+  const maxRequests = Math.max(1, env.createJoinRateLimitMaxRequests);
+
+  cleanupRateLimitBuckets(now, windowMs);
+
+  const bucket = createJoinRateLimitHits.get(key) ?? {
+    hits: [],
+    lastSeenAt: now,
+  };
+  const recent = bucket.hits.filter((timestamp) => now - timestamp < windowMs);
+  if (recent.length >= maxRequests) {
+    bucket.hits = recent;
+    bucket.lastSeenAt = now;
+    createJoinRateLimitHits.set(key, bucket);
+    throw new HttpError(429, "rate_limited", "请求过于频繁，请稍后再试。");
+  }
+
+  recent.push(now);
+  bucket.hits = recent;
+  bucket.lastSeenAt = now;
+  createJoinRateLimitHits.set(key, bucket);
+}
+
+function cleanupRateLimitBuckets(now: number, windowMs: number) {
+  for (const [key, bucket] of createJoinRateLimitHits.entries()) {
+    if (now - bucket.lastSeenAt >= windowMs && bucket.hits.every((timestamp) => now - timestamp >= windowMs)) {
+      createJoinRateLimitHits.delete(key);
+    }
+  }
+}
+
+function toRoomListView(room: ReturnType<LobbyStore["listRooms"]>[number], includeSensitiveSavedRun: boolean) {
+  return {
+    roomId: room.roomId,
+    roomName: room.roomName,
+    hostPlayerName: room.hostPlayerName,
+    requiresPassword: room.requiresPassword,
+    status: room.status,
+    gameMode: room.gameMode,
+    currentPlayers: room.currentPlayers,
+    maxPlayers: room.maxPlayers,
+    version: room.version,
+    modVersion: room.modVersion,
+    protocolProfile: room.protocolProfile,
+    relayState: room.relayState,
+    createdAt: room.createdAt,
+    lastHeartbeatAt: room.lastHeartbeatAt,
+    savedRun: room.savedRun
+      ? {
+          slots: room.savedRun.slots.map((slot) => ({
+            netId: includeSensitiveSavedRun ? slot.netId : "",
+            characterId: slot.characterId,
+            characterName: slot.characterName,
+            playerName: includeSensitiveSavedRun ? slot.playerName : "",
+            isHost: slot.isHost,
+            isConnected: slot.isConnected,
+          })),
+          ...(includeSensitiveSavedRun
+            ? {
+                saveKey: room.savedRun.saveKey,
+                connectedPlayerNetIds: room.savedRun.connectedPlayerNetIds,
+              }
+            : {}),
+        }
+      : undefined,
+  };
 }
 
 function parseBooleanEnv(value: string | undefined, fallback: boolean) {
@@ -1012,6 +1518,11 @@ function requiredQuery(url: URL, key: string) {
 
 class InputError extends Error {}
 
+type RateLimitBucket = {
+  hits: number[];
+  lastSeenAt: number;
+};
+
 class HttpError extends Error {
   constructor(
     readonly statusCode: number,
@@ -1043,11 +1554,29 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 function shutdown() {
+  closeRuntimeResources(() => {
+    process.exit(0);
+  });
+}
+
+function closeRuntimeResources(onClosed?: () => void) {
   clearInterval(cleanupInterval);
   clearInterval(serverRegistrySyncInterval);
   wss.close();
   relayManager.close();
   server.close(() => {
-    process.exit(0);
+    onClosed?.();
   });
 }
+
+export const __testHooks = {
+  normalizeRemoteIp,
+  ipMatchesCandidate,
+  hasLobbyReadAccessToken,
+  getLobbyAccessToken,
+  getCreateRoomToken,
+  assertCreateJoinRateLimit,
+  cleanupRateLimitBuckets,
+  createJoinRateLimitHits,
+  closeRuntimeResources,
+};

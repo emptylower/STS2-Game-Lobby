@@ -785,23 +785,39 @@ if (peerEnv.enabled && peerEnv.selfAddress) {
   mountAnnounce(app, { store: peerStore });
   mountHeartbeat(app, { store: peerStore });
 
-  if (peerEnv.cfDiscoveryBaseUrl) {
-    const seeds = await loadSeedsFromCf(peerEnv.cfDiscoveryBaseUrl);
-    await bootstrapPeers({ store: peerStore, selfAddress: peerEnv.selfAddress, seeds });
-    // After bootstrap, push self into every probed peer's announce endpoint so
-    // a brand-new lobby becomes discoverable without manual KV ops. Without
-    // this, gossip can't propagate self outward (heartbeat only refreshes
-    // already-known peers) and the CF aggregator never learns new servers.
-    const announceTargets = peerStore.list().filter((p) => p.address !== peerEnv.selfAddress).length;
-    if (announceTargets > 0) {
-      await announceToBootstrappedPeers({
-        store: peerStore,
-        selfAddress: peerEnv.selfAddress,
-        selfPublicKey: identity.publicKey,
-        selfDisplayName: resolvePeerDisplayName(),
-      });
-      console.log(`[peer] announced self to ${announceTargets} bootstrapped peer(s)`);
-    }
+  // Defer bootstrap + auto-announce to AFTER server.listen() succeeds.
+  // Load-bearing: if listen() fails (EADDRINUSE, perms, etc.) the process
+  // exits before announcing to upstream peers. Without this, systemd
+  // crash-loops would hammer /peers/announce on every seed lobby every
+  // few seconds, trip their per-IP rate limit (5/h), and lock the
+  // operator's IP out of legitimate re-announcement for an hour.
+  const cfDiscoveryBaseUrl = peerEnv.cfDiscoveryBaseUrl;
+  if (cfDiscoveryBaseUrl) {
+    server.once("listening", () => {
+      void (async () => {
+        try {
+          const seeds = await loadSeedsFromCf(cfDiscoveryBaseUrl);
+          await bootstrapPeers({ store: peerStore, selfAddress: peerEnv.selfAddress, seeds });
+          // After bootstrap, push self into every probed peer's announce endpoint
+          // so a brand-new lobby becomes discoverable without manual KV ops.
+          // Without this, gossip can't propagate self outward (heartbeat only
+          // refreshes already-known peers) and the CF aggregator never learns
+          // new servers.
+          const announceTargets = peerStore.list().filter((p) => p.address !== peerEnv.selfAddress).length;
+          if (announceTargets > 0) {
+            await announceToBootstrappedPeers({
+              store: peerStore,
+              selfAddress: peerEnv.selfAddress,
+              selfPublicKey: identity.publicKey,
+              selfDisplayName: resolvePeerDisplayName(),
+            });
+            console.log(`[peer] announced self to ${announceTargets} bootstrapped peer(s)`);
+          }
+        } catch (err) {
+          console.error("[peer] post-listen bootstrap/announce failed:", err);
+        }
+      })();
+    });
   }
 
   const scheduler = new GossipScheduler({

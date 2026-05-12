@@ -328,6 +328,12 @@ cat > "$UNIT_PATH" <<EOF
 [Unit]
 Description=STS2 Lobby Service
 After=network.target
+# Stop trying after 5 failures in 60s so deterministic boot errors (port
+# already in use, missing files, bad permissions) surface as \`failed\` for
+# an operator to investigate, instead of crash-looping every 3s and
+# pummeling upstream peer discovery endpoints with repeat announces.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
