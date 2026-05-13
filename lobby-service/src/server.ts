@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -9,7 +8,6 @@ import { RoomRelayManager } from "./relay.js";
 import { cleanupExpiredRooms } from "./room-cleanup.js";
 import { signServerAdminSession, verifyServerAdminPassword, verifySignedServerAdminSession } from "./server-admin-auth.js";
 import { ServerAdminStateStore } from "./server-admin-state.js";
-import { createServerRegistrySyncService } from "./server-admin-sync.js";
 import { renderServerAdminPage } from "./server-admin-ui.js";
 import {
   LobbyStore,
@@ -30,6 +28,7 @@ import { GossipScheduler } from "./peer/gossip.js";
 import { loadSeedsFromCf } from "./peer/seeds-loader.js";
 import { bootstrapPeers } from "./peer/bootstrap.js";
 import { announceToBootstrappedPeers } from "./peer/auto-announce.js";
+import { mountMetrics } from "./peer/handlers/metrics.js";
 
 const MaxLobbyPlayers = 256;
 const MaxRoomNameLength = 80;
@@ -78,13 +77,10 @@ const env = {
   serverAdminSessionSecret: optionalEnv(process.env.SERVER_ADMIN_SESSION_SECRET),
   serverAdminSessionTtlMs: Number.parseInt(process.env.SERVER_ADMIN_SESSION_TTL_HOURS ?? "168", 10) * 60 * 60 * 1000,
   serverAdminStateFile: process.env.SERVER_ADMIN_STATE_FILE ?? `${process.cwd()}/data/server-admin.json`,
-  serverRegistryBaseUrl: optionalEnv(process.env.SERVER_REGISTRY_BASE_URL) ?? "",
-  serverRegistrySyncIntervalMs: Number.parseInt(process.env.SERVER_REGISTRY_SYNC_INTERVAL_SECONDS ?? "180", 10) * 1000,
-  serverRegistrySyncTimeoutMs: Number.parseInt(process.env.SERVER_REGISTRY_SYNC_TIMEOUT_MS ?? "5000", 10),
-  serverRegistryPublicBaseUrl: process.env.SERVER_REGISTRY_PUBLIC_BASE_URL ?? buildRegistryPublicBaseUrl(),
-  serverRegistryPublicWsUrl: process.env.SERVER_REGISTRY_PUBLIC_WS_URL ?? buildRegistryPublicWsUrl(),
-  serverRegistryBandwidthProbeUrl: process.env.SERVER_REGISTRY_BANDWIDTH_PROBE_URL ?? buildRegistryBandwidthProbeUrl(),
-  serverRegistryProbeFileBytes: Number.parseInt(process.env.SERVER_REGISTRY_PROBE_FILE_BYTES ?? String(100 * 1024 * 1024), 10),
+  // Initial value used when the persisted admin state file does not yet
+  // contain `publicListingEnabled`. The admin panel toggle is the source of
+  // truth at runtime; this only seeds fresh installs.
+  peerPublicListingEnabledDefault: parseBooleanEnv(process.env.PEER_PUBLIC_LISTING_ENABLED, true),
 };
 
 const peerEnv = {
@@ -124,20 +120,10 @@ const relayManager = new RoomRelayManager(
     console.log(`[relay] ${phase} room=${roomId} ${detail}`);
   },
 );
-const serverAdminStateStore = new ServerAdminStateStore(env.serverAdminStateFile);
-const createRoomBandwidthGuard = new CreateRoomBandwidthGuard();
-const serverRegistrySync = createServerRegistrySyncService({
-  env: {
-    registryBaseUrl: env.serverRegistryBaseUrl,
-    timeoutMs: env.serverRegistrySyncTimeoutMs,
-    publicBaseUrl: env.serverRegistryPublicBaseUrl,
-    publicWsUrl: env.serverRegistryPublicWsUrl,
-    bandwidthProbeUrl: env.serverRegistryBandwidthProbeUrl,
-  },
-  stateStore: serverAdminStateStore,
-  getRoomCount: () => store.listRooms().length,
-  getGuardSnapshot: () => getCreateRoomGuardSnapshot(),
+const serverAdminStateStore = new ServerAdminStateStore(env.serverAdminStateFile, {
+  publicListingEnabledDefault: env.peerPublicListingEnabledDefault,
 });
+const createRoomBandwidthGuard = new CreateRoomBandwidthGuard();
 const serverAdminSessions = new Map<string, ServerAdminSession>();
 const createJoinRateLimitHits = new Map<string, RateLimitBucket>();
 
@@ -192,17 +178,6 @@ app.get("/probe", (_req, res) => {
   res.json({
     ok: true,
   });
-});
-
-app.get("/registry/bandwidth-probe.bin", async (_req, res, next) => {
-  try {
-    res.setHeader("content-type", "application/octet-stream");
-    res.setHeader("content-length", String(env.serverRegistryProbeFileBytes));
-    res.setHeader("cache-control", "no-store");
-    await streamZeroBytes(res, env.serverRegistryProbeFileBytes);
-  } catch (error) {
-    next(error);
-  }
 });
 
 app.get("/rooms", (req, res) => {
@@ -472,10 +447,6 @@ app.get("/server-admin/settings", (req, res, next) => {
     const relayTrafficSnapshot = relayManager.getTrafficSnapshot();
     res.json({
       ...serverAdminStateStore.getSettingsView(),
-      registryBaseUrl: env.serverRegistryBaseUrl,
-      publicBaseUrl: env.serverRegistryPublicBaseUrl,
-      publicWsUrl: env.serverRegistryPublicWsUrl,
-      bandwidthProbeUrl: env.serverRegistryBandwidthProbeUrl,
       currentBandwidthMbps: guardSnapshot.currentBandwidthMbps,
       resolvedCapacityMbps: guardSnapshot.resolvedCapacityMbps,
       bandwidthUtilizationRatio: guardSnapshot.bandwidthUtilizationRatio,
@@ -509,15 +480,10 @@ app.patch("/server-admin/settings", (req, res, next) => {
       bandwidthCapacityMbps: optionalPositiveNumber(body?.bandwidthCapacityMbps, "bandwidthCapacityMbps", 100_000),
       announcements: body?.announcements,
     });
-    await serverRegistrySync.runNow();
     const guardSnapshot = getCreateRoomGuardSnapshot();
     const relayTrafficSnapshot = relayManager.getTrafficSnapshot();
     res.json({
       ...settings,
-      registryBaseUrl: env.serverRegistryBaseUrl,
-      publicBaseUrl: env.serverRegistryPublicBaseUrl,
-      publicWsUrl: env.serverRegistryPublicWsUrl,
-      bandwidthProbeUrl: env.serverRegistryBandwidthProbeUrl,
       currentBandwidthMbps: guardSnapshot.currentBandwidthMbps,
       resolvedCapacityMbps: guardSnapshot.resolvedCapacityMbps,
       bandwidthUtilizationRatio: guardSnapshot.bandwidthUtilizationRatio,
@@ -737,9 +703,6 @@ const cleanupInterval = setInterval(() => {
     }
   }
 }, 5000);
-const serverRegistrySyncInterval = setInterval(() => {
-  void serverRegistrySync.runNow();
-}, env.serverRegistrySyncIntervalMs);
 
 if (peerEnv.enabled && peerEnv.selfAddress) {
   const identity = await loadOrCreateIdentity(peerEnv.stateDir);
@@ -776,14 +739,39 @@ if (peerEnv.enabled && peerEnv.selfAddress) {
     source: "self",
   });
 
+  // Resolved at request time so the admin-panel toggle propagates without a
+  // restart. When false, /peers/health still answers (direct-IP joins keep
+  // working) but the field tells the CF aggregator to skip this node.
+  const resolvePublicListing = (): boolean => serverAdminStateStore.getState().publicListingEnabled;
+
   mountHealth(app, {
     identity,
     address: peerEnv.selfAddress,
     getDisplayName: resolvePeerDisplayName,
+    getPublicListing: resolvePublicListing,
   });
   mountList(app, { store: peerStore });
   mountAnnounce(app, { store: peerStore });
   mountHeartbeat(app, { store: peerStore });
+  mountMetrics(app, {
+    identity,
+    address: peerEnv.selfAddress,
+    getDisplayName: resolvePeerDisplayName,
+    getPublicListing: resolvePublicListing,
+    getSnapshot: () => {
+      const guard = getCreateRoomGuardSnapshot();
+      return {
+        rooms: store.listRooms().length,
+        currentBandwidthMbps: guard.currentBandwidthMbps,
+        bandwidthCapacityMbps: guard.bandwidthCapacityMbps,
+        resolvedCapacityMbps: guard.resolvedCapacityMbps,
+        bandwidthUtilizationRatio: guard.bandwidthUtilizationRatio,
+        capacitySource: guard.capacitySource,
+        createRoomGuardApplies: guard.createRoomGuardApplies,
+        createRoomGuardStatus: guard.createRoomGuardStatus,
+      };
+    },
+  });
 
   // Defer bootstrap + auto-announce to AFTER server.listen() succeeds.
   // Load-bearing: if listen() fails (EADDRINUSE, perms, etc.) the process
@@ -798,6 +786,14 @@ if (peerEnv.enabled && peerEnv.selfAddress) {
         try {
           const seeds = await loadSeedsFromCf(cfDiscoveryBaseUrl);
           await bootstrapPeers({ store: peerStore, selfAddress: peerEnv.selfAddress, seeds });
+          // Operator opt-in: only announce self to the network when this node
+          // is configured for public visibility. Private nodes still load
+          // seeds (so admins can see the network from their dashboard) but
+          // do not advertise themselves outward.
+          if (!resolvePublicListing()) {
+            console.log("[peer] auto-announce skipped (publicListingEnabled=false)");
+            return;
+          }
           // After bootstrap, push self into every probed peer's announce endpoint
           // so a brand-new lobby becomes discoverable without manual KV ops.
           // Without this, gossip can't propagate self outward (heartbeat only
@@ -860,12 +856,8 @@ server.listen(env.port, env.host, () => {
   } else {
     console.log("[server-admin] login disabled until SERVER_ADMIN_PASSWORD_HASH and SERVER_ADMIN_SESSION_SECRET are configured");
   }
-  if (env.serverRegistryBaseUrl) {
-    console.log(`[server-admin] registry sync target ${env.serverRegistryBaseUrl}`);
-    void serverRegistrySync.runNow();
-  } else {
-    console.log("[server-admin] registry sync disabled until SERVER_REGISTRY_BASE_URL is configured");
-  }
+  const listingMode = serverAdminStateStore.getState().publicListingEnabled ? "public" : "private";
+  console.log(`[server-admin] decentralized listing mode: ${listingMode} (toggle via admin panel)`);
 });
 
 function addPeer(peer: ControlPeer) {
@@ -1050,43 +1042,6 @@ function resolveAdvertisedRelayHost(req: Request) {
   }
 }
 
-async function streamZeroBytes(res: Response, totalBytes: number) {
-  const chunk = Buffer.alloc(64 * 1024, 0);
-  let remaining = totalBytes;
-  while (remaining > 0) {
-    const nextLength = Math.min(chunk.length, remaining);
-    const canContinue = res.write(chunk.subarray(0, nextLength));
-    remaining -= nextLength;
-    if (!canContinue) {
-      await once(res, "drain");
-    }
-  }
-  res.end();
-}
-
-function buildRegistryPublicBaseUrl() {
-  const host = process.env.RELAY_PUBLIC_HOST?.trim()
-    || (process.env.HOST?.trim() && process.env.HOST !== "0.0.0.0" ? process.env.HOST.trim() : "127.0.0.1");
-  const port = process.env.PORT?.trim() || "8787";
-  return `http://${host}:${port}`;
-}
-
-function buildRegistryPublicWsUrl() {
-  const baseUrl = process.env.SERVER_REGISTRY_PUBLIC_BASE_URL?.trim() || buildRegistryPublicBaseUrl();
-  try {
-    const url = new URL(baseUrl);
-    const scheme = url.protocol === "https:" ? "wss:" : "ws:";
-    return `${scheme}//${url.host}/control`;
-  } catch {
-    return "ws://127.0.0.1:8787/control";
-  }
-}
-
-function buildRegistryBandwidthProbeUrl() {
-  const baseUrl = process.env.SERVER_REGISTRY_PUBLIC_BASE_URL?.trim() || buildRegistryPublicBaseUrl();
-  return `${baseUrl.replace(/\/+$/, "")}/registry/bandwidth-probe.bin`;
-}
-
 function getCreateRoomGuardSnapshot() {
   const state = serverAdminStateStore.getState();
   const relayTrafficSnapshot = relayManager.getTrafficSnapshot();
@@ -1094,7 +1049,12 @@ function getCreateRoomGuardSnapshot() {
     currentBandwidthMbps: relayTrafficSnapshot.currentBandwidthMbps,
     bandwidthCapacityMbps: state.bandwidthCapacityMbps,
     probePeak7dCapacityMbps: state.probePeak7dCapacityMbps,
-    createRoomGuardApplies: Boolean(env.serverRegistryBaseUrl && state.serverId && state.serverToken),
+    // The bandwidth-saturation guard is a courtesy for operators who opted
+    // their node into the public list — it stops them from getting flooded
+    // by random joiners when relay traffic is near capacity. Private nodes
+    // are only joined by people who already know the address, so the guard
+    // would just get in their way.
+    createRoomGuardApplies: state.publicListingEnabled,
   });
 }
 
@@ -1561,7 +1521,6 @@ function shutdown() {
 
 function closeRuntimeResources(onClosed?: () => void) {
   clearInterval(cleanupInterval);
-  clearInterval(serverRegistrySyncInterval);
   wss.close();
   relayManager.close();
   server.close(() => {

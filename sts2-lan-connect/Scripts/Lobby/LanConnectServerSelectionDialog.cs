@@ -265,73 +265,120 @@ public partial class LanConnectServerSelectionDialog : Control
 
     private Control BuildServerRow(ServerListEntry e)
     {
-        // Whole row is a clickable button styled as a pixel card.
-        var btn = new Button
-        {
-            CustomMinimumSize = new Vector2(0f, 56f),
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            TooltipText = $"address: {e.Address}\nsource: {e.Source}",
-            Text = string.Empty, // we draw our own content
-        };
-        ApplyServerCardStyle(btn);
-        string addr = e.Address;
-        btn.Pressed += () => { ServerChosen?.Invoke(addr); QueueFree(); };
-
-        // Layered content: HBox with name + ping
-        var row = new HBoxContainer
-        {
-            MouseFilter = MouseFilterEnum.Ignore,
-        };
-        row.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
-        row.OffsetLeft = 14;
-        row.OffsetRight = -14;
-        row.AddThemeConstantOverride("separation", 12);
-        btn.AddChild(row);
-
-        var nameVbox = new VBoxContainer
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            MouseFilter = MouseFilterEnum.Ignore,
-        };
-        nameVbox.AddThemeConstantOverride("separation", 2);
-        row.AddChild(nameVbox);
-
-        var nameLabel = new Label
-        {
-            Text = e.DisplayName ?? e.Address,
-            MouseFilter = MouseFilterEnum.Ignore,
-        };
-        nameLabel.AddThemeColorOverride("font_color", TextStrongColor);
-        nameLabel.AddThemeFontSizeOverride("font_size", 16);
-        nameVbox.AddChild(nameLabel);
-
-        var subLabel = new Label
-        {
-            Text = $"{e.Address}  ·  {e.Source}",
-            MouseFilter = MouseFilterEnum.Ignore,
-        };
-        subLabel.AddThemeColorOverride("font_color", TextMutedColor);
-        subLabel.AddThemeFontSizeOverride("font_size", 12);
-        nameVbox.AddChild(subLabel);
-
-        var pingLabel = new Label
-        {
-            Text = e.PingMs.HasValue ? $"{e.PingMs.Value} ms" : "—",
-            MouseFilter = MouseFilterEnum.Ignore,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Center,
-            CustomMinimumSize = new Vector2(80f, 0f),
-        };
-        Color pingColor = !e.PingMs.HasValue
+        // Card layout mirrors the in-lobby overlay's directory dialog
+        // (LanConnectLobbyOverlay.BuildDirectoryServerCard) so the picker
+        // and the in-overlay switch button feel like one component.
+        // Two rows: name + latency on top, room count + build/create-room
+        // guard on the bottom. Tooltip exposes the full address plus the
+        // live bandwidth/utilization snapshot.
+        bool blocked = string.Equals(e.CreateRoomGuardStatus, "block", StringComparison.OrdinalIgnoreCase);
+        string guardText = e.CreateRoomGuardApplies
+            ? blocked ? "建房暂停" : "可以建房"
+            : "—";
+        string rttText = e.PingMs.HasValue ? $"{e.PingMs.Value} ms" : "—";
+        Color rttColor = !e.PingMs.HasValue
             ? TextMutedColor
             : e.PingMs.Value < 80 ? SuccessColor
             : e.PingMs.Value < 250 ? AccentColor
             : DangerColor;
-        pingLabel.AddThemeColorOverride("font_color", pingColor);
-        pingLabel.AddThemeFontSizeOverride("font_size", 14);
-        row.AddChild(pingLabel);
+        string roomsText = e.Rooms.HasValue ? $"房间 {e.Rooms.Value}" : "房间 —";
 
-        return btn;
+        string utilization = e.BandwidthUtilizationRatio.HasValue
+            ? $"{(e.BandwidthUtilizationRatio.Value * 100):0.0}%"
+            : "未计算";
+        string bandwidth = e.CurrentBandwidthMbps.HasValue || e.ResolvedCapacityMbps.HasValue || e.BandwidthCapacityMbps.HasValue
+            ? $"{FormatMbps(e.CurrentBandwidthMbps)} / {FormatMbps(e.ResolvedCapacityMbps ?? e.BandwidthCapacityMbps)}"
+            : "未上报";
+
+        var card = new Button
+        {
+            CustomMinimumSize = new Vector2(0f, 80f),
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            TooltipText = $"{e.Address}\n来源：{e.Source}\n利用率：{utilization}\n带宽：{bandwidth}",
+            Text = string.Empty,
+        };
+        ApplyServerCardStyle(card);
+        string addr = e.Address;
+        card.Pressed += () => { ServerChosen?.Invoke(addr); QueueFree(); };
+
+        var content = new VBoxContainer { MouseFilter = MouseFilterEnum.Ignore };
+        content.AddThemeConstantOverride("separation", 6);
+        content.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+        content.OffsetLeft = 14;
+        content.OffsetRight = -14;
+        content.OffsetTop = 8;
+        content.OffsetBottom = -8;
+        card.AddChild(content);
+
+        var topRow = new HBoxContainer
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        topRow.AddThemeConstantOverride("separation", 10);
+        content.AddChild(topRow);
+
+        var nameLabel = new Label
+        {
+            Text = string.IsNullOrWhiteSpace(e.DisplayName) ? e.Address : e.DisplayName!,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            MouseFilter = MouseFilterEnum.Ignore,
+            ClipText = true,
+        };
+        nameLabel.AddThemeColorOverride("font_color", TextStrongColor);
+        nameLabel.AddThemeFontSizeOverride("font_size", 20);
+        topRow.AddChild(nameLabel);
+
+        var rttLabel = new Label
+        {
+            Text = rttText,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            CustomMinimumSize = new Vector2(80f, 0f),
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        rttLabel.AddThemeColorOverride("font_color", rttColor);
+        rttLabel.AddThemeFontSizeOverride("font_size", 20);
+        topRow.AddChild(rttLabel);
+
+        var bottomRow = new HBoxContainer
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        bottomRow.AddThemeConstantOverride("separation", 10);
+        content.AddChild(bottomRow);
+
+        var roomsLabel = new Label
+        {
+            Text = roomsText,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        roomsLabel.AddThemeColorOverride("font_color", TextMutedColor);
+        roomsLabel.AddThemeFontSizeOverride("font_size", 14);
+        bottomRow.AddChild(roomsLabel);
+
+        var guardLabel = new Label
+        {
+            Text = guardText,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        Color guardColor = !e.CreateRoomGuardApplies ? TextMutedColor : blocked ? DangerColor : SuccessColor;
+        guardLabel.AddThemeColorOverride("font_color", guardColor);
+        guardLabel.AddThemeFontSizeOverride("font_size", 14);
+        bottomRow.AddChild(guardLabel);
+
+        return card;
+    }
+
+    private static string FormatMbps(double? value)
+    {
+        if (!value.HasValue) return "未设置";
+        if (value.Value <= 0) return "0.00 Mbps";
+        if (value.Value < 0.01) return "< 0.01 Mbps";
+        return $"{value.Value:0.00} Mbps";
     }
 
     private void OnManualConnect()

@@ -123,6 +123,66 @@ test("aggregate preserves previous-active entries when only some fetches fail", 
   assert.equal(preserved.displayName, "CN Lobby");
 });
 
+test("aggregate drops peers whose /peers/metrics reports publicListing=false", async () => {
+  // The operator's opt-out toggle is the source of truth. A peer can still
+  // be gossipped around the network (other lobbies know its address), but
+  // CF must drop it from the public aggregate so it does not show up in
+  // the client picker for end users.
+  const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+  const kv = new FakeKV();
+  await kv.put("peers:seeds", JSON.stringify({
+    version: 1, updated_at: recentLastSeen,
+    seeds: [{ address: "https://opted-in" }, { address: "https://opted-out" }],
+  }));
+
+  const fetchMock = async (input: RequestInfo): Promise<Response> => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.endsWith("/peers")) {
+      const addr = url.replace(/\/peers$/, "");
+      return new Response(JSON.stringify({
+        peers: [{ address: addr, publicKey: "k", lastSeen: recentLastSeen }],
+      }), { status: 200 });
+    }
+    if (url.endsWith("/peers/metrics")) {
+      const isOptedOut = url.includes("opted-out");
+      return new Response(JSON.stringify({ publicListing: !isOptedOut }), { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  await aggregateActivePeers({ DISCOVERY_KV: kv as unknown as KVNamespace }, fetchMock);
+  const written = JSON.parse(kv.read("peers:active")!);
+  const addrs = written.servers.map((s: { address: string }) => s.address).sort();
+  assert.deepEqual(addrs, ["https://opted-in"], "opted-out peer must not appear in active list");
+});
+
+test("aggregate keeps peers when /peers/metrics is unreachable (backwards compat with older nodes)", async () => {
+  // Older v0.2/v0.3 lobby-service nodes don't expose /peers/metrics. The
+  // aggregator must treat missing-metrics as "leave the peer in" rather
+  // than silently dropping every pre-v0.4 node from the network.
+  const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+  const kv = new FakeKV();
+  await kv.put("peers:seeds", JSON.stringify({
+    version: 1, updated_at: recentLastSeen,
+    seeds: [{ address: "https://legacy.example" }],
+  }));
+
+  const fetchMock = async (input: RequestInfo): Promise<Response> => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.endsWith("/peers")) {
+      return new Response(JSON.stringify({
+        peers: [{ address: "https://legacy.example", publicKey: "k", lastSeen: recentLastSeen }],
+      }), { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  await aggregateActivePeers({ DISCOVERY_KV: kv as unknown as KVNamespace }, fetchMock);
+  const written = JSON.parse(kv.read("peers:active")!);
+  const addrs = written.servers.map((s: { address: string }) => s.address);
+  assert.deepEqual(addrs, ["https://legacy.example"]);
+});
+
 test("aggregate evicts previous-active entries past the offline retention TTL", async () => {
   // Bound the preservation behavior: a peer that hasn't been refreshed in
   // OFFLINE_RETENTION_MS (24h) is genuinely gone, drop it so the public

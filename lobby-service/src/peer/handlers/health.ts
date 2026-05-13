@@ -10,6 +10,9 @@ interface Deps {
   // Resolved at request time so the operator can change the display name via
   // the admin panel without restarting the service.
   getDisplayName?: () => string;
+  // Resolved at request time so the operator's opt-in toggle propagates
+  // without a restart. Defaults to true if not provided.
+  getPublicListing?: () => boolean;
 }
 
 export function mountHealth(app: Express, deps: Deps): void {
@@ -25,6 +28,7 @@ export function mountHealth(app: Express, deps: Deps): void {
       challenge,
       signature: signChallenge(deps.identity, challenge),
       serverTime: new Date().toISOString(),
+      publicListing: deps.getPublicListing?.() ?? true,
     };
     const displayName = deps.getDisplayName?.().trim();
     if (displayName) {

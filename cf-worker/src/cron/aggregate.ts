@@ -56,6 +56,24 @@ export async function aggregateActivePeers(env: Env, fetchImpl: FetchLike = fetc
     merged.set(p.address, p);
   }
 
+  // Public-listing opt-in: ask each candidate directly whether it wants to
+  // be in the public list. Older nodes (pre-v0.4) don't expose this and
+  // are treated as public by default for backwards compatibility. Failures
+  // also keep the peer — we don't drop reachable-to-players nodes just
+  // because CF edge can't reach them this tick.
+  const filterResults = await Promise.allSettled(
+    [...merged.keys()].map(async (addr) => {
+      const wantsListing = await fetchWantsPublicListing(addr, fetchImpl);
+      return { addr, wantsListing };
+    }),
+  );
+  for (const r of filterResults) {
+    if (r.status !== "fulfilled") continue;
+    if (r.value.wantsListing === false) {
+      merged.delete(r.value.addr);
+    }
+  }
+
   if (merged.size === 0 && previous.length > 0) {
     return;
   }
@@ -66,6 +84,28 @@ export async function aggregateActivePeers(env: Env, fetchImpl: FetchLike = fetc
     servers: [...merged.values()],
   };
   await env.DISCOVERY_KV.put(KV_KEY_ACTIVE, JSON.stringify(document));
+}
+
+// Returns true if the peer explicitly wants to be public, false if it
+// explicitly opted out, or null when we couldn't determine (treated as
+// "leave in" by the caller).
+async function fetchWantsPublicListing(
+  address: string,
+  fetchImpl: FetchLike,
+): Promise<boolean | null> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), PEER_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetchImpl(`${address.replace(/\/+$/, "")}/peers/metrics`, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { publicListing?: unknown };
+    if (typeof body.publicListing === "boolean") return body.publicListing;
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function loadSeeds(env: Env): Promise<Array<{ address: string }>> {

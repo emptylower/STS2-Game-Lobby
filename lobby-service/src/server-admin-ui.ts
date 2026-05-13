@@ -263,272 +263,30 @@ export function renderServerAdminPage() {
           }
         }
 
-        function getSyncMeta(value) {
-          const mapping = {
-            heartbeat_ok: {
-              tagColor: "success",
-              tagLabel: "已在公开列表",
-              toastType: "success",
-              toastTitle: "公开列表同步正常",
-              toastDescription: "这台子服务器已经在公开列表中持续同步。",
-            },
-            approved: {
-              tagColor: "processing",
-              tagLabel: "已获批",
-              toastType: "success",
-              toastTitle: "公开申请已获批",
-              toastDescription: "母面板已签发服务器令牌，正在进入公开列表。",
-            },
-            submission_created: {
-              tagColor: "processing",
-              tagLabel: "申请已提交",
-              toastType: "info",
-              toastTitle: "公开申请已发出",
-              toastDescription: "母面板已返回申请编号，等待进一步审核。",
-            },
-            pending_review: {
-              tagColor: "warning",
-              tagLabel: "待审核",
-              toastType: "info",
-              toastTitle: "公开申请待审核",
-              toastDescription: "申请已经提交，母面板暂未返回审核结果。",
-            },
-            rejected: {
-              tagColor: "error",
-              tagLabel: "已拒绝",
-              toastType: "warning",
-              toastTitle: "公开申请被拒绝",
-              toastDescription: "请根据审核备注调整配置后重新提交。",
-            },
-            submission_failed: {
-              tagColor: "error",
-              tagLabel: "申请发送失败",
-              toastType: "error",
-              toastTitle: "公开申请未发出",
-              toastDescription: "子服务器向母面板发起申请时失败，请检查母面板地址和网络连通性。",
-            },
-            claim_failed: {
-              tagColor: "warning",
-              tagLabel: "审核状态获取失败",
-              toastType: "warning",
-              toastTitle: "申请已提交，但状态确认失败",
-              toastDescription: "子服务器已经拿到申请编号，但暂时无法从母面板获取审核结果。",
-            },
-            heartbeat_failed: {
-              tagColor: "warning",
-              tagLabel: "公开同步失败",
-              toastType: "warning",
-              toastTitle: "公开列表同步失败",
-              toastDescription: "子服务器可能已经获批，但当前公开列表心跳同步失败。",
-            },
-            public_endpoint_invalid: {
-              tagColor: "error",
-              tagLabel: "公网地址无效",
-              toastType: "error",
-              toastTitle: "公网地址配置错误",
-              toastDescription: "当前上报给母面板的地址不是公网可达地址，母面板无法接收这台子服务器。",
-            },
-            listing_disable_failed: {
-              tagColor: "warning",
-              tagLabel: "取消公开失败",
-              toastType: "warning",
-              toastTitle: "取消公开同步失败",
-              toastDescription: "子服务器通知母面板下线时失败，稍后会继续重试。",
-            },
-            sync_failed: {
-              tagColor: "error",
-              tagLabel: "同步失败",
-              toastType: "error",
-              toastTitle: "同步失败",
-              toastDescription: "发生未分类的同步错误，请检查最近错误和服务端日志。",
-            },
-            listing_disabled: {
-              tagColor: "default",
-              tagLabel: "未公开",
-            },
-            registry_disabled: {
-              tagColor: "default",
-              tagLabel: "未配置母面板",
-              toastType: "warning",
-              toastTitle: "未配置母面板地址",
-              toastDescription: "SERVER_REGISTRY_BASE_URL 未配置，公开申请不会发出。",
-            },
-            idle: {
-              tagColor: "default",
-              tagLabel: "未申请",
-            },
-          };
-          return mapping[value] || {
-            tagColor: "default",
-            tagLabel: value || "未知",
-          };
-        }
-
-        function renderSyncTag(value) {
-          const meta = getSyncMeta(value);
-          return h(Tag, { color: meta.tagColor }, meta.tagLabel);
-        }
-
         function getListingStateMeta(settings) {
           if (!settings) {
             return {
               tagColor: "default",
-              tagLabel: "未知",
+              tagLabel: "读取中",
               alertType: "info",
-              description: "正在读取公开申请状态。",
+              description: "正在读取公开列表开关状态。",
             };
           }
 
-          const syncStatus = settings.lastSyncStatus || "idle";
-          if (!settings.publicListingEnabled) {
-            if (syncStatus === "listing_disable_failed") {
-              return {
-                tagColor: "warning",
-                tagLabel: "关闭公开失败",
-                alertType: "warning",
-                description: "你已经关闭了公开开关，但子服务器通知母面板下线时失败，稍后会继续重试。",
-              };
-            }
-
-            if (settings.serverId || settings.submissionId || syncStatus === "listing_disabled") {
-              return {
-                tagColor: "default",
-                tagLabel: "已关闭公开",
-                alertType: "info",
-                description: "公开申请开关已关闭，这台子服务器不会显示在公开列表中。",
-              };
-            }
-
-            return {
-              tagColor: "default",
-              tagLabel: "未申请",
-              alertType: "info",
-              description: "当前尚未向母面板发起公开申请。",
-            };
-          }
-
-          if (syncStatus === "submission_created") {
-            return {
-              tagColor: "processing",
-              tagLabel: "已提交申请",
-              alertType: "info",
-              description: "申请已经成功发到母面板，等待母面板进一步审核。",
-            };
-          }
-
-          if (syncStatus === "pending_review") {
-            return {
-              tagColor: "warning",
-              tagLabel: "待审核",
-              alertType: "warning",
-              description: "申请已提交，但母面板暂未返回审核结果。",
-            };
-          }
-
-          if (syncStatus === "rejected") {
-            return {
-              tagColor: "error",
-              tagLabel: "已拒绝",
-              alertType: "error",
-              description: settings.lastReviewNote || "母面板拒绝了这次公开申请。",
-            };
-          }
-
-          if (syncStatus === "heartbeat_ok") {
+          if (settings.publicListingEnabled) {
             return {
               tagColor: "success",
-              tagLabel: "已加入公开列表",
+              tagLabel: "公开列表可见",
               alertType: "success",
-              description: "母面板已经接收并持续同步这台子服务器，它应当出现在公开列表中。",
-            };
-          }
-
-          if (syncStatus === "approved") {
-            return {
-              tagColor: "processing",
-              tagLabel: "已获批，等待同步",
-              alertType: "info",
-              description: "母面板已经签发服务器令牌，正在把这台子服务器加入公开列表。",
-            };
-          }
-
-          if (syncStatus === "heartbeat_failed") {
-            return {
-              tagColor: "warning",
-              tagLabel: settings.serverId || settings.hasServerToken ? "已获批，同步异常" : "公开同步失败",
-              alertType: "warning",
-              description: settings.lastSyncError || "子服务器和母面板之间的公开列表同步失败。",
-            };
-          }
-
-          if (syncStatus === "submission_failed") {
-            return {
-              tagColor: "error",
-              tagLabel: "申请未发出",
-              alertType: "error",
-              description: settings.lastSyncError || "子服务器向母面板发起申请时失败。",
-            };
-          }
-
-          if (syncStatus === "claim_failed") {
-            return {
-              tagColor: "warning",
-              tagLabel: "申请已提交，状态确认失败",
-              alertType: "warning",
-              description: settings.lastSyncError || "子服务器已经保存申请编号，但暂时无法从母面板确认审核结果。",
-            };
-          }
-
-          if (syncStatus === "public_endpoint_invalid") {
-            return {
-              tagColor: "error",
-              tagLabel: "公网地址配置错误",
-              alertType: "error",
-              description: settings.lastSyncError || "当前上报给母面板的地址不是公网可达地址。",
-            };
-          }
-
-          if (syncStatus === "registry_disabled") {
-            return {
-              tagColor: "warning",
-              tagLabel: "未配置母面板",
-              alertType: "warning",
-              description: "SERVER_REGISTRY_BASE_URL 未配置，公开申请不会发出。",
-            };
-          }
-
-          if (syncStatus === "sync_failed") {
-            return {
-              tagColor: "error",
-              tagLabel: "同步失败",
-              alertType: "error",
-              description: settings.lastSyncError || "发生未分类的同步错误，请检查日志。",
-            };
-          }
-
-          if (settings.submissionId && !settings.serverId) {
-            return {
-              tagColor: "warning",
-              tagLabel: "已申请，待审核",
-              alertType: "warning",
-              description: "子服务器已经拿到申请编号，等待母面板返回审核结果。",
-            };
-          }
-
-          if (settings.serverId && settings.hasServerToken) {
-            return {
-              tagColor: "processing",
-              tagLabel: "已获批",
-              alertType: "info",
-              description: "母面板已经签发服务器令牌，等待首轮心跳同步。",
+              description: "本服务器已主动加入去中心化节点网络，玩家可以在客户端的服务器选择器中看到它。",
             };
           }
 
           return {
-            tagColor: "processing",
-            tagLabel: "准备申请",
+            tagColor: "default",
+            tagLabel: "已关闭公开",
             alertType: "info",
-            description: "公开申请已经启用，子服务器正在进行首轮同步。",
+            description: "本服务器不会出现在公开节点列表中，但知道直连地址的玩家仍可正常连接。",
           };
         }
 
@@ -541,76 +299,15 @@ export function renderServerAdminPage() {
           const meta = getListingStateMeta(settings);
           return {
             type: meta.alertType,
-            message: "申请状态：" + meta.tagLabel,
-            description: h(
-              Space,
-              { direction: "vertical", size: 2 },
-              h("span", null, meta.description),
-              settings && settings.lastSyncError
-                ? h(Text, { type: "secondary" }, "最近错误：" + settings.lastSyncError)
-                : null,
-              settings && settings.lastReviewNote
-                ? h(Text, { type: "secondary" }, "审核备注：" + settings.lastReviewNote)
-                : null,
-            ),
+            message: "公开列表：" + meta.tagLabel,
+            description: meta.description,
           };
         }
 
-        function buildSyncSignature(settings) {
-          if (!settings) {
-            return "";
-          }
-
-          return [
-            settings.publicListingEnabled ? "1" : "0",
-            settings.lastSyncStatus || "",
-            settings.lastSyncError || "",
-            settings.lastReviewNote || "",
-            settings.submissionId || "",
-            settings.serverId || "",
-            settings.hasServerToken ? "1" : "0",
-          ].join("|");
-        }
-
-        function notifySyncState(next, previous, source) {
-          const meta = getSyncMeta(next.lastSyncStatus || "idle");
-          if (!meta.toastType || !meta.toastTitle) {
-            return;
-          }
-
-          const previousSignature = buildSyncSignature(previous);
-          const nextSignature = buildSyncSignature(next);
-          if (previousSignature === nextSignature) {
-            return;
-          }
-
-          if (!previous && meta.toastType !== "error" && meta.toastType !== "warning") {
-            return;
-          }
-
-          if (source === "save" && meta.toastType === "info") {
-            return;
-          }
-
-          let description = meta.toastDescription || "";
-          if (next.lastSyncError && (meta.toastType === "error" || meta.toastType === "warning")) {
-            description = description
-              ? description + " 最近错误：" + next.lastSyncError
-              : next.lastSyncError;
-          }
-
-          if (next.lastReviewNote && next.lastSyncStatus === "rejected") {
-            description = description
-              ? description + " 审核备注：" + next.lastReviewNote
-              : next.lastReviewNote;
-          }
-
-          notification[meta.toastType]({
-            message: meta.toastTitle,
-            description: description || undefined,
-            placement: "topRight",
-            duration: meta.toastType === "error" ? 8 : 6,
-          });
+        function notifySyncState(_next, _previous, _source) {
+          // Decentralized network — no central审核流程, nothing to notify about
+          // beyond what the form already shows. Kept as a no-op so existing
+          // callsites compile.
         }
 
         function renderGuardTag(value, applies) {
@@ -1069,8 +766,13 @@ export function renderServerAdminPage() {
                             ),
                             h(
                               Form.Item,
-                              { name: "publicListingEnabled", label: "公开列表申请", valuePropName: "checked" },
-                              h(Switch, { checkedChildren: "已启用", unCheckedChildren: "未启用" })
+                              {
+                                name: "publicListingEnabled",
+                                label: "加入公开节点列表",
+                                valuePropName: "checked",
+                                extra: "开启后，本服务器会通过去中心化网络对所有玩家可见。关闭后玩家无法在客户端列表中看到，但已知直连地址的人仍可连接。",
+                              },
+                              h(Switch, { checkedChildren: "公开", unCheckedChildren: "私有" })
                             ),
                             h(
                               Form.Item,
@@ -1211,9 +913,8 @@ export function renderServerAdminPage() {
                       h(
                         Descriptions,
                         { bordered: true, size: "middle", column: 1, className: "status-block" },
-                        h(Descriptions.Item, { label: "申请状态" }, renderListingStateTag(settings)),
-                        h(Descriptions.Item, { label: "状态说明" }, getListingStateMeta(settings).description),
-                        h(Descriptions.Item, { label: "同步状态" }, renderSyncTag(settings.lastSyncStatus || "idle")),
+                        h(Descriptions.Item, { label: "公开列表" }, renderListingStateTag(settings)),
+                        h(Descriptions.Item, { label: "说明" }, getListingStateMeta(settings).description),
                         h(Descriptions.Item, { label: "建房保护" }, renderGuardTag(settings.createRoomGuardStatus || "unknown", Boolean(settings.createRoomGuardApplies))),
                         h(Descriptions.Item, { label: "当前带宽" }, formatMbps(settings.currentBandwidthMbps)),
                         h(Descriptions.Item, { label: "30秒累计流量" }, formatBytes(settings.relayTrafficBytesInWindow)),
@@ -1225,17 +926,7 @@ export function renderServerAdminPage() {
                         h(Descriptions.Item, { label: "探针峰值(7天)" }, formatMbps(settings.probePeak7dCapacityMbps)),
                         h(Descriptions.Item, { label: "有效容量" }, formatMbps(settings.resolvedCapacityMbps)),
                         h(Descriptions.Item, { label: "当前利用率" }, formatRatio(settings.bandwidthUtilizationRatio)),
-                        h(Descriptions.Item, { label: "容量来源" }, renderCapacitySource(settings.capacitySource || "unknown")),
-                        h(Descriptions.Item, { label: "申请 ID" }, settings.submissionId || "未创建"),
-                        h(Descriptions.Item, { label: "服务器 ID" }, settings.serverId || "未获批"),
-                        h(Descriptions.Item, { label: "令牌状态" }, settings.hasServerToken ? h(Tag, { color: "success" }, "已签发") : h(Tag, null, "未签发")),
-                        h(Descriptions.Item, { label: "最近同步" }, formatDateTime(settings.lastSyncAt)),
-                        h(Descriptions.Item, { label: "最近错误" }, settings.lastSyncError || "无"),
-                        h(Descriptions.Item, { label: "审核备注" }, settings.lastReviewNote || "无"),
-                        h(Descriptions.Item, { label: "母面板地址" }, settings.registryBaseUrl || "未配置"),
-                        h(Descriptions.Item, { label: "当前大厅地址" }, settings.publicBaseUrl || "未配置"),
-                        h(Descriptions.Item, { label: "当前控制通道" }, settings.publicWsUrl || "未配置"),
-                        h(Descriptions.Item, { label: "带宽探针地址" }, settings.bandwidthProbeUrl || "未配置")
+                        h(Descriptions.Item, { label: "容量来源" }, renderCapacitySource(settings.capacitySource || "unknown"))
                       )
                     )
                   )

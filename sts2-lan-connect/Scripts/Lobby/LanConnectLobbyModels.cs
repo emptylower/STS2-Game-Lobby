@@ -432,4 +432,52 @@ internal sealed class PeerHealthResponse
 
     [JsonPropertyName("serverTime")]
     public string ServerTime { get; set; } = string.Empty;
+
+    [JsonPropertyName("displayName")]
+    public string? DisplayName { get; set; }
+
+    [JsonPropertyName("publicListing")]
+    public bool? PublicListing { get; set; }
+}
+
+internal sealed class PeerMetricsResponse
+{
+    [JsonPropertyName("address")]
+    public string Address { get; set; } = string.Empty;
+
+    [JsonPropertyName("publicKey")]
+    public string PublicKey { get; set; } = string.Empty;
+
+    [JsonPropertyName("serverTime")]
+    public string ServerTime { get; set; } = string.Empty;
+
+    [JsonPropertyName("displayName")]
+    public string? DisplayName { get; set; }
+
+    [JsonPropertyName("publicListing")]
+    public bool PublicListing { get; set; }
+
+    [JsonPropertyName("rooms")]
+    public int Rooms { get; set; }
+
+    [JsonPropertyName("currentBandwidthMbps")]
+    public double? CurrentBandwidthMbps { get; set; }
+
+    [JsonPropertyName("bandwidthCapacityMbps")]
+    public double? BandwidthCapacityMbps { get; set; }
+
+    [JsonPropertyName("resolvedCapacityMbps")]
+    public double? ResolvedCapacityMbps { get; set; }
+
+    [JsonPropertyName("bandwidthUtilizationRatio")]
+    public double? BandwidthUtilizationRatio { get; set; }
+
+    [JsonPropertyName("capacitySource")]
+    public string CapacitySource { get; set; } = "unknown";
+
+    [JsonPropertyName("createRoomGuardApplies")]
+    public bool CreateRoomGuardApplies { get; set; }
+
+    [JsonPropertyName("createRoomGuardStatus")]
+    public string CreateRoomGuardStatus { get; set; } = "allow";
 }

@@ -15,6 +15,18 @@ internal sealed class ServerListEntry
     public DateTime? LastSuccessConnect { get; set; }
     public PingBucket Bucket { get; set; } = PingBucket.Unreachable;
     public int? PingMs { get; set; }
+
+    // Live metrics from `/peers/metrics`, populated by PingAllAsync after the
+    // initial pre-warmed gather. All nullable — older v0.2/v0.3 nodes don't
+    // expose this endpoint and the picker must render gracefully without it.
+    public int? Rooms { get; set; }
+    public double? CurrentBandwidthMbps { get; set; }
+    public double? BandwidthCapacityMbps { get; set; }
+    public double? ResolvedCapacityMbps { get; set; }
+    public double? BandwidthUtilizationRatio { get; set; }
+    public string CapacitySource { get; set; } = "unknown";
+    public bool CreateRoomGuardApplies { get; set; }
+    public string CreateRoomGuardStatus { get; set; } = "allow";
 }
 
 internal static class LanConnectServerListBootstrap
@@ -63,7 +75,14 @@ internal static class LanConnectServerListBootstrap
     {
         var tasks = entries.Select(async e =>
         {
-            PeerProbeResult result = await LanConnectPeerPing.ProbeAsync(e.Address, ct);
+            // Probe first for the latency bucket + signed-challenge liveness.
+            // Metrics fetched in parallel, since they're a different endpoint
+            // that doesn't share state with the probe.
+            var probeTask = LanConnectPeerPing.ProbeAsync(e.Address, ct);
+            var metricsTask = LanConnectPeerMetricsClient.FetchAsync(e.Address, ct);
+            await Task.WhenAll(probeTask, metricsTask);
+
+            PeerProbeResult result = probeTask.Result;
             e.PingMs = result.Ms >= 0 ? result.Ms : null;
             e.Bucket = result.Bucket;
             // Probe is the freshest source — it's a live round-trip to the
@@ -73,6 +92,23 @@ internal static class LanConnectServerListBootstrap
             if (!string.IsNullOrWhiteSpace(result.DisplayName))
             {
                 e.DisplayName = result.DisplayName;
+            }
+
+            PeerMetricsResponse? metrics = metricsTask.Result;
+            if (metrics != null)
+            {
+                e.Rooms = metrics.Rooms;
+                e.CurrentBandwidthMbps = metrics.CurrentBandwidthMbps;
+                e.BandwidthCapacityMbps = metrics.BandwidthCapacityMbps;
+                e.ResolvedCapacityMbps = metrics.ResolvedCapacityMbps;
+                e.BandwidthUtilizationRatio = metrics.BandwidthUtilizationRatio;
+                e.CapacitySource = metrics.CapacitySource;
+                e.CreateRoomGuardApplies = metrics.CreateRoomGuardApplies;
+                e.CreateRoomGuardStatus = metrics.CreateRoomGuardStatus;
+                if (!string.IsNullOrWhiteSpace(metrics.DisplayName))
+                {
+                    e.DisplayName = metrics.DisplayName;
+                }
             }
         }).ToList();
         await Task.WhenAll(tasks);

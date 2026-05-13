@@ -156,12 +156,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Control? _inviteConfirmDialogContainer;
     private Label? _inviteConfirmDialogMessage;
     private LanConnectInvitePayload? _pendingInvitePayload;
-    private Control? _directoryServerDialogContainer;
-    private Label? _directoryServerDialogTitle;
-    private Label? _directoryServerDialogStatusLabel;
-    private GridContainer? _directoryServerDialogOptions;
-    private bool _directoryServerLoadInFlight;
-    private List<(LobbyDirectoryServerEntry Entry, double? RttMs)>? _cachedDirectoryServers;
     private LobbyRoomSummary? _pendingResumeJoinRoom;
     private string? _pendingResumeJoinPassword;
     private bool _networkFieldsRevealed;
@@ -241,13 +235,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         if (!HasAvailableLobbyEndpoint())
         {
-            GD.Print("sts2_lan_connect overlay: no lobby endpoint configured, opening server dialog");
-            _ = OpenDirectoryServerDialogAsync();
+            GD.Print("sts2_lan_connect overlay: no lobby endpoint configured, opening server picker");
+            OpenServerPicker();
             return;
         }
-
-        // Pre-fetch directory servers in background so cache is warm.
-        _ = RefreshDirectoryServersInBackgroundAsync();
 
         try
         {
@@ -255,9 +246,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             LobbyHealthResponse health = await apiClient.GetHealthAsync();
             if (health.CreateRoomGuardStatus == "block")
             {
-                GD.Print("sts2_lan_connect overlay: current server blocks room creation, auto-opening server dialog");
+                GD.Print("sts2_lan_connect overlay: current server blocks room creation, auto-opening server picker");
                 SetStatus("当前服务器不允许创建房间，建议切换。");
-                _ = OpenDirectoryServerDialogAsync();
+                OpenServerPicker();
                 return;
             }
 
@@ -265,9 +256,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
         catch (Exception ex)
         {
-            GD.Print($"sts2_lan_connect overlay: connectivity check failed ({ex.Message}), auto-opening server dialog");
+            GD.Print($"sts2_lan_connect overlay: connectivity check failed ({ex.Message}), auto-opening server picker");
             SetStatus("当前服务器无法连接，建议切换。");
-            _ = OpenDirectoryServerDialogAsync();
+            OpenServerPicker();
             return;
         }
 
@@ -300,11 +291,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_resumeSlotDialogContainer != null)
         {
             _resumeSlotDialogContainer.Visible = false;
-        }
-
-        if (_directoryServerDialogContainer != null)
-        {
-            _directoryServerDialogContainer.Visible = false;
         }
 
         if (_inviteConfirmDialogContainer != null)
@@ -362,7 +348,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         AddChild(BuildJoinPasswordDialog());
         AddChild(BuildProgressDialog());
         AddChild(BuildResumeSlotDialog());
-        AddChild(BuildDirectoryServerDialog());
         AddChild(BuildFilterDialog());
         AddChild(BuildInviteConfirmDialog());
         ApplyResponsiveLayout();
@@ -462,7 +447,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _healthIndicatorLatencyLabel.AddThemeColorOverride("font_color", TextMutedColor);
         healthRow.AddChild(_healthIndicatorLatencyLabel);
 
-        _chooseDirectoryServerButton = CreateToolbarButton("SERVER", "打开公共服务器列表，切换到其他大厅。", () => TaskHelper.RunSafely(OpenDirectoryServerDialogAsync()), GlyphIconKind.Server, accent: true);
+        _chooseDirectoryServerButton = CreateToolbarButton("SERVER", "打开公共服务器列表，切换到其他大厅。", OpenServerPicker, GlyphIconKind.Server, accent: true);
         _headerToolbar.AddChild(_chooseDirectoryServerButton);
 
         _settingsButton = CreateToolbarIconButton("展开或收起设置", ToggleSettingsVisibility, GlyphIconKind.Gear);
@@ -1202,7 +1187,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Button switchServer = CreateActionButton(
             "切换服务器",
             "打开公共服务器列表，选择其他可用服务器后再创建房间。",
-            () => TaskHelper.RunSafely(SwitchServerFromCreateGuardAsync()),
+            SwitchServerFromCreateGuardAsync,
             primary: true);
         switchServer.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         buttons.AddChild(switchServer);
@@ -1321,82 +1306,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _progressDialogHint.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         _progressDialogHint.AddThemeColorOverride("font_color", TextMutedColor);
         body.AddChild(_progressDialogHint);
-        return shell;
-    }
-
-    private Control BuildDirectoryServerDialog()
-    {
-        Control shell = CreateDialogShell(out VBoxContainer body);
-        _directoryServerDialogContainer = shell;
-
-        // Enlarge dialog to cover ~80% of the screen for comfortable browsing.
-        if (body.GetParent() is PanelContainer card)
-        {
-            card.CustomMinimumSize = new Vector2(0f, 0f);
-            if (card.GetParent() is MarginContainer margin)
-            {
-                // Use percentage-based anchors instead of fixed offsets:
-                // roughly 10% margin on each side → 80% of screen.
-                if (margin.GetParent() is CenterContainer cc)
-                {
-                    cc.RemoveChild(margin);
-                    margin.SetAnchorsPreset(LayoutPreset.FullRect);
-                    margin.OffsetLeft = 0f;
-                    margin.OffsetTop = 0f;
-                    margin.OffsetRight = 0f;
-                    margin.OffsetBottom = 0f;
-                    margin.AddThemeConstantOverride("margin_left", 80);
-                    margin.AddThemeConstantOverride("margin_top", 60);
-                    margin.AddThemeConstantOverride("margin_right", 80);
-                    margin.AddThemeConstantOverride("margin_bottom", 60);
-                    shell.AddChild(margin);
-                }
-            }
-        }
-
-        _directoryServerDialogTitle = CreateSectionLabel("切换大厅服务器");
-        _directoryServerDialogTitle.AddThemeFontSizeOverride("font_size", 22);
-        body.AddChild(_directoryServerDialogTitle);
-
-        _directoryServerDialogStatusLabel = CreateBodyLabel("选择一个大厅服务器。延迟越低体验越好。");
-        _directoryServerDialogStatusLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-        _directoryServerDialogStatusLabel.AddThemeColorOverride("font_color", TextMutedColor);
-        _directoryServerDialogStatusLabel.AddThemeFontSizeOverride("font_size", 18);
-        body.AddChild(_directoryServerDialogStatusLabel);
-
-        _directoryServerDialogOptions = new GridContainer
-        {
-            Columns = 2,
-            SizeFlagsHorizontal = SizeFlags.ExpandFill
-        };
-        _directoryServerDialogOptions.AddThemeConstantOverride("h_separation", 14);
-        _directoryServerDialogOptions.AddThemeConstantOverride("v_separation", 14);
-
-        ScrollContainer directoryScroll = new()
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            SizeFlagsVertical = SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(0f, 300f),
-            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
-            VerticalScrollMode = ScrollContainer.ScrollMode.Auto
-        };
-        directoryScroll.AddChild(_directoryServerDialogOptions);
-        body.AddChild(directoryScroll);
-
-        HBoxContainer actions = new()
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill
-        };
-        actions.AddThemeConstantOverride("separation", 10);
-        body.AddChild(actions);
-
-        Button refresh = CreateActionButton("刷新列表", "重新从中心服务器拉取可用大厅列表。", () => TaskHelper.RunSafely(RefreshDirectoryServersAsync()), primary: true);
-        refresh.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        actions.AddChild(refresh);
-
-        Button cancel = CreateActionButton("关闭", "返回设置页面。", CloseDirectoryServerDialog);
-        cancel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        actions.AddChild(cancel);
         return shell;
     }
 
@@ -3014,10 +2923,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         OpenCreateDialogInternal();
     }
 
-    private async Task SwitchServerFromCreateGuardAsync()
+    private void SwitchServerFromCreateGuardAsync()
     {
         CloseCreateGuardDialog();
-        await OpenDirectoryServerDialogAsync();
+        OpenServerPicker();
     }
 
     private void ShowCreateRoomGuardDialog(string title, string message, string detail, bool allowContinue)
@@ -3122,239 +3031,30 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             : $"{characterLabel}（{slot.PlayerName}）";
     }
 
-    private async Task OpenDirectoryServerDialogAsync()
+    // The picker dialog is owned by LanConnectServerSelectionStartup — built as
+    // a top-level full-screen Control, NOT a child of this overlay. That way
+    // the SAME picker shows up for the lobby-button entrypoint
+    // (Patches.MultiplayerSubmenu.OnLobbyPressed) and the in-overlay SERVER
+    // toolbar button. Data source is the decentralized CF aggregator plus the
+    // peer-gossip cache — no more legacy mother registry.
+    private void OpenServerPicker()
     {
-        if (_directoryServerDialogContainer == null)
+        LanConnectServerSelectionStartup.Show(GetTree(), onPicked: addr =>
         {
-            return;
-        }
-
-        _directoryServerDialogContainer.Visible = true;
-        _directoryServerDialogContainer.MoveToFront();
-
-        if (_cachedDirectoryServers != null && _cachedDirectoryServers.Count > 0)
-        {
-            RebuildDirectoryServerCards(_cachedDirectoryServers);
-            SetLabelText(_directoryServerDialogStatusLabel, $"{_cachedDirectoryServers.Count} 个可用大厅。点击即可切换。");
-            _ = RefreshDirectoryServersInBackgroundAsync();
-        }
-        else
-        {
-            await RefreshDirectoryServersAsync();
-        }
-    }
-
-    private void CloseDirectoryServerDialog()
-    {
-        if (_directoryServerDialogContainer != null)
-        {
-            _directoryServerDialogContainer.Visible = false;
-        }
-    }
-
-    private void RebuildDirectoryServerCards(List<(LobbyDirectoryServerEntry Entry, double? RttMs)> servers)
-    {
-        if (_directoryServerDialogOptions == null)
-        {
-            return;
-        }
-
-        foreach (Node child in _directoryServerDialogOptions.GetChildren())
-        {
-            _directoryServerDialogOptions.RemoveChild(child);
-            child.QueueFree();
-        }
-
-        foreach ((LobbyDirectoryServerEntry entry, double? rtt) in servers)
-        {
-            Control card = BuildDirectoryServerCard(entry, rtt);
-            _directoryServerDialogOptions.AddChild(card);
-        }
-    }
-
-    private async Task RefreshDirectoryServersInBackgroundAsync()
-    {
-        if (_directoryServerLoadInFlight)
-        {
-            return;
-        }
-
-        _directoryServerLoadInFlight = true;
-        try
-        {
-            IReadOnlyList<LobbyDirectoryServerEntry> servers = await LanConnectLobbyDirectoryClient.GetServersAsync();
-            if (servers.Count == 0)
+            // Startup.Show already wrote LanConnectConfig.LobbyServerBaseUrl
+            // before invoking onPicked, so the on-disk config is up to date.
+            // We mirror the value into the overlay's settings input so the
+            // user sees the new address right away, then refresh rooms from
+            // the chosen server.
+            if (_serverBaseUrlInput != null)
             {
-                return;
+                _serverBaseUrlInput.Text = addr;
             }
-
-            Task<double?>[] probeTasks = servers.Select(s => MeasureServerProbeRttSafeAsync(s.BaseUrl)).ToArray();
-            await Task.WhenAll(probeTasks);
-
-            _cachedDirectoryServers = new List<(LobbyDirectoryServerEntry, double?)>();
-            for (int i = 0; i < servers.Count; i++)
-            {
-                _cachedDirectoryServers.Add((servers[i], probeTasks[i].Result));
-            }
-
-            if (_directoryServerDialogContainer is { Visible: true })
-            {
-                RebuildDirectoryServerCards(_cachedDirectoryServers);
-                SetLabelText(_directoryServerDialogStatusLabel, $"{_cachedDirectoryServers.Count} 个可用大厅。点击即可切换。");
-            }
-        }
-        catch (Exception ex)
-        {
-            GD.Print($"sts2_lan_connect overlay: background directory refresh failed: {ex.Message}");
-        }
-        finally
-        {
-            _directoryServerLoadInFlight = false;
-        }
-    }
-
-    private async Task RefreshDirectoryServersAsync()
-    {
-        if (_directoryServerLoadInFlight || _directoryServerDialogOptions == null || _directoryServerDialogStatusLabel == null)
-        {
-            return;
-        }
-
-        _directoryServerLoadInFlight = true;
-        SetLabelText(_directoryServerDialogStatusLabel, "正在刷新...");
-        foreach (Node child in _directoryServerDialogOptions.GetChildren())
-        {
-            _directoryServerDialogOptions.RemoveChild(child);
-            child.QueueFree();
-        }
-
-        try
-        {
-            IReadOnlyList<LobbyDirectoryServerEntry> servers = await LanConnectLobbyDirectoryClient.GetServersAsync();
-            if (servers.Count == 0)
-            {
-                _cachedDirectoryServers = null;
-                SetLabelText(_directoryServerDialogStatusLabel, "当前没有可用大厅。");
-                return;
-            }
-
-            SetLabelText(_directoryServerDialogStatusLabel, $"已找到 {servers.Count} 个大厅，正在测速...");
-
-            Task<double?>[] probeTasks = servers.Select(s => MeasureServerProbeRttSafeAsync(s.BaseUrl)).ToArray();
-            await Task.WhenAll(probeTasks);
-
-            _cachedDirectoryServers = new List<(LobbyDirectoryServerEntry, double?)>();
-            for (int i = 0; i < servers.Count; i++)
-            {
-                _cachedDirectoryServers.Add((servers[i], probeTasks[i].Result));
-            }
-
-            RebuildDirectoryServerCards(_cachedDirectoryServers);
-            SetLabelText(_directoryServerDialogStatusLabel, $"{servers.Count} 个可用大厅。点击即可切换。");
-        }
-        catch (Exception ex)
-        {
-            SetLabelText(_directoryServerDialogStatusLabel, $"拉取列表失败：{ex.Message}");
-        }
-        finally
-        {
-            _directoryServerLoadInFlight = false;
-        }
-    }
-
-    private Control BuildDirectoryServerCard(LobbyDirectoryServerEntry entry, double? rttMs)
-    {
-        string name = string.IsNullOrWhiteSpace(entry.ServerName) ? entry.BaseUrl : entry.ServerName;
-        bool blocked = entry.CreateRoomGuardStatus == "block";
-        string guardText = FormatCreateRoomGuardStatus(entry.CreateRoomGuardStatus);
-        string rttText = rttMs.HasValue ? $"{rttMs.Value:0}ms" : "超时";
-        Color rttColor = rttMs.HasValue
-            ? rttMs.Value <= 200d ? SuccessColor : rttMs.Value <= 600d ? AccentColor : DangerColor
-            : DangerColor;
-
-        string tooltipDetail =
-            $"{entry.BaseUrl}\n" +
-            $"最后验证：{entry.LastVerifiedAt:yyyy-MM-dd HH:mm:ss}\n" +
-            $"利用率：{FormatUtilizationValue(entry.BandwidthUtilizationRatio)}\n" +
-            $"带宽：{FormatBandwidthValue(entry.CurrentBandwidthMbps)} / {FormatBandwidthValue(entry.ResolvedCapacityMbps ?? entry.BandwidthCapacityMbps)}";
-
-        PanelContainer card = CreateSurfacePanel(CardColor, BorderColor, borderWidth: 2, padding: 18);
-        card.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        card.TooltipText = UiText(tooltipDetail);
-        card.MouseFilter = MouseFilterEnum.Stop;
-        card.MouseDefaultCursorShape = CursorShape.PointingHand;
-
-        VBoxContainer content = new();
-        content.AddThemeConstantOverride("separation", 6);
-        content.MouseFilter = MouseFilterEnum.Ignore;
-        card.AddChild(content);
-
-        // Row 1: name + latency
-        HBoxContainer topRow = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
-        topRow.AddThemeConstantOverride("separation", 10);
-        topRow.MouseFilter = MouseFilterEnum.Ignore;
-        content.AddChild(topRow);
-
-        Label nameLabel = CreateBodyLabel(name);
-        nameLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        nameLabel.AddThemeFontSizeOverride("font_size", 20);
-        nameLabel.AddThemeColorOverride("font_color", TextStrongColor);
-        nameLabel.ClipText = true;
-        nameLabel.MouseFilter = MouseFilterEnum.Ignore;
-        topRow.AddChild(nameLabel);
-
-        Label rttLabel = CreateBodyLabel(rttText);
-        rttLabel.HorizontalAlignment = HorizontalAlignment.Right;
-        rttLabel.AddThemeFontSizeOverride("font_size", 20);
-        rttLabel.AddThemeColorOverride("font_color", rttColor);
-        rttLabel.MouseFilter = MouseFilterEnum.Ignore;
-        topRow.AddChild(rttLabel);
-
-        // Row 2: room count + create status
-        HBoxContainer bottomRow = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
-        bottomRow.AddThemeConstantOverride("separation", 10);
-        bottomRow.MouseFilter = MouseFilterEnum.Ignore;
-        content.AddChild(bottomRow);
-
-        Label infoLabel = CreateBodyLabel($"房间 {entry.Rooms}");
-        infoLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        infoLabel.AddThemeFontSizeOverride("font_size", 16);
-        infoLabel.AddThemeColorOverride("font_color", TextMutedColor);
-        infoLabel.MouseFilter = MouseFilterEnum.Ignore;
-        bottomRow.AddChild(infoLabel);
-
-        Label guardLabel = CreateBodyLabel(guardText);
-        guardLabel.HorizontalAlignment = HorizontalAlignment.Right;
-        guardLabel.AddThemeFontSizeOverride("font_size", 16);
-        guardLabel.AddThemeColorOverride("font_color", blocked ? DangerColor : SuccessColor);
-        guardLabel.MouseFilter = MouseFilterEnum.Ignore;
-        bottomRow.AddChild(guardLabel);
-
-        LobbyDirectoryServerEntry capturedEntry = entry;
-        card.Connect(Control.SignalName.GuiInput, Callable.From((InputEvent @event) =>
-        {
-            if (@event is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left })
-            {
-                GD.Print($"sts2_lan_connect overlay: directory server card '{capturedEntry.ServerName}' clicked");
-                ApplyDirectoryServer(capturedEntry);
-            }
-        }));
-
-        return card;
-    }
-
-    private void ApplyDirectoryServer(LobbyDirectoryServerEntry entry)
-    {
-        if (_serverBaseUrlInput != null)
-        {
-            _serverBaseUrlInput.Text = entry.BaseUrl;
-        }
-
-        PersistSettings();
-        UpdateActionButtons();
-        SetStatus($"已切换到大厅服务：{entry.ServerName} ({entry.BaseUrl})");
-        CloseDirectoryServerDialog();
-        TaskHelper.RunSafely(RefreshRoomsAsync(userInitiated: true));
+            UpdateNetworkSummary();
+            UpdateActionButtons();
+            SetStatus($"已切换到大厅服务：{addr}");
+            TaskHelper.RunSafely(RefreshRoomsAsync(userInitiated: true));
+        });
     }
 
     private void PersistSettings()
@@ -3784,23 +3484,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
     }
 
-    private static async Task<double?> MeasureServerProbeRttSafeAsync(string baseUrl)
-    {
-        try
-        {
-            string normalized = baseUrl.TrimEnd('/');
-            Uri probeUri = new($"{normalized}/probe");
-            using System.Net.Http.HttpClient client = new() { Timeout = TimeSpan.FromSeconds(5d) };
-            Stopwatch sw = Stopwatch.StartNew();
-            using HttpResponseMessage response = await client.GetAsync(probeUri);
-            sw.Stop();
-            return response.IsSuccessStatusCode ? sw.Elapsed.TotalMilliseconds : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
 
     private void UpdateNetworkSummary()
     {
