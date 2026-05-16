@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { CreateRoomBandwidthGuard } from "./bandwidth-guard.js";
@@ -47,6 +48,7 @@ const MaxSavedRunConnectedNetIds = 16;
 const MaxNetIdLength = 64;
 const MaxCharacterIdLength = 64;
 const MaxCharacterNameLength = 64;
+const lobbyServiceVersion = readLobbyServiceVersion();
 
 const env = {
   host: process.env.HOST ?? "0.0.0.0",
@@ -391,7 +393,7 @@ app.post("/rooms/:id/connection-events", (req, res, next) => {
 });
 
 app.get("/server-admin", (_req, res) => {
-  res.type("html").send(renderServerAdminPage());
+  res.type("html").send(renderServerAdminPage(lobbyServiceVersion));
 });
 
 app.post("/server-admin/login", (req, res, next) => {
@@ -1436,6 +1438,16 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean) {
   }
 
   throw new Error(`Invalid boolean env value: ${value}`);
+}
+
+function readLobbyServiceVersion() {
+  try {
+    const raw = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "string" && parsed.version.trim().length > 0 ? parsed.version.trim() : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 function parseConnectionStrategyEnv(value: string | undefined): ConnectionStrategy {

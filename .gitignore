@@ -16,3 +16,5 @@ server-registry/dist/
 server-registry/release/
 server-registry/.env
 releases/sts2_peer_sidecar/
+
+.hermes/

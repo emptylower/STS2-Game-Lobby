@@ -1,4 +1,5 @@
-export function renderServerAdminPage() {
+export function renderServerAdminPage(serviceVersion: string) {
+  const versionLabel = `Lobby Service v${serviceVersion}`;
   return `<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -233,6 +234,7 @@ export function renderServerAdminPage() {
         } = antd;
         const { Title, Paragraph, Text } = Typography;
         const TextArea = Input.TextArea;
+        const serviceVersionLabel = ${JSON.stringify(versionLabel)};
 
         const ANNOUNCEMENT_TYPES = [
           { value: "update", label: "更新" },
@@ -656,6 +658,7 @@ export function renderServerAdminPage() {
                     Card,
                     { className: "login-card" },
                     h(Title, { level: 2, style: { marginTop: 0, marginBottom: 8 } }, "服务器控制台"),
+                    h(Paragraph, { type: "secondary", style: { marginBottom: 8 } }, serviceVersionLabel),
                     h(Paragraph, { type: "secondary", style: { marginBottom: 24 } }, "登录后查看和修改这台服务器的公开列表设置与同步状态。"),
                     h(
                       Form,
@@ -694,6 +697,7 @@ export function renderServerAdminPage() {
                   "div",
                   { className: "page-brand" },
                     h(Title, { level: 3, className: "page-brand-title" }, "服务器控制台"),
+                    h(Text, { type: "secondary", className: "page-brand-subtitle" }, serviceVersionLabel),
                     h(Text, { type: "secondary", className: "page-brand-subtitle" }, "管理公开列表申请、显示名称和与公共服务器控制台的同步状态")
                   ),
                   h(
