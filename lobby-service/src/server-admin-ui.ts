@@ -271,25 +271,54 @@ export function renderServerAdminPage(serviceVersion: string) {
               tagColor: "default",
               tagLabel: "读取中",
               alertType: "info",
-              description: "正在读取公开列表开关状态。",
+              description: "正在读取节点网络运行状态。",
             };
           }
 
-          if (settings.publicListingEnabled) {
-            return {
-              tagColor: "success",
-              tagLabel: "公开列表可见",
-              alertType: "success",
-              description: "本服务器已主动加入去中心化节点网络，玩家可以在客户端的服务器选择器中看到它。",
-            };
+          switch (settings.peerRuntimeState) {
+            case "disabled":
+              return {
+                tagColor: "default",
+                tagLabel: "节点网络未启用",
+                alertType: "info",
+                description: "当前服务未启用去中心化节点网络，因此不会加入公共服务器列表。",
+              };
+            case "unconfigured":
+              return {
+                tagColor: "warning",
+                tagLabel: "节点网络未配置",
+                alertType: "warning",
+                description: "已启用节点网络，但尚未配置本机对外地址，因此暂时无法加入节点网络。",
+              };
+            case "private":
+              return {
+                tagColor: "default",
+                tagLabel: "仅私有可见",
+                alertType: "info",
+                description: "节点网络已启用，但当前服务器未公开到公共列表；知道直连地址的玩家仍可连接。",
+              };
+            case "joining":
+              return {
+                tagColor: "processing",
+                tagLabel: "正在加入节点网络",
+                alertType: "info",
+                description: "当前服务器已开始公开，但还没有观察到外部活跃节点，可能仍在等待网络同步。",
+              };
+            case "joined":
+              return {
+                tagColor: "success",
+                tagLabel: "已加入节点网络",
+                alertType: "success",
+                description: "当前服务器已观察到外部活跃节点，说明它已加入去中心化节点网络并可被公共列表传播。",
+              };
+            default:
+              return {
+                tagColor: "default",
+                tagLabel: "读取中",
+                alertType: "info",
+                description: "正在读取节点网络运行状态。",
+              };
           }
-
-          return {
-            tagColor: "default",
-            tagLabel: "已关闭公开",
-            alertType: "info",
-            description: "本服务器不会出现在公开节点列表中，但知道直连地址的玩家仍可正常连接。",
-          };
         }
 
         function renderListingStateTag(settings) {
@@ -301,7 +330,7 @@ export function renderServerAdminPage(serviceVersion: string) {
           const meta = getListingStateMeta(settings);
           return {
             type: meta.alertType,
-            message: "公开列表：" + meta.tagLabel,
+            message: "节点网络：" + meta.tagLabel,
             description: meta.description,
           };
         }
@@ -698,7 +727,7 @@ export function renderServerAdminPage(serviceVersion: string) {
                   { className: "page-brand" },
                     h(Title, { level: 3, className: "page-brand-title" }, "服务器控制台"),
                     h(Text, { type: "secondary", className: "page-brand-subtitle" }, serviceVersionLabel),
-                    h(Text, { type: "secondary", className: "page-brand-subtitle" }, "管理公开列表申请、显示名称和与公共服务器控制台的同步状态")
+                    h(Text, { type: "secondary", className: "page-brand-subtitle" }, "管理公开列表开关、显示名称和节点网络运行状态")
                   ),
                   h(
                     "div",
@@ -917,6 +946,7 @@ export function renderServerAdminPage(serviceVersion: string) {
                       h(
                         Descriptions,
                         { bordered: true, size: "middle", column: 1, className: "status-block" },
+                        h(Descriptions.Item, { label: "服务器版本" }, serviceVersionLabel),
                         h(Descriptions.Item, { label: "公开列表" }, renderListingStateTag(settings)),
                         h(Descriptions.Item, { label: "说明" }, getListingStateMeta(settings).description),
                         h(Descriptions.Item, { label: "建房保护" }, renderGuardTag(settings.createRoomGuardStatus || "unknown", Boolean(settings.createRoomGuardApplies))),
