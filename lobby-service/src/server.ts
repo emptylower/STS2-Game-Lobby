@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { CreateRoomBandwidthGuard } from "./bandwidth-guard.js";
@@ -47,6 +48,9 @@ const MaxSavedRunConnectedNetIds = 16;
 const MaxNetIdLength = 64;
 const MaxCharacterIdLength = 64;
 const MaxCharacterNameLength = 64;
+const lobbyServiceVersion = readLobbyServiceVersion();
+
+type PeerRuntimeState = "disabled" | "unconfigured" | "private" | "joining" | "joined";
 
 const env = {
   host: process.env.HOST ?? "0.0.0.0",
@@ -126,6 +130,14 @@ const serverAdminStateStore = new ServerAdminStateStore(env.serverAdminStateFile
 const createRoomBandwidthGuard = new CreateRoomBandwidthGuard();
 const serverAdminSessions = new Map<string, ServerAdminSession>();
 const createJoinRateLimitHits = new Map<string, RateLimitBucket>();
+let peerStore: PeerStore | null = null;
+
+function requirePeerStore(): PeerStore {
+  if (!peerStore) {
+    throw new Error("peer store is not initialized");
+  }
+  return peerStore;
+}
 
 const app = express();
 app.disable("x-powered-by");
@@ -391,7 +403,7 @@ app.post("/rooms/:id/connection-events", (req, res, next) => {
 });
 
 app.get("/server-admin", (_req, res) => {
-  res.type("html").send(renderServerAdminPage());
+  res.type("html").send(renderServerAdminPage(lobbyServiceVersion));
 });
 
 app.post("/server-admin/login", (req, res, next) => {
@@ -443,23 +455,7 @@ app.get("/server-admin/session", (req, res, next) => {
 app.get("/server-admin/settings", (req, res, next) => {
   try {
     requireServerAdminSession(req);
-    const guardSnapshot = getCreateRoomGuardSnapshot();
-    const relayTrafficSnapshot = relayManager.getTrafficSnapshot();
-    res.json({
-      ...serverAdminStateStore.getSettingsView(),
-      currentBandwidthMbps: guardSnapshot.currentBandwidthMbps,
-      resolvedCapacityMbps: guardSnapshot.resolvedCapacityMbps,
-      bandwidthUtilizationRatio: guardSnapshot.bandwidthUtilizationRatio,
-      capacitySource: guardSnapshot.capacitySource,
-      createRoomGuardStatus: guardSnapshot.createRoomGuardStatus,
-      createRoomGuardApplies: guardSnapshot.createRoomGuardApplies,
-      createRoomThresholdRatio: guardSnapshot.createRoomThresholdRatio,
-      relayTrafficWindowMs: relayTrafficSnapshot.windowMs,
-      relayTrafficBytesInWindow: relayTrafficSnapshot.totalBytesInWindow,
-      relayActiveRooms: relayTrafficSnapshot.activeRooms,
-      relayActiveHosts: relayTrafficSnapshot.activeHosts,
-      relayActiveClients: relayTrafficSnapshot.activeClients,
-    });
+    res.json(buildServerAdminSettingsResponse());
   } catch (error) {
     next(error);
   }
@@ -480,23 +476,7 @@ app.patch("/server-admin/settings", (req, res, next) => {
       bandwidthCapacityMbps: optionalPositiveNumber(body?.bandwidthCapacityMbps, "bandwidthCapacityMbps", 100_000),
       announcements: body?.announcements,
     });
-    const guardSnapshot = getCreateRoomGuardSnapshot();
-    const relayTrafficSnapshot = relayManager.getTrafficSnapshot();
-    res.json({
-      ...settings,
-      currentBandwidthMbps: guardSnapshot.currentBandwidthMbps,
-      resolvedCapacityMbps: guardSnapshot.resolvedCapacityMbps,
-      bandwidthUtilizationRatio: guardSnapshot.bandwidthUtilizationRatio,
-      capacitySource: guardSnapshot.capacitySource,
-      createRoomGuardStatus: guardSnapshot.createRoomGuardStatus,
-      createRoomGuardApplies: guardSnapshot.createRoomGuardApplies,
-      createRoomThresholdRatio: guardSnapshot.createRoomThresholdRatio,
-      relayTrafficWindowMs: relayTrafficSnapshot.windowMs,
-      relayTrafficBytesInWindow: relayTrafficSnapshot.totalBytesInWindow,
-      relayActiveRooms: relayTrafficSnapshot.activeRooms,
-      relayActiveHosts: relayTrafficSnapshot.activeHosts,
-      relayActiveClients: relayTrafficSnapshot.activeClients,
-    });
+    res.json(buildServerAdminSettingsResponse(settings));
   })().catch((error) => {
     next(error);
   });
@@ -706,7 +686,7 @@ const cleanupInterval = setInterval(() => {
 
 if (peerEnv.enabled && peerEnv.selfAddress) {
   const identity = await loadOrCreateIdentity(peerEnv.stateDir);
-  const peerStore = new PeerStore(join(peerEnv.stateDir, "peers.json"));
+  peerStore = new PeerStore(join(peerEnv.stateDir, "peers.json"));
   await peerStore.load();
 
   // Resolved at request time so admin panel edits propagate live without a
@@ -785,7 +765,7 @@ if (peerEnv.enabled && peerEnv.selfAddress) {
       void (async () => {
         try {
           const seeds = await loadSeedsFromCf(cfDiscoveryBaseUrl);
-          await bootstrapPeers({ store: peerStore, selfAddress: peerEnv.selfAddress, seeds });
+          await bootstrapPeers({ store: requirePeerStore(), selfAddress: peerEnv.selfAddress, seeds });
           // Operator opt-in: only announce self to the network when this node
           // is configured for public visibility. Private nodes still load
           // seeds (so admins can see the network from their dashboard) but
@@ -799,10 +779,10 @@ if (peerEnv.enabled && peerEnv.selfAddress) {
           // Without this, gossip can't propagate self outward (heartbeat only
           // refreshes already-known peers) and the CF aggregator never learns
           // new servers.
-          const announceTargets = peerStore.list().filter((p) => p.address !== peerEnv.selfAddress).length;
+          const announceTargets = requirePeerStore().list().filter((p) => p.address !== peerEnv.selfAddress).length;
           if (announceTargets > 0) {
             await announceToBootstrappedPeers({
-              store: peerStore,
+              store: requirePeerStore(),
               selfAddress: peerEnv.selfAddress,
               selfPublicKey: identity.publicKey,
               selfDisplayName: resolvePeerDisplayName(),
@@ -817,7 +797,7 @@ if (peerEnv.enabled && peerEnv.selfAddress) {
   }
 
   const scheduler = new GossipScheduler({
-    store: peerStore,
+    store: requirePeerStore(),
     selfAddress: peerEnv.selfAddress,
     selfPublicKey: identity.publicKey,
     seedAddresses: [],
@@ -837,9 +817,9 @@ if (peerEnv.enabled && peerEnv.selfAddress) {
   // resolves live, but the local /peers list cache needs an explicit poke.
   setInterval(() => {
     const fresh = resolvePeerDisplayName();
-    const existing = peerStore.get(peerEnv.selfAddress);
+    const existing = requirePeerStore().get(peerEnv.selfAddress);
     if (!existing || existing.displayName === fresh) return;
-    void peerStore.upsert({ ...existing, displayName: fresh, lastSeen: new Date().toISOString() });
+    void requirePeerStore().upsert({ ...existing, displayName: fresh, lastSeen: new Date().toISOString() });
   }, 60_000).unref();
 } else {
   console.log("[peer] disabled (set PEER_SELF_ADDRESS to enable)");
@@ -1039,6 +1019,65 @@ function resolveAdvertisedRelayHost(req: Request) {
     return new URL(`http://${hostHeader}`).hostname;
   } catch {
     return hostHeader.replace(/:\d+$/, "");
+  }
+}
+
+function buildServerAdminSettingsResponse(settings = serverAdminStateStore.getSettingsView()) {
+  const guardSnapshot = getCreateRoomGuardSnapshot();
+  const relayTrafficSnapshot = relayManager.getTrafficSnapshot();
+  return {
+    ...settings,
+    peerNetworkEnabled: peerEnv.enabled,
+    peerRuntimeState: getPeerRuntimeState(settings.publicListingEnabled),
+    currentBandwidthMbps: guardSnapshot.currentBandwidthMbps,
+    resolvedCapacityMbps: guardSnapshot.resolvedCapacityMbps,
+    bandwidthUtilizationRatio: guardSnapshot.bandwidthUtilizationRatio,
+    capacitySource: guardSnapshot.capacitySource,
+    createRoomGuardStatus: guardSnapshot.createRoomGuardStatus,
+    createRoomGuardApplies: guardSnapshot.createRoomGuardApplies,
+    createRoomThresholdRatio: guardSnapshot.createRoomThresholdRatio,
+    relayTrafficWindowMs: relayTrafficSnapshot.windowMs,
+    relayTrafficBytesInWindow: relayTrafficSnapshot.totalBytesInWindow,
+    relayActiveRooms: relayTrafficSnapshot.activeRooms,
+    relayActiveHosts: relayTrafficSnapshot.activeHosts,
+    relayActiveClients: relayTrafficSnapshot.activeClients,
+  };
+}
+
+function getPeerRuntimeState(publicListingEnabled: boolean): PeerRuntimeState {
+  if (!peerEnv.enabled) {
+    return "disabled";
+  }
+
+  const normalizedSelfAddress = normalizePeerAddressForRuntimeComparison(peerEnv.selfAddress);
+  if (!normalizedSelfAddress) {
+    return "unconfigured";
+  }
+
+  if (!publicListingEnabled) {
+    return "private";
+  }
+
+  const hasExternalActivePeer = peerStore?.list().some((peer) => {
+    return normalizePeerAddressForRuntimeComparison(peer.address) !== normalizedSelfAddress && peer.status === "active";
+  }) ?? false;
+  return hasExternalActivePeer ? "joined" : "joining";
+}
+
+function normalizePeerAddressForRuntimeComparison(address: string): string {
+  const trimmed = address.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    const url = new URL(trimmed);
+    url.hash = "";
+    url.search = "";
+    url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return url.toString();
+  } catch {
+    return trimmed.replace(/\/+$/, "");
   }
 }
 
@@ -1436,6 +1475,16 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean) {
   }
 
   throw new Error(`Invalid boolean env value: ${value}`);
+}
+
+function readLobbyServiceVersion() {
+  try {
+    const raw = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "string" && parsed.version.trim().length > 0 ? parsed.version.trim() : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 function parseConnectionStrategyEnv(value: string | undefined): ConnectionStrategy {
