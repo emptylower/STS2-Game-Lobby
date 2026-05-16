@@ -224,6 +224,8 @@ export STS2_LOBBY_DEFAULT_BASE_URL="http://47.111.146.69:8787"
 export STS2_LOBBY_DEFAULT_WS_URL="ws://47.111.146.69:8787/control"
 export STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL="http://47.111.146.69:18787"
 export STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN="Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E"
+export STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL="https://sts2-gamelobby-register.xyz"
+export STS2_LOBBY_SEEDS_FILE="$PWD/data/seeds.json"
 
 ./scripts/package-sts2-lan-connect.sh
 ```
@@ -237,6 +239,7 @@ export STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN="Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYG
 
 - 若未显式设置 `STS2_LOBBY_DEFAULT_WS_URL`，打包脚本会根据 `STS2_LOBBY_DEFAULT_BASE_URL` 自动推导
 - 若服务端启用了 `CREATE_ROOM_TOKEN`，建议客户端打包时的默认值与服务端 `.env` 保持一致
+- 若希望客户端默认 picker 直接看到 CF 聚合与内置种子，请同时设置 `STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL` 与 `STS2_LOBBY_SEEDS_FILE`
 - 如需玩家安装 / 卸载说明，可继续阅读 [`./CLIENT_RELEASE_README_ZH.md`](./CLIENT_RELEASE_README_ZH.md)
 
 ---
@@ -374,8 +377,12 @@ export STS2_LOBBY_DEFAULT_BASE_URL="http://47.111.146.69:8787"
 export STS2_LOBBY_DEFAULT_WS_URL="ws://47.111.146.69:8787/control"
 export STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL="http://47.111.146.69:18787"
 export STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN="Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E"
+export STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL="https://sts2-gamelobby-register.xyz"
+export STS2_LOBBY_SEEDS_FILE="$PWD/data/seeds.json"
 ./scripts/package-sts2-lan-connect.sh
 ```
+
+如果希望打包后的服务器 picker 默认带上 CF 聚合入口和内置种子，请在打包时同时设置 `STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL` 与 `STS2_LOBBY_SEEDS_FILE`。
 
 ## Verification
 

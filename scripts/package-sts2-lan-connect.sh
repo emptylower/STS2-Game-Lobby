@@ -179,6 +179,22 @@ EOF
   fi
 }
 
+verify_lobby_defaults_runtime_fields() {
+  local defaults_path="$1"
+
+  if [[ -z "${STS2_LOBBY_DEFAULT_BASE_URL:-}" ]]; then
+    return
+  fi
+
+  if [[ -n "${STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL:-}" ]]; then
+    grep -q '"cfDiscoveryBaseUrl"' "$defaults_path" || die "Generated lobby-defaults.json is missing cfDiscoveryBaseUrl"
+  fi
+
+  if [[ -f "${STS2_LOBBY_SEEDS_FILE:-$ROOT_DIR/data/seeds.json}" ]]; then
+    grep -q '"seedPeers"' "$defaults_path" || die "Generated lobby-defaults.json is missing seedPeers"
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build)
@@ -225,6 +241,9 @@ cp "$WIN_INSTALLER" "$PACKAGE_ROOT/"
 cp "$WIN_INSTALLER_BAT" "$PACKAGE_ROOT/"
 rm -f "$PACKAGE_ROOT/$DEFAULTS_FILE_NAME"
 write_lobby_defaults "$PACKAGE_ROOT"
+if [[ -f "$PACKAGE_ROOT/$DEFAULTS_FILE_NAME" ]]; then
+  verify_lobby_defaults_runtime_fields "$PACKAGE_ROOT/$DEFAULTS_FILE_NAME"
+fi
 chmod +x "$PACKAGE_ROOT/install-sts2-lan-connect-macos.sh"
 chmod +x "$PACKAGE_ROOT/install-sts2-lan-connect-macos.command"
 verify_package_manifest "$PACKAGE_ROOT"

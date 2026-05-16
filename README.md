@@ -76,6 +76,8 @@
 打包发布：
 
 ```bash
+export STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL="https://sts2-gamelobby-register.xyz"
+export STS2_LOBBY_SEEDS_FILE="$PWD/data/seeds.json"
 ./scripts/package-sts2-lan-connect.sh
 # 输出：sts2-lan-connect/release/sts2_lan_connect-release.zip
 ```
@@ -187,6 +189,8 @@ npm start
 
 ```bash
 ./scripts/build-sts2-lan-connect.sh
+STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL="https://sts2-gamelobby-register.xyz" \
+STS2_LOBBY_SEEDS_FILE="$PWD/data/seeds.json" \
 ./scripts/package-sts2-lan-connect.sh
 ```
 
