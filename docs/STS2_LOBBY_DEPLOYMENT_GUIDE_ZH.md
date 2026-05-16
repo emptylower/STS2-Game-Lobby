@@ -210,7 +210,7 @@ CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS=30
 - `GET /health` 默认只公开 `{ ok: true }`；详细字段需要受信来源或 `LOBBY_ACCESS_TOKEN`
 - `GET /rooms` 默认不公开；需要受信来源或 `LOBBY_ACCESS_TOKEN`
 - `POST /rooms` 需要受信来源或 `CREATE_ROOM_TOKEN`
-- 建议通过 `x-lobby-access-token` / `x-create-room-token` 请求头传递，或使用 `Authorization: Bearer <your-token>`
+- 建议通过 `x-lobby-access-token` / `x-create-room-token` 请求头传递，或使用 `Authorization: Bearer ***`
 - 不建议把 token 放进 query string，避免出现在日志和浏览器历史中
 
 ---
