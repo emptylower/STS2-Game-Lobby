@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Godot;
 
@@ -10,6 +13,10 @@ namespace Sts2LanConnect.Scripts;
 // mod hosts. Palette and pixel-border treatment mirror LanConnectLobbyOverlay.
 public partial class LanConnectServerSelectionDialog : Control
 {
+    private const float ServerListWheelStep = 120f;
+    private const float ServerListTouchDragThreshold = 20f;
+    private const float ServerListTouchTapMovementThreshold = ServerListTouchDragThreshold;
+
     // Mirror of the palette used by LanConnectLobbyOverlay so the picker
     // matches the lobby style without extracting shared theme infra.
     private static readonly Color BackdropDimColor = new(0.10f, 0.06f, 0.03f, 0.55f);
@@ -28,10 +35,20 @@ public partial class LanConnectServerSelectionDialog : Control
     private static readonly Color PrimaryFgColor = new(0.15f, 0.05f, 0.00f, 1f);
 
     private VBoxContainer? _list;
+    private ScrollContainer? _listScroll;
     private LineEdit? _manualInput;
     private Label? _statusLabel;
+    private CancellationTokenSource? _refreshCts;
+    private int _refreshGeneration;
 
     private System.Collections.Generic.List<ServerListEntry> _entries = new();
+    private bool _serverListTouchActive;
+    private bool _serverListTouchDragging;
+    private Vector2 _serverListTouchStartPosition;
+    private float _serverListTouchStartScroll;
+    private float _serverListTouchMaxDistance;
+    private string? _serverListTouchTapAddress;
+    private int _serverListTouchIndex = -1;
 
     public event Action<string>? ServerChosen;
     public event Action? Cancelled;
@@ -51,6 +68,12 @@ public partial class LanConnectServerSelectionDialog : Control
         _ = RefreshAsync();
     }
 
+    public override void _ExitTree()
+    {
+        CancelRefresh();
+        base._ExitTree();
+    }
+
     public override void _Input(InputEvent @event)
     {
         if (@event is InputEventKey { Pressed: true, Keycode: Key.Escape })
@@ -62,6 +85,8 @@ public partial class LanConnectServerSelectionDialog : Control
 
     private void Cancel()
     {
+        CancelRefresh();
+        ResetServerListTouchTracking();
         Cancelled?.Invoke();
         QueueFree();
     }
@@ -77,8 +102,10 @@ public partial class LanConnectServerSelectionDialog : Control
         backdrop.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         backdrop.GuiInput += @event =>
         {
-            if (@event is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left })
+            if (@event is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left }
+                || @event is InputEventScreenTouch { Pressed: true })
             {
+                AcceptEvent();
                 Cancel();
             }
         };
@@ -155,19 +182,20 @@ public partial class LanConnectServerSelectionDialog : Control
         scrollPanel.AddThemeStyleboxOverride("panel", BuildPixelStyle(SecondaryColor, BorderColor, borderWidth: 2, padding: 6, shadowSize: 0));
         inner.AddChild(scrollPanel);
 
-        var scroll = new ScrollContainer
+        _listScroll = new ScrollContainer
         {
             SizeFlagsVertical = SizeFlags.ExpandFill,
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
         };
-        scrollPanel.AddChild(scroll);
+        _listScroll.GuiInput += OnServerListGuiInput;
+        scrollPanel.AddChild(_listScroll);
 
         _list = new VBoxContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
         };
         _list.AddThemeConstantOverride("separation", 6);
-        scroll.AddChild(_list);
+        _listScroll.AddChild(_list);
 
         // Manual entry row
         var manualSection = new VBoxContainer();
@@ -227,11 +255,151 @@ public partial class LanConnectServerSelectionDialog : Control
 
     private async Task RefreshAsync()
     {
-        if (_statusLabel != null) _statusLabel.Text = "刷新中...";
-        _entries = await LanConnectServerListBootstrap.GatherAsync();
-        await LanConnectServerListBootstrap.PingAllAsync(_entries);
+        var (refreshGeneration, refreshToken) = BeginRefresh();
+
+        try
+        {
+            if (_statusLabel != null)
+            {
+                _statusLabel.Text = "正在加载本地候选服务器...";
+            }
+
+            _entries = LanConnectServerListBootstrap.GatherInitialCandidates();
+            if (!CanApplyRefresh(refreshGeneration, refreshToken))
+            {
+                return;
+            }
+
+            Render();
+            SetRefreshStatus(enrichmentPending: true);
+
+            Task cfDiscoveryTask = EnrichWithCloudflareResultsAsync(refreshGeneration, refreshToken);
+            Task pingTask = EnrichVisibleEntriesAsync(refreshGeneration, refreshToken, _entries.ToList());
+
+            await cfDiscoveryTask;
+            await pingTask;
+
+            if (!CanApplyRefresh(refreshGeneration, refreshToken))
+            {
+                return;
+            }
+
+            Render();
+            SetRefreshStatus(enrichmentPending: false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+            if (!CanApplyRefresh(refreshGeneration, refreshToken))
+            {
+                return;
+            }
+
+            Render();
+            if (_statusLabel != null)
+            {
+                _statusLabel.Text = _entries.Count > 0
+                    ? $"已显示 {_entries.Count} 个候选服务器，后台刷新失败。"
+                    : "刷新失败，请稍后重试。";
+            }
+        }
+    }
+
+    private async Task EnrichWithCloudflareResultsAsync(int refreshGeneration, CancellationToken refreshToken)
+    {
+        List<ServerListEntry> cfEntries;
+        try
+        {
+            cfEntries = await LanConnectServerListBootstrap.GatherCloudflareCandidatesAsync(refreshToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return;
+        }
+
+        if (!CanApplyRefresh(refreshGeneration, refreshToken))
+        {
+            return;
+        }
+
+        var mergeResult = LanConnectServerListBootstrap.MergeDiscoveredEntries(_entries, cfEntries);
+        if (!mergeResult.Changed)
+        {
+            return;
+        }
+
         Render();
-        if (_statusLabel != null) _statusLabel.Text = $"共 {_entries.Count} 个候选服务器";
+        SetRefreshStatus(enrichmentPending: true);
+
+        if (mergeResult.AddedEntries.Count > 0)
+        {
+            await EnrichVisibleEntriesAsync(refreshGeneration, refreshToken, mergeResult.AddedEntries);
+        }
+    }
+
+    private async Task EnrichVisibleEntriesAsync(int refreshGeneration, CancellationToken refreshToken, System.Collections.Generic.IEnumerable<ServerListEntry> entries)
+    {
+        await LanConnectServerListBootstrap.PingAllAsync(entries, refreshToken);
+        if (!CanApplyRefresh(refreshGeneration, refreshToken))
+        {
+            return;
+        }
+
+        Render();
+        SetRefreshStatus(enrichmentPending: true);
+    }
+
+    private (int RefreshGeneration, CancellationToken RefreshToken) BeginRefresh()
+    {
+        CancelRefresh();
+        _refreshCts = new CancellationTokenSource();
+        _refreshGeneration += 1;
+        return (_refreshGeneration, _refreshCts.Token);
+    }
+
+    private void CancelRefresh()
+    {
+        if (_refreshCts == null)
+        {
+            return;
+        }
+
+        try
+        {
+            _refreshCts.Cancel();
+        }
+        catch
+        {
+        }
+
+        _refreshCts.Dispose();
+        _refreshCts = null;
+    }
+
+    private bool CanApplyRefresh(int refreshGeneration, CancellationToken refreshToken)
+    {
+        return refreshGeneration == _refreshGeneration &&
+               !refreshToken.IsCancellationRequested &&
+               IsInstanceValid(this) &&
+               !IsQueuedForDeletion();
+    }
+
+    private void SetRefreshStatus(bool enrichmentPending)
+    {
+        if (_statusLabel == null)
+        {
+            return;
+        }
+
+        _statusLabel.Text = enrichmentPending
+            ? $"已显示 {_entries.Count} 个候选服务器，正在补充延迟和房间信息..."
+            : $"共 {_entries.Count} 个候选服务器";
     }
 
     private void Render()
@@ -299,7 +467,14 @@ public partial class LanConnectServerSelectionDialog : Control
         };
         ApplyServerCardStyle(card);
         string addr = e.Address;
-        card.Pressed += () => { ServerChosen?.Invoke(addr); QueueFree(); };
+        card.Pressed += () =>
+        {
+            if (!_serverListTouchActive)
+            {
+                ChooseServer(addr);
+            }
+        };
+        card.GuiInput += inputEvent => OnServerRowGuiInput(addr, inputEvent);
 
         var content = new VBoxContainer { MouseFilter = MouseFilterEnum.Ignore };
         content.AddThemeConstantOverride("separation", 6);
@@ -373,6 +548,121 @@ public partial class LanConnectServerSelectionDialog : Control
         return card;
     }
 
+    private void OnServerRowGuiInput(string address, InputEvent inputEvent)
+    {
+        HandleServerListPointerInput(inputEvent, address);
+    }
+
+    private void OnServerListGuiInput(InputEvent inputEvent)
+    {
+        HandleServerListPointerInput(inputEvent, null);
+    }
+
+    private bool HandleServerListPointerInput(InputEvent inputEvent, string? address)
+    {
+        if (inputEvent is InputEventMouseButton mouseButton &&
+            mouseButton.Pressed &&
+            (mouseButton.ButtonIndex == MouseButton.WheelUp || mouseButton.ButtonIndex == MouseButton.WheelDown))
+        {
+            AdjustServerListScroll(mouseButton.ButtonIndex == MouseButton.WheelUp ? -ServerListWheelStep : ServerListWheelStep);
+            AcceptEvent();
+            return true;
+        }
+
+        if (inputEvent is InputEventScreenTouch touch)
+        {
+            if (touch.Pressed)
+            {
+                _serverListTouchActive = true;
+                _serverListTouchDragging = false;
+                _serverListTouchStartPosition = touch.Position;
+                _serverListTouchStartScroll = _listScroll?.ScrollVertical ?? 0;
+                _serverListTouchMaxDistance = 0f;
+                _serverListTouchTapAddress = address;
+                _serverListTouchIndex = touch.Index;
+                AcceptEvent();
+                return true;
+            }
+
+            if (!_serverListTouchActive || touch.Index != _serverListTouchIndex)
+            {
+                return false;
+            }
+
+            bool shouldChooseTappedServer = !_serverListTouchDragging &&
+                                            _serverListTouchMaxDistance <= ServerListTouchTapMovementThreshold &&
+                                            !string.IsNullOrWhiteSpace(address) &&
+                                            !string.IsNullOrWhiteSpace(_serverListTouchTapAddress) &&
+                                            string.Equals(_serverListTouchTapAddress, address, StringComparison.Ordinal);
+            ResetServerListTouchTracking();
+            if (shouldChooseTappedServer)
+            {
+                ChooseServer(address!);
+            }
+
+            AcceptEvent();
+            return true;
+        }
+
+        if (inputEvent is InputEventScreenDrag screenDrag && _serverListTouchActive)
+        {
+            if (screenDrag.Index != _serverListTouchIndex)
+            {
+                return false;
+            }
+
+            float dragDistance = screenDrag.Position.DistanceTo(_serverListTouchStartPosition);
+            _serverListTouchMaxDistance = Mathf.Max(_serverListTouchMaxDistance, dragDistance);
+            if (!_serverListTouchDragging && dragDistance >= ServerListTouchDragThreshold)
+            {
+                _serverListTouchDragging = true;
+            }
+
+            if (_serverListTouchDragging)
+            {
+                SetServerListScroll(_serverListTouchStartScroll - (screenDrag.Position.Y - _serverListTouchStartPosition.Y));
+            }
+
+            AcceptEvent();
+            return true;
+        }
+
+        return false;
+    }
+
+    private void AdjustServerListScroll(float delta)
+    {
+        if (_listScroll == null)
+        {
+            return;
+        }
+
+        SetServerListScroll(_listScroll.ScrollVertical + delta);
+    }
+
+    private void SetServerListScroll(float value)
+    {
+        if (_listScroll == null)
+        {
+            return;
+        }
+
+        VScrollBar scrollbar = _listScroll.GetVScrollBar();
+        float maxScroll = Mathf.Max((float)scrollbar.MaxValue - (float)scrollbar.Page, 0f);
+        _listScroll.ScrollVertical = Mathf.RoundToInt(Mathf.Clamp(value, 0f, maxScroll));
+    }
+
+    private void ResetServerListTouchTracking()
+    {
+        _serverListTouchActive = false;
+        _serverListTouchDragging = false;
+        _serverListTouchTapAddress = null;
+        _serverListTouchIndex = -1;
+        _serverListTouchStartPosition = Vector2.Zero;
+        _serverListTouchStartScroll = 0f;
+        _serverListTouchMaxDistance = 0f;
+    }
+
     private static string FormatMbps(double? value)
     {
         if (!value.HasValue) return "未设置";
@@ -386,9 +676,15 @@ public partial class LanConnectServerSelectionDialog : Control
         string addr = (_manualInput?.Text ?? "").Trim();
         if (!string.IsNullOrEmpty(addr))
         {
-            ServerChosen?.Invoke(addr);
-            QueueFree();
+            ChooseServer(addr);
         }
+    }
+
+    private void ChooseServer(string address)
+    {
+        ResetServerListTouchTracking();
+        ServerChosen?.Invoke(address);
+        QueueFree();
     }
 
     // ── Pixel-art style helpers (local copies of the lobby palette) ──

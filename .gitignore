@@ -9,6 +9,7 @@ lobby-service/node_modules/
 lobby-service/dist/
 lobby-service/release/
 lobby-service/data/
+lobby-service/.tmp-run/
 lobby-service/.env
 
 server-registry/node_modules/
@@ -16,3 +17,5 @@ server-registry/dist/
 server-registry/release/
 server-registry/.env
 releases/sts2_peer_sidecar/
+
+.hermes/

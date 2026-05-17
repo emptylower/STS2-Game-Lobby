@@ -25,6 +25,7 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
     private Label? _titleLabel;
     private Label? _dateLabel;
     private Label? _bodyLabel;
+    private Button? _copyButton;
     private Button? _previousButton;
     private Button? _nextButton;
     private HBoxContainer? _indicatorContainer;
@@ -142,13 +143,13 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
         _topGlow = new ColorRect { Visible = false, MouseFilter = MouseFilterEnum.Ignore };
         _frame.AddChild(_topGlow);
 
-        // Single-line layout: [TYPE pill] [title] [date] [dot indicators]
+        // Main layout: [TYPE pill] [title] [date] [copy] [dot indicators]
         VBoxContainer root = new()
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill
         };
-        root.AddThemeConstantOverride("separation", 2);
+        root.AddThemeConstantOverride("separation", 4);
         _frame.AddChild(root);
 
         HBoxContainer mainRow = new()
@@ -203,6 +204,18 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
         _dateLabel.AddThemeFontSizeOverride("font_size", 14);
         mainRow.AddChild(_dateLabel);
 
+        _copyButton = new Button
+        {
+            Text = "复制",
+            TooltipText = "复制当前公告全文",
+            CustomMinimumSize = new Vector2(56f, 28f),
+            FocusMode = FocusModeEnum.None,
+            SizeFlagsVertical = SizeFlags.ShrinkCenter
+        };
+        ApplyCopyButtonStyle(_copyButton);
+        _copyButton.Connect(Button.SignalName.Pressed, Callable.From(CopyCurrentAnnouncement));
+        mainRow.AddChild(_copyButton);
+
         // Dot indicators
         _indicatorContainer = new HBoxContainer
         {
@@ -225,8 +238,15 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
         _nextButton.Visible = false;
         mainRow.AddChild(_nextButton);
 
-        // Body label kept hidden (content available via tooltip)
-        _bodyLabel = new Label { Visible = false };
+        _bodyLabel = new Label
+        {
+            Visible = false,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            AutowrapMode = TextServer.AutowrapMode.Off,
+            ClipText = true
+        };
+        _bodyLabel.AddThemeColorOverride("font_color", TextMutedColor);
+        _bodyLabel.AddThemeFontSizeOverride("font_size", 13);
         root.AddChild(_bodyLabel);
 
         // Progress bar
@@ -280,6 +300,7 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
     {
         LobbyAnnouncementItem current = GetCurrentAnnouncement();
         AnnouncementVisualStyle style = GetVisualStyle(current.Type);
+        string tooltipText = BuildAnnouncementTooltip(current);
 
         if (_frame != null)
         {
@@ -289,11 +310,13 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
             refreshStyle.ContentMarginTop = 14;
             refreshStyle.ContentMarginBottom = 10;
             _frame.AddThemeStyleboxOverride("panel", refreshStyle);
+            _frame.TooltipText = tooltipText;
         }
 
         if (_iconOrb != null)
         {
             _iconOrb.AddThemeStyleboxOverride("panel", CreatePanelStyle(AccentColor, BorderColor, radius: 0, borderWidth: 2, padding: 0, shadowSize: 2, shadowColor: new Color(BorderColor, 0.7f)));
+            _iconOrb.TooltipText = tooltipText;
         }
 
         if (_iconLabel != null)
@@ -301,31 +324,35 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
             _iconLabel.Text = style.IconText;
             // White text on orange pill for contrast
             _iconLabel.AddThemeColorOverride("font_color", new Color(1f, 1f, 1f, 1f));
+            _iconLabel.TooltipText = tooltipText;
         }
 
         if (_titleLabel != null)
         {
-            // Single-line: show body text as main content (title is shown via the type pill)
-            string displayText = !string.IsNullOrWhiteSpace(current.Body)
-                ? current.Body.Trim()
-                : !string.IsNullOrWhiteSpace(current.Title)
-                    ? current.Title.Trim()
-                    : "暂无公告";
-            _titleLabel.Text = NormalizeText(displayText);
-            // Full text available via tooltip
-            string fullText = $"{current.Title?.Trim()}\n{current.Body?.Trim()}".Trim();
-            _titleLabel.TooltipText = NormalizeText(fullText);
+            _titleLabel.Text = NormalizeText(GetAnnouncementDisplayTitle(current));
+            _titleLabel.TooltipText = tooltipText;
         }
 
         if (_dateLabel != null)
         {
             _dateLabel.Text = NormalizeText(current.DateLabel?.Trim() ?? string.Empty);
             _dateLabel.Visible = !string.IsNullOrWhiteSpace(_dateLabel.Text);
+            _dateLabel.TooltipText = tooltipText;
         }
 
         if (_bodyLabel != null)
         {
-            _bodyLabel.Visible = false;
+            string bodyText = GetAnnouncementDisplayBody(current);
+            _bodyLabel.Text = NormalizeText(bodyText);
+            _bodyLabel.TooltipText = tooltipText;
+            _bodyLabel.Visible = !_compactMode && !string.IsNullOrWhiteSpace(bodyText);
+        }
+
+        if (_copyButton != null)
+        {
+            bool hasAnnouncement = _announcements.Count > 0;
+            _copyButton.Disabled = !hasAnnouncement;
+            _copyButton.TooltipText = hasAnnouncement ? "复制当前公告全文" : "当前没有可复制的公告";
         }
 
         if (_counterLabel != null)
@@ -452,6 +479,34 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
         return true;
     }
 
+    private void CopyCurrentAnnouncement()
+    {
+        if (_announcements.Count == 0)
+        {
+            LanConnectPopupUtil.ShowInfo("当前没有可复制的公告。");
+            return;
+        }
+
+        string text = BuildAnnouncementClipboardText(GetCurrentAnnouncement());
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            LanConnectPopupUtil.ShowInfo("当前公告内容为空，无法复制。");
+            return;
+        }
+
+        try
+        {
+            DisplayServer.ClipboardSet(text);
+            GD.Print($"sts2_lan_connect announcement: copied current announcement, length={text.Length}");
+            LanConnectPopupUtil.ShowInfo("当前公告已复制到剪贴板。");
+        }
+        catch (Exception ex)
+        {
+            GD.PushWarning($"sts2_lan_connect announcement: copy failed. {ex}");
+            LanConnectPopupUtil.ShowInfo($"复制公告失败：{ex.Message}");
+        }
+    }
+
     private static void ApplyIndicatorStyle(Button button, Color baseColor, bool active)
     {
         Color hoverColor = active ? baseColor.Lightened(0.08f) : new Color(BorderColor, 0.6f);
@@ -460,6 +515,18 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
         button.AddThemeStyleboxOverride("hover", CreatePanelStyle(hoverColor, Colors.Transparent, radius: 0, borderWidth: 0, padding: 0));
         button.AddThemeStyleboxOverride("pressed", CreatePanelStyle(pressedColor, Colors.Transparent, radius: 0, borderWidth: 0, padding: 0));
         button.AddThemeStyleboxOverride("focus", CreatePanelStyle(hoverColor, Colors.Transparent, radius: 0, borderWidth: 0, padding: 0));
+    }
+
+    private static void ApplyCopyButtonStyle(Button button)
+    {
+        button.AddThemeStyleboxOverride("normal", CreatePanelStyle(CardColor, BorderColor, radius: 0, borderWidth: 2, padding: 6));
+        button.AddThemeStyleboxOverride("hover", CreatePanelStyle(new Color(AccentBrightColor, 0.18f), BorderColor, radius: 0, borderWidth: 2, padding: 6));
+        button.AddThemeStyleboxOverride("pressed", CreatePanelStyle(new Color(AccentColor, 0.24f), BorderColor, radius: 0, borderWidth: 2, padding: 6));
+        button.AddThemeStyleboxOverride("focus", CreatePanelStyle(new Color(AccentBrightColor, 0.18f), BorderColor, radius: 0, borderWidth: 2, padding: 6));
+        button.AddThemeStyleboxOverride("disabled", CreatePanelStyle(new Color(BorderColor, 0.18f), BorderColor, radius: 0, borderWidth: 2, padding: 6));
+        button.AddThemeColorOverride("font_color", TextStrongColor);
+        button.AddThemeColorOverride("font_disabled_color", new Color(TextMutedColor, 0.8f));
+        button.AddThemeFontSizeOverride("font_size", 13);
     }
 
     private LobbyAnnouncementItem GetCurrentAnnouncement()
@@ -536,6 +603,80 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
     private static string NormalizeText(string text)
     {
         return LanConnectUiText.NormalizeForDisplay(text);
+    }
+
+    private static string GetAnnouncementDisplayTitle(LobbyAnnouncementItem announcement)
+    {
+        string title = announcement.Title?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            return title;
+        }
+
+        string body = announcement.Body?.Trim() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(body)
+            ? body
+            : "暂无公告";
+    }
+
+    private static string GetAnnouncementDisplayBody(LobbyAnnouncementItem announcement)
+    {
+        string title = announcement.Title?.Trim() ?? string.Empty;
+        string body = announcement.Body?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(body) || string.Equals(title, body, StringComparison.Ordinal))
+        {
+            return string.Empty;
+        }
+
+        return body;
+    }
+
+    private static string BuildAnnouncementTooltip(LobbyAnnouncementItem announcement)
+    {
+        return NormalizeText(BuildAnnouncementClipboardText(announcement));
+    }
+
+    private static string BuildAnnouncementClipboardText(LobbyAnnouncementItem announcement)
+    {
+        string title = announcement.Title?.Trim() ?? string.Empty;
+        string dateLabel = announcement.DateLabel?.Trim() ?? string.Empty;
+        string body = announcement.Body?.Trim() ?? string.Empty;
+
+        List<string> headerLines = new();
+        AppendDistinctLine(headerLines, title);
+        AppendDistinctLine(headerLines, dateLabel);
+
+        if (!string.IsNullOrWhiteSpace(body) && headerLines.Count > 0)
+        {
+            if (string.Equals(body, headerLines[^1], StringComparison.Ordinal))
+            {
+                return string.Join("\n", headerLines);
+            }
+
+            return string.Join("\n", headerLines) + "\n\n" + body;
+        }
+
+        if (!string.IsNullOrWhiteSpace(body))
+        {
+            return body;
+        }
+
+        return string.Join("\n", headerLines);
+    }
+
+    private static void AppendDistinctLine(List<string> lines, string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        if (lines.Count > 0 && string.Equals(lines[^1], value, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        lines.Add(value);
     }
 
     private static AnnouncementVisualStyle GetVisualStyle(string? type)

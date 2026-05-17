@@ -40,6 +40,8 @@ Environment:
   STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN
   STS2_LOBBY_COMPATIBILITY_PROFILE
   STS2_LOBBY_CONNECTION_STRATEGY
+  STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL
+  STS2_LOBBY_SEEDS_FILE   (defaults to <repo>/data/seeds.json)
 EOF
 }
 
@@ -101,6 +103,18 @@ write_lobby_defaults() {
       ws_url="${ws_url%/}/control"
     fi
 
+    local seeds_file="${STS2_LOBBY_SEEDS_FILE:-$ROOT_DIR/data/seeds.json}"
+    local seed_peers_array="[]"
+    if [[ -f "$seeds_file" ]]; then
+      local addrs
+      addrs="$(sed -nE 's/.*"address"[[:space:]]*:[[:space:]]*"([^"]*)".*/"\1"/p' "$seeds_file" | paste -sd, -)"
+      if [[ -n "$addrs" ]]; then
+        seed_peers_array="[$addrs]"
+      fi
+    fi
+    local cf_discovery_base_url="${STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL:-}"
+    cf_discovery_base_url="${cf_discovery_base_url%/}"
+
     cat > "$target_dir/$DEFAULTS_FILE_NAME" <<EOF
 {
   "baseUrl": "$base_url",
@@ -108,7 +122,9 @@ write_lobby_defaults() {
   "createRoomToken": "${create_room_token:-}",
   "wsUrl": "$ws_url",
   "compatibilityProfile": "$compatibility_profile",
-  "connectionStrategy": "$connection_strategy"
+  "connectionStrategy": "$connection_strategy",
+  "cfDiscoveryBaseUrl": "$cf_discovery_base_url",
+  "seedPeers": $seed_peers_array
 }
 EOF
     return
@@ -175,6 +191,16 @@ if [[ -f "$LOCAL_MANIFEST_FILE" ]]; then
 fi
 rm -f "$MOD_OUTPUT_DIR/$DEFAULTS_FILE_NAME"
 write_lobby_defaults "$MOD_OUTPUT_DIR"
+
+if [[ -n "${STS2_LOBBY_DEFAULT_BASE_URL:-}" ]]; then
+  if [[ -n "${STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL:-}" ]]; then
+    grep -q '"cfDiscoveryBaseUrl"' "$MOD_OUTPUT_DIR/$DEFAULTS_FILE_NAME" || die "Missing cfDiscoveryBaseUrl in generated $DEFAULTS_FILE_NAME"
+  fi
+
+  if [[ -f "${STS2_LOBBY_SEEDS_FILE:-$ROOT_DIR/data/seeds.json}" ]]; then
+    grep -q '"seedPeers"' "$MOD_OUTPUT_DIR/$DEFAULTS_FILE_NAME" || die "Missing seedPeers in generated $DEFAULTS_FILE_NAME"
+  fi
+fi
 
 log "Build artifacts staged at: $MOD_OUTPUT_DIR"
 log "Godot headless log: $GODOT_LOG_FILE"
