@@ -6,6 +6,11 @@
 
 ---
 
+> ⚠️ **本 README 来自 v0.3.x release 快照**。其中 `SERVER_REGISTRY_*` 相关配置在 v0.4.0 中已彻底无效。  
+> 当前 v0.4.0 运维手册：[GitHub](https://github.com/emptylower/STS2-Game-Lobby/blob/main/lobby-service/README.md)
+
+---
+
 ## 中文
 
 # STS2 Lobby Service

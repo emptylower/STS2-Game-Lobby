@@ -1,5 +1,8 @@
 # STS2 双服务 Docker 化部署与运维指南
 
+> ⚠️ **本文档来自 v0.3.x release 快照**。v0.4.0 起 lobby-service 与 server-registry 解耦：lobby 不再向 registry 上报，新部署只需要 lobby-service 单容器。  
+> 当前 v0.4.0 运维指南：[GitHub](https://github.com/emptylower/STS2-Game-Lobby/blob/main/docs/STS2_SERVER_DOCKER_OPERATION_GUIDE_ZH.md)
+
 这份文档对应当前两套服务：
 
 - 子服务器大厅：`lobby-service/`

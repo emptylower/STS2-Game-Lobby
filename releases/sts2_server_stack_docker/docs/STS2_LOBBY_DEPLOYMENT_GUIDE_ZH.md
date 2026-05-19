@@ -6,6 +6,11 @@
 
 ---
 
+> ⚠️ **本文档来自 v0.3.x release 快照**，其中关于 `SERVER_REGISTRY_*` 的配置在 v0.4.0 已不再生效。  
+> 当前 v0.4.0 部署指南：[GitHub](https://github.com/emptylower/STS2-Game-Lobby/blob/main/docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md)
+
+---
+
 <a name="中文"></a>
 
 # STS2 游戏大厅部署指南

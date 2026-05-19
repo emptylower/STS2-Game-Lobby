@@ -1,42 +1,130 @@
-# STS2 双服务 Docker 化部署与运维指南
+# STS2 服务 Docker 化部署与运维指南
 
-这份文档对应当前两套服务：
+> 本文档对应 **v0.4.0**。在 v0.4.0 中，部署只需要 `lobby-service` 一个容器——以前的"双服务"栈（lobby-service + server-registry + postgres）只是 v0.3.x 时代的产物，相关材料保留在本文末尾，供旧部署运维参考。
 
-- 子服务器大厅：`lobby-service/`
-- 公共服务器母面板：`server-registry/`
+## 一、当前推荐：lobby-service 单容器
 
-当前推荐部署方式已经调整为 Docker Compose。原因很直接：
+v0.4.0 的去中心化节点网络通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）做节点列表聚合，本地不再需要 PostgreSQL 或 `server-registry`。推荐用单服务 compose 部署。
 
-- 两个 Node 服务都能稳定容器化
-- `server-registry` 依赖的 PostgreSQL 可以一起纳入同一套栈
-- 日志、重启策略、升级和备份路径更统一
-- 更适合后续做清理旧版本、滚动更新和环境迁移
+### 1.1 准备 env 文件
 
-## 一、容器栈组成
+从仓库根目录开始：
 
-完整公共栈包含 3 个容器：
+```bash
+cp deploy/lobby-service.env.example deploy/lobby-service.env
+$EDITOR deploy/lobby-service.env
+```
+
+必须替换的占位符：
+
+- `RELAY_PUBLIC_HOST=` 改成你的公网 IP 或域名
+- `PEER_SELF_ADDRESS=` 改成 `http://<你的公网 IP 或域名>:8787`（HTTPS 反代场景请写代理对外的真实 URL）
+- `SERVER_ADMIN_PASSWORD_HASH=` 改成 `npm run hash-admin-password -- 'your-password'` 的输出
+- `SERVER_ADMIN_SESSION_SECRET=` 改成 `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"` 的输出
+
+可选：
+
+- `PEER_PUBLIC_LISTING_ENABLED=false` 如果只想跑私有节点（仍在节点网络里但不公开）
+- `PEER_NETWORK_ENABLED=false` 如果完全不想加入节点网络
+
+> ⚠️ `PEER_SELF_ADDRESS` 是 v0.4.0 新部署最容易漏掉的一项。漏了就会在 `/server-admin` 看到"节点网络未配置"。
+
+### 1.2 启动
+
+```bash
+docker compose -f lobby-service/deploy/docker-compose.lobby-service.yml build
+docker compose -f lobby-service/deploy/docker-compose.lobby-service.yml up -d
+```
+
+默认对外端口：
+
+- `8787/TCP` —— HTTP / WebSocket
+- `39000-39149/UDP` —— relay 端口段
+
+默认日志策略：Docker `json-file`，`max-size=10m`，`max-file=5`。
+
+### 1.3 验证
+
+```bash
+curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:8787/peers/health
+curl http://127.0.0.1:8787/announcements
+docker compose -f lobby-service/deploy/docker-compose.lobby-service.yml ps
+```
+
+`/peers/health` 应该显示：
+
+- `publicListing: true`（公开节点）
+- `selfAddress` 等于你配的公网 URL
+- `activePeers` 在启动 1-2 分钟后变为正数
+
+浏览器侧打开 `http://<公网 IP 或域名>:8787/server-admin`，登录后查看"节点网络"区域：
+
+| 状态 | 含义 |
+|------|------|
+| `节点网络未启用` | `PEER_NETWORK_ENABLED=false` |
+| `节点网络未配置` | 启用了但 `PEER_SELF_ADDRESS` 为空 |
+| `仅私有可见` | `PEER_SELF_ADDRESS` 已配但公开开关关闭 |
+| `正在加入节点网络` | 已公开但尚未观察到外部节点 |
+| `已加入节点网络` | 已观察到外部节点，列表传播正常 |
+
+### 1.4 日志
+
+```bash
+docker compose -f lobby-service/deploy/docker-compose.lobby-service.yml logs --tail 200 -f lobby-service
+```
+
+关键日志条目：
+
+- `[peer] mounted; self=...` —— 节点网络已启动
+- `[peer] disabled (set PEER_SELF_ADDRESS to enable)` —— `PEER_SELF_ADDRESS` 没读到
+- `relay_host_registered`、`relay_client_connected` —— relay 流量
+- `connection_event phase=...` —— 客户端联机阶段事件
+
+### 1.5 升级
+
+```bash
+git pull   # 或同步打包产物
+docker compose -f lobby-service/deploy/docker-compose.lobby-service.yml build
+docker compose -f lobby-service/deploy/docker-compose.lobby-service.yml up -d
+curl http://127.0.0.1:8787/health
+```
+
+数据目录默认挂载在 `lobby-service/deploy/data/lobby-service`，升级不会丢失 `server-admin.json` 和 peer 状态。
+
+### 1.6 常见排障
+
+| 现象 | 优先排查 |
+|------|----------|
+| `/server-admin` 显示"节点网络未配置" | `deploy/lobby-service.env` 里 `PEER_SELF_ADDRESS` 是否填了真实公网 URL |
+| 状态卡在"正在加入节点网络" | 公网是否真能反向访问 `PEER_SELF_ADDRESS`；防火墙是否放行 `8787/TCP` |
+| 客户端进房后没有 relay 流量 | `39000-39149/UDP` 是否真正放行；`RELAY_PUBLIC_HOST` 是否写了真实公网地址 |
+| 容器起来但 `8787` 空响应、SSH 也变慢 | 见下方"附录 A：Docker bridge UDP 端口段拖坏宿主网络" |
+
+也可使用诊断脚本：
+
+```bash
+sudo ./scripts/diagnose-lobby-peer.sh
+```
+
+---
+
+## 二、可选：自建公开列表 stack（v0.3.x 兼容路径）
+
+> **何时需要**：你想完全自托管节点列表服务（不依赖 Cloudflare discovery worker），或者你正在维护 v0.3.x 时代部署、暂时还不想迁到 v0.4.0 的 CF 发现路径。  
+> **v0.4.0 默认部署不需要看这一节。**
+
+仓库里仍保留三容器栈：
 
 1. `sts2-lobby-service`
 2. `sts2-server-registry`
 3. `sts2-server-registry-postgres`
 
-默认对外端口：
+注意：v0.4.0 的 `lobby-service` 已经**不再读取**任何 `SERVER_REGISTRY_*` 环境变量；即便和 `server-registry` 一起部署，lobby 端也不会向它上报。`server-registry` 现在只是一个独立的、可选的公开列表服务，给那些想跑自家 discovery 的运维一个完整的可参考实现。
 
-- `8787/TCP`：大厅 HTTP / WebSocket
-- `39000-39149/UDP`：大厅 relay 端口段
-- `18787/TCP`：母面板 HTTP
+如果你只是想跑 v0.4.0 的"标准"部署，请回到第一节使用单容器 compose。
 
-默认日志策略：
-
-- Docker `json-file`
-- `max-size=10m`
-- `max-file=5`
-
-这意味着日志默认会自动轮转，不需要再手动清理无限增长的容器日志。
-
-## 二、本地打包
-
-从仓库根目录执行：
+### 2.1 打包
 
 ```bash
 ./scripts/package-server-stack-docker.sh
@@ -47,44 +135,13 @@
 - `releases/sts2_server_stack_docker/`
 - `releases/sts2_server_stack_docker.zip`
 
-压缩包内已经包含：
-
-- 两个服务的源码
-- 两个服务的 `Dockerfile`
-- 顶层 `docker-compose.public-stack.yml`
-- 示例环境变量文件
-- Docker 安装脚本
-- Docker 运维脚本
-
-## 三、部署目录建议
-
-推荐固定目录：
-
-- 安装根目录：`/opt/sts2-server-stack-docker`
-- 数据目录：`/opt/sts2-server-stack-docker/deploy/data`
-- 环境变量目录：`/opt/sts2-server-stack-docker/deploy`
-- 备份目录：`/opt/sts2-server-stack-docker/backups`
-
-## 四、首次安装
-
-### 方式 A：直接从源码仓库安装
+### 2.2 部署
 
 ```bash
 sudo ./scripts/install-server-stack-docker-linux.sh --install-dir /opt/sts2-server-stack-docker
 ```
 
-首次执行时，脚本会：
-
-- 复制 `deploy/`、`lobby-service/`、`server-registry/`
-- 自动创建 `deploy/lobby-service.env`
-- 自动创建 `deploy/server-registry.env`
-- 自动创建 `deploy/postgres.env`
-- 自动创建数据目录
-- 构建 Docker 镜像
-
-如果脚本发现还是示例占位符，会停止在“准备完成”状态，要求你先编辑 env 文件。
-
-### 方式 B：使用打包后的发布包安装
+或解压发布包后：
 
 ```bash
 unzip sts2_server_stack_docker.zip
@@ -92,28 +149,23 @@ cd sts2_server_stack_docker
 sudo ./install-server-stack-docker-linux.sh --install-dir /opt/sts2-server-stack-docker
 ```
 
-## 五、环境变量准备
+首次执行时，脚本会：
 
-最少需要修改这 3 个文件：
+- 复制 `deploy/`、`lobby-service/`、`server-registry/`
+- 自动创建 `deploy/lobby-service.env`、`deploy/server-registry.env`、`deploy/postgres.env`
+- 自动创建数据目录
+- 构建 Docker 镜像
 
-- `deploy/.env`
+发现仍是示例占位符时，脚本会停止并要求先编辑 env 文件。
+
+### 2.3 env 文件清单
+
+- `deploy/.env`（compose 默认变量，可调 Docker 镜像源）
 - `deploy/postgres.env`
 - `deploy/server-registry.env`
 - `deploy/lobby-service.env`
 
-如果部署机器直连 Docker Hub 很慢或经常超时，可以先改：
-
-- `deploy/.env` 里的 `STS2_NODE_IMAGE`
-- `deploy/.env` 里的 `STS2_POSTGRES_IMAGE`
-
-例如切到国内镜像：
-
-```text
-STS2_NODE_IMAGE=docker.m.daocloud.io/library/node:20-bookworm-slim
-STS2_POSTGRES_IMAGE=docker.m.daocloud.io/library/postgres:16-alpine
-```
-
-必须替换的占位符包括：
+必须替换的占位符：
 
 - `CHANGE_ME_POSTGRES_PASSWORD`
 - `CHANGE_ME_PASSWORD_HASH`
@@ -121,196 +173,89 @@ STS2_POSTGRES_IMAGE=docker.m.daocloud.io/library/postgres:16-alpine
 - `CHANGE_ME_SERVER_TOKEN_SECRET`
 - `CHANGE_ME_PUBLIC_HOST`
 
-关键说明：
+要点：
 
-- `lobby-service.env`
-  - `RELAY_PUBLIC_HOST` 必须是玩家能访问到的公网 IP 或域名
-  - `SERVER_ADMIN_STATE_FILE` 在容器内固定写 `/app/data/server-admin.json`
-  - 公共栈里的 `lobby-service` 默认使用宿主机网络，避免大段 UDP 端口发布把 Docker 网络层拖挂
-  - 因为使用宿主机网络，双服务同机部署时，`SERVER_REGISTRY_BASE_URL` 应写成 `http://127.0.0.1:18787`
-- `server-registry.env`
-  - `DATABASE_URL` 必须指向容器内 PostgreSQL：`postgres://...@postgres:5432/...`
-  - `PUBLIC_BASE_URL` 要写母面板的公网地址
+- `lobby-service.env`：`RELAY_PUBLIC_HOST` + `PEER_SELF_ADDRESS` 必须是玩家能访问到的真实公网地址。`lobby-service` 在公共栈里默认使用宿主机网络，避免大段 UDP 端口发布把 Docker 网络层拖挂。
+- `server-registry.env`：`DATABASE_URL` 必须指向容器内 PostgreSQL：`postgres://...@postgres:5432/...`。
 
-## 六、启动与验证
-
-准备好 env 文件后，启动：
+### 2.4 启动与验证
 
 ```bash
 docker compose \
   -p sts2-public-stack \
   -f /opt/sts2-server-stack-docker/deploy/docker-compose.public-stack.yml \
   up -d
-```
 
-验证：
-
-```bash
 curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:18787/health
-docker compose -p sts2-public-stack -f /opt/sts2-server-stack-docker/deploy/docker-compose.public-stack.yml ps
-```
-
-建议再额外验证：
-
-```bash
-curl http://127.0.0.1:8787/announcements
 curl http://127.0.0.1:18787/servers/
 ```
 
-### 对外页面如何打开
-
-如果你是公网部署，并且已经放行对应端口，那么外部浏览器通常这样访问：
-
-- 子服务管理面板：`http://<你的公网 IP 或域名>:8787/server-admin`
-- 子服务健康检查：`http://<你的公网 IP 或域名>:8787/health`
-- 母面板健康检查：`http://<你的公网 IP 或域名>:18787/health`
-- 公共服务器列表接口：`http://<你的公网 IP 或域名>:18787/servers/`
-
-说明：
-
-- `lobby-service` 没有单独给玩家使用的网页大厅；玩家联机还是通过游戏客户端
-- 服主日常主要打开的是 `8787/server-admin`
-- 如果 `server-admin` 页面能打开但不能登录，检查 `deploy/lobby-service.env` 里的 `SERVER_ADMIN_PASSWORD_HASH` 和 `SERVER_ADMIN_SESSION_SECRET`
-- 如果你走反向代理或域名，只需要把 `<你的公网 IP 或域名>` 替换成实际域名，并保证代理把对应路径转发到正确端口
-
-## 七、日志与维护
-
-统一使用：
+### 2.5 维护脚本
 
 ```bash
 ./scripts/maintain-server-stack-docker.sh --install-dir /opt/sts2-server-stack-docker status
 ./scripts/maintain-server-stack-docker.sh --install-dir /opt/sts2-server-stack-docker logs lobby-service --follow
-./scripts/maintain-server-stack-docker.sh --install-dir /opt/sts2-server-stack-docker logs server-registry --tail 300
 ./scripts/maintain-server-stack-docker.sh --install-dir /opt/sts2-server-stack-docker backup
 ./scripts/maintain-server-stack-docker.sh --install-dir /opt/sts2-server-stack-docker rebuild
-```
-
-可用维护动作：
-
-- `status`
-- `start`
-- `stop`
-- `down`
-- `restart [service]`
-- `rebuild`
-- `logs [service] [--follow] [--tail N]`
-- `backup`
-- `prune-images`
-
-其中：
-
-- `logs` 用来看容器日志
-- `backup` 会打包 env 文件和 `deploy/data`
-- `rebuild` 用于源码更新后重建镜像并拉起
-- `prune-images` 用于清掉无用镜像层
-
-## 八、升级流程
-
-推荐流程：
-
-1. 先备份
-2. 同步新包或新源码
-3. 覆盖安装目录
-4. 重建镜像并重启容器
-5. 做健康检查
-
-示例：
-
-```bash
-./scripts/maintain-server-stack-docker.sh --install-dir /opt/sts2-server-stack-docker backup
-sudo ./scripts/install-server-stack-docker-linux.sh --install-dir /opt/sts2-server-stack-docker --skip-up
-./scripts/maintain-server-stack-docker.sh --install-dir /opt/sts2-server-stack-docker rebuild
-curl http://127.0.0.1:8787/health
-curl http://127.0.0.1:18787/health
-```
-
-## 九、从旧 systemd 迁移到 Docker
-
-推荐迁移顺序：
-
-1. 备份旧目录
-2. 导出旧 PostgreSQL 数据
-3. 停掉旧 systemd 服务
-4. 清理旧运行态
-5. 部署 Docker 栈
-6. 导入数据库
-7. 验证两个健康接口
-
-最少备份内容：
-
-- `/opt/sts2-lobby`
-- `/opt/sts2-server-registry`
-- 旧 `.env`
-- `lobby-service` 的 `data/server-admin.json`
-- `server-registry` 对应 PostgreSQL 数据库导出
-
-如果旧母面板使用的是宿主机 PostgreSQL，推荐先：
-
-```bash
-pg_dump <old_database_name> > registry-backup.sql
-```
-
-再把备份导入容器内 PostgreSQL。
-
-## 十、常见问题
-
-### 1. 容器起来了，但 lobby 客户端连不上 relay
-
-优先检查：
-
-- `39000-39149/UDP` 是否已放行
-- `RELAY_PUBLIC_HOST` 是否写成了真实公网地址
-- 宿主机防火墙 / 云厂商安全组是否同时放行
-
-### 2. 容器日志一直增长怎么办
-
-当前 compose 已经开启日志轮转：
-
-- 单个容器最多保留 5 个日志文件
-- 每个文件最大 10MB
-
-一般不需要额外清理；如果镜像层积累过多，可执行：
-
-```bash
 ./scripts/maintain-server-stack-docker.sh --install-dir /opt/sts2-server-stack-docker prune-images
 ```
 
-### 3. 想恢复旧版怎么办
+### 2.6 从旧 systemd 迁移到 Docker
 
-直接使用备份目录还原：
+推荐顺序：
 
-- `deploy/*.env`
-- `deploy/data/`
-- 旧 systemd 安装目录
-- 旧 PostgreSQL 备份
+1. 备份 `/opt/sts2-lobby`、`/opt/sts2-server-registry`、旧 `.env`、`lobby-service` 的 `data/server-admin.json`
+2. `pg_dump <old_database_name> > registry-backup.sql`
+3. 停掉旧 systemd 服务
+4. 部署 Docker 栈
+5. 导入数据库
+6. `curl` 两个 `/health` 验证
 
-再执行旧的 systemd 安装脚本即可回滚。
+如果你只用 v0.4.0 的 lobby（不再需要自建公开列表），直接跳过 server-registry 与 postgres，按第一节用单容器 compose 即可。
 
-### 4. 一启动 `lobby-service`，`8787` 空响应、`18787` 超时，SSH 也开始异常
+---
 
-这是已经在线上复现过的问题，不是理论风险。
+## 附录 A：Docker bridge UDP 端口段拖坏宿主网络
+
+这是已经在线上复现过的问题。
 
 典型症状：
 
 - `docker start sts2-lobby-service` 后，`http://127.0.0.1:8787/health` 连得上但返回空响应
-- 原本健康的 `server-registry` 也会一起变慢，`18787` 超时
+- 同机部署的其他服务也会一起变慢、超时
 - 宿主机 `22` 端口还能建立 TCP，但 SSH banner 不返回，表现为 `Connection timed out during banner exchange`
 
 排查结论：
 
-- 旧 `systemd` 服务不是根因
-- `server-registry` 容器本身通常是健康的
 - 真正的问题在于某些云主机上，`lobby-service` 通过 Docker bridge 发布一整段 relay UDP 端口时，会把宿主机网络层一起拖坏
+- 与 systemd 服务、`server-registry` 容器、其他容器都无关
 
-当前仓库里的公共栈已经按这个结论修正：
+修复方法：
 
-- `lobby-service` 使用 `network_mode: host`
-- `SERVER_REGISTRY_BASE_URL` 改为 `http://127.0.0.1:18787`
-- relay 端口默认范围调整为 `39000-39149`
+- `lobby-service` 改用 `network_mode: host`（双服务栈的 `docker-compose.public-stack.yml` 已经按此调整）
+- 或者把 relay 端口段缩短
 
-如果你在线上遇到这类现象，不要继续反复 `restart` 或盲目重启容器；优先确认：
+遇到这类现象时，不要继续反复 `restart` 或盲目重启容器；优先确认：
 
-1. `docker-compose.public-stack.yml` 中 `lobby-service` 是否仍是宿主机网络
-2. `deploy/lobby-service.env` 中 `SERVER_REGISTRY_BASE_URL` 是否写成了 `http://127.0.0.1:18787`
-3. `RELAY_PORT_START` / `RELAY_PORT_END` 是否和实际放行范围一致
+1. 该容器是否仍在用 bridge 网络发布 `39000-39149/UDP`
+2. `deploy/lobby-service.env` 中 `RELAY_PORT_START` / `RELAY_PORT_END` 是否和实际放行范围一致
+
+## 附录 B：日志轮转
+
+`json-file` 驱动默认开启：
+
+- 单个容器最多保留 5 个日志文件
+- 每个文件最大 10MB
+
+一般不需要额外清理；如果镜像层积累过多，执行：
+
+```bash
+docker image prune -f
+```
+
+或（双服务栈）：
+
+```bash
+./scripts/maintain-server-stack-docker.sh --install-dir /opt/sts2-server-stack-docker prune-images
+```
