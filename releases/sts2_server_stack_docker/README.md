@@ -13,6 +13,12 @@
 
 ---
 
+> ⚠️ **本 release 包对应 v0.3.x 的双服务 Docker 栈**（lobby + registry + postgres）。  
+> v0.4.0 已经去掉了 lobby ↔ registry 的耦合：lobby-service 现在只是把它当作"可选的、可独立运行的公开列表服务"——同机部署也不会自动联动。  
+> v0.4.0 新部署只需要 lobby-service 单容器：见仓库主分支 [`docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](https://github.com/emptylower/STS2-Game-Lobby/blob/main/docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) 与 [`docs/STS2_SERVER_DOCKER_OPERATION_GUIDE_ZH.md`](https://github.com/emptylower/STS2-Game-Lobby/blob/main/docs/STS2_SERVER_DOCKER_OPERATION_GUIDE_ZH.md) 的第一节。
+
+---
+
 ## 中文
 
 **STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案，提供完整的房间管理、玩家匹配与 relay 中继支持。

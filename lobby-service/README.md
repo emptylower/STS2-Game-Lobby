@@ -12,6 +12,8 @@
 
 # STS2 Lobby Service
 
+> 本文档对应 **v0.4.0**（去中心化节点网络）。v0.3.x 时代的 `SERVER_REGISTRY_*` 一组环境变量已在 v0.4.0 运行时中完全删除，本文不再提及。
+
 ## 文档定位
 
 这份文档是 **大厅服务服主 / 运维手册**，面向准备部署、维护、排障或打包 `lobby-service` 的管理员。
@@ -19,9 +21,9 @@
 它主要回答：
 
 - 该服务负责什么、**不**负责什么
-- 当前推荐的部署路径是什么
+- 当前 v0.4.0 推荐的部署路径是什么
 - 首次部署完成后先检查哪些项目
-- 如何配置公开列表、私有访问、管理面板与客户端默认大厅
+- 如何配置节点网络、私有访问、管理面板与客户端默认大厅
 - 需要深入查阅时，环境变量和 API 在哪里看
 
 ## 负责 / 不负责
@@ -39,16 +41,17 @@
 - 保存续局房间 `savedRun` 元数据与可接管角色槽位
 - 内置 `/server-admin` 管理面板
 - 公告下发（`GET /announcements`）
-- 公开列表申请、claim token、心跳同步
+- 通过 `/peers/announce` + Cloudflare discovery worker 加入去中心化节点网络
+- 暴露 `/peers/metrics` 给客户端 picker 做按节点活跃指标读取
 
 ### 不负责
 
 - 战斗同步
 - 账号系统
 - 保证 NAT 一定打通
-- 官方私有母面板 / 审核后台发布
+- 任何"母面板"/审核后台 —— v0.4.0 没有这种概念
 
-> 当前 relay 的定位是“直连失败时的房间级兜底路径”，不是独立完整的联机协议。
+> 当前 relay 的定位是"直连失败时的房间级兜底路径"，不是独立完整的联机协议。
 
 ## 推荐部署路径
 
@@ -57,11 +60,11 @@
 1. 优先使用 **systemd 安装脚本** 部署到 Linux 主机
 2. 在首次安装时就填好公网地址（域名优先）
 3. 生成并写入 `SERVER_ADMIN_PASSWORD_HASH` 与 `SERVER_ADMIN_SESSION_SECRET`
-4. 决定你的服务是 **公开列表模式** 还是 **私有 / 半私有模式**
-5. 完成最小验证：`/health`、`/server-admin`、`/announcements`、`/rooms`
+4. **手动补全 `PEER_SELF_ADDRESS` / `PEER_CF_DISCOVERY_BASE_URL`**（首次安装脚本生成的 `.env` 里可能还未包含）
+5. 完成最小验证：`/health`、`/server-admin`、`/announcements`、`/rooms`、`/peers/health`
 6. 按需为客户端重新打包默认大厅配置
 
-如果你的环境已经标准化为容器部署，再使用 Docker；手动运行主要用于开发或临时排障。
+容器部署也是受支持的；手动运行主要用于开发或临时排障。
 
 ## 首次部署最小步骤
 
@@ -84,6 +87,8 @@ sudo ./scripts/install-lobby-service-linux.sh \
 - 生成 `/opt/sts2-lobby/start-lobby-service.sh`
 - 在 systemd 可用且以 root 执行时安装并启动 `sts2-lobby.service`
 
+> ⚠️ **首次安装后必检**：编辑 `/opt/sts2-lobby/lobby-service/.env`，确认里面包含 `PEER_SELF_ADDRESS` 与 `PEER_CF_DISCOVERY_BASE_URL`。如果没有，按本文"4) 配置节点网络"补齐——这是 v0.4.0 新部署最常见的遗漏，会导致 `/server-admin` 显示"节点网络未配置"。
+
 ### 2) 开放端口
 
 默认需要放行：
@@ -91,32 +96,40 @@ sudo ./scripts/install-lobby-service-linux.sh \
 - `8787/TCP`
 - `39000-39149/UDP`
 
-### 3) 生成管理面板密码哈希
-
-`SERVER_ADMIN_PASSWORD_HASH` 不是明文密码，格式为 `salt:hash`。
+### 3) 生成管理面板密码哈希与会话密钥
 
 ```bash
 cd lobby-service
 npm run hash-admin-password -- '你的面板密码'
-```
-
-将输出写入 `.env`：
-
-```text
-SERVER_ADMIN_PASSWORD_HASH=<上一步输出的整串内容>
-```
-
-### 4) 生成会话密钥
-
-```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-写入 `.env`：
+将两段输出分别写入 `.env`：
 
 ```text
-SERVER_ADMIN_SESSION_SECRET=<上一步输出的随机字符串>
+SERVER_ADMIN_PASSWORD_HASH=<密码哈希>
+SERVER_ADMIN_SESSION_SECRET=<会话密钥>
 ```
+
+### 4) 配置节点网络（v0.4.0 必检）
+
+在 `.env` 中加入 / 确认以下行：
+
+```text
+PEER_SELF_ADDRESS=http://<你的公网 IP 或域名>:8787
+PEER_CF_DISCOVERY_BASE_URL=https://sts2-gamelobby-register.xyz
+PEER_PUBLIC_LISTING_ENABLED=true
+PEER_STATE_DIR=/app/data/peer
+# 可选：覆盖客户端 picker 显示名
+# PEER_DISPLAY_NAME=My Community Lobby
+```
+
+要点：
+
+- `PEER_SELF_ADDRESS` 必须能从公网回访这台机器（含 scheme + 端口）；其他节点和 CF discovery worker 用它探活
+- 走 HTTPS / 反向代理时，写代理对外的真正可达 URL
+- 完全关闭节点网络：`PEER_NETWORK_ENABLED=false`，此时 `PEER_SELF_ADDRESS` 可留空
+- 真理源：[`../deploy/lobby-service.env.example`](../deploy/lobby-service.env.example)
 
 ### 5) 首次检查
 
@@ -125,7 +138,10 @@ curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/probe
 curl http://127.0.0.1:8787/announcements
 curl http://127.0.0.1:8787/rooms
+curl http://127.0.0.1:8787/peers/health
 ```
+
+`/peers/health` 应该显示 `selfAddress` 等于你配的公网地址，`publicListing: true`，过一会儿 `activePeers` 会 > 0。
 
 并在浏览器打开：
 
@@ -133,11 +149,13 @@ curl http://127.0.0.1:8787/rooms
 http://<公网 IP 或域名>:8787/server-admin
 ```
 
+进入后查看"节点网络"区域：理想状态是 `已加入节点网络`（已观察到外部节点）或 `正在加入节点网络`（刚开机时）。
+
 ## 选择部署方式
 
 ### A. systemd（推荐）
 
-适合长期运行的 Linux 主机，优点是路径清晰、便于日志查看、方便后续升级。
+适合长期运行的 Linux 主机。
 
 安装：
 
@@ -149,14 +167,18 @@ sudo ./scripts/install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 
 ```bash
 systemctl status sts2-lobby
-journalctl -u sts2-lobby.service -n 100 --no-pager
+journalctl -u sts2-lobby.service -n 200 --no-pager
+```
+
+如果遇到 `[peer] disabled (set PEER_SELF_ADDRESS to enable)`：
+
+```bash
+sudo ./scripts/diagnose-lobby-peer.sh
 ```
 
 ### B. Docker
 
-适合已有容器基础设施的环境。
-
-在 `lobby-service/` 目录执行：
+适合已有容器基础设施的环境。在 `lobby-service/` 目录执行：
 
 ```bash
 cp deploy/lobby-service.docker.env.example deploy/lobby-service.docker.env
@@ -171,8 +193,8 @@ docker compose -f deploy/docker-compose.lobby-service.yml up -d
 
 **Docker 额外注意：**
 
-- Docker 不会自动推导公网地址，必须手动填写 `RELAY_PUBLIC_HOST` 或全部 `SERVER_REGISTRY_PUBLIC_*`
-- 如果这些值仍是 `127.0.0.1`、`0.0.0.0`、`localhost` 或占位值，公开列表反向探测会失败
+- Docker 不会自动推导公网地址，**必须手动填写 `RELAY_PUBLIC_HOST` 和 `PEER_SELF_ADDRESS`**
+- 如果 `PEER_SELF_ADDRESS` 仍是 `127.0.0.1`、`0.0.0.0`、`localhost` 或占位值，CF discovery 反向探测会失败，节点不会出现在公共列表
 - 日志轮转由 Docker `json-file` 驱动处理，默认单文件 `10MB`、保留 `5` 个历史文件
 
 ### C. 手动运行
@@ -202,6 +224,8 @@ npm start
 |------|----------|
 | 管理面板 | `http://<公网 IP 或域名>:8787/server-admin` |
 | 健康检查 | `http://<公网 IP 或域名>:8787/health` |
+| 节点网络运行状态 | `http://<公网 IP 或域名>:8787/peers/health` |
+| 节点指标快照 | `http://<公网 IP 或域名>:8787/peers/metrics` |
 | 公告接口 | `http://<公网 IP 或域名>:8787/announcements` |
 | 房间列表接口 | `http://<公网 IP 或域名>:8787/rooms` |
 | 控制通道 | `ws://<公网 IP 或域名>:8787/control` |
@@ -210,25 +234,27 @@ npm start
 
 - 玩家通常不需要手动打开这些 URL；他们通过游戏客户端建房 / 加房
 - `/server-admin` 页面可以打开，但要登录修改配置，必须设置 `SERVER_ADMIN_PASSWORD_HASH` 和 `SERVER_ADMIN_SESSION_SECRET`
-- 若你在反向代理后提供 HTTPS / WSS，请确保客户端默认大厅也对应更新
+- 若你在反向代理后提供 HTTPS / WSS，请确保客户端默认大厅、`PEER_SELF_ADDRESS` 都更新成代理对外地址
 
-## 公开列表 / 私有部署说明
+## 节点网络 / 私有部署说明
 
-### 公开列表模式（Public Listing）
+### 加入去中心化公开节点网络
 
-如果你希望让服务出现在公共列表中，需要：
+希望这台 lobby 出现在 CF 聚合的节点列表里：
 
-1. 设置 `SERVER_REGISTRY_BASE_URL=http://47.111.146.69:18787`
-2. 配置对外可访问的公网地址：
-   - `RELAY_PUBLIC_HOST=<公网 IP 或域名>`
-   - 或显式设置全部 `SERVER_REGISTRY_PUBLIC_*`
-3. 在 `/server-admin` 中启用“公开列表申请”
+1. `PEER_SELF_ADDRESS` 写成公网可达的 URL
+2. `PEER_PUBLIC_LISTING_ENABLED=true`
+3. 重启服务，在 `/server-admin` 查看"节点网络"状态
 
-关键点：
+`/server-admin` 节点网络状态映射：
 
-- `SERVER_REGISTRY_BASE_URL` 表示“申请发往哪里”，**不等于** 母面板已经能反向访问你的服务
-- 若上报地址仍是本机地址，`/server-admin` 会显示公网地址配置错误
-- 不需要接入公开列表时，可将 `SERVER_REGISTRY_BASE_URL=` 留空
+| 状态 | 含义 |
+|------|------|
+| `节点网络未启用` | `PEER_NETWORK_ENABLED=false` |
+| `节点网络未配置` | 启用了节点网络但 `PEER_SELF_ADDRESS` 为空 —— **新部署最容易踩的坑** |
+| `仅私有可见` | `PEER_SELF_ADDRESS` 已配但 `publicListingEnabled=false` |
+| `正在加入节点网络` | 已公开但还没观察到外部活跃节点 |
+| `已加入节点网络` | 已观察到外部活跃节点，列表传播正常 |
 
 ### 私有 / 半私有模式
 
@@ -259,6 +285,8 @@ CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS=30
 - 建议通过 `x-lobby-access-token` / `x-create-room-token` 请求头传递，或使用 `Authorization: Bearer ***`
 - 不建议把 token 放进 query string，避免出现在日志和浏览器历史中
 - 如果只配置其中一个 token，服务端会向后兼容回退到该 token
+
+> 注：将 `PEER_PUBLIC_LISTING_ENABLED=false` 只是不出现在公共列表，**节点网络心跳仍然进行**（仅私有可见）。如果要完全不接触 CF discovery，请 `PEER_NETWORK_ENABLED=false`。
 
 ## 常见运维入口
 
@@ -302,7 +330,7 @@ sudo ./install-lobby-service-linux.sh --install-dir /opt/sts2-lobby
 systemd：
 
 ```bash
-journalctl -u sts2-lobby.service -n 100 --no-pager
+journalctl -u sts2-lobby.service -n 200 --no-pager
 ```
 
 Docker：
@@ -313,6 +341,8 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 
 常见日志条目：
 
+- `[peer] mounted; self=...` —— 节点网络已启动，附带本机 self URL
+- `[peer] disabled (set PEER_SELF_ADDRESS to enable)` —— `PEER_SELF_ADDRESS` 没读到，会显示"节点网络未配置"
 - `create room`
 - `join ticket issued`
 - `relay_host_registered`
@@ -336,7 +366,7 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 
 ## 环境变量参考
 
-完整示例见 [`.env.example`](./.env.example)。以下仅保留运维最常查的分组说明。
+完整示例见仓库根目录的 [`../deploy/lobby-service.env.example`](../deploy/lobby-service.env.example)。以下仅保留运维最常查的分组说明。
 
 ### 网络
 
@@ -358,7 +388,7 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 | 变量 | 说明 |
 |------|------|
 | `RELAY_BIND_HOST` | relay 监听地址 |
-| `RELAY_PUBLIC_HOST` | relay 对外公网地址；留空时可能退回本机地址 |
+| `RELAY_PUBLIC_HOST` | relay 对外公网地址；留空时可能退回本机地址，客户端连不上 |
 | `RELAY_PORT_START` | relay UDP 端口段起始 |
 | `RELAY_PORT_END` | relay UDP 端口段结束 |
 | `RELAY_HOST_IDLE_SECONDS` | relay 房主空闲超时 |
@@ -398,17 +428,16 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 | `SERVER_ADMIN_SESSION_TTL_HOURS` | 会话有效期（小时） |
 | `SERVER_ADMIN_STATE_FILE` | 状态持久化文件路径 |
 
-### 公开列表同步
+### 节点网络（PEER_*）—— v0.4.0 新增
 
 | 变量 | 说明 |
 |------|------|
-| `SERVER_REGISTRY_BASE_URL` | 公开列表服务地址 |
-| `SERVER_REGISTRY_SYNC_INTERVAL_SECONDS` | 心跳同步间隔 |
-| `SERVER_REGISTRY_SYNC_TIMEOUT_MS` | 同步请求超时 |
-| `SERVER_REGISTRY_PUBLIC_BASE_URL` | 上报给公开列表的 HTTP 地址 |
-| `SERVER_REGISTRY_PUBLIC_WS_URL` | 上报给公开列表的 WebSocket 地址 |
-| `SERVER_REGISTRY_BANDWIDTH_PROBE_URL` | 上报给公开列表的带宽探针地址 |
-| `SERVER_REGISTRY_PROBE_FILE_BYTES` | 带宽探针文件大小 |
+| `PEER_NETWORK_ENABLED` | 默认 `true`（任何非 `false` 值都按 true 处理）；设为 `false` 完全关闭节点网络 |
+| `PEER_SELF_ADDRESS` | 本机公网 URL；空值即"节点网络未配置" |
+| `PEER_CF_DISCOVERY_BASE_URL` | Cloudflare discovery worker 基地址；客户端与本节点 bootstrap 都从这里读取节点列表 |
+| `PEER_PUBLIC_LISTING_ENABLED` | 首次安装时种子值；管理面板开关是运行时真理源 |
+| `PEER_STATE_DIR` | 本地 peer 状态目录（`peers.json` + identity 密钥对） |
+| `PEER_DISPLAY_NAME` | 可选；覆盖客户端 picker 显示名 |
 
 ## API 参考
 
@@ -416,9 +445,15 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 
 - `GET /health`
 - `GET /probe`
-- `GET /registry/bandwidth-probe.bin`
 - `GET /announcements`
 - `GET /rooms`
+
+### 节点网络（v0.4.0 新增）
+
+- `GET /peers/health` —— 节点网络运行状态
+- `GET /peers/metrics` —— 当前节点的房间数、带宽、guard 状态、显示名快照（替代旧版 server-registry 的 `/servers/` 读取）
+- `POST /peers/announce` —— 接收其他节点的 announce
+- `POST /peers/heartbeat` —— 节点间心跳
 
 ### 房间管理
 
@@ -466,10 +501,11 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 
 ## 历史兼容 / 补充说明
 
-以下内容 **不是当前 v0.4.0 推荐主路径**，但仍保留供旧部署管理员查阅：
+以下内容 **不是 v0.4.0 推荐主路径**，但仍保留供旧部署管理员查阅：
 
-- `legacy_4p` / `extended_8p`、`0.2.2` / `0.2.3` 兼容叙事：用于解释历史房间协议兼容背景
-- 旧中心化 / peer sidecar / `v0.3.x` 迁移资料：请改看 [`../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) 中的“历史升级与兼容说明”
+- v0.3.x 升级与 sidecar 过渡资料：[`../docs/STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md`](../docs/STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md)、[`../docs/STS2_PEER_SIDECAR_GUIDE_ZH.md`](../docs/STS2_PEER_SIDECAR_GUIDE_ZH.md)
+- 当前部署主路径中文版：[`../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md)
+- `SERVER_REGISTRY_*` 一组变量在 v0.4.0 lobby-service 中已彻底无效；旧 `.env` 里保留这些行不会出错也不会生效，建议清理
 
 ---
 
@@ -478,6 +514,8 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 ## English
 
 # STS2 Lobby Service
+
+> Targets **v0.4.0** (decentralized peer network). All `SERVER_REGISTRY_*` env vars from the v0.3.x era are inert at runtime in v0.4.0 and are not documented below.
 
 This README is the **operator/admin guide** for `lobby-service`.
 
@@ -488,43 +526,55 @@ This README is the **operator/admin guide** for `lobby-service`.
 - Control-channel handshake and room-scoped broadcast
 - In-room announcements and `/server-admin` management
 - Relay fallback planning when direct ENet connection fails
-- Public listing application and sync integration
+- Joins the decentralized peer network via `/peers/announce` + the Cloudflare discovery worker
+- Serves per-node live metrics at `/peers/metrics` for the client picker
 
 ### What it does not do
 
 - Battle synchronization
 - Account systems
 - Guaranteed NAT traversal
-- Publishing the official private master panel
+- Any "master panel" / review backend — v0.4.0 has no such concept
 
 ### Recommended path
 
 1. Use the Linux systemd installer
 2. Set a real public hostname or domain during install
 3. Generate `SERVER_ADMIN_PASSWORD_HASH` and `SERVER_ADMIN_SESSION_SECRET`
-4. Decide between public-listing mode and private-token mode
-5. Verify `/health`, `/server-admin`, `/announcements`, and `/rooms`
+4. **Manually add `PEER_SELF_ADDRESS` / `PEER_CF_DISCOVERY_BASE_URL`** to the generated `.env` (the install script may not include them yet on a fresh install)
+5. Verify `/health`, `/server-admin`, `/announcements`, `/rooms`, `/peers/health`
 
 Recommended install command:
 
 ```bash
 sudo ./scripts/install-lobby-service-linux.sh \
   --install-dir /opt/sts2-lobby \
-  --relay-public-host <你的公网 IP 或域名>
+  --relay-public-host <your public IP or domain>
 ```
 
-### Public examples
+### Minimum peer network settings
 
 ```text
-Admin panel: http://<public IP or domain>:8787/server-admin
-Lobby API: http://<public IP or domain>:8787
-Control WS: ws://<public IP or domain>:8787/control
-Registry base URL: http://47.111.146.69:18787
-Token: Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E
+PEER_SELF_ADDRESS=http://<your public IP or domain>:8787
+PEER_CF_DISCOVERY_BASE_URL=https://sts2-gamelobby-register.xyz
+PEER_PUBLIC_LISTING_ENABLED=true
+PEER_STATE_DIR=/app/data/peer
 ```
+
+If `PEER_SELF_ADDRESS` is missing, `/server-admin` will show "Peer network unconfigured". The canonical reference is [`../deploy/lobby-service.env.example`](../deploy/lobby-service.env.example).
+
+### Admin panel peer-network states
+
+| State | Meaning |
+|-------|---------|
+| `Peer network disabled` | `PEER_NETWORK_ENABLED=false` |
+| `Peer network unconfigured` | Enabled but `PEER_SELF_ADDRESS` empty — most common fresh-install issue |
+| `Private only` | `PEER_SELF_ADDRESS` set but `publicListingEnabled=false` |
+| `Joining` | Public, no external peers observed yet |
+| `Joined` | Public and external peers observed |
 
 ### Reference sections
 
-- Environment variables: see [`.env.example`](./.env.example)
+- Environment variables: see [`../deploy/lobby-service.env.example`](../deploy/lobby-service.env.example)
 - Current deployment guide (Chinese): [`../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md)
-- Historical compatibility context remains intentionally demoted and is not the recommended v0.4.0 path
+- Historical compatibility notes are intentionally demoted and not part of the v0.4.0 path

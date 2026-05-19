@@ -40,13 +40,14 @@ SERVER_ADMIN_PASSWORD_HASH="${STS2_SERVER_ADMIN_PASSWORD_HASH:-}"
 SERVER_ADMIN_SESSION_SECRET="${STS2_SERVER_ADMIN_SESSION_SECRET:-}"
 SERVER_ADMIN_SESSION_TTL_HOURS="${STS2_SERVER_ADMIN_SESSION_TTL_HOURS:-168}"
 SERVER_ADMIN_STATE_FILE="${STS2_SERVER_ADMIN_STATE_FILE:-./data/server-admin.json}"
-SERVER_REGISTRY_BASE_URL="${STS2_SERVER_REGISTRY_BASE_URL:-http://47.111.146.69:18787}"
-SERVER_REGISTRY_SYNC_INTERVAL_SECONDS="${STS2_SERVER_REGISTRY_SYNC_INTERVAL_SECONDS:-180}"
-SERVER_REGISTRY_SYNC_TIMEOUT_MS="${STS2_SERVER_REGISTRY_SYNC_TIMEOUT_MS:-5000}"
-SERVER_REGISTRY_PUBLIC_BASE_URL="${STS2_SERVER_REGISTRY_PUBLIC_BASE_URL:-}"
-SERVER_REGISTRY_PUBLIC_WS_URL="${STS2_SERVER_REGISTRY_PUBLIC_WS_URL:-}"
-SERVER_REGISTRY_BANDWIDTH_PROBE_URL="${STS2_SERVER_REGISTRY_BANDWIDTH_PROBE_URL:-}"
-SERVER_REGISTRY_PROBE_FILE_BYTES="${STS2_SERVER_REGISTRY_PROBE_FILE_BYTES:-104857600}"
+# Decentralized peer network (v0.4.0+). PEER_SELF_ADDRESS is derived from
+# --relay-public-host below when not explicitly provided.
+PEER_NETWORK_ENABLED="${STS2_PEER_NETWORK_ENABLED:-true}"
+PEER_SELF_ADDRESS="${STS2_PEER_SELF_ADDRESS:-}"
+PEER_CF_DISCOVERY_BASE_URL="${STS2_PEER_CF_DISCOVERY_BASE_URL:-https://sts2-gamelobby-register.xyz}"
+PEER_PUBLIC_LISTING_ENABLED="${STS2_PEER_PUBLIC_LISTING_ENABLED:-true}"
+PEER_STATE_DIR="${STS2_PEER_STATE_DIR:-./data/peer}"
+PEER_DISPLAY_NAME="${STS2_PEER_DISPLAY_NAME:-}"
 NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
 NPM_BIN="${NPM_BIN:-$(command -v npm || true)}"
 SKIP_SYSTEMD=0
@@ -68,7 +69,18 @@ Options:
                         RELAY_BIND_HOST written into .env. Default: same as --host
   --relay-public-host <value>
                         RELAY_PUBLIC_HOST written into .env. Default: empty, service uses request host.
-                        When SERVER_REGISTRY_PUBLIC_* are empty, this value is also used to derive public registry URLs.
+                        Also used to derive PEER_SELF_ADDRESS when --peer-self-address is not provided.
+  --peer-self-address <url>
+                        PEER_SELF_ADDRESS written into .env (e.g. http://your.public.ip:8787).
+                        Required for joining the decentralized peer network. Auto-derived from --relay-public-host if omitted.
+  --peer-cf-discovery-base-url <url>
+                        PEER_CF_DISCOVERY_BASE_URL written into .env. Default: https://sts2-gamelobby-register.xyz
+  --peer-public-listing-enabled <true|false>
+                        PEER_PUBLIC_LISTING_ENABLED written into .env. Default: true
+  --peer-network-enabled <true|false>
+                        PEER_NETWORK_ENABLED written into .env. Default: true
+  --peer-display-name <name>
+                        Optional PEER_DISPLAY_NAME written into .env.
   --relay-port-start <value>
                         RELAY_PORT_START written into .env. Default: 39000
   --relay-port-end <value>
@@ -173,6 +185,31 @@ while [[ $# -gt 0 ]]; do
       CONNECTION_STRATEGY="$2"
       shift 2
       ;;
+    --peer-self-address)
+      [[ $# -ge 2 ]] || die "--peer-self-address requires a value"
+      PEER_SELF_ADDRESS="$2"
+      shift 2
+      ;;
+    --peer-cf-discovery-base-url)
+      [[ $# -ge 2 ]] || die "--peer-cf-discovery-base-url requires a value"
+      PEER_CF_DISCOVERY_BASE_URL="$2"
+      shift 2
+      ;;
+    --peer-public-listing-enabled)
+      [[ $# -ge 2 ]] || die "--peer-public-listing-enabled requires a value"
+      PEER_PUBLIC_LISTING_ENABLED="$2"
+      shift 2
+      ;;
+    --peer-network-enabled)
+      [[ $# -ge 2 ]] || die "--peer-network-enabled requires a value"
+      PEER_NETWORK_ENABLED="$2"
+      shift 2
+      ;;
+    --peer-display-name)
+      [[ $# -ge 2 ]] || die "--peer-display-name requires a value"
+      PEER_DISPLAY_NAME="$2"
+      shift 2
+      ;;
     --run-user)
       [[ $# -ge 2 ]] || die "--run-user requires a value"
       RUN_AS_USER="$2"
@@ -206,22 +243,14 @@ if [[ "$node_major" -lt 20 ]]; then
   die "Node.js 20+ is required. Current version: $("$NODE_BIN" -v)"
 fi
 
-if [[ -n "$RELAY_PUBLIC_HOST" ]]; then
+if [[ -n "$RELAY_PUBLIC_HOST" && -z "$PEER_SELF_ADDRESS" ]]; then
   PUBLIC_URL_HOST="$(format_host_for_url "$RELAY_PUBLIC_HOST")"
-  if [[ -z "$SERVER_REGISTRY_PUBLIC_BASE_URL" ]]; then
-    SERVER_REGISTRY_PUBLIC_BASE_URL="http://$PUBLIC_URL_HOST:$PORT"
-  fi
-  if [[ -z "$SERVER_REGISTRY_PUBLIC_WS_URL" ]]; then
-    SERVER_REGISTRY_PUBLIC_WS_URL="ws://$PUBLIC_URL_HOST:$PORT$WS_PATH"
-  fi
-  if [[ -z "$SERVER_REGISTRY_BANDWIDTH_PROBE_URL" ]]; then
-    SERVER_REGISTRY_BANDWIDTH_PROBE_URL="http://$PUBLIC_URL_HOST:$PORT/registry/bandwidth-probe.bin"
-  fi
+  PEER_SELF_ADDRESS="http://$PUBLIC_URL_HOST:$PORT"
 fi
 
-if [[ -n "$SERVER_REGISTRY_BASE_URL" && -z "$RELAY_PUBLIC_HOST" && -z "$SERVER_REGISTRY_PUBLIC_BASE_URL" ]]; then
-  log "WARNING: public listing is enabled by default, but neither RELAY_PUBLIC_HOST nor SERVER_REGISTRY_PUBLIC_BASE_URL is set."
-  log "WARNING: the service will fall back to 127.0.0.1 for registry probing unless you set a public IP/domain in the .env file."
+if [[ "$PEER_NETWORK_ENABLED" != "false" && -z "$PEER_SELF_ADDRESS" ]]; then
+  log "WARNING: peer network is enabled but PEER_SELF_ADDRESS is empty."
+  log "WARNING: /server-admin will display 'Peer network unconfigured' until you set PEER_SELF_ADDRESS (or --peer-self-address / --relay-public-host) in the .env file."
 fi
 
 APP_DIR="$INSTALL_DIR/lobby-service"
@@ -275,13 +304,12 @@ SERVER_ADMIN_PASSWORD_HASH=$SERVER_ADMIN_PASSWORD_HASH
 SERVER_ADMIN_SESSION_SECRET=$SERVER_ADMIN_SESSION_SECRET
 SERVER_ADMIN_SESSION_TTL_HOURS=$SERVER_ADMIN_SESSION_TTL_HOURS
 SERVER_ADMIN_STATE_FILE=$SERVER_ADMIN_STATE_FILE
-SERVER_REGISTRY_BASE_URL=$SERVER_REGISTRY_BASE_URL
-SERVER_REGISTRY_SYNC_INTERVAL_SECONDS=$SERVER_REGISTRY_SYNC_INTERVAL_SECONDS
-SERVER_REGISTRY_SYNC_TIMEOUT_MS=$SERVER_REGISTRY_SYNC_TIMEOUT_MS
-SERVER_REGISTRY_PUBLIC_BASE_URL=$SERVER_REGISTRY_PUBLIC_BASE_URL
-SERVER_REGISTRY_PUBLIC_WS_URL=$SERVER_REGISTRY_PUBLIC_WS_URL
-SERVER_REGISTRY_BANDWIDTH_PROBE_URL=$SERVER_REGISTRY_BANDWIDTH_PROBE_URL
-SERVER_REGISTRY_PROBE_FILE_BYTES=$SERVER_REGISTRY_PROBE_FILE_BYTES
+PEER_NETWORK_ENABLED=$PEER_NETWORK_ENABLED
+PEER_SELF_ADDRESS=$PEER_SELF_ADDRESS
+PEER_CF_DISCOVERY_BASE_URL=$PEER_CF_DISCOVERY_BASE_URL
+PEER_PUBLIC_LISTING_ENABLED=$PEER_PUBLIC_LISTING_ENABLED
+PEER_STATE_DIR=$PEER_STATE_DIR
+PEER_DISPLAY_NAME=$PEER_DISPLAY_NAME
 EOF
   log "Created default environment file: $ENV_FILE"
 else

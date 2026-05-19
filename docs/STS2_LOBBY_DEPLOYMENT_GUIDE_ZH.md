@@ -10,40 +10,46 @@
 
 # STS2 游戏大厅部署指南
 
+> 本文档对应 **v0.4.0**（去中心化节点网络）。如果你正从 v0.3.x 升级上来，请先看文末的"v0.3.x → v0.4.0 升级要点"。
+
 ## 文档定位
 
-这篇文档是 **当前推荐的 STS2 Lobby Service 部署主手册**，面向：
+这是 **当前推荐的 `lobby-service` 部署主手册**，面向：
 
 - 自行部署大厅服务的服主 / 运维
 - 需要给客户端分发默认大厅配置的维护者
-- 需要核对公开列表、私有访问、最小验证步骤的管理员
+- 需要核对节点网络、私有访问、最小验证步骤的管理员
 
 推荐先读：
 
 1. [`../README.md`](../README.md)
 2. [`../lobby-service/README.md`](../lobby-service/README.md)
 
-本文只讲 **当前怎么部署与验证 v0.4.0**。旧版本升级、旧兼容策略、`v0.3.x` 过渡资料会被降级到文末“历史升级与兼容说明”。
+本文只讲 **v0.4.0 怎么部署与验证**。旧的 mother registry / SERVER_REGISTRY_* 流程已经在 v0.4.0 中删除，相关内容只在文末作为升级参考保留。
+
+## v0.4.0 关键变更（一句话）
+
+`lobby-service` 不再向任何"母面板"上报。每个节点自己通过 `PEER_SELF_ADDRESS` 公开对外地址，并由 Cloudflare 上的 discovery worker（`PEER_CF_DISCOVERY_BASE_URL`）做无状态聚合。`SERVER_REGISTRY_*` 一整组环境变量在运行时已经完全无效——配置了也不会生效。
 
 ## 当前推荐部署路径（主路径）
 
-推荐按以下顺序完成部署：
-
 1. 在 Linux 主机上安装 `lobby-service`
-2. 配置公网地址、管理面板密码哈希、会话密钥
-3. 决定是否接入公开列表
+2. 配置 **公网地址**（`RELAY_PUBLIC_HOST` + `PEER_SELF_ADDRESS`）、管理面板密码哈希、会话密钥
+3. 决定是否加入去中心化公开节点网络（`PEER_PUBLIC_LISTING_ENABLED` + 管理面板开关）
 4. 决定是否启用私有 / 半私有 token 收口
-5. 验证 `/health`、`/server-admin`、`/announcements`、`/rooms`
+5. 验证 `/health`、`/server-admin`、`/announcements`、`/rooms`、`/peers/health`
 6. 按需重新打包客户端默认大厅
 
-项目当前默认大厅与公共目录如下：
+项目当前公共节点与发现入口：
 
 ```text
-大厅地址: http://47.111.146.69:8787
-控制通道: ws://47.111.146.69:8787/control
-公开列表服务: http://47.111.146.69:18787
-建房 token: Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E
+默认社区节点(示例)：http://47.111.146.69:8787
+控制通道：ws://47.111.146.69:8787/control
+CF 发现入口：https://sts2-gamelobby-register.xyz
+默认建房 token：Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E
 ```
+
+> 注：v0.4.0 客户端通过 CF 发现入口 + 内置 seeds 聚合节点列表，不再通过任何"公开列表服务"。`http://47.111.146.69:18787` 在 v0.4.0 中已无运行时角色。
 
 ---
 
@@ -67,6 +73,8 @@ sudo ./scripts/install-lobby-service-linux.sh \
 - 生成启动脚本
 - 在 systemd 可用且以 root 执行时安装并启动 `sts2-lobby.service`
 
+> ⚠️ **首次安装后必须手动检查 `/opt/sts2-lobby/lobby-service/.env`** 里是否含 `PEER_SELF_ADDRESS` 和 `PEER_CF_DISCOVERY_BASE_URL`。如果缺，请按本指南第二节"3. 节点网络（PEER_*）"补齐，否则 `/server-admin` 会显示"节点网络未配置"。
+
 默认需要放行的端口：
 
 - `8787/TCP`
@@ -74,20 +82,21 @@ sudo ./scripts/install-lobby-service-linux.sh \
 
 ### 方案 B：Docker
 
-在 `lobby-service/` 目录执行：
+在仓库根目录使用单服务编排：
 
 ```bash
-cp deploy/lobby-service.docker.env.example deploy/lobby-service.docker.env
-$EDITOR deploy/lobby-service.docker.env
-docker compose -f deploy/docker-compose.lobby-service.yml build
-docker compose -f deploy/docker-compose.lobby-service.yml up -d
+cp deploy/lobby-service.env.example deploy/lobby-service.env
+$EDITOR deploy/lobby-service.env   # 关键：填好 RELAY_PUBLIC_HOST 和 PEER_SELF_ADDRESS
+
+docker compose -f lobby-service/deploy/docker-compose.lobby-service.yml build
+docker compose -f lobby-service/deploy/docker-compose.lobby-service.yml up -d
 ```
 
 说明：
 
 - 默认会将 `./deploy/data/lobby-service` 挂载到容器内 `/app/data`
 - `SERVER_ADMIN_STATE_FILE` 默认指向 `/app/data/server-admin.json`
-- Docker 不会自动推导公网地址，必须手动填写 `RELAY_PUBLIC_HOST` 或 `SERVER_REGISTRY_PUBLIC_*`
+- Docker 不会自动推导公网地址，**必须手动填写 `RELAY_PUBLIC_HOST` 和 `PEER_SELF_ADDRESS`**
 
 ### 方案 C：手动运行
 
@@ -137,24 +146,39 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 SERVER_ADMIN_SESSION_SECRET=<上一步输出的随机字符串>
 ```
 
-### 3. 公网地址
+### 3. 节点网络（PEER_*）—— **v0.4.0 最容易漏的一节**
 
-至少满足以下任一方式：
+`lobby-service` 默认开启节点网络（`PEER_NETWORK_ENABLED` 不显式为 `false` 即认为开启）。要真正加入节点网络，必须额外提供 **本机对外可达的 URL**：
 
-- `RELAY_PUBLIC_HOST=<你的公网 IP 或域名>`
-- 或显式设置：
-  - `SERVER_REGISTRY_PUBLIC_BASE_URL=http://<你的公网 IP 或域名>:8787`
-  - `SERVER_REGISTRY_PUBLIC_WS_URL=ws://<你的公网 IP 或域名>:8787/control`
-  - `SERVER_REGISTRY_BANDWIDTH_PROBE_URL=http://<你的公网 IP 或域名>:8787/registry/bandwidth-probe.bin`
+```text
+PEER_SELF_ADDRESS=http://<你的公网 IP 或域名>:8787
+PEER_CF_DISCOVERY_BASE_URL=https://sts2-gamelobby-register.xyz
+PEER_PUBLIC_LISTING_ENABLED=true
+PEER_STATE_DIR=/app/data/peer
+# 可选：覆盖客户端 picker 上显示的服务器名
+# PEER_DISPLAY_NAME=My Community Lobby
+```
 
-如果这些值都留空，服务可能向外上报本机地址，导致公开列表反向探测失败。
+要点：
 
-### 4. 常用外部地址
+- `PEER_SELF_ADDRESS` **必须能从公网回访这台机器**——它会被其他节点和 CF discovery worker 用来探活
+- 如果走反向代理 / HTTPS / WSS，写成代理对外的真正可访问地址（含 scheme + 端口）
+- 如果只想跑私有大厅、不希望出现在公共列表：保留 `PEER_SELF_ADDRESS` 不变，把 `PEER_PUBLIC_LISTING_ENABLED=false`，知道直连地址的玩家仍然能加入
+- 如果想完全关掉节点网络：`PEER_NETWORK_ENABLED=false`，此时 `PEER_SELF_ADDRESS` 可留空
+- 真理源：[`deploy/lobby-service.env.example`](../deploy/lobby-service.env.example)
+
+### 4. 公网地址（Relay）
+
+`RELAY_PUBLIC_HOST=<你的公网 IP 或域名>` 必须设置，否则 relay fallback 路径里会把本机地址下发给客户端，客户端连不上。
+
+### 5. 常用外部地址
 
 | 用途 | 示例地址 |
 |------|----------|
 | 管理面板 | `http://<公网 IP 或域名>:8787/server-admin` |
 | 健康检查 | `http://<公网 IP 或域名>:8787/health` |
+| 节点网络运行状态 | `http://<公网 IP 或域名>:8787/peers/health` |
+| 节点指标快照 | `http://<公网 IP 或域名>:8787/peers/metrics` |
 | 公告接口 | `http://<公网 IP 或域名>:8787/announcements` |
 | 房间列表 | `http://<公网 IP 或域名>:8787/rooms` |
 | 控制通道 | `ws://<公网 IP 或域名>:8787/control` |
@@ -163,26 +187,29 @@ SERVER_ADMIN_SESSION_SECRET=<上一步输出的随机字符串>
 
 - 玩家不需要在浏览器里操作这些地址；游戏客户端负责联机
 - `/server-admin` 可直接打开，但未配置密码哈希和会话密钥时无法登录修改
-- 如果你通过反向代理提供 HTTPS / WSS，请确保客户端默认大厅配置也使用相同的公开地址
+- 如果你通过反向代理提供 HTTPS / WSS，`PEER_SELF_ADDRESS` 也要写成代理对外的实际地址
 
 ---
 
-## 三、公开 / 私有访问策略
+## 三、加入节点网络 vs 私有模式
 
-### 公开列表申请（Public Listing）
+### 加入去中心化公开节点网络
 
-如果你希望进入公共列表：
+希望让这台 lobby 出现在 CF 聚合的节点列表里（玩家通过客户端 picker 看到）：
 
-1. 设置 `SERVER_REGISTRY_BASE_URL=http://47.111.146.69:18787`
-2. 确保公网地址配置正确
-3. 在 `/server-admin` 中启用“公开列表申请”
+1. 把 `PEER_SELF_ADDRESS` 写成公网可达的 URL（见第二节第 3 条）
+2. `PEER_PUBLIC_LISTING_ENABLED=true`
+3. 重启服务，进 `/server-admin` 检查"节点网络"区域，状态应在 1-2 分钟内变为 `正在加入节点网络` 或 `已加入节点网络`
 
-关键说明：
+`/server-admin` 上"节点网络"状态对照：
 
-- `SERVER_REGISTRY_BASE_URL` 表示“申请提交到哪台列表服务”
-- 它不会自动替你修正子服务对外地址
-- 若上报地址仍是 `127.0.0.1`、`0.0.0.0`、`localhost` 或占位值，申请会失败或被标记为配置错误
-- 如果你根本不打算接入公开列表，可将 `SERVER_REGISTRY_BASE_URL=` 留空
+| 状态 | 含义 |
+|------|------|
+| `节点网络未启用` | 设置了 `PEER_NETWORK_ENABLED=false` |
+| `节点网络未配置` | 启用了但 `PEER_SELF_ADDRESS` 为空——**这是新部署最常见的错误** |
+| `仅私有可见` | `PEER_SELF_ADDRESS` 已配，但 `publicListingEnabled=false` |
+| `正在加入节点网络` | 已公开但还没观察到外部活跃节点 |
+| `已加入节点网络` | 已观察到外部活跃节点，列表传播正常 |
 
 ### 私有 / 半私有访问收口
 
@@ -213,17 +240,18 @@ CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS=30
 - 建议通过 `x-lobby-access-token` / `x-create-room-token` 请求头传递，或使用 `Authorization: Bearer ***`
 - 不建议把 token 放进 query string，避免出现在日志和浏览器历史中
 
+> 关于"完全私有 lobby"：把 `PEER_PUBLIC_LISTING_ENABLED=false` 仅仅是不出现在公共列表，节点网络本身仍在；如果完全不想跟 CF 发现网络打交道，请同时把 `PEER_NETWORK_ENABLED=false` 并清空 `PEER_CF_DISCOVERY_BASE_URL`。
+
 ---
 
 ## 四、客户端默认大厅打包
 
-如果你希望分发“默认就指向你这台大厅”的客户端包，可在打包前覆盖默认值：
+如果你希望分发"默认就指向你这台大厅"的客户端包：
 
 ```bash
-export STS2_LOBBY_DEFAULT_BASE_URL="http://47.111.146.69:8787"
-export STS2_LOBBY_DEFAULT_WS_URL="ws://47.111.146.69:8787/control"
-export STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL="http://47.111.146.69:18787"
-export STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN="Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E"
+export STS2_LOBBY_DEFAULT_BASE_URL="http://<你的公网 IP 或域名>:8787"
+export STS2_LOBBY_DEFAULT_WS_URL="ws://<你的公网 IP 或域名>:8787/control"
+export STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN="<服务端 .env 里的 CREATE_ROOM_TOKEN>"
 export STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL="https://sts2-gamelobby-register.xyz"
 export STS2_LOBBY_SEEDS_FILE="$PWD/data/seeds.json"
 
@@ -238,9 +266,10 @@ export STS2_LOBBY_SEEDS_FILE="$PWD/data/seeds.json"
 说明：
 
 - 若未显式设置 `STS2_LOBBY_DEFAULT_WS_URL`，打包脚本会根据 `STS2_LOBBY_DEFAULT_BASE_URL` 自动推导
-- 若服务端启用了 `CREATE_ROOM_TOKEN`，建议客户端打包时的默认值与服务端 `.env` 保持一致
-- 若希望客户端默认 picker 直接看到 CF 聚合与内置种子，请同时设置 `STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL` 与 `STS2_LOBBY_SEEDS_FILE`
-- 如需玩家安装 / 卸载说明，可继续阅读 [`./CLIENT_RELEASE_README_ZH.md`](./CLIENT_RELEASE_README_ZH.md)
+- 若服务端启用了 `CREATE_ROOM_TOKEN`，客户端打包时的默认值需与服务端 `.env` 保持一致
+- `STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL` + `STS2_LOBBY_SEEDS_FILE` 决定客户端 picker 默认能看到 CF 聚合列表 + 内置种子
+- `STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL` 在 v0.4.0 客户端里只用于诊断报告字符串，不再用于发起任何 HTTP 请求，**新部署可不设置**
+- 玩家安装 / 卸载说明：[`./CLIENT_RELEASE_README_ZH.md`](./CLIENT_RELEASE_README_ZH.md)
 
 ---
 
@@ -253,11 +282,19 @@ curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/probe
 curl http://127.0.0.1:8787/announcements
 curl http://127.0.0.1:8787/rooms
+curl http://127.0.0.1:8787/peers/health
+curl http://127.0.0.1:8787/peers/metrics
 ```
+
+`/peers/health` 关键字段：
+
+- `publicListing: true` —— 已开启公开
+- `selfAddress` —— 必须是你配的公网地址，不能是 `127.0.0.1`
+- `activePeers` —— 已发现的外部活跃节点数，正常运行时 > 0
 
 ### 2. 浏览器验证
 
-确认以下地址可按你的部署策略正常响应：
+确认以下地址按部署策略正常响应：
 
 - `http://<公网 IP 或域名>:8787/server-admin`
 - `http://<公网 IP 或域名>:8787/health`
@@ -267,8 +304,8 @@ curl http://127.0.0.1:8787/rooms
 ### 3. 运维验证
 
 - `/server-admin` 可以登录
+- "节点网络"状态显示 `正在加入节点网络` 或 `已加入节点网络`（公开节点）/ `仅私有可见`（私有节点）
 - 公告可以保存并被客户端拉取
-- 若启用了公开列表申请，状态能进入 `pending_review`、`approved` 或 `heartbeat_ok`
 - 若是私有 / 半私有模式，未带 token 的访问会按预期被限制
 
 ### 4. 游戏内验证
@@ -284,44 +321,55 @@ curl http://127.0.0.1:8787/rooms
 
 ---
 
-## 六、历史升级与兼容说明
+## 六、常见排障
 
-> 本节内容 **不是当前 v0.4.0 推荐主路径**。仅当你正在维护旧部署、旧客户端兼容，或查阅历史迁移资料时再看。
+### 6.1 `/server-admin` 显示"节点网络未配置"
 
-### 历史版本号为何仍保留在文档中
+判定逻辑在 [`lobby-service/src/server.ts`](../lobby-service/src/server.ts) 中：`PEER_NETWORK_ENABLED ≠ "false"` 且 `PEER_SELF_ADDRESS=""` 时即报"未配置"。
 
-以下版本号可能仍在相关历史文档或兼容说明中出现：
+修复：
 
-- `0.2.2`
-- `0.2.3`
-- `0.3.0`
-- `0.3.1`
-- `0.3.2`
+1. 编辑 lobby-service 真正使用的 `.env`（systemd 默认 `/opt/sts2-lobby/lobby-service/.env`）
+2. 加上 `PEER_SELF_ADDRESS=http://<你的公网 IP 或域名>:8787`
+3. 加上 `PEER_CF_DISCOVERY_BASE_URL=https://sts2-gamelobby-register.xyz`
+4. 重启：`sudo systemctl restart sts2-lobby`
+5. 等待 1-2 分钟后刷新 `/server-admin`
 
-它们保留的原因是：
+如果重启后日志里仍打印 `[peer] disabled (set PEER_SELF_ADDRESS to enable)`，说明 env 文件没被进程读到。可用诊断脚本：
 
-- 解释 `legacy_4p`、`extended_8p` 等历史协议兼容背景
-- 指向旧部署升级资料
-- 说明 token 强制策略在旧版本升级过程中的兼容问题
+```bash
+sudo ./scripts/diagnose-lobby-peer.sh
+```
 
-### 旧版本兼容背景
+### 6.2 状态卡在"正在加入节点网络"
 
-- `0.2.2` / `0.2.3` 相关叙事只适用于旧客户端 / 旧房间协议兼容说明
-- `legacy_4p` 与 `extended_8p` 仍有参考价值，因为它们解释了旧房间元数据来源
-- 这些内容不应再作为“当前推荐部署版本”阅读
+CF discovery worker 还没拉到本节点的 announce，或本节点的 `PEER_SELF_ADDRESS` 对 CF / 其他节点不可达。
 
-### v0.3.x 历史迁移资料
+排查：
 
-以下资料仅适用于 **旧部署升级 / 兼容场景**：
+- `curl <PEER_SELF_ADDRESS>/health` 从外部机器是否能 200
+- 检查防火墙 / 安全组对 `8787/TCP` 是否真正放行
+- `journalctl -u sts2-lobby -n 200 | grep -E '\[peer\]|announce|bootstrap'`
 
-- [`./STS2_PEER_SIDECAR_GUIDE_ZH.md`](./STS2_PEER_SIDECAR_GUIDE_ZH.md)
-- [`./STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md`](./STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md)
+### 6.3 客户端连得上 lobby 但加房后没有 relay 流量
 
-适用语境包括：
+通常是 `RELAY_PUBLIC_HOST` 没配，或 `39000-39149/UDP` 未放行。
 
-- 你正在处理从旧中心化 / peer 过渡方案升级上来的老环境
-- 你需要理解 `v0.3.1` / `v0.3.2` 的 peer 自加入或 sidecar 过渡背景
-- 你需要兼容未及时升级的旧客户端
+---
+
+## 七、v0.3.x → v0.4.0 升级要点
+
+适用：你正从 v0.3.x systemd 或单服务 Docker 部署升级到 v0.4.0。
+
+1. **环境变量**：删除/忽略 `SERVER_REGISTRY_BASE_URL`、`SERVER_REGISTRY_PUBLIC_BASE_URL`、`SERVER_REGISTRY_PUBLIC_WS_URL`、`SERVER_REGISTRY_BANDWIDTH_PROBE_URL`、`SERVER_REGISTRY_SYNC_INTERVAL_SECONDS`、`SERVER_REGISTRY_SYNC_TIMEOUT_MS`、`SERVER_REGISTRY_PROBE_FILE_BYTES`、`SERVER_REGISTRY_PUBLIC_HOST`、`SERVER_REGISTRY_PROBE_FILE_BYTES`。这些在 v0.4.0 lobby-service 中已经不读取了，保留不会出错，但也不会生效。
+2. **新增**：`PEER_SELF_ADDRESS`、`PEER_CF_DISCOVERY_BASE_URL`、`PEER_PUBLIC_LISTING_ENABLED`、`PEER_STATE_DIR`（可选 `PEER_DISPLAY_NAME`）。
+3. **server-registry 服务**：v0.4.0 不再需要单独的 server-registry。如果你之前部署了它，可以保留运行（无害），但 lobby-service 不会再向它上报，CF discovery worker 已经替代了它的角色。
+4. **客户端**：v0.4.0 客户端只通过 CF discovery + 内置 seeds 聚合节点列表，不再向 `server-registry` 发请求。
+
+历史升级与兼容资料：
+
+- [`./STS2_PEER_SIDECAR_GUIDE_ZH.md`](./STS2_PEER_SIDECAR_GUIDE_ZH.md) —— v0.2.x → v0.3 sidecar 过渡
+- [`./STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md`](./STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md) —— v0.3.2 升级说明
 
 ---
 
@@ -329,71 +377,97 @@ curl http://127.0.0.1:8787/rooms
 
 # STS2 Game Lobby Deployment Guide
 
+> Targets **v0.4.0** (decentralized peer network). If you are upgrading from v0.3.x, see the upgrade notes at the end.
+
 ## Document scope
 
 This is the **current deployment guide** for `lobby-service` and operator-facing client packaging.
 
-Recommended prerequisite reading:
+Prerequisite reading:
 
 1. [`../README.md`](../README.md)
 2. [`../lobby-service/README.md`](../lobby-service/README.md)
 
-This guide documents the **current v0.4.0 recommended path**. Older migration material is intentionally demoted to the historical compatibility section.
+## What changed in v0.4.0 (one sentence)
+
+`lobby-service` no longer reports to any "master registry". Each node advertises its own externally-reachable URL via `PEER_SELF_ADDRESS` and a Cloudflare discovery worker (`PEER_CF_DISCOVERY_BASE_URL`) provides stateless aggregation. All `SERVER_REGISTRY_*` env vars are inert at runtime — setting them does nothing.
 
 ## Current recommended path
 
-1. Deploy `lobby-service` on Linux
-2. Configure public address, admin password hash, and session secret
-3. Choose public-listing mode or private-token mode
-4. Verify `/health`, `/server-admin`, `/announcements`, and `/rooms`
-5. Repackage the client defaults if needed
+1. Install `lobby-service` on Linux
+2. Configure the public address (`RELAY_PUBLIC_HOST` + `PEER_SELF_ADDRESS`), admin password hash, and session secret
+3. Decide whether to join the decentralized public network (`PEER_PUBLIC_LISTING_ENABLED` + admin panel toggle)
+4. Decide on public vs. private/token-gated access
+5. Verify `/health`, `/server-admin`, `/announcements`, `/rooms`, `/peers/health`
+6. Repackage the client defaults if needed
 
 ### Recommended install command
 
 ```bash
 sudo ./scripts/install-lobby-service-linux.sh \
   --install-dir /opt/sts2-lobby \
-  --relay-public-host <你的公网 IP 或域名>
+  --relay-public-host <your public IP or domain>
 ```
 
-### Sanitized examples
+> ⚠️ After install, manually verify `/opt/sts2-lobby/lobby-service/.env` contains `PEER_SELF_ADDRESS` and `PEER_CF_DISCOVERY_BASE_URL`. If missing, add them as below — otherwise `/server-admin` will show "Peer network unconfigured".
+
+### Minimum `PEER_*` settings
 
 ```text
-Lobby URL: http://47.111.146.69:8787
-Control WebSocket: ws://47.111.146.69:8787/control
-Registry URL: http://47.111.146.69:18787
-Create-room token: Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E
+PEER_SELF_ADDRESS=http://<your public IP or domain>:8787
+PEER_CF_DISCOVERY_BASE_URL=https://sts2-gamelobby-register.xyz
+PEER_PUBLIC_LISTING_ENABLED=true
+PEER_STATE_DIR=/app/data/peer
 ```
 
-## Public vs private access
+The canonical reference is [`deploy/lobby-service.env.example`](../deploy/lobby-service.env.example).
 
-- Public listing: set `SERVER_REGISTRY_BASE_URL=http://47.111.146.69:18787`, configure public URLs, then enable listing in `/server-admin`
-- Private mode: keep room list and detailed health private, and use strong tokens
+### Public vs. private access
 
-## Client packaging
+- **Public node**: set `PEER_SELF_ADDRESS` to a public URL and keep `PEER_PUBLIC_LISTING_ENABLED=true`. The CF discovery worker aggregates this node into the client picker.
+- **Private but networked**: `PEER_PUBLIC_LISTING_ENABLED=false`. Direct connections still work; the node just isn't aggregated.
+- **Fully offline of the peer network**: `PEER_NETWORK_ENABLED=false`. Only players who know the direct URL can connect.
+- **Token-gated** (private API): keep defaults `PUBLIC_ROOM_LIST_ENABLED=false`, `PUBLIC_DETAILED_HEALTH_ENABLED=false`, `ENFORCE_LOBBY_ACCESS_TOKEN=true`, `ENFORCE_CREATE_ROOM_TOKEN=true` and issue strong tokens.
+
+### Client packaging
 
 ```bash
-export STS2_LOBBY_DEFAULT_BASE_URL="http://47.111.146.69:8787"
-export STS2_LOBBY_DEFAULT_WS_URL="ws://47.111.146.69:8787/control"
-export STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL="http://47.111.146.69:18787"
-export STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN="Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E"
+export STS2_LOBBY_DEFAULT_BASE_URL="http://<your public IP or domain>:8787"
+export STS2_LOBBY_DEFAULT_WS_URL="ws://<your public IP or domain>:8787/control"
+export STS2_LOBBY_DEFAULT_CREATE_ROOM_TOKEN="<token from server .env>"
 export STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL="https://sts2-gamelobby-register.xyz"
 export STS2_LOBBY_SEEDS_FILE="$PWD/data/seeds.json"
 ./scripts/package-sts2-lan-connect.sh
 ```
 
-如果希望打包后的服务器 picker 默认带上 CF 聚合入口和内置种子，请在打包时同时设置 `STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL` 与 `STS2_LOBBY_SEEDS_FILE`。
+> `STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL` is retained only for diagnostic strings in the v0.4.0 client; you do not need to set it for new packaging.
 
-## Verification
+### Verification
 
-Verify:
+```bash
+curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:8787/probe
+curl http://127.0.0.1:8787/announcements
+curl http://127.0.0.1:8787/rooms
+curl http://127.0.0.1:8787/peers/health
+curl http://127.0.0.1:8787/peers/metrics
+```
 
-- `curl http://127.0.0.1:8787/health`
-- `curl http://127.0.0.1:8787/probe`
-- `curl http://127.0.0.1:8787/announcements`
-- `curl http://127.0.0.1:8787/rooms`
-- Browser access to `/server-admin`
+`/peers/health` should show `publicListing: true`, `selfAddress` matching your public URL, and `activePeers > 0` once aggregation kicks in (1-2 minutes after first boot).
 
-## Historical compatibility
+### Common triage
 
-References to `0.2.2`, `0.2.3`, `0.3.0`, `0.3.1`, and `0.3.2` are kept only for old-deployment compatibility and migration context, not as current deployment recommendations.
+- **"Peer network unconfigured"** in `/server-admin` → `PEER_SELF_ADDRESS` missing from the env file the process actually loaded. Run `sudo ./scripts/diagnose-lobby-peer.sh`.
+- **Stuck on "joining"** → `PEER_SELF_ADDRESS` not reachable from the public internet, or firewall blocks `8787/TCP`.
+- **No relay traffic after a player joins** → `RELAY_PUBLIC_HOST` unset, or `39000-39149/UDP` not allowed through.
+
+### Upgrading from v0.3.x
+
+1. Remove (or ignore) all `SERVER_REGISTRY_*` env vars — they are inert in v0.4.0.
+2. Add `PEER_SELF_ADDRESS`, `PEER_CF_DISCOVERY_BASE_URL`, `PEER_PUBLIC_LISTING_ENABLED`, `PEER_STATE_DIR`.
+3. The standalone `server-registry` service is optional in v0.4.0 — `lobby-service` does not contact it. CF discovery has taken over the aggregation role.
+
+Historical material (kept for old deployments only):
+
+- [`./STS2_PEER_SIDECAR_GUIDE_ZH.md`](./STS2_PEER_SIDECAR_GUIDE_ZH.md)
+- [`./STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md`](./STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md)

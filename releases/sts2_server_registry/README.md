@@ -1,5 +1,8 @@
 # STS2 Server Registry
 
+> ⚠️ **本 README 锁定在 v0.3.x release 快照**。  
+> v0.4.0 起 `server-registry` 已成为可选组件，`lobby-service` 不再向它上报。新部署请优先参考仓库主分支：[`../../server-registry/README.md`](../../server-registry/README.md) 和 [`../../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](../../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md)。
+
 `server-registry/` 是独立部署的母面板服务，负责：
 
 - 子服务器申请公开展示

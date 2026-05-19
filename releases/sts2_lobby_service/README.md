@@ -6,6 +6,11 @@
 
 ---
 
+> ⚠️ **This README is locked to v0.3.3** —— it documents the release tarball captured at that version (commit `e8d4677`, 2026-05-13). All `SERVER_REGISTRY_*` instructions below were correct **for v0.3.x only**; in v0.4.0 they are inert at runtime.  
+> For current (v0.4.0) operator instructions see the live repo: [`../../lobby-service/README.md`](../../lobby-service/README.md) and [`../../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](../../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md).
+
+---
+
 ## 中文
 
 # STS2 Lobby Service

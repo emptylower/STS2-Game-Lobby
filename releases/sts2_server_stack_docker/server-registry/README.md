@@ -1,5 +1,8 @@
 # STS2 Server Registry
 
+> ⚠️ **本 README 来自 v0.3.x release 快照**。v0.4.0 起 `server-registry` 已成为可选组件，lobby-service 不会向它上报。  
+> 当前 v0.4.0 说明：[GitHub](https://github.com/emptylower/STS2-Game-Lobby/blob/main/server-registry/README.md)
+
 `server-registry/` 是独立部署的母面板服务，负责：
 
 - 子服务器申请公开展示

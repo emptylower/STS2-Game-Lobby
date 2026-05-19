@@ -30,14 +30,16 @@
 | 组件 | 路径 | 作用 |
 |------|------|------|
 | 客户端 MOD | `sts2-lan-connect/` | 游戏内大厅 UI、建房 / 加房、续局绑定、默认大厅配置 |
-| 大厅服务 | `lobby-service/` | 房间目录、控制通道、管理面板、公告、relay fallback |
-| 公共列表服务源码 | `server-registry/` | 自建公开列表 / 审核服务的源码与说明 |
+| 大厅服务 | `lobby-service/` | 房间目录、控制通道、管理面板、公告、relay fallback、加入去中心化节点网络 |
+| (可选) 公共列表服务源码 | `server-registry/` | v0.3.x 时代的母面板源码；v0.4.0 不再需要，仅供想自托管列表服务的运维参考 |
 | 文档 | `docs/` | 玩家说明、部署指南、历史兼容文档 |
 | 脚本 | `scripts/` | 构建、打包、安装、同步发布产物 |
 
-### 仓库不包含什么
+### v0.4.0 架构要点
 
-- **官方生产环境的私有母面板 / 审核后台** 不随本仓库发布
+- 节点之间通过 `lobby-service` 内置的 peer-announce 协议彼此发现
+- 客户端通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）拿到聚合节点列表
+- 不再有任何"母面板"或中心化审核后台；`SERVER_REGISTRY_*` 一组环境变量已在 v0.4.0 lobby-service 中完全移除
 
 ### 当前版本
 
@@ -50,7 +52,7 @@
 1. 本页（仓库总览）
 2. [`lobby-service/README.md`](./lobby-service/README.md) — 服主运维手册
 3. [`docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](./docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) — 当前部署主路径
-4. 如需自建公开列表，再看 [`server-registry/README.md`](./server-registry/README.md)
+4. (可选) 想自托管完整公共列表服务时再看 [`server-registry/README.md`](./server-registry/README.md)（v0.4.0 不再依赖它）
 
 **如果你是客户端维护者：**
 1. 本页
@@ -121,23 +123,26 @@ npm start
 下面这些值是当前项目内置 / 文档默认引用的实际入口：
 
 ```text
-大厅基地址: http://47.111.146.69:8787
+默认社区节点(示例): http://47.111.146.69:8787
 控制通道: ws://47.111.146.69:8787/control
-公开列表服务: http://47.111.146.69:18787
-读取 / 建房 token: Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E
+CF 发现入口: https://sts2-gamelobby-register.xyz
+默认建房 token: Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E
 ```
+
+> `http://47.111.146.69:18787`（v0.3.x 的母面板入口）在 v0.4.0 已无运行时角色，仅为兼容旧客户端而保留可达。
 
 ### 文档索引
 
 | 文档 | 说明 |
 |------|------|
 | [`lobby-service/README.md`](./lobby-service/README.md) | 服主 / 运维手册：推荐部署路径、运维入口、环境变量、API |
-| [`docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](./docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) | 当前中文部署主路径 |
-| [`server-registry/README.md`](./server-registry/README.md) | 自建公开列表服务说明 |
+| [`docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](./docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) | 当前中文部署主路径（v0.4.0） |
+| [`docs/STS2_SERVER_DOCKER_OPERATION_GUIDE_ZH.md`](./docs/STS2_SERVER_DOCKER_OPERATION_GUIDE_ZH.md) | Docker 部署与运维指南（v0.4.0 单容器 + v0.3.x 双服务栈兼容路径） |
 | [`docs/CLIENT_RELEASE_README_ZH.md`](./docs/CLIENT_RELEASE_README_ZH.md) | 客户端安装 / 卸载说明 |
 | [`docs/STS2_LAN_CONNECT_USER_GUIDE_ZH.md`](./docs/STS2_LAN_CONNECT_USER_GUIDE_ZH.md) | 玩家侧大厅使用说明 |
-| [`docs/STS2_PEER_SIDECAR_GUIDE_ZH.md`](./docs/STS2_PEER_SIDECAR_GUIDE_ZH.md) | 历史 peer sidecar 兼容文档 |
-| [`docs/STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md`](./docs/STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md) | 历史 v0.3.2 升级说明 |
+| [`server-registry/README.md`](./server-registry/README.md) | (可选) 自托管公共列表服务源码说明，v0.4.0 不再依赖 |
+| [`docs/STS2_PEER_SIDECAR_GUIDE_ZH.md`](./docs/STS2_PEER_SIDECAR_GUIDE_ZH.md) | 历史：v0.2.x → v0.3 peer sidecar 兼容文档 |
+| [`docs/STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md`](./docs/STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md) | 历史：v0.3.2 升级说明 |
 
 ### 许可证
 
@@ -156,14 +161,14 @@ npm start
 | Component | Path | Purpose |
 |-----------|------|---------|
 | Client MOD | `sts2-lan-connect/` | In-game lobby UI, room create/join, save-run binding, default lobby packaging |
-| Lobby Service | `lobby-service/` | Room directory, control channel, admin panel, announcements, relay fallback |
-| Public listing service source | `server-registry/` | Source and docs for self-hosted public listing / review service |
+| Lobby Service | `lobby-service/` | Room directory, control channel, admin panel, announcements, relay fallback, decentralized peer-network membership |
+| (Optional) Public listing service source | `server-registry/` | Source for v0.3.x-style self-hosted public listing service; not required in v0.4.0 |
 | Docs | `docs/` | Player docs, deployment guide, historical compatibility notes |
 | Scripts | `scripts/` | Build, package, install, and release-sync helpers |
 
-### What is not included
+### v0.4.0 architecture in one paragraph
 
-- The **official production master panel / review backend** is not published in this repository
+Each `lobby-service` node advertises itself to peers via the built-in peer-announce protocol. Clients aggregate the public node list through a Cloudflare discovery worker (`https://sts2-gamelobby-register.xyz`). There is no master panel and no central review backend; the `SERVER_REGISTRY_*` env vars from v0.3.x have been removed from `lobby-service` and are inert in v0.4.0.
 
 ### Current versions
 
@@ -176,7 +181,7 @@ npm start
 1. This README
 2. [`lobby-service/README.md`](./lobby-service/README.md)
 3. [`docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](./docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) *(current deployment guide, Chinese)*
-4. [`server-registry/README.md`](./server-registry/README.md) if you want to self-host a public listing
+4. (Optional) [`server-registry/README.md`](./server-registry/README.md) only if you want to self-host the v0.3.x-style public listing service — v0.4.0 itself does not require it
 
 **For client maintainers:**
 1. This README
@@ -205,10 +210,12 @@ sudo ./scripts/install-lobby-service-linux.sh \
 **Current project defaults**
 
 ```text
-Lobby base URL: http://47.111.146.69:8787
+Sample community node: http://47.111.146.69:8787
 Control WebSocket: ws://47.111.146.69:8787/control
-Registry endpoint: http://47.111.146.69:18787
-Default token: Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E
+CF discovery worker: https://sts2-gamelobby-register.xyz
+Default create-room token: Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E
 ```
+
+> The legacy `http://47.111.146.69:18787` registry endpoint has no runtime role in v0.4.0; it is kept reachable only for older clients.
 
 For operator details, environment variables, and API reference, go to [`lobby-service/README.md`](./lobby-service/README.md).

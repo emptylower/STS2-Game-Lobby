@@ -1,7 +1,11 @@
 # STS2 Peer Sidecar 部署指南
 
+> ⚠️ **本文档对应 v0.2.x → v0.3 过渡，不是当前推荐版本**。  
+> v0.4.0 节点网络协议已经直接内置在 `lobby-service` 中，新部署无需 sidecar。新部署或升级到 v0.4.0 请改看 [`./STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](./STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md)。  
+> 本文保留作为 v0.2.x 历史兼容材料。
+
 > 此 sidecar 让旧版 lobby-service（v0.2.x）也能加入 v0.3 的去中心化 peer 发现网络，
-> 无需立即升级 lobby 主进程。新搭建的 lobby v0.3 不需要 sidecar（peer 协议已内置）。
+> 无需立即升级 lobby 主进程。新搭建的 lobby v0.3 / v0.4.0 不需要 sidecar（peer 协议已内置）。
 
 ## 1. 适用场景
 
