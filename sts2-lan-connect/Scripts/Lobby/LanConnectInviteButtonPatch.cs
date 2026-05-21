@@ -12,8 +12,23 @@ namespace Sts2LanConnect.Scripts;
 internal static class LanConnectInviteButtonPatch
 {
     private const string InviteButtonName = "LanConnectLobbyInviteButton";
+    private const string ContinueRunInviteButtonName = "LanConnectContinueRunInviteButton";
+    private const string NativeInviteContainerName = "InviteButtonContainer";
+    private const string NativeInviteControlName = "InviteButton";
+    private const float ContinueRunInviteLeft = 72f;
+    private const float ContinueRunInviteTop = 96f;
+    private const float ContinueRunInviteWidth = 200f;
+    private const float ContinueRunInviteHeight = 50f;
     private const string HookedMetaKey = "sts2_lan_connect_invite_button_hooks";
+    private const string ContinueRunHookedMetaKey = "sts2_lan_connect_continue_run_invite_button_hooks";
     private const string NativeInviteManagedMetaKey = "sts2_lan_connect_native_invite_button_managed";
+    private const string NativeInviteControlHookedMetaKey = "sts2_lan_connect_native_invite_control_hooks";
+    private static readonly string[] RemotePlayerContainerScenePaths =
+    {
+        "res://scenes/screens/remote_player_container.tscn",
+        "res://scenes/screens/char_select/remote_player_container.tscn",
+        "res://scenes/screens/character_select/remote_player_container.tscn"
+    };
     private static readonly Harmony NativeInviteHarmony = new("sts2_lan_connect.invite_button");
     private static bool _nativeInvitePatched;
 
@@ -73,9 +88,32 @@ internal static class LanConnectInviteButtonPatch
         QueueEnsureInviteButton(screen, source);
     }
 
+    internal static void ScheduleEnsureInviteButton(Control screen, string source)
+    {
+        if (!GodotObject.IsInstanceValid(screen))
+        {
+            return;
+        }
+
+        if (!screen.HasMeta(ContinueRunHookedMetaKey))
+        {
+            screen.SetMeta(ContinueRunHookedMetaKey, true);
+            screen.Connect(Node.SignalName.TreeEntered, Callable.From(() => QueueEnsureContinueRunInviteButton(screen, "tree_entered")));
+            screen.Connect(Node.SignalName.Ready, Callable.From(() => QueueEnsureContinueRunInviteButton(screen, "ready")));
+            screen.Connect(CanvasItem.SignalName.VisibilityChanged, Callable.From(() => QueueEnsureContinueRunInviteButton(screen, "visibility_changed")));
+        }
+
+        QueueEnsureContinueRunInviteButton(screen, source);
+    }
+
     private static void QueueEnsureInviteButton(NCharacterSelectScreen screen, string source)
     {
         Callable.From(() => TryEnsureInviteButton(screen, source)).CallDeferred();
+    }
+
+    private static void QueueEnsureContinueRunInviteButton(Control screen, string source)
+    {
+        Callable.From(() => TryEnsureContinueRunInviteButton(screen, source)).CallDeferred();
     }
 
     private static void TryEnsureInviteButton(NCharacterSelectScreen screen, string source)
@@ -141,6 +179,73 @@ internal static class LanConnectInviteButtonPatch
         CreateLobbyInviteButton(screen);
     }
 
+    private static void TryEnsureContinueRunInviteButton(Control screen, string source)
+    {
+        if (!GodotObject.IsInstanceValid(screen) || !screen.IsInsideTree() || !screen.IsNodeReady())
+        {
+            return;
+        }
+
+        Control? existing = screen.FindChild(ContinueRunInviteButtonName, recursive: true, owned: false) as Control;
+        Control? nativeInviteContainer = existing == null ? FindNativeInviteContainer(screen) : FindNativeInviteContainer(existing);
+        Control? nativeInviteControl = existing == null ? FindNativeInviteControl(screen, nativeInviteContainer) : FindNativeInviteControl(existing, nativeInviteContainer);
+        NInvitePlayersButton? nativeInvite = nativeInviteControl as NInvitePlayersButton ?? FindNativeInviteButton(screen);
+        bool shouldShow = LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true;
+        if (!shouldShow)
+        {
+            if (existing != null)
+            {
+                existing.Visible = false;
+            }
+
+            HideManagedNativeInvite(nativeInvite, nativeInviteControl, nativeInviteContainer);
+            return;
+        }
+
+        if (nativeInvite != null)
+        {
+            if (existing != null)
+            {
+                existing.Visible = false;
+            }
+
+            RepurposeNativeInviteButton(nativeInvite);
+            return;
+        }
+
+        if (nativeInviteControl != null)
+        {
+            if (existing != null)
+            {
+                existing.Visible = false;
+            }
+
+            RepurposeNativeInviteControl(nativeInviteControl, nativeInviteContainer);
+            return;
+        }
+
+        if (existing != null)
+        {
+            existing.Visible = true;
+            ReparentAndPositionContinueRunInvite(screen, existing);
+            if (nativeInvite != null)
+            {
+                RepurposeNativeInviteButton(nativeInvite);
+            }
+            else if (nativeInviteControl != null)
+            {
+                RepurposeNativeInviteControl(nativeInviteControl, nativeInviteContainer);
+            }
+            return;
+        }
+
+        Control inviteControl = CreateContinueRunInviteControl();
+        screen.AddChild(inviteControl);
+        ReparentAndPositionContinueRunInvite(screen, inviteControl);
+        Log.Info($"sts2_lan_connect: continue-run invite button created via {source}");
+        QueueEnsureContinueRunInviteButton(screen, "continue_invite_created");
+    }
+
     private static bool HasManagedLobbyInviteButton(NCharacterSelectScreen screen)
     {
         if (screen.FindChild(InviteButtonName, recursive: true, owned: false) is Button)
@@ -169,6 +274,43 @@ internal static class LanConnectInviteButtonPatch
         }
 
         return null;
+    }
+
+    private static Control? FindNativeInviteContainer(Node root)
+    {
+        return root.FindChild(NativeInviteContainerName, recursive: true, owned: false) as Control;
+    }
+
+    private static Control? FindNativeInviteControl(Node root, Control? container)
+    {
+        if (container?.FindChild(NativeInviteControlName, recursive: true, owned: false) is Control inviteControl)
+        {
+            return inviteControl;
+        }
+
+        return root.FindChild(NativeInviteControlName, recursive: true, owned: false) as Control;
+    }
+
+    private static void ReparentAndPositionContinueRunInvite(Control screen, Control inviteControl)
+    {
+        if (inviteControl.GetParent() != screen)
+        {
+            inviteControl.GetParent()?.RemoveChild(inviteControl);
+            screen.AddChild(inviteControl);
+        }
+
+        inviteControl.SetAnchorsPreset(Control.LayoutPreset.TopLeft);
+        inviteControl.AnchorLeft = 0f;
+        inviteControl.AnchorRight = 0f;
+        inviteControl.AnchorTop = 0f;
+        inviteControl.AnchorBottom = 0f;
+        inviteControl.OffsetLeft = ContinueRunInviteLeft;
+        inviteControl.OffsetTop = ContinueRunInviteTop;
+        inviteControl.OffsetRight = ContinueRunInviteLeft + ContinueRunInviteWidth;
+        inviteControl.OffsetBottom = ContinueRunInviteTop + ContinueRunInviteHeight;
+        inviteControl.CustomMinimumSize = new Vector2(ContinueRunInviteWidth, ContinueRunInviteHeight);
+        inviteControl.MouseFilter = Control.MouseFilterEnum.Pass;
+        inviteControl.ZIndex = 25;
     }
 
     private static bool OnNativeInviteReleasePrefix(NInvitePlayersButton __instance)
@@ -223,6 +365,69 @@ internal static class LanConnectInviteButtonPatch
         }
     }
 
+    private static void RepurposeNativeInviteControl(Control nativeControl, Control? container)
+    {
+        nativeControl.SetMeta(NativeInviteManagedMetaKey, true);
+        nativeControl.Visible = true;
+        nativeControl.MouseFilter = Control.MouseFilterEnum.Stop;
+        nativeControl.TooltipText = "生成邀请码并复制到剪贴板，发给朋友即可一键加入。";
+        if (container != null)
+        {
+            container.Visible = true;
+        }
+        else if (nativeControl.GetParent() is CanvasItem parent)
+        {
+            parent.Visible = true;
+        }
+
+        if (nativeControl.GetNodeOrNull<MegaRichTextLabel>("Label") is { } label)
+        {
+            label.SetTextAutoSize("大厅邀请");
+        }
+
+        if (!nativeControl.HasMeta(NativeInviteControlHookedMetaKey))
+        {
+            nativeControl.SetMeta(NativeInviteControlHookedMetaKey, true);
+            if (nativeControl is Button button)
+            {
+                button.Pressed += OnLobbyInvitePressed;
+            }
+            else
+            {
+                nativeControl.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnNativeInviteControlGuiInput));
+            }
+        }
+    }
+
+    private static void HideManagedNativeInvite(NInvitePlayersButton? nativeInvite, Control? nativeControl, Control? container)
+    {
+        if (nativeInvite != null && nativeInvite.HasMeta(NativeInviteManagedMetaKey))
+        {
+            nativeInvite.Visible = false;
+        }
+
+        if (nativeControl != null && nativeControl.HasMeta(NativeInviteManagedMetaKey))
+        {
+            nativeControl.Visible = false;
+        }
+
+        if (container != null && (nativeInvite?.HasMeta(NativeInviteManagedMetaKey) == true || nativeControl?.HasMeta(NativeInviteManagedMetaKey) == true))
+        {
+            container.Visible = false;
+        }
+    }
+
+    private static void OnNativeInviteControlGuiInput(InputEvent inputEvent)
+    {
+        switch (inputEvent)
+        {
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false }:
+            case InputEventScreenTouch { Pressed: false }:
+                OnLobbyInvitePressed();
+                break;
+        }
+    }
+
     private static void CreateLobbyInviteButton(NCharacterSelectScreen screen)
     {
         Button inviteButton = new()
@@ -263,6 +468,95 @@ internal static class LanConnectInviteButtonPatch
 
         screen.AddChild(inviteButton);
         Log.Info("sts2_lan_connect: lobby invite button created on character select screen");
+    }
+
+    private static Control CreateContinueRunInviteControl()
+    {
+        Control? nativeClone = TryCloneNativeInviteContainer();
+        if (nativeClone != null)
+        {
+            nativeClone.Name = ContinueRunInviteButtonName;
+            nativeClone.Visible = true;
+            return nativeClone;
+        }
+
+        return CreateFallbackContinueRunInviteControl();
+    }
+
+    private static Control? TryCloneNativeInviteContainer()
+    {
+        foreach (string scenePath in RemotePlayerContainerScenePaths)
+        {
+            try
+            {
+                if (!ResourceLoader.Exists(scenePath))
+                {
+                    continue;
+                }
+
+                PackedScene? scene = ResourceLoader.Load<PackedScene>(scenePath);
+                Control? sceneRoot = scene?.Instantiate<Control>();
+                Control? inviteContainer = sceneRoot == null ? null : FindNativeInviteContainer(sceneRoot);
+                if (sceneRoot == null || inviteContainer == null)
+                {
+                    sceneRoot?.QueueFree();
+                    continue;
+                }
+
+                inviteContainer.GetParent()?.RemoveChild(inviteContainer);
+                sceneRoot.QueueFree();
+                return inviteContainer;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"sts2_lan_connect: failed to clone native invite button from {scenePath}: {ex.Message}");
+            }
+        }
+
+        return null;
+    }
+
+    private static Control CreateFallbackContinueRunInviteControl()
+    {
+        Control container = new()
+        {
+            Name = ContinueRunInviteButtonName,
+            CustomMinimumSize = new Vector2(0f, 50f),
+            MouseFilter = Control.MouseFilterEnum.Pass
+        };
+
+        Button inviteButton = new()
+        {
+            Name = NativeInviteControlName,
+            Text = "大厅邀请",
+            TooltipText = "生成邀请码并复制到剪贴板，发给朋友即可一键加入。",
+            CustomMinimumSize = new Vector2(ContinueRunInviteWidth, ContinueRunInviteHeight),
+            MouseFilter = Control.MouseFilterEnum.Stop,
+        };
+
+        Color bgColor = new(0.28f, 0.21f, 0.08f, 0.96f);
+        Color hoverColor = new(0.37f, 0.28f, 0.11f, 0.98f);
+        Color pressedColor = new(0.47f, 0.34f, 0.12f, 1f);
+        Color borderColor = new(0.86f, 0.69f, 0.33f, 1f);
+        Color textColor = new(0.96f, 0.94f, 0.88f, 1f);
+
+        inviteButton.AddThemeColorOverride("font_color", textColor);
+        inviteButton.AddThemeColorOverride("font_hover_color", textColor);
+        inviteButton.AddThemeColorOverride("font_pressed_color", textColor);
+        inviteButton.AddThemeStyleboxOverride("normal", CreateBorderedStyle(bgColor, borderColor));
+        inviteButton.AddThemeStyleboxOverride("hover", CreateBorderedStyle(hoverColor, borderColor));
+        inviteButton.AddThemeStyleboxOverride("pressed", CreateBorderedStyle(pressedColor, borderColor));
+        inviteButton.AnchorLeft = 0.5f;
+        inviteButton.AnchorRight = 0.5f;
+        inviteButton.AnchorTop = 0f;
+        inviteButton.AnchorBottom = 0f;
+        inviteButton.OffsetLeft = 0f;
+        inviteButton.OffsetRight = ContinueRunInviteWidth;
+        inviteButton.OffsetTop = 0f;
+        inviteButton.OffsetBottom = ContinueRunInviteHeight;
+        container.Visible = true;
+        container.AddChild(inviteButton);
+        return container;
     }
 
     private static void OnLobbyInvitePressed()
@@ -312,4 +606,26 @@ internal static class LanConnectInviteButtonPatch
             ContentMarginBottom = 8,
         };
     }
+
+    private static StyleBoxFlat CreateBorderedStyle(Color bgColor, Color borderColor)
+    {
+        return new StyleBoxFlat
+        {
+            BgColor = bgColor,
+            BorderColor = borderColor,
+            BorderWidthBottom = 1,
+            BorderWidthTop = 1,
+            BorderWidthLeft = 1,
+            BorderWidthRight = 1,
+            CornerRadiusTopLeft = 14,
+            CornerRadiusTopRight = 14,
+            CornerRadiusBottomLeft = 14,
+            CornerRadiusBottomRight = 14,
+            ContentMarginLeft = 14,
+            ContentMarginTop = 8,
+            ContentMarginRight = 14,
+            ContentMarginBottom = 8,
+        };
+    }
+
 }
