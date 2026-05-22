@@ -22,6 +22,7 @@
     "test": "npm run build && find dist -name '*.test.js' -print0 | xargs -0 node --test"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "express": "^5.1.0",
     "ws": "^8.18.3"
   },
