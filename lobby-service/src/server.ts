@@ -1,3 +1,5 @@
+import dotenv from 'dotenv';
+dotenv.config();
 import { randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { readFileSync } from "node:fs";
