@@ -140,6 +140,7 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
 
             LanConnectMultiplayerSaveRoomBinding.PersistBinding(context.Run, binding.RoomName, binding.Password, binding.GameMode, "continue_save_publish");
             CompletedScreens.Add(screen.GetInstanceId());
+            LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(screen, "continue_save_publish");
             GD.Print(
                 $"sts2_lan_connect continue_run_publish: publish succeeded screen={context.ScreenType}, saveKey={binding.SaveKey}, roomName='{binding.RoomName}'");
             LanConnectPopupUtil.ShowInfo($"已为当前多人存档自动恢复大厅房间：{binding.RoomName}\n队友现在可以从“游戏大厅”重新加入。");

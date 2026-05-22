@@ -147,6 +147,7 @@ internal static class LanConnectSceneReadyPatches
     {
         EnsureDeferredAndroidPatches();
         LanConnectContinueRunLobbyAutoPublisher.ScheduleEnsureAutoPublish(__instance, "ready_postfix");
+        LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(__instance, "load_ready_postfix");
     }
 
     private static void OnCustomRunLoadScreenReady(NCustomRunLoadScreen __instance)
