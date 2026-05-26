@@ -1442,7 +1442,7 @@ function toRoomListView(room: ReturnType<LobbyStore["listRooms"]>[number], inclu
     savedRun: room.savedRun
       ? {
           slots: room.savedRun.slots.map((slot) => ({
-            netId: includeSensitiveSavedRun ? slot.netId : "",
+            netId: slot.netId,
             characterId: slot.characterId,
             characterName: slot.characterName,
             playerName: includeSensitiveSavedRun ? slot.playerName : "",
