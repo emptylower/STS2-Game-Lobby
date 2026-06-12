@@ -102,6 +102,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Label? _roomHintLabel;
     private LineEdit? _roomSearchInput;
     private Button? _roomFilterMenuButton;
+    private Button? _clearRoomSearchButton;
     private Control? _filterDialogContainer;
     private Button? _filterPublicButton;
     private Button? _filterLockedButton;
@@ -189,6 +190,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private double _healthPulseTime;
     private Color _healthIndicatorDotColor = SuccessColor;
     private CancellationTokenSource? _activeJoinCancellationSource;
+    private Control? _dialogReturnFocusTarget;
+    private Control? _progressDialogReturnFocusTarget;
+    private string? _pendingRoomCardFocusRestoreId;
 
     public void Initialize(NMultiplayerSubmenu submenu, NSubmenuButton templateButton, NSubmenuStack stack, Control loadingOverlay)
     {
@@ -227,8 +231,172 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         EnsureAnnouncementFallback();
         RebuildRoomStage();
         UpdateActionButtons();
+        FocusInitialLobbyControl();
         CheckClipboardForInviteCode();
         TaskHelper.RunSafely(CheckConnectivityAndRefreshAsync());
+    }
+
+    public override void _Input(InputEvent inputEvent)
+    {
+        if (HandleLobbyKeyInput(inputEvent))
+        {
+            GetViewport().SetInputAsHandled();
+        }
+    }
+
+    public override void _UnhandledInput(InputEvent inputEvent)
+    {
+        if (HandleLobbyKeyInput(inputEvent))
+        {
+            AcceptEvent();
+        }
+    }
+
+    private bool HandleLobbyKeyInput(InputEvent inputEvent)
+    {
+        if (!Visible || inputEvent is not InputEventKey { Pressed: true, Echo: false } keyEvent)
+        {
+            return false;
+        }
+
+        if (keyEvent.Keycode == Key.Escape)
+        {
+            if (CloseTopmostDialogFromKeyboard())
+            {
+                return true;
+            }
+
+            HideOverlay();
+            return true;
+        }
+
+        if (keyEvent.Keycode == Key.F7)
+        {
+            return HandleInviteHotkey();
+        }
+
+        if (TryMoveFocusFromKeyboard(keyEvent))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool HandleInviteHotkey()
+    {
+        bool inviteDialogVisible = _inviteConfirmDialogContainer?.Visible == true;
+        LanConnectInviteEntryDecision inviteDecision = LanConnectInviteEntryDecider.Decide(DisplayServer.ClipboardGet());
+        LanConnectAccessibilityHotkeyRoute route = LanConnectAccessibilityHotkeyRouter.Route(
+            LanConnectAccessibilityHotkey.F7Invite,
+            new LanConnectAccessibilityHotkeyContext(
+                TextInputHasFocus: GetViewport().GuiGetFocusOwner() is LineEdit,
+                InviteDialogVisible: inviteDialogVisible && _pendingInvitePayload != null,
+                ClipboardHasInvite: inviteDecision.Action == LanConnectInviteEntryAction.ShowInvite,
+                ChatAvailable: false));
+
+        switch (route.Action)
+        {
+            case LanConnectAccessibilityHotkeyAction.AcceptVisibleInvite:
+                TaskHelper.RunSafely(AcceptInviteAsync());
+                return true;
+            case LanConnectAccessibilityHotkeyAction.ShowClipboardInvite when inviteDecision.Payload != null:
+                ShowInviteConfirmDialog(inviteDecision.Payload);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private bool CloseTopmostDialogFromKeyboard()
+    {
+        if (_progressDialogContainer?.Visible == true)
+        {
+            if (_progressDialogAllowCancel)
+            {
+                CancelActiveJoinRequest();
+            }
+
+            return true;
+        }
+
+        if (_inviteConfirmDialogContainer?.Visible == true)
+        {
+            CloseInviteConfirmDialog();
+            return true;
+        }
+
+        if (_resumeSlotDialogContainer?.Visible == true)
+        {
+            CloseResumeSlotDialog();
+            return true;
+        }
+
+        if (_joinPasswordDialogContainer?.Visible == true)
+        {
+            CloseJoinPasswordDialog();
+            return true;
+        }
+
+        if (_createGuardDialogContainer?.Visible == true)
+        {
+            CloseCreateGuardDialog();
+            return true;
+        }
+
+        if (_createDialogContainer?.Visible == true)
+        {
+            CloseCreateDialog();
+            return true;
+        }
+
+        if (_filterDialogContainer?.Visible == true)
+        {
+            CloseFilterDialog();
+            return true;
+        }
+
+        return false;
+    }
+
+    private void RememberDialogReturnFocus()
+    {
+        _dialogReturnFocusTarget = CaptureFocusTarget();
+    }
+
+    private void RestoreDialogReturnFocus()
+    {
+        RestoreFocusTarget(ref _dialogReturnFocusTarget);
+    }
+
+    private void RememberProgressDialogReturnFocus()
+    {
+        _progressDialogReturnFocusTarget = CaptureFocusTarget();
+    }
+
+    private void RestoreProgressDialogReturnFocus()
+    {
+        RestoreFocusTarget(ref _progressDialogReturnFocusTarget);
+    }
+
+    private Control? CaptureFocusTarget()
+    {
+        Control? focusOwner = GetViewport()?.GuiGetFocusOwner();
+        return focusOwner != null && GodotObject.IsInstanceValid(focusOwner) ? focusOwner : null;
+    }
+
+    private void RestoreFocusTarget(ref Control? focusTarget)
+    {
+        Control? target = focusTarget;
+        focusTarget = null;
+        if (target != null && GodotObject.IsInstanceValid(target) && target.IsInsideTree() && target.Visible)
+        {
+            target.GrabFocus();
+        }
+        else
+        {
+            _refreshButton?.GrabFocus();
+        }
     }
 
     private async Task CheckConnectivityAndRefreshAsync()
@@ -299,6 +467,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         HideProgressDialog();
+        _dialogReturnFocusTarget = null;
+        _progressDialogReturnFocusTarget = null;
+        _pendingRoomCardFocusRestoreId = null;
     }
 
     private void BuildUi()
@@ -306,6 +477,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Name = LanConnectConstants.LobbyOverlayName;
         Visible = false;
         ProcessMode = ProcessModeEnum.Always;
+        FocusMode = FocusModeEnum.All;
         MouseFilter = MouseFilterEnum.Stop;
         SetAnchorsPreset(LayoutPreset.FullRect);
         Connect(Control.SignalName.Resized, Callable.From(ApplyResponsiveLayout));
@@ -672,6 +844,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             TooltipText = UiText("清空当前搜索关键词"),
             CustomMinimumSize = new Vector2(76f, 44f)
         };
+        _clearRoomSearchButton = clearButton;
         // Ghost style normally, green bg + white text + press animation on hover/press
         clearButton.AddThemeStyleboxOverride("normal", new StyleBoxEmpty { ContentMarginLeft = 15, ContentMarginRight = 15, ContentMarginTop = 9, ContentMarginBottom = 9 });
         clearButton.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(SuccessColor, BorderColor, 2, 10, 3, 1));
@@ -714,6 +887,213 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         UpdateRoomFilterButtons();
         return barPanel;
+    }
+
+    private void FocusInitialLobbyControl()
+    {
+        Callable.From(() =>
+        {
+            if (!Visible)
+            {
+                return;
+            }
+
+            Control? focusOwner = GetViewport()?.GuiGetFocusOwner();
+            if (focusOwner != null && GodotObject.IsInstanceValid(focusOwner) && IsNodeWithinOverlay(focusOwner))
+            {
+                return;
+            }
+
+            (_roomSearchInput as Control ?? GetLobbyFocusTargets().FirstOrDefault())?.GrabFocus();
+        }).CallDeferred();
+    }
+
+    private bool TryMoveFocusFromKeyboard(InputEventKey keyEvent)
+    {
+        bool forward = keyEvent.Keycode == Key.Tab && !keyEvent.ShiftPressed
+                       || keyEvent.Keycode is Key.Down or Key.Right
+                       || keyEvent.IsActionPressed("ui_focus_next")
+                       || keyEvent.IsActionPressed("ui_down")
+                       || keyEvent.IsActionPressed("ui_right");
+        bool backward = keyEvent.Keycode == Key.Tab && keyEvent.ShiftPressed
+                        || keyEvent.Keycode is Key.Up or Key.Left
+                        || keyEvent.IsActionPressed("ui_focus_prev")
+                        || keyEvent.IsActionPressed("ui_up")
+                        || keyEvent.IsActionPressed("ui_left");
+
+        if (!forward && !backward)
+        {
+            return false;
+        }
+
+        Control? focusOwner = GetViewport()?.GuiGetFocusOwner();
+        if (focusOwner is LineEdit && keyEvent.Keycode is Key.Left or Key.Right)
+        {
+            return false;
+        }
+
+        IReadOnlyList<Control> targets = GetActiveFocusTargets();
+        if (targets.Count == 0)
+        {
+            return false;
+        }
+
+        int currentIndex = -1;
+        if (focusOwner != null && GodotObject.IsInstanceValid(focusOwner))
+        {
+            for (int i = 0; i < targets.Count; i++)
+            {
+                if (ReferenceEquals(targets[i], focusOwner) || IsDescendantOf(focusOwner, targets[i]))
+                {
+                    currentIndex = i;
+                    break;
+                }
+            }
+        }
+
+        int nextIndex = currentIndex < 0
+            ? (forward ? 0 : targets.Count - 1)
+            : (currentIndex + (forward ? 1 : -1) + targets.Count) % targets.Count;
+        targets[nextIndex].GrabFocus();
+        return true;
+    }
+
+    private IReadOnlyList<Control> GetActiveFocusTargets()
+    {
+        Control? topmostDialog = GetTopmostVisibleDialog();
+        if (topmostDialog != null)
+        {
+            List<Control> dialogTargets = new();
+            AddFocusableDescendants(dialogTargets, topmostDialog);
+            return dialogTargets;
+        }
+
+        return GetLobbyFocusTargets();
+    }
+
+    private Control? GetTopmostVisibleDialog()
+    {
+        if (_progressDialogContainer?.Visible == true) return _progressDialogContainer;
+        if (_inviteConfirmDialogContainer?.Visible == true) return _inviteConfirmDialogContainer;
+        if (_resumeSlotDialogContainer?.Visible == true) return _resumeSlotDialogContainer;
+        if (_joinPasswordDialogContainer?.Visible == true) return _joinPasswordDialogContainer;
+        if (_createGuardDialogContainer?.Visible == true) return _createGuardDialogContainer;
+        if (_createDialogContainer?.Visible == true) return _createDialogContainer;
+        if (_filterDialogContainer?.Visible == true) return _filterDialogContainer;
+        return null;
+    }
+
+    private static void AddFocusableDescendants(List<Control> targets, Node node)
+    {
+        foreach (Node child in node.GetChildren())
+        {
+            if (child is Control control)
+            {
+                AddFocusTarget(targets, control);
+            }
+
+            AddFocusableDescendants(targets, child);
+        }
+    }
+
+    private IReadOnlyList<Control> GetLobbyFocusTargets()
+    {
+        List<Control> targets = new();
+
+        AddFocusTarget(targets, _chooseDirectoryServerButton);
+        AddFocusTarget(targets, _settingsButton);
+        AddFocusTarget(targets, _closeButton);
+
+        if (_settingsSection?.Visible == true)
+        {
+            AddFocusTarget(targets, _displayNameInput);
+            AddFocusTarget(targets, _toggleNetworkSettingsButton);
+            if (_networkSettingsContainer?.Visible == true)
+            {
+                AddFocusTarget(targets, _serverBaseUrlInput);
+                AddFocusTarget(targets, _createRoomTokenInput);
+                AddFocusTarget(targets, _toggleSensitiveNetworkButton);
+                AddFocusTarget(targets, _clearNetworkOverridesButton);
+            }
+            AddFocusTarget(targets, _repairSaveButton);
+            AddFocusTarget(targets, _copyDebugReportButton);
+        }
+
+        AddFocusTarget(targets, _roomSearchInput);
+        AddFocusTarget(targets, _roomFilterMenuButton);
+        AddFocusTarget(targets, _clearRoomSearchButton);
+        AddFocusTarget(targets, _pagePreviousButton);
+        AddFocusTarget(targets, _pageNextButton);
+        AddRoomCardFocusTargets(targets);
+        AddFocusTarget(targets, _createButton);
+        AddFocusTarget(targets, _joinButton);
+        AddFocusTarget(targets, _refreshButton);
+        AddFocusTarget(targets, _closeRoomButton);
+
+        return targets;
+    }
+
+    private void AddRoomCardFocusTargets(List<Control> targets)
+    {
+        if (_roomListContainer == null)
+        {
+            return;
+        }
+
+        foreach (Node child in _roomListContainer.GetChildren())
+        {
+            if (child is Control control && control.HasMeta("room_id"))
+            {
+                AddFocusTarget(targets, control);
+            }
+        }
+    }
+
+    private static void AddFocusTarget(List<Control> targets, Control? control)
+    {
+        if (control == null || !GodotObject.IsInstanceValid(control) || !control.IsInsideTree())
+        {
+            return;
+        }
+
+        if (!control.Visible || control.FocusMode == FocusModeEnum.None || control is BaseButton { Disabled: true })
+        {
+            return;
+        }
+
+        targets.Add(control);
+    }
+
+    private bool IsNodeWithinOverlay(Node node)
+    {
+        Node? current = node;
+        while (current != null)
+        {
+            if (ReferenceEquals(current, this))
+            {
+                return true;
+            }
+
+            current = current.GetParent();
+        }
+
+        return false;
+    }
+
+    private static bool IsDescendantOf(Node node, Node ancestor)
+    {
+        Node? current = node;
+        while (current != null)
+        {
+            if (ReferenceEquals(current, ancestor))
+            {
+                return true;
+            }
+
+            current = current.GetParent();
+        }
+
+        return false;
     }
 
     private Control BuildRoomPagerRow()
@@ -1431,12 +1811,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void SyncFilterDialogButtons()
     {
-        ApplyFilterChipStyle(_filterPublicButton, _showPublicRooms);
-        ApplyFilterChipStyle(_filterLockedButton, _showLockedRooms);
-        ApplyFilterChipStyle(_filterJoinableButton, _joinableOnlyFilter);
-        ApplyFilterChipStyle(_filterStandardButton, _showStandardMode);
-        ApplyFilterChipStyle(_filterDailyButton, _showDailyMode);
-        ApplyFilterChipStyle(_filterCustomButton, _showCustomMode);
+        if (_filterPublicButton != null) ApplyFilterChipStyle(_filterPublicButton, _showPublicRooms);
+        if (_filterLockedButton != null) ApplyFilterChipStyle(_filterLockedButton, _showLockedRooms);
+        if (_filterJoinableButton != null) ApplyFilterChipStyle(_filterJoinableButton, _joinableOnlyFilter);
+        if (_filterStandardButton != null) ApplyFilterChipStyle(_filterStandardButton, _showStandardMode);
+        if (_filterDailyButton != null) ApplyFilterChipStyle(_filterDailyButton, _showDailyMode);
+        if (_filterCustomButton != null) ApplyFilterChipStyle(_filterCustomButton, _showCustomMode);
         // Also update the 筛选 button accent state in the search bar
         if (_roomFilterMenuButton != null)
         {
@@ -1447,9 +1827,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private void OpenFilterDialog()
     {
         if (_filterDialogContainer == null) return;
+        RememberDialogReturnFocus();
         SyncFilterDialogButtons();
         _filterDialogContainer.Visible = true;
         _filterDialogContainer.MoveToFront();
+        _filterPublicButton?.GrabFocus();
     }
 
     private void CloseFilterDialog()
@@ -1458,6 +1840,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             _filterDialogContainer.Visible = false;
         }
+
+        RestoreDialogReturnFocus();
     }
 
     private Control CreateDialogShell(out VBoxContainer body)
@@ -1794,6 +2178,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
+        string? focusedRoomId = GetFocusedRoomCardId();
+        if (!string.IsNullOrWhiteSpace(focusedRoomId))
+        {
+            _pendingRoomCardFocusRestoreId = focusedRoomId;
+        }
+
         foreach (Node child in _roomListContainer.GetChildren())
         {
             child.QueueFree();
@@ -1841,6 +2231,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             }
 
             UpdatePageControls(filteredRooms.Count);
+            _pendingRoomCardFocusRestoreId = null;
             return;
         }
 
@@ -1849,6 +2240,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             _selectedRoomId = null;
             UpdatePageControls(filteredRooms.Count);
+            _pendingRoomCardFocusRestoreId = null;
             return;
         }
 
@@ -1882,6 +2274,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             };
             _roomListContainer.AddChild(spacer);
         }
+
+        RestorePendingRoomCardFocus(pageRooms);
 
         // Dynamic selection status goes to the action availability label (sidebar), not the bottom hint
         if (selectedIsHostRoom)
@@ -2235,6 +2629,31 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         card.SizeFlagsStretchRatio = 1f;
         card.MouseFilter = MouseFilterEnum.Stop;
         card.MouseDefaultCursorShape = CursorShape.PointingHand;
+        card.FocusMode = FocusModeEnum.All;
+        card.Name = $"RoomCard_{SanitizeNodeName(room.RoomId)}";
+        card.SetMeta("room_id", room.RoomId);
+
+        string? joinDisabledReason = null;
+        bool canJoin = !isHostRoom && CanJoinRoom(room, out joinDisabledReason);
+        Label accessibilityLabel = new()
+        {
+            Name = "Label",
+            Text = LanConnectAccessibilityAnnouncements.BuildRoomCardAnnouncement(
+                room.RoomName,
+                room.HostPlayerName,
+                room.CurrentPlayers,
+                room.MaxPlayers,
+                room.RequiresPassword,
+                canJoin,
+                joinDisabledReason,
+                isSelected,
+                GetRoomGameModePill(room.GameMode).Text),
+            TopLevel = true,
+            CustomMinimumSize = Vector2.Zero,
+            MouseFilter = MouseFilterEnum.Ignore,
+            Modulate = new Color(1f, 1f, 1f, 0f)
+        };
+        card.AddChild(accessibilityLabel);
 
         VBoxContainer body = new()
         {
@@ -2316,7 +2735,99 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         ApplyPassiveMouseFilterRecursive(card);
         card.MouseFilter = MouseFilterEnum.Stop;
         card.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(inputEvent => OnRoomCardGuiInput(room, inputEvent)));
+        card.Connect(Control.SignalName.FocusEntered, Callable.From(() => OnRoomCardFocused(room, card)));
         return card;
+    }
+
+    private void OnRoomCardFocused(LobbyRoomSummary room, Control card)
+    {
+        if (!string.Equals(_selectedRoomId, room.RoomId, StringComparison.Ordinal))
+        {
+            _selectedRoomId = room.RoomId;
+            UpdateActionButtons();
+            GD.Print($"sts2_lan_connect overlay: room card focused -> roomId={room.RoomId}");
+        }
+
+        LanConnectAccessibilityBridge.TryAnnounce(card);
+    }
+
+    private string? GetFocusedRoomCardId()
+    {
+        Control? focusOwner = GetViewport()?.GuiGetFocusOwner();
+        if (focusOwner == null || !GodotObject.IsInstanceValid(focusOwner))
+        {
+            return null;
+        }
+
+        Node? current = focusOwner;
+        while (current != null)
+        {
+            if (current.HasMeta("room_id"))
+            {
+                string roomId = current.GetMeta("room_id").AsString();
+                return string.IsNullOrWhiteSpace(roomId) ? null : roomId;
+            }
+
+            current = current.GetParent();
+        }
+
+        return null;
+    }
+
+    private void RestorePendingRoomCardFocus(IReadOnlyList<LobbyRoomSummary> pageRooms)
+    {
+        string? restoreRoomId = _pendingRoomCardFocusRestoreId;
+        _pendingRoomCardFocusRestoreId = null;
+        if (string.IsNullOrWhiteSpace(restoreRoomId))
+        {
+            return;
+        }
+
+        LobbyRoomSummary? targetRoom = pageRooms.FirstOrDefault(room => string.Equals(room.RoomId, restoreRoomId, StringComparison.Ordinal));
+        if (targetRoom == null)
+        {
+            return;
+        }
+
+        Callable.From(() => FocusRoomCardById(targetRoom.RoomId)).CallDeferred();
+    }
+
+    private void FocusRoomCardById(string roomId)
+    {
+        if (_roomListContainer == null)
+        {
+            return;
+        }
+
+        foreach (Node child in _roomListContainer.GetChildren())
+        {
+            if (child is Control control && control.HasMeta("room_id")
+                && string.Equals(control.GetMeta("room_id").AsString(), roomId, StringComparison.Ordinal)
+                && GodotObject.IsInstanceValid(control))
+            {
+                control.GrabFocus();
+                return;
+            }
+        }
+    }
+
+    private static string SanitizeNodeName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "unknown";
+        }
+
+        char[] chars = value.Trim().ToCharArray();
+        for (int i = 0; i < chars.Length; i++)
+        {
+            if (!char.IsLetterOrDigit(chars[i]) && chars[i] != '_' && chars[i] != '-')
+            {
+                chars[i] = '_';
+            }
+        }
+
+        return new string(chars);
     }
 
     private Control CreateTagPill(string text, Color border, Color background, bool isPrimary)
@@ -2362,6 +2873,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void OnRoomCardGuiInput(LobbyRoomSummary room, InputEvent inputEvent)
     {
+        if (inputEvent.IsActionPressed("ui_accept"))
+        {
+            SelectRoom(room);
+            GD.Print($"sts2_lan_connect overlay: room card ui_accept -> roomId={room.RoomId}");
+            OnJoinRoomPressed(room);
+            AcceptEvent();
+            return;
+        }
+
         if (HandleRoomListPointerInput(inputEvent, room))
         {
             return;
@@ -2833,6 +3353,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             UpdateMaxPlayersHint();
         }
         ShowCreateDialogError(string.Empty, visible: false);
+        RememberDialogReturnFocus();
         _createDialogContainer.Visible = true;
         _roomNameInput.GrabFocus();
     }
@@ -2907,6 +3428,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             _createDialogContainer.Visible = false;
         }
+
+        RestoreDialogReturnFocus();
     }
 
     private void CloseCreateGuardDialog()
@@ -2915,6 +3438,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             _createGuardDialogContainer.Visible = false;
         }
+
+        RestoreDialogReturnFocus();
     }
 
     private void ContinueCreateAfterGuardDecision()
@@ -2944,8 +3469,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _createGuardContinueButton.Visible = allowContinue;
         }
 
+        RememberDialogReturnFocus();
         _createGuardDialogContainer.Visible = true;
         _createGuardDialogContainer.MoveToFront();
+        (_createGuardContinueButton?.Visible == true ? _createGuardContinueButton : null)?.GrabFocus();
     }
 
     private void CloseJoinPasswordDialog()
@@ -2956,6 +3483,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         _pendingPasswordJoinRoom = null;
+        RestoreDialogReturnFocus();
     }
 
     private void OpenResumeSlotDialog(LobbyRoomSummary room, string? password, IReadOnlyList<LobbySavedRunSlot> availableSlots)
@@ -2991,8 +3519,19 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         ShowResumeSlotError(string.Empty, visible: false);
-        CloseJoinPasswordDialog();
+        if (_dialogReturnFocusTarget == null)
+        {
+            RememberDialogReturnFocus();
+        }
+
+        if (_joinPasswordDialogContainer != null)
+        {
+            _joinPasswordDialogContainer.Visible = false;
+        }
+
+        _pendingPasswordJoinRoom = null;
         _resumeSlotDialogContainer.Visible = true;
+        (_resumeSlotDialogOptions.GetChildren().FirstOrDefault() as Control)?.GrabFocus();
     }
 
     private async Task SubmitResumeSlotAsync(string desiredSavePlayerNetId)
@@ -3018,6 +3557,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _pendingResumeJoinRoom = null;
         _pendingResumeJoinPassword = null;
+        RestoreDialogReturnFocus();
     }
 
     private static string FormatSlotLabel(LobbySavedRunSlot slot)
@@ -3607,8 +4147,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (_inviteConfirmDialogContainer != null)
         {
+            RememberDialogReturnFocus();
             _inviteConfirmDialogContainer.Visible = true;
             _inviteConfirmDialogContainer.MoveToFront();
+            FocusFirstDialogButton(_inviteConfirmDialogContainer);
         }
     }
 
@@ -3619,6 +4161,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _inviteConfirmDialogContainer.Visible = false;
         }
         _pendingInvitePayload = null;
+        RestoreDialogReturnFocus();
     }
 
     private async Task AcceptInviteAsync()
@@ -3729,8 +4272,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _progressDialogVisibleDuration = 0d;
         ConfigureProgressDialogCancel(allowCancel);
         SetProgressDialogContent(title, message, hint);
+        RememberProgressDialogReturnFocus();
         _progressDialogContainer.Visible = true;
         _progressDialogContainer.MoveToFront();
+        if (allowCancel)
+        {
+            _progressDialogCancelButton?.GrabFocus();
+        }
         GD.Print($"sts2_lan_connect overlay: progress dialog shown -> {title} | {message}");
     }
 
@@ -3752,6 +4300,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void HideProgressDialog()
     {
+        bool wasVisible = _progressDialogContainer?.Visible == true;
         if (_progressDialogContainer != null)
         {
             _progressDialogContainer.Visible = false;
@@ -3762,6 +4311,49 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _progressDialogDotCount = 0;
         _progressDialogVisibleDuration = 0d;
         ConfigureProgressDialogCancel(false);
+        if (wasVisible && Visible && !IsAnyDialogVisible())
+        {
+            RestoreProgressDialogReturnFocus();
+        }
+        else
+        {
+            _progressDialogReturnFocusTarget = null;
+        }
+    }
+
+    private bool IsAnyDialogVisible()
+    {
+        return _createDialogContainer?.Visible == true
+            || _createGuardDialogContainer?.Visible == true
+            || _joinPasswordDialogContainer?.Visible == true
+            || _resumeSlotDialogContainer?.Visible == true
+            || _inviteConfirmDialogContainer?.Visible == true
+            || _filterDialogContainer?.Visible == true
+            || _progressDialogContainer?.Visible == true;
+    }
+
+    private static bool FocusFirstDialogButton(Node node)
+    {
+        foreach (Node child in node.GetChildren())
+        {
+            if (child is Control control && !control.Visible)
+            {
+                continue;
+            }
+
+            if (child is Button button && button.Visible && !button.Disabled)
+            {
+                button.GrabFocus();
+                return true;
+            }
+
+            if (FocusFirstDialogButton(child))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void SetProgressDialogContent(string title, string message, string? hint)
