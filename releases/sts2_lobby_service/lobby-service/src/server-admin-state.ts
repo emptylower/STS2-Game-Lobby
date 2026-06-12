@@ -22,14 +22,6 @@ export interface ServerAdminState {
   capacitySource: string;
   announcements: ServerAnnouncement[];
   extraMetadata: Record<string, string>;
-  submissionId: string;
-  submissionClaimSecret: string;
-  serverId: string;
-  serverToken: string;
-  lastSyncAt: string;
-  lastSyncStatus: string;
-  lastSyncError: string;
-  lastReviewNote: string;
 }
 
 export interface ServerAdminSettingsView {
@@ -41,22 +33,15 @@ export interface ServerAdminSettingsView {
   capacitySource: string;
   announcements: ServerAnnouncement[];
   extraMetadata: Record<string, string>;
-  submissionId: string;
-  serverId: string;
-  hasServerToken: boolean;
-  lastSyncAt: string;
-  lastSyncStatus: string;
-  lastSyncError: string;
-  lastReviewNote: string;
 }
 
 export class ServerAdminStateStore {
   private readonly stateFilePath: string;
   private state: ServerAdminState;
 
-  constructor(stateFilePath: string) {
+  constructor(stateFilePath: string, defaults?: { publicListingEnabledDefault?: boolean }) {
     this.stateFilePath = resolve(stateFilePath);
-    this.state = loadState(this.stateFilePath);
+    this.state = loadState(this.stateFilePath, defaults?.publicListingEnabledDefault ?? true);
   }
 
   getState() {
@@ -73,13 +58,6 @@ export class ServerAdminStateStore {
       capacitySource: this.state.capacitySource,
       announcements: this.state.announcements.map(cloneAnnouncement),
       extraMetadata: { ...this.state.extraMetadata },
-      submissionId: this.state.submissionId,
-      serverId: this.state.serverId,
-      hasServerToken: this.state.serverToken.length > 0,
-      lastSyncAt: this.state.lastSyncAt,
-      lastSyncStatus: this.state.lastSyncStatus,
-      lastSyncError: this.state.lastSyncError,
-      lastReviewNote: this.state.lastReviewNote,
     };
   }
 
@@ -137,13 +115,6 @@ export class ServerAdminStateStore {
     return this.getState();
   }
 
-  clearSubmission() {
-    this.state.submissionId = "";
-    this.state.submissionClaimSecret = "";
-    this.state.lastReviewNote = "";
-    this.save();
-  }
-
   private save() {
     mkdirSync(dirname(this.stateFilePath), { recursive: true });
     const tempFilePath = `${this.stateFilePath}.tmp`;
@@ -152,51 +123,37 @@ export class ServerAdminStateStore {
   }
 }
 
-function loadState(path: string): ServerAdminState {
+function loadState(path: string, publicListingDefault: boolean): ServerAdminState {
   try {
     const raw = readFileSync(path, "utf8");
-    return normalizeState(JSON.parse(raw));
+    return normalizeState(JSON.parse(raw), publicListingDefault);
   } catch {
     return {
       displayName: "",
-      publicListingEnabled: false,
+      publicListingEnabled: publicListingDefault,
       bandwidthCapacityMbps: null,
       probePeak7dCapacityMbps: null,
       resolvedCapacityMbps: null,
       capacitySource: "unknown",
       announcements: [],
       extraMetadata: {},
-      submissionId: "",
-      submissionClaimSecret: "",
-      serverId: "",
-      serverToken: "",
-      lastSyncAt: "",
-      lastSyncStatus: "idle",
-      lastSyncError: "",
-      lastReviewNote: "",
     };
   }
 }
 
-function normalizeState(value: unknown): ServerAdminState {
+function normalizeState(value: unknown, publicListingDefault: boolean): ServerAdminState {
   const data = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return {
     displayName: sanitizeText(typeof data.displayName === "string" ? data.displayName : "", 64),
-    publicListingEnabled: Boolean(data.publicListingEnabled),
+    publicListingEnabled: typeof data.publicListingEnabled === "boolean"
+      ? data.publicListingEnabled
+      : publicListingDefault,
     bandwidthCapacityMbps: sanitizeOptionalMbps(typeof data.bandwidthCapacityMbps === "number" ? data.bandwidthCapacityMbps : null),
     probePeak7dCapacityMbps: sanitizeOptionalMbps(typeof data.probePeak7dCapacityMbps === "number" ? data.probePeak7dCapacityMbps : null),
     resolvedCapacityMbps: sanitizeOptionalMbps(typeof data.resolvedCapacityMbps === "number" ? data.resolvedCapacityMbps : null),
     capacitySource: sanitizeCapacitySource(typeof data.capacitySource === "string" ? data.capacitySource : "unknown"),
     announcements: sanitizeAnnouncements(data.announcements),
     extraMetadata: sanitizeMetadata(data.extraMetadata),
-    submissionId: sanitizeText(typeof data.submissionId === "string" ? data.submissionId : "", 128),
-    submissionClaimSecret: sanitizeText(typeof data.submissionClaimSecret === "string" ? data.submissionClaimSecret : "", 256),
-    serverId: sanitizeText(typeof data.serverId === "string" ? data.serverId : "", 128),
-    serverToken: sanitizeText(typeof data.serverToken === "string" ? data.serverToken : "", 256),
-    lastSyncAt: sanitizeText(typeof data.lastSyncAt === "string" ? data.lastSyncAt : "", 64),
-    lastSyncStatus: sanitizeText(typeof data.lastSyncStatus === "string" ? data.lastSyncStatus : "idle", 64) || "idle",
-    lastSyncError: sanitizeText(typeof data.lastSyncError === "string" ? data.lastSyncError : "", 512),
-    lastReviewNote: sanitizeText(typeof data.lastReviewNote === "string" ? data.lastReviewNote : "", 512),
   };
 }
 
