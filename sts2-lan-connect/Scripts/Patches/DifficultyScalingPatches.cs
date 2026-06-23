@@ -25,7 +25,7 @@ internal static class DifficultyScalingPatches
             harmony.Patch(modifyBlock, transpiler: new HarmonyMethod(typeof(DifficultyScalingPatches), nameof(PatchPlayersCountTranspiler)));
         }
 
-        MethodInfo? modifyPower = AccessTools.Method(typeof(MultiplayerScalingModel), nameof(MultiplayerScalingModel.ModifyPowerAmountGiven));
+        MethodInfo? modifyPower = AccessTools.Method(typeof(MultiplayerScalingModel), "ModifyPowerAmountGiven");
         if (modifyPower != null)
         {
             harmony.Patch(modifyPower, transpiler: new HarmonyMethod(typeof(DifficultyScalingPatches), nameof(PatchPlayersCountTranspiler)));

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Godot;
@@ -19,6 +20,10 @@ namespace Sts2LanConnect.Scripts;
 
 internal sealed class LanConnectLobbyManagedJoinFlow
 {
+    private static readonly FieldInfo? InitialGameInfoGameplayModsField =
+        typeof(InitialGameInfoMessage).GetField("gameplayAffectingMods", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+        ?? typeof(InitialGameInfoMessage).GetField("mods", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
     private TaskCompletionSource<InitialGameInfoMessage>? _connectCompletion;
     private TaskCompletionSource<ClientRejoinResponseMessage>? _rejoinCompletion;
     private TaskCompletionSource<ClientLoadJoinResponseMessage>? _loadJoinCompletion;
@@ -175,7 +180,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         }
 
         List<string> localMods = LanConnectBuildInfo.GetModList();
-        List<string> hostMods = initialMessage.mods ?? new List<string>();
+        List<string> hostMods = GetGameplayAffectingMods(initialMessage);
         List<string> missingModsOnLocal = hostMods.Except(localMods).ToList();
         List<string> missingModsOnHost = localMods.Except(hostMods).ToList();
         ConnectionFailureExtraInfo extraInfo = new()
@@ -225,6 +230,19 @@ internal sealed class LanConnectLobbyManagedJoinFlow
                 $"房主报告了连接兼容性错误：{declaredCompatibilityFailure.Value}",
                 new NetErrorInfo(declaredCompatibilityFailure.Value));
         }
+    }
+
+    private static List<string> GetGameplayAffectingMods(InitialGameInfoMessage initialMessage)
+    {
+        object? rawMods = InitialGameInfoGameplayModsField?.GetValue(initialMessage);
+        return rawMods is IEnumerable<string> mods
+            ? mods
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .Select(static value => value.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(static value => value, StringComparer.Ordinal)
+                .ToList()
+            : new List<string>();
     }
 
     private async Task NetServiceUpdateLoop(CancellationTokenSource tokenSource, SceneTree sceneTree)

@@ -36,7 +36,12 @@ internal sealed class LanConnectBundledLobbyDefaults
 
 internal static class LanConnectLobbyEndpointDefaults
 {
-    private const string DefaultsFileName = "lobby-defaults.json";
+    private static readonly string[] DefaultsFileNames =
+    {
+        "lobby-defaults.json",
+        "lobby-defaults.data"
+    };
+
     private const string DefaultRegistryBaseUrl = "http://47.111.146.69:18787";
 
     private static readonly object Sync = new();
@@ -144,7 +149,7 @@ internal static class LanConnectLobbyEndpointDefaults
 
     private static void LoadUnsafe()
     {
-        string path = Path.Combine(LanConnectPaths.ResolveModDirectory(), DefaultsFileName);
+        string? path = ResolveDefaultsPath();
         if (!File.Exists(path))
         {
             return;
@@ -185,6 +190,21 @@ internal static class LanConnectLobbyEndpointDefaults
             _seedPeers = new List<string>();
             _cfDiscoveryBaseUrl = string.Empty;
         }
+    }
+
+    private static string? ResolveDefaultsPath()
+    {
+        string modDirectory = LanConnectPaths.ResolveModDirectory();
+        foreach (string fileName in DefaultsFileNames)
+        {
+            string path = Path.Combine(modDirectory, fileName);
+            if (File.Exists(path))
+            {
+                return path;
+            }
+        }
+
+        return null;
     }
 
     private static string NormalizeBaseUrl(string? value)

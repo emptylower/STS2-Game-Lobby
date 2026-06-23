@@ -17,6 +17,7 @@ public static class Entry
 
         LanConnectConfig.Load();
         LanConnectExternalModDetection.Detect();
+        LanConnectSentryCompatibilityPatches.Initialize();
         LanConnectAccessibilityBridge.Initialize();
         LanConnectMultiplayerCompatibility.Initialize();
         LanConnectGameplayPatches.Initialize();

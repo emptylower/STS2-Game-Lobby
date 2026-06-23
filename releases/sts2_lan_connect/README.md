@@ -14,12 +14,14 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.3.1` |
-| 默认大厅 | `47.111.146.69:8787`（"默认大厅（华东）"，可在 picker 内切换） |
+| 客户端版本 | `0.4.0` |
+| 默认大厅 | `47.111.146.69:8787`（兜底社区节点，可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `test_relaxed + relay-only` |
 
-`0.3.1` 主要改进（v0.3 系列，去中心化发现）：进入"游戏大厅"时弹出
+`0.4.0` 主要改进：大厅支持键盘 / 手柄式焦点导航，房间卡片可聚焦，`Enter` / `Space` / `ui_accept` 可加入当前聚焦房间；`Esc` 优先关闭最上层弹窗，再退出大厅；若安装 `say-the-spire2` 盲人辅助模组，客户端会软检测并把大厅焦点朗读桥接给该模组。新增 `F7` 邀请快捷键、`F8` 聊天快捷键，以及“剪贴板已有有效邀请码时跳过服务器选择器、直接弹出加入确认”的入口流程。发布包现在强制携带带 CF discovery 和内置 seed peers 的 `lobby-defaults.json`。
+
+`0.3.1` 主要改进（v0.3 系列，去中心化发现，保留作历史参考）：进入"游戏大厅"时弹出
 **服务器选择 picker**，列表来自 CF Worker 聚合 + 本地缓存 + 内置种子三路；
 每个候选实时探活，对 v0.3+ 服务器走 `/peers/health` 拉取**运维设置的服务器名**，
 对 v0.2 服务器自动回退 `/probe` 仅显示 ping。Picker 用大厅同款像素风样式，
@@ -38,7 +40,7 @@
 
 - 关闭《Slay the Spire 2》
 - 确保所有联机玩家使用同一版本 MOD
-- 发布包内已包含 `lobby-defaults.json`，普通玩家无需手动填写大厅地址
+- 发布包内已包含 `lobby-defaults.json`，普通玩家无需手动填写大厅地址；该文件同时提供 CF 发现入口和内置种子列表
 - 如使用 `Clash`、`Surge`、全局代理或 `TUN`，请将大厅服务器 IP 设为 `DIRECT`
 
 ---
@@ -115,8 +117,11 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 ## 使用要点
 
 - 房间列表支持关键词搜索、分页和筛选；`公开` / `上锁` 互斥，`可加入` 可叠加
-- 单击房间卡片选中，双击直接尝试加入
-- 进入房间后可通过右上角按钮展开聊天面板；面板支持长按拖动，位置自动保存
+- 单击房间卡片选中，双击直接尝试加入；键盘 / 手柄焦点落在房间卡片时，按 `Enter` / `Space` / `ui_accept` 也可加入
+- `Esc` 优先关闭当前弹窗；无弹窗时退出大厅
+- 复制有效邀请码后点击 `游戏大厅` 会直接弹出加入确认；也可在大厅中按 `F7` 处理剪贴板邀请码或接受当前邀请弹窗
+- 进入房间后可通过右上角按钮展开聊天面板，也可按 `F8` 打开 / 收起；面板支持长按拖动，位置自动保存
+- 如同时安装 `say-the-spire2` 盲人辅助模组，大厅焦点和房间卡片会被桥接到其朗读系统；未安装时无额外依赖
 - 房主可在暂停菜单 `房间管理` 中点击 `重开一局`，自动重启当前多人续局
 - 队友端在重开期间会自动回主菜单并尝试自动重连；超时可手动从 `游戏大厅` 加入
 - 顶部公告栏每 6 秒轮播，鼠标悬停时暂停
@@ -145,12 +150,14 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.2.3` |
-| Default lobby | `47.111.146.69:8787` |
-| Public server directory | `47.111.146.69:18787` |
+| Client version | `0.4.0` |
+| Default lobby | `47.111.146.69:8787` fallback community node |
+| Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `test_relaxed + relay-only` |
 
-`0.2.3` key changes: the runtime hook is now scene-based (`_Ready`) instead of a polling scanner, reducing CPU and battery usage on solo play and mobile. 4-player rooms automatically use the `0.2.2` compatibility protocol; 5-8 player rooms use the extended protocol and require `0.2.3+`. Android stability is significantly improved, fixing startup crashes and `MethodAccessException` errors. The lobby UI gains an announcement carousel, an in-room chat panel, room search and filtering, and a server-switch button. The host can now trigger `Restart Run` from pause-menu room management to restart the current multiplayer save flow and auto-rejoin teammates. The authoritative version source is `sts2_lan_connect.json` in the release package.
+`0.4.0` key changes: the lobby supports keyboard/controller-style focus navigation, focusable room cards, `Enter` / `Space` / `ui_accept` room joining, and dialog-first `Esc` behavior. If the `say-the-spire2` accessibility mod is present, the client soft-detects it and forwards lobby focus announcements to its speech system. `F7` handles clipboard/visible invite confirmation, `F8` toggles the room chat panel, and valid clipboard invites skip the server picker and open the lobby invite confirmation directly. Release packages now require `lobby-defaults.json` with CF discovery and bundled seed peers.
+
+Historical `0.3.x` changes: the server picker lists lobbies from CF Worker aggregation, local cache, and bundled seed peers. Historical `0.2.3` changes: scene-based runtime hook, 4-player legacy compatibility, 5-8 player extended protocol, Android stability fixes, announcement carousel, room chat, search/filtering, and pause-menu `Restart Run`.
 
 ---
 
@@ -158,7 +165,7 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 - Close Slay the Spire 2 before proceeding.
 - All players in a session must use the same MOD version.
-- The release package includes `lobby-defaults.json`; most players do not need to enter a lobby address manually.
+- The release package includes `lobby-defaults.json`; most players do not need to enter a lobby address manually. This file also provides the CF discovery endpoint and bundled seed peers.
 - If you use Clash, Surge, a system-wide proxy, or TUN mode, route the lobby server IP as `DIRECT`.
 
 ---
@@ -235,15 +242,18 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 ## Usage Tips
 
 - The room list supports keyword search, pagination, and filters. `Public` and `Locked` are mutually exclusive; `Joinable` can be combined with either.
-- Single-click a room card to select it; double-click to join immediately.
-- Once inside a room, open the chat panel from the button in the top-right corner. The panel can be repositioned by long-pressing and dragging; its position is saved between sessions.
+- Single-click a room card to select it; double-click to join immediately. With keyboard/controller focus on a room card, `Enter` / `Space` / `ui_accept` also joins it.
+- `Esc` closes the current dialog first; when no dialog is open, it leaves the lobby.
+- Copying a valid invite before clicking `Game Lobby` opens the lobby invite confirmation directly; `F7` handles clipboard invites or accepts the visible invite confirmation.
+- Once inside a room, open the chat panel from the button in the top-right corner or press `F8`. The panel can be repositioned by long-pressing and dragging; its position is saved between sessions.
+- If the `say-the-spire2` accessibility mod is installed, lobby focus and room-card announcements are bridged to its speech system; without it, there is no extra dependency.
 - The host can click `Restart Run` from pause-menu `Room Management` to restart the current multiplayer save quickly.
 - During restart, teammates are auto-routed back to main menu and auto-rejoin; if timeout occurs, manual join from `Game Lobby` remains available.
 - The announcement carousel at the top rotates every 6 seconds and pauses on hover.
 - A progress dialog appears for long join attempts; a cancel button appears in its top-right corner if the attempt takes too long.
 - If a `MOD mismatch` error occurs, a dialog will list the specific missing MOD names.
 - If the lobby feels slow or unavailable, use the `Switch Server` button in the title bar to move to another available lobby.
-- To switch the central directory service, enter a value in the `Central Server Override` field in the developer network settings.
+- To switch to a specific lobby for troubleshooting, enter it in `HTTP Override` in the developer network settings. Public discovery itself comes from the packaged CF discovery endpoint, local cache, and bundled seed peers.
 
 ---
 

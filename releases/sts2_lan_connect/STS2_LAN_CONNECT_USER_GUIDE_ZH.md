@@ -17,6 +17,8 @@
 3. 直接在大厅里完成建房、刷新和加入
 4. 如果默认大厅拥堵或不可用，点标题栏的 `切换服务器` 切换到其他可用大厅
 
+如果剪贴板里已经复制了有效的邀请码，点击 `游戏大厅` 时会跳过服务器选择器，直接进入大厅并弹出加入确认；邀请码里包含目标服务器和房间 ID，因此即使邀请来自另一台大厅，也会在加入时临时切换到对应服务器。
+
 ## 顶部公告
 
 - 大厅顶部显示服务器下发的公告轮播，支持 `更新`、`活动`、`警告`、`信息` 四类样式
@@ -28,9 +30,19 @@
 - 支持关键词搜索、分页和可叠加筛选（`公开`、`上锁`、`可加入`）
 - `公开` 与 `上锁` 互斥，再次点击当前筛选可取消；`可加入` 过滤掉当前无法加入的房间
 - 桌面端可用鼠标滚轮滚动列表，移动端可按住列表区域上下滑动
-- 单击房间卡片选中，双击直接尝试加入
+- 单击房间卡片选中，双击直接尝试加入；键盘 / 手柄焦点落在房间卡片上时，按 `Enter` / `Space` / `ui_accept` 也会尝试加入
 - 卡片显示状态、游戏版本、MOD 版本和 relay 就绪状态
 - 连续刷新失败时，顶部状态条会提示建议切换服务器
+
+## 键盘、手柄与无障碍
+
+- 大厅支持键盘 / 手柄式焦点导航：`Tab` / `Shift+Tab` 和方向键在按钮、输入框、筛选、分页与房间卡片之间移动焦点
+- `Esc` 优先关闭当前最上层弹窗；没有弹窗时才退出大厅，避免误返回游戏主菜单
+- 房间卡片可被焦点选中，焦点移动到卡片时会同步更新右侧加入按钮状态
+- 如果安装了 `say-the-spire2` 盲人辅助模组，STS2 LAN Connect 会在启动时软检测并把大厅焦点交给其朗读系统；未安装该模组时不会增加额外依赖
+- 房间卡片朗读内容包括房名、房主、人数、是否需要密码、当前是否可加入、游戏模式与选中状态；不会朗读房间密码
+- `F7`：剪贴板有有效邀请码时弹出加入确认；邀请确认弹窗已打开时执行加入
+- `F8`：进入房间后打开 / 收起右上角房间聊天面板
 
 ## 房主流程
 
@@ -49,6 +61,7 @@
 ## 房间聊天
 
 - 进入已连接房间后，右上角出现 `房间聊天` 按钮；点击后展开面板，按 `Enter` 或点 `发送` 发消息
+- 也可以按 `F8` 打开或收起聊天面板；文本输入框聚焦时不会把快捷键内容写进聊天文本
 - 面板收起时，收到新消息会显示未读角标
 - 聊天面板标题栏和按钮支持长按拖动，位置保存到本地配置
 - 聊天走大厅控制通道，仅在当前房间内广播，不写入续局存档
@@ -92,14 +105,14 @@
 ## 网络说明
 
 - 默认连接策略由安装包内的 `lobby-defaults.json` 决定，可选 `direct-first`、`relay-first` 或 `relay-only`
-- 公开包默认使用阿里云大厅 `47.111.146.69:8787`，公共服务器目录为 `47.111.146.69:18787`，固定策略为 `test_relaxed + relay-only`
+- 公开包默认使用阿里云大厅 `47.111.146.69:8787` 作为兜底社区节点，并通过 CF 发现入口 `https://sts2-gamelobby-register.xyz` + 内置种子聚合可用服务器；旧的 `47.111.146.69:18787` 公开目录在 v0.4.0 中不再参与运行时发现
 - 兼容矩阵当前统一规则为：
   - `4` 人房发布 `legacy_4p`，用于兼容 `0.2.2`
   - `5-8` 人房发布 `extended_8p`，仅支持 `0.2.3+`
   - 客户端实际日志 / 调试报告会同时记录 `compatibilityProfile`、`connectionStrategy`、`effectiveMaxPlayers`、`publishedProtocolProfile`
 - MOD 内置 5-8 人支持；`4` 人房自动启用 `legacy_4p` 兼容协议，可与 `0.2.2` 联机；`5-8` 人房仅支持 `0.2.3+`
 - 检测到 RMP 等外部扩展人数 MOD 时，内置补丁会自动跳过以避免冲突
-- `切换服务器` 从中心服务器拉取可用大厅列表，并将选择写入客户端的 HTTP 覆盖设置
+- `切换服务器` 从 CF 发现入口、本地缓存与内置种子聚合可用大厅，并将选择写入客户端的 HTTP 覆盖设置
 - 大厅显示的服务延迟来自独立探测，不是房间列表接口总耗时
 - 房主机器开放 `33771/UDP` 直连可达时，加入速度更快；服务端启用 relay fallback 需放行 `39000-39149/UDP`
 - `WS /control` 承担大厅协调、房主会话保活和房间聊天，不替代游戏联机数据通路
@@ -108,8 +121,8 @@
 
 - 普通玩家通常只需填写 `玩家名`
 - 切换环境时优先使用 `切换服务器`；仅在排障时才展开 `开发网络设置`
-- 开发网络设置当前只保留 `HTTP 覆盖` 与 `建房令牌`；中心服务器地址固定走内置默认，不提供 UI 覆盖入口
-- 安装包附带 `lobby-defaults.json` 时，默认大厅地址与默认建房令牌会自动生效，不在 UI 中明文展示
+- 开发网络设置当前只保留 `HTTP 覆盖` 与 `建房令牌`；公共发现入口和内置种子来自安装包内的 `lobby-defaults.json`
+- 安装包附带 `lobby-defaults.json` 时，默认大厅地址、默认建房令牌、CF 发现入口与内置种子会自动生效，不在 UI 中明文展示
 - 当前 MOD 版本号以 `mods/sts2_lan_connect/sts2_lan_connect.json` 为准
 
 ## 常见问题
@@ -156,14 +169,14 @@
 
 ### 安卓端启动就弹"致命错误"
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为 `0.2.3`
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本仓库 v0.4.0 文档对应 `0.4.0`）
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保 `sts2_lan_connect.dll`、`sts2_lan_connect.pck` 和 `sts2_lan_connect.json` 同步更新
 - 如仍崩溃，将最新 `godot.log` 和本地调试报告一并发给开发者
 
 ### 安卓端进了主菜单，但打开多人页面 / 游戏大厅异常
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为 `0.2.3`
-- 确认安装的是当前发布的 `0.2.3` 客户端包，而非更早的旧包
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本仓库 v0.4.0 文档对应 `0.4.0`）
+- 确认安装的是当前发布的客户端包，而非更早的旧包
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保三个文件来自同一批 release
 - 如问题仍存在，将最新 `godot.log` 和本地调试报告一并发给开发者
 
@@ -184,6 +197,8 @@
 3. Create, refresh, and join rooms directly from the lobby
 4. If the default lobby is congested or unavailable, click `Switch Server` in the title bar to select another
 
+If the clipboard already contains a valid invite code, clicking `Game Lobby` skips the server picker, opens the lobby directly, and shows the invite confirmation. The invite payload includes the target server and room ID, so invites from another lobby can temporarily switch to that server during join.
+
 ## Announcements
 
 - The top of the lobby displays a rotating announcement banner from the server, supporting four styles: `Update`, `Event`, `Warning`, and `Info`
@@ -195,9 +210,19 @@
 - Supports keyword search, pagination, and stackable filters: `Public`, `Locked`, `Joinable`
 - `Public` and `Locked` are mutually exclusive; clicking the active filter again deselects it; `Joinable` hides rooms that cannot currently be entered
 - Desktop supports mouse-wheel scrolling; mobile supports press-and-drag scrolling
-- Single-click a room card to select it; double-click to attempt joining immediately
+- Single-click a room card to select it; double-click to attempt joining immediately. When a room card has keyboard/controller focus, `Enter` / `Space` / `ui_accept` also attempts to join it
 - Room cards display status, game version, MOD version, and relay readiness
 - If repeated refreshes fail, the status bar suggests switching servers
+
+## Keyboard, Controller, and Accessibility
+
+- The lobby supports keyboard/controller-style focus navigation: `Tab` / `Shift+Tab` and arrow keys move between buttons, inputs, filters, pagination, and room cards
+- `Esc` closes the topmost dialog first; only when no dialog is open does it leave the lobby, avoiding accidental returns to the game main menu
+- Room cards are focusable, and focusing one also updates the sidebar join-button state
+- If the `say-the-spire2` accessibility mod is installed, STS2 LAN Connect soft-detects it at startup and forwards lobby focus announcements to its speech system; without that mod, no extra dependency is required
+- Room-card announcements include room name, host, player count, password requirement, joinability, game mode, and selection state; room passwords are never spoken
+- `F7`: opens invite confirmation when the clipboard has a valid invite; accepts the visible invite confirmation when it is already open
+- `F8`: opens or collapses the top-right room chat panel after joining a room
 
 ## Host Flow
 
@@ -216,6 +241,7 @@
 ## Room Chat
 
 - After connecting to a room, a `Room Chat` button appears in the top-right corner; click to expand the panel and send messages with `Enter` or the `Send` button
+- You can also press `F8` to open or collapse the chat panel; focused text inputs do not receive shortcut text
 - When the panel is collapsed, unread messages show a badge indicator
 - The chat panel title bar and button support press-and-drag repositioning; the position is saved to local config
 - Chat uses the lobby control channel and is broadcast only within the current room; it is not written to save files
@@ -260,14 +286,14 @@
 ## Network Notes
 
 - The default connection strategy is determined by `lobby-defaults.json` in the installation package: `direct-first`, `relay-first`, or `relay-only`
-- The public release defaults to the Alibaba Cloud lobby at `47.111.146.69:8787`, with the public server directory at `47.111.146.69:18787`, using `test_relaxed + relay-only`
+- The public release defaults to the Alibaba Cloud lobby at `47.111.146.69:8787` as a fallback community node and aggregates available servers through the CF discovery worker `https://sts2-gamelobby-register.xyz` plus bundled seed peers. The legacy `47.111.146.69:18787` directory is no longer used for runtime discovery in v0.4.0
 - The compatibility matrix is currently unified as:
   - `4`-player rooms publish `legacy_4p` for `0.2.2` compatibility
   - `5-8`-player rooms publish `extended_8p` and require `0.2.3+`
   - Client runtime logs and debug reports record `compatibilityProfile`, `connectionStrategy`, `effectiveMaxPlayers`, and `publishedProtocolProfile`
 - MOD supports 2-8 players natively; 4-player rooms automatically use the `legacy_4p` compatibility protocol for `0.2.2` clients; 5-8 player rooms require `0.2.3+`
 - If external player-count expansion MODs such as RMP are detected, the built-in patch skips automatically to avoid conflicts
-- `Switch Server` fetches the available lobby list from the central server and writes the selection to client override settings
+- `Switch Server` aggregates available lobbies from the CF discovery worker, local cache, and bundled seed peers, then writes the selected lobby to client override settings
 - The latency shown in the lobby comes from an independent probe, not the total round-trip time of the room list request
 - Opening port `33771/UDP` on the host machine improves connection speed; relay fallback requires ports `39000-39149/UDP` to be open on the server
 - `WS /control` handles lobby coordination, host session keepalive, and room chat; it does not replace the game's multiplayer data channel
@@ -276,8 +302,8 @@
 
 - Regular players typically only need to set their `Player Name`
 - Use `Switch Server` when changing environments; only open `Developer Network Settings` for troubleshooting
-- To change the public server directory source, modify `Central Server Override` in Developer Network Settings
-- If the installation package includes `lobby-defaults.json`, the default lobby address takes effect automatically and is not shown in plain text in the UI
+- Developer Network Settings currently expose `HTTP Override` and `Create-Room Token`; the public discovery endpoint and bundled seed peers come from the package's `lobby-defaults.json`
+- If the installation package includes `lobby-defaults.json`, the default lobby address, create-room token, CF discovery endpoint, and bundled seed peers take effect automatically and are not shown in plain text in the UI
 - The current MOD version is determined by `mods/sts2_lan_connect/sts2_lan_connect.json`
 
 ## FAQ
@@ -324,14 +350,14 @@
 
 ### Android: "Fatal Error" on launch
 
-- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` is `0.2.3`
+- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.4.0 documentation corresponds to `0.4.0`)
 - If you installed over an older package, fully uninstall first and then reinstall to ensure `sts2_lan_connect.dll`, `sts2_lan_connect.pck`, and `sts2_lan_connect.json` are all updated together
 - If the crash persists, send the latest `godot.log` and the local debug report to the developer
 
 ### Android: Main menu loads, but multiplayer page / Game Lobby behaves abnormally
 
-- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` is `0.2.3`
-- Confirm you installed the re-packaged `0.2.3` refresh build, not an earlier `0.2.3` release
+- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.4.0 documentation corresponds to `0.4.0`)
+- Confirm you installed the current release package, not an older package
 - If you installed over an older package, fully uninstall first and then reinstall to ensure all three files come from the same release batch
 - If the issue persists, send the latest `godot.log` and the local debug report to the developer
 
