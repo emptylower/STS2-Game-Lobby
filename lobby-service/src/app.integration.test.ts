@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -154,6 +155,114 @@ test("close terminates active control-channel sockets and finishes promptly", as
   } finally {
     try {
       socket.terminate();
+    } catch {
+      // ignore
+    }
+    cleanupTempDir(config);
+  }
+});
+
+test("post-listen start failure tears down and allows a later successful start", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sts2-lobby-partial-start-"));
+  const badPeerStatePath = join(tempDir, "peer-state-as-file");
+  // Force identity/bootstrap path to throw after HTTP listen succeeds.
+  writeFileSync(badPeerStatePath, "not-a-directory");
+
+  const failingConfig = testConfig({
+    port: 0,
+    peer: {
+      enabled: true,
+      selfAddress: "http://127.0.0.1:9",
+      stateDir: badPeerStatePath,
+      cfDiscoveryBaseUrl: "",
+      displayNameOverride: "",
+    },
+  });
+
+  const failingService = await createLobbyService(failingConfig);
+  await assert.rejects(() => failingService.start(), /./);
+  assert.equal(
+    failingService.httpServer.listening,
+    false,
+    "failed start must not leave HTTP server listening",
+  );
+
+  // Same instance must not report a sticky successful start while half-initialized.
+  await assert.rejects(() => failingService.start(), /./);
+  assert.equal(failingService.httpServer.listening, false);
+
+  await Promise.race([
+    failingService.close(),
+    sleep(1500).then(() => {
+      throw new Error("close() after failed start hung");
+    }),
+  ]);
+
+  const recoveryConfig = testConfig({ port: 0 });
+  const recoveryService = await createLobbyService(recoveryConfig);
+  try {
+    const address = await recoveryService.start();
+    assert.ok(address.port > 0);
+    const probe = await fetch(`http://127.0.0.1:${address.port}/probe`);
+    assert.equal(probe.status, 200);
+    await recoveryService.close();
+    assert.equal(recoveryService.httpServer.listening, false);
+  } finally {
+    cleanupTempDir(failingConfig);
+    cleanupTempDir(recoveryConfig);
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }
+});
+
+test("close finishes promptly while an HTTP keep-alive connection is open", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  // Hold a real keep-alive TCP connection from outside Node's Agent lifecycle so
+  // server.close() would otherwise wait until the idle timeout.
+  const socket = netConnect({ host: "127.0.0.1", port: address.port });
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("keep-alive connect timeout")), 2000);
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    socket.once("connect", () => {
+      socket.write(
+        "GET /probe HTTP/1.1\r\n" +
+          "Host: 127.0.0.1\r\n" +
+          "Connection: keep-alive\r\n" +
+          "\r\n",
+      );
+    });
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
+      if (buffer.includes("\r\n\r\n")) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+  });
+
+  assert.equal(socket.destroyed, false, "expected keep-alive socket to remain open");
+
+  try {
+    await Promise.race([
+      service.close(),
+      sleep(1500).then(() => {
+        throw new Error("close() did not complete within 1500ms with keep-alive HTTP open");
+      }),
+    ]);
+    assert.equal(service.httpServer.listening, false);
+  } finally {
+    try {
+      socket.destroy();
     } catch {
       // ignore
     }

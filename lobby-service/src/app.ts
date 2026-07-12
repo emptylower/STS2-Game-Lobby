@@ -847,55 +847,132 @@ export async function createLobbyService(
       return boundAddress;
     }
 
-    await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error) => {
-        server.off("listening", onListening);
-        reject(error);
-      };
-      const onListening = () => {
-        server.off("error", onError);
-        resolve();
-      };
-      server.once("error", onError);
-      server.once("listening", onListening);
-      server.listen(env.port, env.host);
-    });
-
-    started = true;
-    const addressInfo = server.address();
-    if (!addressInfo || typeof addressInfo === "string") {
-      throw new Error("failed to resolve listening address");
+    // Avoid overlapping start attempts while recovering from a prior failure.
+    if (server.listening) {
+      throw new Error("lobby service start is incomplete; call close() or retry after recovery");
     }
-    boundAddress = {
-      host: addressInfo.address,
-      port: addressInfo.port,
-    };
 
-    cleanupInterval = setInterval(() => {
-      cleanupExpiredRoomsNow();
-      cleanupExpiredServerAdminSessions();
+    let listenSucceeded = false;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => {
+          server.off("listening", onListening);
+          reject(error);
+        };
+        const onListening = () => {
+          server.off("error", onError);
+          resolve();
+        };
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(env.port, env.host);
+      });
+      listenSucceeded = true;
 
-      const staleThreshold = Date.now() - env.heartbeatTimeoutMs;
-      for (const peers of roomPeers.values()) {
-        for (const peer of peers) {
-          if (peer.lastSeenAt < staleThreshold) {
-            peer.socket.close(1001, "peer_timeout");
-          } else {
-            sendJson(peer.socket, {
-              type: "ping",
-              roomId: peer.roomId,
-              controlChannelId: peer.controlChannelId,
-            });
+      const addressInfo = server.address();
+      if (!addressInfo || typeof addressInfo === "string") {
+        throw new Error("failed to resolve listening address");
+      }
+      boundAddress = {
+        host: addressInfo.address,
+        port: addressInfo.port,
+      };
+
+      cleanupInterval = setInterval(() => {
+        cleanupExpiredRoomsNow();
+        cleanupExpiredServerAdminSessions();
+
+        const staleThreshold = Date.now() - env.heartbeatTimeoutMs;
+        for (const peers of roomPeers.values()) {
+          for (const peer of peers) {
+            if (peer.lastSeenAt < staleThreshold) {
+              peer.socket.close(1001, "peer_timeout");
+            } else {
+              sendJson(peer.socket, {
+                type: "ping",
+                roomId: peer.roomId,
+                controlChannelId: peer.controlChannelId,
+              });
+            }
           }
         }
+      }, 5000);
+      cleanupInterval.unref();
+
+      relayManager.start();
+      await startPeerRuntime();
+
+      started = true;
+      return boundAddress;
+    } catch (error) {
+      // Post-listen (or mid-start) failure must not leave a half-started service
+      // that reports success on the next start() while still holding the port.
+      if (listenSucceeded || server.listening || cleanupInterval || selfEntryRefreshInterval || gossipScheduler) {
+        await abortFailedStart();
       }
-    }, 5000);
-    cleanupInterval.unref();
+      throw error;
+    }
+  }
 
-    relayManager.start();
-    await startPeerRuntime();
+  async function abortFailedStart(): Promise<void> {
+    started = false;
+    boundAddress = null;
 
-    return boundAddress;
+    if (cleanupInterval) {
+      clearInterval(cleanupInterval);
+      cleanupInterval = null;
+    }
+    if (selfEntryRefreshInterval) {
+      clearInterval(selfEntryRefreshInterval);
+      selfEntryRefreshInterval = null;
+    }
+    if (gossipScheduler) {
+      gossipScheduler.stop();
+      gossipScheduler = null;
+    }
+
+    peerStore = null;
+
+    try {
+      relayManager.close();
+    } catch {
+      // best-effort cleanup after partial start
+    }
+
+    await closeHttpServerAndConnections();
+  }
+
+  async function closeHttpServerAndConnections(): Promise<void> {
+    // Keep-alive / idle sockets prevent server.close() from finishing; force them
+    // closed when the runtime supports it (Node 18.2+).
+    const httpServerWithForceClose = server as HttpServer & {
+      closeAllConnections?: () => void;
+      closeIdleConnections?: () => void;
+    };
+    try {
+      httpServerWithForceClose.closeIdleConnections?.();
+    } catch {
+      // ignore
+    }
+    try {
+      httpServerWithForceClose.closeAllConnections?.();
+    } catch {
+      // ignore
+    }
+
+    if (!server.listening) {
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
   }
 
   async function close(): Promise<void> {
@@ -903,6 +980,8 @@ export async function createLobbyService(
       return;
     }
     closed = true;
+    started = false;
+    boundAddress = null;
 
     if (cleanupInterval) {
       clearInterval(cleanupInterval);
@@ -944,17 +1023,7 @@ export async function createLobbyService(
 
     relayManager.close();
 
-    if (server.listening) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
-    }
+    await closeHttpServerAndConnections();
   }
 
   function addPeer(peer: ControlPeer) {
