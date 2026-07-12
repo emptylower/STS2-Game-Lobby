@@ -56,8 +56,8 @@ type QueuedFrame =
 interface PeerState {
   peer: ChatPeer;
   queue: QueuedFrame[];
+  /** True while a socket.send callback is outstanding; at most one in-flight send. */
   sending: boolean;
-  snapshotBarrier: boolean;
   slow: boolean;
   lastPongAt: number;
   lastPingAt: number;
@@ -136,7 +136,6 @@ export class ChatPeerRegistry {
       peer,
       queue: [],
       sending: false,
-      snapshotBarrier: false,
       slow: false,
       lastPongAt: now,
       lastPingAt: now,
@@ -145,6 +144,10 @@ export class ChatPeerRegistry {
     this.ipCounts.set(peer.clientIp, (this.ipCounts.get(peer.clientIp) ?? 0) + 1);
   }
 
+  /**
+   * Unregister a peer and free total / per-IP capacity counters.
+   * Callers must remove after close/terminate so capacity is released.
+   */
   remove(sessionId: string): void {
     const state = this.peers.get(sessionId);
     if (!state) {
@@ -173,7 +176,6 @@ export class ChatPeerRegistry {
       return Promise.resolve();
     }
 
-    state.snapshotBarrier = true;
     return new Promise<void>((resolve, reject) => {
       for (const frame of frames) {
         if (state.slow) {
@@ -185,13 +187,11 @@ export class ChatPeerRegistry {
           payload: JSON.stringify(frame),
         });
       }
+      // Barrier only settles the snapshot promise. Do not pump here: nested pump
+      // while the outer pump loop continues can start concurrent socket.sends.
       this.enqueue(state, {
         kind: "barrier",
-        resolve: () => {
-          state.snapshotBarrier = false;
-          resolve();
-          this.pump(state);
-        },
+        resolve,
       });
       // If enqueue discarded due to slow mid-way, still settle.
       if (state.slow) {
@@ -297,6 +297,10 @@ export class ChatPeerRegistry {
     }
   }
 
+  /**
+   * Hard-terminate the socket. Does not free registry counters — caller must
+   * `remove(sessionId)` (typically on close) to release capacity.
+   */
   private forceTerminate(state: PeerState): void {
     if (state.terminateTimer != null) {
       this.clearTimeoutFn(state.terminateTimer);
@@ -322,6 +326,11 @@ export class ChatPeerRegistry {
     }
   }
 
+  /**
+   * Drain queue with single-flight sends. Barriers settle without starting a
+   * send; after a barrier, re-check `sending` so nested work cannot race a
+   * second socket.send while this loop continues.
+   */
   private pump(state: PeerState): void {
     if (state.sending || state.slow) {
       return;
@@ -332,6 +341,10 @@ export class ChatPeerRegistry {
       if (next.kind === "barrier") {
         state.queue.shift();
         next.resolve();
+        // Barrier resolve (or sync listeners) may have started a send or marked slow.
+        if (state.sending || state.slow) {
+          return;
+        }
         continue;
       }
 
@@ -366,6 +379,7 @@ export class ChatPeerRegistry {
         next.reject?.(error instanceof Error ? error : new Error(String(error)));
         this.markSlow(state);
       }
+      // One in-flight send only; resume from the send callback.
       return;
     }
   }

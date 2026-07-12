@@ -240,6 +240,12 @@ test("incrementals wait until snapshot end", async () => {
   socket.completeNext();
   await snapshotDone;
 
+  // Barrier complete: only the first incremental may start (single in-flight send).
+  assert.equal(socket.sent.length, 4);
+  assert.equal(socket.pendingCount(), 1);
+  assert.deepEqual(JSON.parse(socket.sent[3]!), { type: "chat_message", id: "inc-1" });
+
+  socket.completeNext();
   assert.equal(socket.sent.length, 5);
   assert.deepEqual(parseSent(socket).slice(3), [
     { type: "chat_message", id: "inc-1" },
@@ -247,6 +253,46 @@ test("incrementals wait until snapshot end", async () => {
   ]);
 
   socket.completeAll();
+});
+
+test("serializes sends after snapshot barrier: second waits for first callback", async () => {
+  const { peers } = registry();
+  const socket = makeSocket();
+  peers.add(peer("a", "203.0.113.1", socket));
+
+  const snapshotDone = peers.enqueueSnapshot("a", [
+    { type: "chat_snapshot_begin" },
+    { type: "chat_snapshot_end" },
+  ]);
+
+  // Queue two incrementals while the snapshot is still draining.
+  peers.send("a", { type: "chat_message", id: "inc-1" });
+  peers.send("a", { type: "chat_message", id: "inc-2" });
+
+  assert.equal(socket.sent.length, 1);
+  assert.deepEqual(JSON.parse(socket.sent[0]!), { type: "chat_snapshot_begin" });
+
+  socket.completeNext();
+  assert.equal(socket.sent.length, 2);
+  assert.deepEqual(JSON.parse(socket.sent[1]!), { type: "chat_snapshot_end" });
+
+  // Completing the last snapshot frame resolves the barrier and may start the
+  // first incremental — but must not start two concurrent socket.sends.
+  socket.completeNext();
+  await snapshotDone;
+
+  assert.equal(socket.sent.length, 3, "only one send may start after barrier");
+  assert.equal(socket.pendingCount(), 1, "exactly one in-flight send after barrier");
+  assert.deepEqual(JSON.parse(socket.sent[2]!), { type: "chat_message", id: "inc-1" });
+
+  // Second incremental starts only after the first send callback completes.
+  socket.completeNext();
+  assert.equal(socket.sent.length, 4);
+  assert.equal(socket.pendingCount(), 1);
+  assert.deepEqual(JSON.parse(socket.sent[3]!), { type: "chat_message", id: "inc-2" });
+
+  socket.completeNext();
+  assert.equal(socket.pendingCount(), 0);
 });
 
 test("broadcasts include sender", () => {
