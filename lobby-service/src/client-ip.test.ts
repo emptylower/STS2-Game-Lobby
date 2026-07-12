@@ -134,6 +134,60 @@ test("trusted proxy rejects malformed Forwarded quoted strings and parameter whi
   );
 });
 
+test("trusted proxy rejects whitespace before a Forwarded parameter separator", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=203.0.113.8 ;proto=https",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects whitespace after a Forwarded parameter separator", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=203.0.113.8; proto=https",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects whitespace inside a bracketed Forwarded IPv6 node", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=\"[ 2001:db8::8 ]\"",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects whitespace inside a quoted Forwarded node", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=\" 203.0.113.8 \"",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects bracketed Forwarded IPv4 nodes", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", { forwarded: "for=\"[192.0.2.99]\"" }), ["10.0.0.0/8"]),
+    "10.0.0.4",
+  );
+});
+
+test("trusted proxy accepts bracketed IPv4-mapped IPv6 nodes", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", { forwarded: "for=\"[::ffff:192.0.2.99]\"" }), ["10.0.0.0/8"]),
+    "192.0.2.99",
+  );
+});
+
 test("trusted proxy rejects a Forwarded IPv6 port longer than five digits", () => {
   assert.equal(
     resolveClientIp(req("10.0.0.4", {

@@ -160,7 +160,7 @@ function resolveForwardedIp(header: string | undefined): string | undefined {
 
   let firstFor: string | undefined;
   for (const [elementIndex, element] of elements.entries()) {
-    const parameters = splitHeaderValues(element, ";");
+    const parameters = splitHeaderValues(element, ";", false);
     if (!parameters || parameters.length === 0) {
       return undefined;
     }
@@ -206,12 +206,13 @@ function resolveXForwardedFor(header: string | undefined): string | undefined {
 function normalizeForwardedValue(value: string): string {
   const quoted = value.startsWith("\"");
   const unquoted = quoted ? unquote(value) : value;
-  if (!unquoted) {
+  if (!unquoted || /\s/.test(unquoted)) {
     return "";
   }
 
   if (unquoted.startsWith("[")) {
     const endBracket = unquoted.indexOf("]");
+    const node = unquoted.slice(1, endBracket);
     const port = unquoted.slice(endBracket + 1);
     if (!quoted || endBracket < 0 || !/^(?::\d{1,5})?$/.test(port)) {
       return "";
@@ -219,7 +220,7 @@ function normalizeForwardedValue(value: string): string {
     if (port && Number.parseInt(port.slice(1), 10) > 65535) {
       return "";
     }
-    return normalizeIp(unquoted.slice(1, endBracket));
+    return node.includes(":") && ipToBytes(node) ? normalizeIp(node) : "";
   }
 
   return unquoted.includes(":") ? "" : normalizeIp(unquoted);
@@ -272,11 +273,20 @@ function unquote(value: string): string {
   return value.slice(1, -1).replace(/\\(.)/g, "$1");
 }
 
-function splitHeaderValues(value: string, separator: string): string[] | undefined {
+function splitHeaderValues(value: string, separator: string, trimEntries = true): string[] | undefined {
   const values: string[] = [];
   let start = 0;
   let quoted = false;
   let escaped = false;
+
+  const addEntry = (entry: string): boolean => {
+    const normalizedEntry = trimEntries ? entry.trim() : entry;
+    if (!normalizedEntry) {
+      return false;
+    }
+    values.push(normalizedEntry);
+    return true;
+  };
 
   for (let index = 0; index < value.length; index++) {
     const character = value[index]!;
@@ -293,11 +303,9 @@ function splitHeaderValues(value: string, separator: string): string[] | undefin
       continue;
     }
     if (!quoted && character === separator) {
-      const entry = value.slice(start, index).trim();
-      if (!entry) {
+      if (!addEntry(value.slice(start, index))) {
         return undefined;
       }
-      values.push(entry);
       start = index + 1;
     }
   }
@@ -306,12 +314,7 @@ function splitHeaderValues(value: string, separator: string): string[] | undefin
     return undefined;
   }
 
-  const entry = value.slice(start).trim();
-  if (!entry) {
-    return undefined;
-  }
-  values.push(entry);
-  return values;
+  return addEntry(value.slice(start)) ? values : undefined;
 }
 
 function ipToBytes(value: string): number[] | null {
