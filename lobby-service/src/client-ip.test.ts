@@ -34,6 +34,11 @@ test("normalizeIp collapses IPv4-mapped IPv6 addresses and rejects hostnames", (
   assert.equal(normalizeIp(""), "");
 });
 
+test("normalizeIp rejects IPv6 addresses with a leading or trailing single colon", () => {
+  assert.equal(normalizeIp(":1:2:3:4:5:6:7:8"), "");
+  assert.equal(normalizeIp("1:2:3:4:5:6:7:8:"), "");
+});
+
 test("ipMatchesCidr supports IPv4 and IPv6 CIDRs", () => {
   assert.equal(ipMatchesCidr("127.0.0.1", "127.0.0.1"), true);
   assert.equal(ipMatchesCidr("::ffff:127.0.0.1", "127.0.0.1"), true);
@@ -65,6 +70,50 @@ test("trusted proxy falls back to X-Forwarded-For when Forwarded is malformed", 
       "x-forwarded-for": "198.51.100.7, 10.0.0.4",
     }), ["10.0.0.0/8"]),
     "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects an unterminated Forwarded quote before falling back to X-Forwarded-For", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=198.51.100.8;proto=\"unterminated",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects unquoted and malformed Forwarded IPv6 values", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=2001:db8::8",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=\"[:1:2:3:4:5:6:7:8]\"",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects a Forwarded chain containing a hostname", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=198.51.100.8, for=example.com",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects X-Forwarded-For with an empty first candidate", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", { "x-forwarded-for": ", 198.51.100.7" }), ["10.0.0.0/8"]),
+    "10.0.0.4",
   );
 });
 

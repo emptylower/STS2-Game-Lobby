@@ -4,7 +4,13 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { loadLobbyServiceConfig } from "./config.js";
-import { ipMatchesCidr, normalizeIp } from "./client-ip.js";
+import {
+  consumeCreateJoinRateLimit,
+  getCreateRoomToken,
+  getLobbyAccessToken,
+  ipMatchesCidr,
+  normalizeIp,
+} from "./client-ip.js";
 import { CreateRoomBandwidthGuard } from "./bandwidth-guard.js";
 import { assertRelayCreateReady, assertRelayJoinReady } from "./join-guard.js";
 import { RoomRelayManager } from "./relay.js";
@@ -1119,15 +1125,6 @@ function hasLobbyReadAccessToken(req: Request) {
   return providedToken === env.lobbyAccessToken;
 }
 
-function getLobbyAccessToken(req: Request) {
-  return optionalString(req.header("x-lobby-access-token"))
-    ?? optionalString(req.header("authorization"))?.replace(/^Bearer\s+/i, "");
-}
-
-function getCreateRoomToken(req: Request) {
-  return optionalString(req.header("x-create-room-token"));
-}
-
 function isTrustedOperationsRequest(req: Request) {
   const remote = requestIp(req);
   if (!remote) {
@@ -1173,37 +1170,12 @@ function boundedStringArray(value: unknown, name: string, maxEntries: number, ma
 }
 
 function assertCreateJoinRateLimit(req: Request, scope: string) {
-  const now = Date.now();
   const ip = requestIp(req) || "unknown";
-  const key = `${scope}:${ip}`;
   const windowMs = Math.max(1000, env.createJoinRateLimitWindowMs);
   const maxRequests = Math.max(1, env.createJoinRateLimitMaxRequests);
 
-  cleanupRateLimitBuckets(now, windowMs);
-
-  const bucket = createJoinRateLimitHits.get(key) ?? {
-    hits: [],
-    lastSeenAt: now,
-  };
-  const recent = bucket.hits.filter((timestamp) => now - timestamp < windowMs);
-  if (recent.length >= maxRequests) {
-    bucket.hits = recent;
-    bucket.lastSeenAt = now;
-    createJoinRateLimitHits.set(key, bucket);
+  if (consumeCreateJoinRateLimit(createJoinRateLimitHits, scope, ip, windowMs, maxRequests)) {
     throw new HttpError(429, "rate_limited", "请求过于频繁，请稍后再试。");
-  }
-
-  recent.push(now);
-  bucket.hits = recent;
-  bucket.lastSeenAt = now;
-  createJoinRateLimitHits.set(key, bucket);
-}
-
-function cleanupRateLimitBuckets(now: number, windowMs: number) {
-  for (const [key, bucket] of createJoinRateLimitHits.entries()) {
-    if (now - bucket.lastSeenAt >= windowMs && bucket.hits.every((timestamp) => now - timestamp >= windowMs)) {
-      createJoinRateLimitHits.delete(key);
-    }
   }
 }
 
@@ -1337,10 +1309,7 @@ function closeRuntimeResources(onClosed?: () => void) {
 
 export const __testHooks = {
   hasLobbyReadAccessToken,
-  getLobbyAccessToken,
-  getCreateRoomToken,
   assertCreateJoinRateLimit,
-  cleanupRateLimitBuckets,
   createJoinRateLimitHits,
   closeRuntimeResources,
 };

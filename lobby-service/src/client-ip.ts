@@ -5,6 +5,11 @@ export interface ClientIpRequest {
   headers: Record<string, string | string[] | undefined>;
 }
 
+export interface CreateJoinRateLimitBucket {
+  hits: number[];
+  lastSeenAt: number;
+}
+
 export function parseTrustedProxyCidrs(value: string | undefined): string[] {
   return (value ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
 }
@@ -64,6 +69,58 @@ export function ipMatchesCidr(ip: string, cidr: string): boolean {
   return bytesMatchPrefix(ipBytes, baseBytes, prefixLength);
 }
 
+export function getLobbyAccessToken(req: ClientIpRequest): string | undefined {
+  return optionalHeaderString(req, "x-lobby-access-token")
+    ?? optionalHeaderString(req, "authorization")?.replace(/^Bearer\s+/i, "");
+}
+
+export function getCreateRoomToken(req: ClientIpRequest): string | undefined {
+  return optionalHeaderString(req, "x-create-room-token");
+}
+
+export function consumeCreateJoinRateLimit(
+  hits: Map<string, CreateJoinRateLimitBucket>,
+  scope: string,
+  ip: string,
+  windowMs: number,
+  maxRequests: number,
+  now = Date.now(),
+): boolean {
+  const key = `${scope}:${ip || "unknown"}`;
+  cleanupCreateJoinRateLimitBuckets(hits, now, windowMs);
+
+  const bucket = hits.get(key) ?? { hits: [], lastSeenAt: now };
+  const recent = bucket.hits.filter((timestamp) => now - timestamp < windowMs);
+  bucket.hits = recent;
+  bucket.lastSeenAt = now;
+  hits.set(key, bucket);
+
+  if (recent.length >= maxRequests) {
+    return true;
+  }
+
+  recent.push(now);
+  return false;
+}
+
+export function cleanupCreateJoinRateLimitBuckets(
+  hits: Map<string, CreateJoinRateLimitBucket>,
+  now: number,
+  windowMs: number,
+): void {
+  for (const [key, bucket] of hits.entries()) {
+    if (now - bucket.lastSeenAt >= windowMs && bucket.hits.every((timestamp) => now - timestamp >= windowMs)) {
+      hits.delete(key);
+    }
+  }
+}
+
+function optionalHeaderString(req: ClientIpRequest, name: string): string | undefined {
+  const value = requestHeader(req, name);
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
 export function resolveClientIp(req: ClientIpRequest, trusted: readonly string[]): string {
   const directPeer = normalizeIp(req.socket.remoteAddress ?? "");
   if (!directPeer || !trusted.some((cidr) => ipMatchesCidr(directPeer, cidr))) {
@@ -85,21 +142,39 @@ function resolveForwardedIp(header: string | undefined): string | undefined {
     return undefined;
   }
 
-  const firstElement = splitHeaderValues(header, ",")[0];
-  if (!firstElement) {
+  const elements = splitHeaderValues(header, ",");
+  if (!elements || elements.length === 0) {
     return undefined;
   }
 
-  for (const parameter of splitHeaderValues(firstElement, ";")) {
-    const separatorIndex = parameter.indexOf("=");
-    if (separatorIndex < 0 || parameter.slice(0, separatorIndex).trim().toLowerCase() !== "for") {
-      continue;
+  let firstFor: string | undefined;
+  for (const [elementIndex, element] of elements.entries()) {
+    const parameters = splitHeaderValues(element, ";");
+    if (!parameters || parameters.length === 0) {
+      return undefined;
     }
 
-    return normalizeForwardedValue(parameter.slice(separatorIndex + 1)) || undefined;
+    for (const parameter of parameters) {
+      const separatorIndex = parameter.indexOf("=");
+      const name = parameter.slice(0, separatorIndex).trim().toLowerCase();
+      const value = parameter.slice(separatorIndex + 1).trim();
+      if (separatorIndex <= 0 || !isForwardedToken(name) || !isForwardedValue(value)) {
+        return undefined;
+      }
+
+      if (name === "for") {
+        const ip = normalizeForwardedValue(value);
+        if (!ip) {
+          return undefined;
+        }
+        if (elementIndex === 0) {
+          firstFor = ip;
+        }
+      }
+    }
   }
 
-  return undefined;
+  return firstFor;
 }
 
 function resolveXForwardedFor(header: string | undefined): string | undefined {
@@ -107,45 +182,53 @@ function resolveXForwardedFor(header: string | undefined): string | undefined {
     return undefined;
   }
 
-  for (const value of splitHeaderValues(header, ",")) {
-    const ip = normalizeForwardedValue(value);
-    if (ip) {
-      return ip;
-    }
-  }
-
-  return undefined;
+  const firstCandidate = header.split(",", 1)[0]?.trim();
+  return firstCandidate ? normalizeIp(firstCandidate) || undefined : undefined;
 }
 
 function normalizeForwardedValue(value: string): string {
-  const unquoted = unquote(value.trim());
+  const quoted = value.startsWith("\"");
+  const unquoted = quoted ? unquote(value) : value;
   if (!unquoted) {
     return "";
   }
 
   if (unquoted.startsWith("[")) {
     const endBracket = unquoted.indexOf("]");
-    if (endBracket < 0 || !/^(:\d+)?$/.test(unquoted.slice(endBracket + 1))) {
+    if (!quoted || endBracket < 0 || !/^(:\d+)?$/.test(unquoted.slice(endBracket + 1))) {
       return "";
     }
     return normalizeIp(unquoted.slice(1, endBracket));
   }
 
-  return normalizeIp(unquoted);
+  return unquoted.includes(":") ? "" : normalizeIp(unquoted);
+}
+
+function isForwardedToken(value: string): boolean {
+  return /^[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(value);
+}
+
+function isForwardedValue(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+
+  if (value.startsWith("\"")) {
+    return value.length >= 2 && value.endsWith("\"");
+  }
+
+  return isForwardedToken(value);
 }
 
 function unquote(value: string): string {
-  if (!value.startsWith("\"")) {
-    return value;
-  }
-  if (value.length < 2 || !value.endsWith("\"")) {
+  if (value.length < 2 || !value.startsWith("\"") || !value.endsWith("\"")) {
     return "";
   }
 
   return value.slice(1, -1).replace(/\\(.)/g, "$1");
 }
 
-function splitHeaderValues(value: string, separator: string): string[] {
+function splitHeaderValues(value: string, separator: string): string[] | undefined {
   const values: string[] = [];
   let start = 0;
   let quoted = false;
@@ -166,12 +249,24 @@ function splitHeaderValues(value: string, separator: string): string[] {
       continue;
     }
     if (!quoted && character === separator) {
-      values.push(value.slice(start, index));
+      const entry = value.slice(start, index).trim();
+      if (!entry) {
+        return undefined;
+      }
+      values.push(entry);
       start = index + 1;
     }
   }
 
-  values.push(value.slice(start));
+  if (quoted || escaped) {
+    return undefined;
+  }
+
+  const entry = value.slice(start).trim();
+  if (!entry) {
+    return undefined;
+  }
+  values.push(entry);
   return values;
 }
 
@@ -216,16 +311,22 @@ function ipv6ToBytes(value: string): number[] | null {
   if (doubleColonIndex !== value.lastIndexOf("::")) {
     return null;
   }
+  if (doubleColonIndex < 0 && (value.startsWith(":") || value.endsWith(":"))) {
+    return null;
+  }
 
-  const expandPart = (part: string) => part.split(":").filter((segment) => segment.length > 0);
+  const expandPart = (part: string) => part === "" ? [] : part.split(":");
   const left = doubleColonIndex >= 0 ? expandPart(value.slice(0, doubleColonIndex)) : expandPart(value);
   const right = doubleColonIndex >= 0 ? expandPart(value.slice(doubleColonIndex + 2)) : [];
+  if (left.some((segment) => segment.length === 0) || right.some((segment) => segment.length === 0)) {
+    return null;
+  }
   if (doubleColonIndex < 0 && left.length !== 8) {
     return null;
   }
 
   const missing = doubleColonIndex >= 0 ? 8 - (left.length + right.length) : 0;
-  if (missing < 0) {
+  if (missing < 1 && doubleColonIndex >= 0) {
     return null;
   }
 
