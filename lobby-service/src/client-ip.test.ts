@@ -29,6 +29,9 @@ test("parseTrustedProxyCidrs trims comma-separated CIDRs", () => {
 
 test("normalizeIp collapses IPv4-mapped IPv6 addresses and rejects hostnames", () => {
   assert.equal(normalizeIp(" ::ffff:127.0.0.1 "), "127.0.0.1");
+  assert.equal(normalizeIp("::ffff:c000:201"), "192.0.2.1");
+  assert.equal(ipMatchesCidr("::ffff:c000:201", "192.0.2.0/24"), true);
+  assert.equal(resolveClientIp(req("::ffff:c000:201"), []), "192.0.2.1");
   assert.equal(normalizeIp("2001:DB8::10"), "2001:db8::10");
   assert.equal(normalizeIp("example.com"), "");
   assert.equal(normalizeIp(""), "");
@@ -94,6 +97,26 @@ test("trusted proxy rejects unquoted and malformed Forwarded IPv6 values", () =>
   assert.equal(
     resolveClientIp(req("10.0.0.4", {
       forwarded: "for=\"[:1:2:3:4:5:6:7:8]\"",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects a Forwarded IPv6 port longer than five digits", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=\"[2001:db8::8]:999999\"",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects duplicate Forwarded parameter names case-insensitively", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=198.51.100.8;For=203.0.113.9",
       "x-forwarded-for": "198.51.100.7",
     }), ["10.0.0.0/8"]),
     "198.51.100.7",

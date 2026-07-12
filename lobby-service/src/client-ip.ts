@@ -21,9 +21,9 @@ export function normalizeIp(value: string): string {
   }
 
   const lower = trimmed.toLowerCase();
-  if (lower.startsWith("::ffff:")) {
-    const mapped = lower.slice("::ffff:".length);
-    return normalizeIpv4(mapped);
+  const mappedIpv4 = ipv4MappedIpv6ToIpv4(lower);
+  if (mappedIpv4) {
+    return mappedIpv4;
   }
 
   const ipv4 = normalizeIpv4(lower);
@@ -154,13 +154,15 @@ function resolveForwardedIp(header: string | undefined): string | undefined {
       return undefined;
     }
 
+    const parameterNames = new Set<string>();
     for (const parameter of parameters) {
       const separatorIndex = parameter.indexOf("=");
       const name = parameter.slice(0, separatorIndex).trim().toLowerCase();
       const value = parameter.slice(separatorIndex + 1).trim();
-      if (separatorIndex <= 0 || !isForwardedToken(name) || !isForwardedValue(value)) {
+      if (separatorIndex <= 0 || parameterNames.has(name) || !isForwardedToken(name) || !isForwardedValue(value)) {
         return undefined;
       }
+      parameterNames.add(name);
 
       if (name === "for") {
         const ip = normalizeForwardedValue(value);
@@ -195,7 +197,7 @@ function normalizeForwardedValue(value: string): string {
 
   if (unquoted.startsWith("[")) {
     const endBracket = unquoted.indexOf("]");
-    if (!quoted || endBracket < 0 || !/^(:\d+)?$/.test(unquoted.slice(endBracket + 1))) {
+    if (!quoted || endBracket < 0 || !/^(?::\d{1,5})?$/.test(unquoted.slice(endBracket + 1))) {
       return "";
     }
     return normalizeIp(unquoted.slice(1, endBracket));
@@ -273,6 +275,22 @@ function splitHeaderValues(value: string, separator: string): string[] | undefin
 function ipToBytes(value: string): number[] | null {
   const ipv4 = ipv4ToBytes(value);
   return ipv4 ?? ipv6ToBytes(value);
+}
+
+function ipv4MappedIpv6ToIpv4(value: string): string {
+  if (value.startsWith("::ffff:")) {
+    const dottedIpv4 = normalizeIpv4(value.slice("::ffff:".length));
+    if (dottedIpv4) {
+      return dottedIpv4;
+    }
+  }
+
+  const bytes = ipv6ToBytes(value);
+  if (!bytes || !bytes.slice(0, 10).every((byte) => byte === 0) || bytes[10] !== 0xff || bytes[11] !== 0xff) {
+    return "";
+  }
+
+  return bytes.slice(12).join(".");
 }
 
 function normalizeIpv4(value: string): string {
