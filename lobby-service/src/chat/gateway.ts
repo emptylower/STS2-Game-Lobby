@@ -28,6 +28,9 @@ export interface ServerChatGatewayOptions {
   now?: () => number;
   randomUuid?: () => string;
   randomSenderId?: () => string;
+  protocolErrorCloseGraceMs?: number;
+  setInterval?: typeof setInterval;
+  clearInterval?: typeof clearInterval;
 }
 
 interface ConnectionState {
@@ -36,6 +39,9 @@ interface ConnectionState {
   readonly senderId: string;
   readonly ticket: ReservedChatTicket;
   snapshotComplete: boolean;
+  protocolCloseTimer: NodeJS.Timeout | null;
+  protocolCloseFinished: boolean;
+  cleanup(): void;
 }
 
 const PHASE_ONE_FEATURES = Object.freeze({
@@ -51,6 +57,9 @@ export class ServerChatGateway {
   private readonly now: () => number;
   private readonly randomUuid: () => string;
   private readonly randomSenderId: () => string;
+  private readonly protocolErrorCloseGraceMs: number;
+  private readonly setIntervalFn: typeof setInterval;
+  private readonly clearIntervalFn: typeof clearInterval;
   private readonly dedupe: ChatDedupeCache;
   private readonly connectionLimiter: TokenBucketLimiter;
   private readonly ipLimiter: SlidingWindowLimiter;
@@ -68,6 +77,9 @@ export class ServerChatGateway {
     this.now = options.now ?? Date.now;
     this.randomUuid = options.randomUuid ?? randomUUID;
     this.randomSenderId = options.randomSenderId ?? (() => randomBytes(16).toString("base64url"));
+    this.protocolErrorCloseGraceMs = options.protocolErrorCloseGraceMs ?? 1_000;
+    this.setIntervalFn = options.setInterval ?? setInterval;
+    this.clearIntervalFn = options.clearInterval ?? clearInterval;
     this.history = new ChatHistoryBuffer({
       now: this.now,
       ...(options.historyLimit === undefined ? {} : { historyLimit: options.historyLimit }),
@@ -90,55 +102,117 @@ export class ServerChatGateway {
   }
 
   accept(socket: WebSocket, ticket: ReservedChatTicket): void {
-    const sessionId = this.randomUuid();
-    const state: ConnectionState = {
-      socket,
-      sessionId,
-      senderId: this.randomSenderId(),
-      ticket,
-      snapshotComplete: false,
+    let state: ConnectionState | null = null;
+    let peerAdded = false;
+    let cleaned = false;
+    let onMessage: ((data: RawData, isBinary: boolean) => void) | null = null;
+    let onPong: (() => void) | null = null;
+
+    const cleanup = (): void => {
+      if (cleaned) {
+        return;
+      }
+      cleaned = true;
+      socket.off("close", cleanup);
+      if (onMessage) {
+        socket.off("message", onMessage);
+      }
+      if (onPong) {
+        socket.off("pong", onPong);
+      }
+      if (state) {
+        if (state.protocolCloseTimer) {
+          clearTimeout(state.protocolCloseTimer);
+          state.protocolCloseTimer = null;
+        }
+        if (this.connections.get(state.sessionId) === state) {
+          this.connections.delete(state.sessionId);
+        }
+        if (peerAdded) {
+          this.peerRegistry.remove(state.sessionId);
+          peerAdded = false;
+        }
+        this.connectionLimiter.remove(state.sessionId);
+      }
+      this.stopHeartbeatIfIdle();
     };
 
-    this.startHeartbeat();
-    this.peerRegistry.add({ sessionId, clientIp: ticket.clientIp, socket });
-    this.connections.set(sessionId, state);
-    this.peerRegistry.send(sessionId, {
-      type: "chat_ready",
-      protocolVersion: 1,
-      channel: "server",
-      sessionId,
-      senderId: state.senderId,
-      instanceId: this.history.instanceId,
-      historyEpoch: this.history.historyEpoch,
-      chatEnabled: this.desiredChatEnabled,
-      serverChatVersion: 1,
-      enabledFeatures: PHASE_ONE_FEATURES,
-    });
+    const failSetup = (): void => {
+      cleanup();
+      try {
+        socket.close(1011, "chat setup failed");
+      } catch {
+        // terminate below
+      }
+      try {
+        socket.terminate();
+      } catch {
+        // ignore termination races
+      }
+    };
 
-    const snapshotId = this.randomUuid();
-    const snapshot = this.history.buildSnapshot(snapshotId, this.maxPayloadBytes);
-    void this.peerRegistry.enqueueSnapshot(sessionId, snapshot).then(() => {
-      state.snapshotComplete = true;
-    });
+    try {
+      socket.once("close", cleanup);
+      const sessionId = this.randomUuid();
+      state = {
+        socket,
+        sessionId,
+        senderId: this.randomSenderId(),
+        ticket,
+        snapshotComplete: false,
+        protocolCloseTimer: null,
+        protocolCloseFinished: false,
+        cleanup,
+      };
+      this.peerRegistry.add({ sessionId, clientIp: ticket.clientIp, socket });
+      peerAdded = true;
+      this.connections.set(sessionId, state);
+      this.startHeartbeat();
 
-    socket.on("message", (data: RawData, isBinary: boolean) => {
-      const acceptedAfterSnapshot = state.snapshotComplete;
-      this.enqueueEvent(async () => {
-        if (!acceptedAfterSnapshot) {
-          await this.closeProtocolError(state);
-          return;
-        }
-        await this.handleMessage(state, data, isBinary);
-      }, () => {
-        this.sendError(state, "server_busy");
+      onMessage = (data: RawData, isBinary: boolean): void => {
+        const acceptedAfterSnapshot = state!.snapshotComplete;
+        this.enqueueEvent(async () => {
+          if (!acceptedAfterSnapshot) {
+            this.closeProtocolError(state!);
+            return;
+          }
+          await this.handleMessage(state!, data, isBinary);
+        }, () => {
+          this.sendError(state!, "server_busy");
+        });
+      };
+      onPong = () => this.peerRegistry.markPong(sessionId);
+      socket.on("message", onMessage);
+      socket.on("pong", onPong);
+
+      this.peerRegistry.send(sessionId, {
+        type: "chat_ready",
+        protocolVersion: 1,
+        channel: "server",
+        sessionId,
+        senderId: state.senderId,
+        instanceId: this.history.instanceId,
+        historyEpoch: this.history.historyEpoch,
+        chatEnabled: this.desiredChatEnabled,
+        serverChatVersion: 1,
+        enabledFeatures: PHASE_ONE_FEATURES,
       });
-    });
-    socket.on("pong", () => this.peerRegistry.markPong(sessionId));
-    socket.once("close", () => {
-      this.connections.delete(sessionId);
-      this.peerRegistry.remove(sessionId);
-      this.connectionLimiter.remove(sessionId);
-    });
+
+      const snapshotId = this.randomUuid();
+      const snapshot = this.history.buildSnapshot(snapshotId, this.maxPayloadBytes);
+      const snapshotDelivery = this.peerRegistry.enqueueSnapshot(sessionId, snapshot);
+      void snapshotDelivery.then(
+        () => {
+          if (!cleaned) {
+            state!.snapshotComplete = true;
+          }
+        },
+        () => failSetup(),
+      );
+    } catch (error) {
+      failSetup();
+      throw error;
+    }
   }
 
   setState(state: { chatEnabled: boolean }): void {
@@ -156,8 +230,8 @@ export class ServerChatGateway {
     });
   }
 
-  clearHistory(changedAt = new Date()): void {
-    const changedAtIso = changedAt.toISOString();
+  clearHistory(changedAt?: Date): void {
+    const changedAtIso = (changedAt ?? new Date(this.now())).toISOString();
     this.enqueueEvent(() => {
       const historyEpoch = this.history.clear();
       this.peerRegistry.broadcast({
@@ -171,11 +245,11 @@ export class ServerChatGateway {
 
   async close(): Promise<void> {
     if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
+      this.clearIntervalFn(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
     for (const state of this.connections.values()) {
-      this.peerRegistry.remove(state.sessionId);
+      state.cleanup();
       try {
         state.socket.close(1001, "server shutdown");
       } catch {
@@ -196,8 +270,16 @@ export class ServerChatGateway {
     if (this.heartbeatTimer) {
       return;
     }
-    this.heartbeatTimer = setInterval(() => this.peerRegistry.heartbeat(), 5_000);
+    this.heartbeatTimer = this.setIntervalFn(() => this.peerRegistry.heartbeat(), 5_000);
     this.heartbeatTimer.unref();
+  }
+
+  private stopHeartbeatIfIdle(): void {
+    if (this.connections.size !== 0 || !this.heartbeatTimer) {
+      return;
+    }
+    this.clearIntervalFn(this.heartbeatTimer);
+    this.heartbeatTimer = null;
   }
 
   private async handleMessage(
@@ -228,7 +310,7 @@ export class ServerChatGateway {
         state.socket.close(1007, "invalid UTF-8");
         return;
       }
-      await this.closeProtocolError(state);
+      this.closeProtocolError(state);
       return;
     }
 
@@ -236,7 +318,7 @@ export class ServerChatGateway {
     try {
       envelope = parseChatSend(parsed);
     } catch {
-      await this.closeProtocolError(state);
+      this.closeProtocolError(state);
       return;
     }
 
@@ -442,7 +524,7 @@ export class ServerChatGateway {
     );
   }
 
-  private async closeProtocolError(state: ConnectionState): Promise<void> {
+  private closeProtocolError(state: ConnectionState): void {
     const frame: ChatErrorEnvelope = {
       type: "chat_error",
       protocolVersion: 1,
@@ -450,11 +532,47 @@ export class ServerChatGateway {
       code: "protocol_mismatch",
       message: safeChatErrorMessage("protocol_mismatch"),
     };
-    await this.peerRegistry.enqueueSnapshot(state.sessionId, [frame]);
-    console.log(
-      `[chat] event=protocol_closed sessionId=${state.sessionId} code=1002`,
+    let delivery: Promise<void>;
+    try {
+      delivery = this.peerRegistry.enqueueSnapshot(state.sessionId, [frame]);
+    } catch {
+      this.finishProtocolClose(state, true);
+      return;
+    }
+
+    state.protocolCloseTimer = setTimeout(() => {
+      state.protocolCloseTimer = null;
+      this.finishProtocolClose(state, true);
+    }, this.protocolErrorCloseGraceMs);
+    state.protocolCloseTimer.unref();
+    void delivery.then(
+      () => this.finishProtocolClose(state, false),
+      () => this.finishProtocolClose(state, true),
     );
-    state.socket.close(1002, "protocol error");
+  }
+
+  private finishProtocolClose(state: ConnectionState, terminate: boolean): void {
+    if (state.protocolCloseFinished || this.connections.get(state.sessionId) !== state) {
+      return;
+    }
+    state.protocolCloseFinished = true;
+    if (state.protocolCloseTimer) {
+      clearTimeout(state.protocolCloseTimer);
+      state.protocolCloseTimer = null;
+    }
+    console.log(`[chat] event=protocol_closed sessionId=${state.sessionId} code=1002`);
+    try {
+      state.socket.close(1002, "protocol error");
+    } catch {
+      terminate = true;
+    }
+    if (terminate) {
+      try {
+        state.socket.terminate();
+      } catch {
+        // ignore termination races
+      }
+    }
   }
 
   private auditClose(

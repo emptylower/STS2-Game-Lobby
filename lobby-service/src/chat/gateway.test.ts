@@ -17,6 +17,7 @@ class FakeSocket extends EventEmitter implements ChatSocket {
   bufferedAmount = 0;
   readonly sent: string[] = [];
   readonly closes: Array<{ code: number; reason: string }> = [];
+  terminateCalls = 0;
   private readonly callbacks: Array<(error?: Error) => void> = [];
 
   send(data: string, callback: (error?: Error) => void): void {
@@ -32,6 +33,7 @@ class FakeSocket extends EventEmitter implements ChatSocket {
   }
 
   terminate(): void {
+    this.terminateCalls += 1;
     this.readyState = 3;
   }
 
@@ -43,6 +45,17 @@ class FakeSocket extends EventEmitter implements ChatSocket {
     while (this.callbacks.length > 0) {
       this.flushOne();
     }
+  }
+}
+
+class ThrowingSnapshotRegistry extends ChatPeerRegistry {
+  failSnapshot = true;
+
+  override enqueueSnapshot(sessionId: string, frames: readonly object[]): Promise<void> {
+    if (this.failSnapshot) {
+      throw new Error("injected snapshot failure");
+    }
+    return super.enqueueSnapshot(sessionId, frames);
   }
 }
 
@@ -416,6 +429,58 @@ test("sends a protocol error before closing malformed and mismatched messages", 
   }
 });
 
+test("a stalled protocol-error peer does not block later global events for other peers", async () => {
+  const gateway = new ServerChatGateway({ chatEnabled: true, protocolErrorCloseGraceMs: 10 });
+  const stalled = new FakeSocket();
+  const healthy = new FakeSocket();
+  gateway.accept(stalled as unknown as WebSocket, ticket);
+  gateway.accept(healthy as unknown as WebSocket, { ...ticket, id: "healthy", playerName: "Bob" });
+  await settle(stalled, healthy);
+  const healthyStart = healthy.sent.length;
+
+  stalled.emit("message", "{", false);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(frames(stalled).at(-1)?.code, "protocol_mismatch");
+
+  healthy.emit("message", chatSend("12121212-1212-4212-8212-121212121212", "still live"), false);
+  gateway.setState({ chatEnabled: false });
+  gateway.clearHistory(new Date("2026-07-13T07:00:00.000Z"));
+  await settle(healthy);
+  assert.deepEqual(frames(healthy).slice(healthyStart).map((frame) => frame.type), [
+    "chat_ack",
+    "chat_message",
+    "chat_state",
+    "chat_history_cleared",
+  ]);
+
+  await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  assert.equal(stalled.closes.at(-1)?.code, 1002);
+  assert.equal(stalled.terminateCalls, 1);
+  await gateway.close();
+});
+
+test("accept rolls back peer capacity and closes the socket when setup throws", async () => {
+  const registry = new ThrowingSnapshotRegistry({ maxPerIp: 1, maxTotal: 1 });
+  const gateway = new ServerChatGateway({ peerRegistry: registry, chatEnabled: true });
+  const failed = new FakeSocket();
+  assert.throws(
+    () => gateway.accept(failed as unknown as WebSocket, ticket),
+    /injected snapshot failure/,
+  );
+  assert.equal(failed.terminateCalls, 1);
+  assert.equal(registry.size, 0);
+
+  registry.failSnapshot = false;
+  const replacement = new FakeSocket();
+  assert.doesNotThrow(() => gateway.accept(
+    replacement as unknown as WebSocket,
+    { ...ticket, id: "replacement" },
+  ));
+  await settle(replacement);
+  assert.equal(frames(replacement)[0]?.type, "chat_ready");
+  await gateway.close();
+});
+
 test("state changes and history clears remain ordered after an accepting peer snapshot", async () => {
   const socket = new FakeSocket();
   const gateway = new ServerChatGateway({ chatEnabled: true });
@@ -463,6 +528,81 @@ test("chat_state includes current history epoch and fake-clock event time", asyn
     emojiSetVersion: 0,
     itemRefVersion: 0,
   });
+});
+
+test("clearHistory defaults changedAt from the injected clock", async () => {
+  const now = Date.parse("2026-07-13T08:09:10.123Z");
+  const socket = new FakeSocket();
+  const gateway = new ServerChatGateway({ chatEnabled: true, now: () => now });
+  gateway.accept(socket as unknown as WebSocket, ticket);
+  await settle(socket);
+
+  gateway.clearHistory();
+  await settle(socket);
+  const cleared = frames(socket).at(-1)!;
+  assert.equal(cleared.type, "chat_history_cleared");
+  assert.equal(cleared.changedAt, "2026-07-13T08:09:10.123Z");
+});
+
+test("heartbeat lives exactly while at least one successfully added peer exists", async () => {
+  let intervalStarts = 0;
+  let intervalClears = 0;
+  const activeTimers = new Set<NodeJS.Timeout>();
+  const setIntervalHook = ((_callback: () => void, _ms: number) => {
+    intervalStarts += 1;
+    const timer = { unref: () => timer } as unknown as NodeJS.Timeout;
+    activeTimers.add(timer);
+    return timer;
+  }) as unknown as typeof setInterval;
+  const clearIntervalHook = ((timer: NodeJS.Timeout) => {
+    intervalClears += 1;
+    activeTimers.delete(timer);
+  }) as unknown as typeof clearInterval;
+
+  const gateway = new ServerChatGateway({
+    chatEnabled: true,
+    setInterval: setIntervalHook,
+    clearInterval: clearIntervalHook,
+  });
+  assert.equal(intervalStarts, 0);
+  const first = new FakeSocket();
+  const second = new FakeSocket();
+  gateway.accept(first as unknown as WebSocket, ticket);
+  assert.equal(intervalStarts, 1);
+  gateway.accept(second as unknown as WebSocket, { ...ticket, id: "heartbeat-second" });
+  assert.equal(intervalStarts, 1);
+  await settle(first, second);
+
+  first.emit("close", 1000, Buffer.alloc(0));
+  assert.equal(intervalClears, 0);
+  second.emit("close", 1000, Buffer.alloc(0));
+  assert.equal(intervalClears, 1);
+  assert.equal(activeTimers.size, 0);
+  await gateway.close();
+  await gateway.close();
+  assert.equal(intervalClears, 1);
+
+  const addFailureGateway = new ServerChatGateway({
+    peerRegistry: new ChatPeerRegistry({ maxTotal: 0 }),
+    setInterval: setIntervalHook,
+    clearInterval: clearIntervalHook,
+  });
+  assert.throws(() => addFailureGateway.accept(new FakeSocket() as unknown as WebSocket, ticket));
+  assert.equal(intervalStarts, 1, "failed peer add must not start heartbeat");
+
+  const snapshotRegistry = new ThrowingSnapshotRegistry();
+  const snapshotFailureGateway = new ServerChatGateway({
+    peerRegistry: snapshotRegistry,
+    setInterval: setIntervalHook,
+    clearInterval: clearIntervalHook,
+  });
+  assert.throws(() => snapshotFailureGateway.accept(
+    new FakeSocket() as unknown as WebSocket,
+    { ...ticket, id: "heartbeat-failure" },
+  ));
+  assert.equal(intervalStarts, 2);
+  assert.equal(intervalClears, 2);
+  assert.equal(activeTimers.size, 0);
 });
 
 test("serializes sends before later state and history mutations", async () => {
