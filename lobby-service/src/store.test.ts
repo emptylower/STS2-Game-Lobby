@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { LobbyStore, LobbyStoreError } from "./store.js";
+import { LobbyStore, LobbyStoreError, type CreateRoomResult, type JoinRoomInput } from "./store.js";
 
 const baseConfig = {
   heartbeatTimeoutMs: 35_000,
@@ -9,6 +9,90 @@ const baseConfig = {
   strictModVersionCheck: true,
   connectionStrategy: "direct-first" as const,
 };
+
+function sequenceIds(...ids: string[]) {
+  const queue = [...ids];
+  return () => {
+    const next = queue.shift();
+    if (!next) {
+      throw new Error("sequenceIds exhausted");
+    }
+    return next;
+  };
+}
+
+function createBasicRoom(store: LobbyStore): CreateRoomResult {
+  return store.createRoom(
+    {
+      roomName: "基础房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.1.0",
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+        localAddresses: ["192.168.1.10"],
+      },
+    },
+    "203.0.113.10",
+  );
+}
+
+function basicJoinInput(): JoinRoomInput {
+  return {
+    playerName: "Guest",
+    version: "1.2.3",
+    modVersion: "0.1.0",
+  };
+}
+
+test("create and join share a HostSession roomSessionId", () => {
+  const store = new LobbyStore(baseConfig, { id: sequenceIds("room", "control", "room-session", "ticket") });
+  const created = createBasicRoom(store);
+  const joined = store.joinRoom(created.roomId, basicJoinInput());
+  assert.equal(created.roomSessionId, "room-session");
+  assert.equal(joined.roomSessionId, created.roomSessionId);
+});
+
+test("validateHostControl reconnect preserves HostSession roomSessionId", () => {
+  const store = new LobbyStore(baseConfig, {
+    id: sequenceIds("room", "control", "room-session", "ticket"),
+  });
+  const created = createBasicRoom(store);
+  const hostSession = store.validateHostControl(created.roomId, created.controlChannelId, created.hostToken);
+  assert.equal(hostSession.roomSessionId, created.roomSessionId);
+  assert.equal(hostSession.roomSessionId, "room-session");
+});
+
+test("new HostSession receives a different roomSessionId", () => {
+  const store = new LobbyStore(baseConfig, {
+    id: sequenceIds(
+      "room-a",
+      "control-a",
+      "session-a",
+      "room-b",
+      "control-b",
+      "session-b",
+    ),
+  });
+  const first = createBasicRoom(store);
+  const second = createBasicRoom(store);
+  assert.equal(first.roomSessionId, "session-a");
+  assert.equal(second.roomSessionId, "session-b");
+  assert.notEqual(first.roomSessionId, second.roomSessionId);
+});
+
+test("room list summaries do not expose roomSessionId", () => {
+  const store = new LobbyStore(baseConfig, {
+    id: sequenceIds("room", "control", "room-session"),
+  });
+  const created = createBasicRoom(store);
+  const rooms = store.listRooms();
+  assert.equal(rooms.length, 1);
+  assert.equal(rooms[0]?.roomId, created.roomId);
+  assert.equal(Object.hasOwn(rooms[0] as object, "roomSessionId"), false);
+});
 
 test("createRoom exposes room summary in listRooms", () => {
   const store = new LobbyStore(baseConfig);
