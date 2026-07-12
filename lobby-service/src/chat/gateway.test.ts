@@ -459,6 +459,47 @@ test("a stalled protocol-error peer does not block later global events for other
   await gateway.close();
 });
 
+test("ignores a valid send queued behind the same peer's protocol error", async () => {
+  const gateway = new ServerChatGateway({ chatEnabled: true, protocolErrorCloseGraceMs: 1_000 });
+  const attacker = new FakeSocket();
+  const observer = new FakeSocket();
+  gateway.accept(attacker as unknown as WebSocket, ticket);
+  gateway.accept(observer as unknown as WebSocket, { ...ticket, id: "observer", playerName: "Bob" });
+  await settle(attacker, observer);
+  const observerStart = observer.sent.length;
+
+  attacker.emit("message", "{", false);
+  attacker.emit("message", chatSend("13131313-1313-4313-8313-131313131313", "must drop"), false);
+  await settle(observer);
+
+  assert.equal(frames(attacker).filter((frame) => frame.type === "chat_ack").length, 0);
+  assert.equal(frames(observer).slice(observerStart).some((frame) => frame.type === "chat_message"), false);
+  const newcomer = new FakeSocket();
+  gateway.accept(newcomer as unknown as WebSocket, { ...ticket, id: "post-error-newcomer" });
+  await settle(newcomer);
+  assert.equal(frames(newcomer).find((frame) => frame.type === "chat_snapshot_begin")?.totalMessages, 0);
+  await gateway.close();
+});
+
+test("repeated malformed messages schedule only one protocol error delivery and close", async () => {
+  const gateway = new ServerChatGateway({ chatEnabled: true, protocolErrorCloseGraceMs: 1_000 });
+  const socket = new FakeSocket();
+  gateway.accept(socket as unknown as WebSocket, ticket);
+  await settle(socket);
+
+  socket.emit("message", "{", false);
+  socket.emit("message", "{", false);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  socket.flushAll();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  socket.flushAll();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(frames(socket).filter((frame) => frame.code === "protocol_mismatch").length, 1);
+  assert.equal(socket.closes.filter((entry) => entry.code === 1002).length, 1);
+  await gateway.close();
+});
+
 test("accept rolls back peer capacity and closes the socket when setup throws", async () => {
   const registry = new ThrowingSnapshotRegistry({ maxPerIp: 1, maxTotal: 1 });
   const gateway = new ServerChatGateway({ peerRegistry: registry, chatEnabled: true });

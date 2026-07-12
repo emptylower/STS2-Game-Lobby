@@ -39,6 +39,7 @@ interface ConnectionState {
   readonly senderId: string;
   readonly ticket: ReservedChatTicket;
   snapshotComplete: boolean;
+  protocolCloseStarted: boolean;
   protocolCloseTimer: NodeJS.Timeout | null;
   protocolCloseFinished: boolean;
   cleanup(): void;
@@ -160,6 +161,7 @@ export class ServerChatGateway {
         senderId: this.randomSenderId(),
         ticket,
         snapshotComplete: false,
+        protocolCloseStarted: false,
         protocolCloseTimer: null,
         protocolCloseFinished: false,
         cleanup,
@@ -170,8 +172,14 @@ export class ServerChatGateway {
       this.startHeartbeat();
 
       onMessage = (data: RawData, isBinary: boolean): void => {
+        if (state!.protocolCloseStarted) {
+          return;
+        }
         const acceptedAfterSnapshot = state!.snapshotComplete;
         this.enqueueEvent(async () => {
+          if (state!.protocolCloseStarted) {
+            return;
+          }
           if (!acceptedAfterSnapshot) {
             this.closeProtocolError(state!);
             return;
@@ -525,6 +533,10 @@ export class ServerChatGateway {
   }
 
   private closeProtocolError(state: ConnectionState): void {
+    if (state.protocolCloseStarted) {
+      return;
+    }
+    state.protocolCloseStarted = true;
     const frame: ChatErrorEnvelope = {
       type: "chat_error",
       protocolVersion: 1,
