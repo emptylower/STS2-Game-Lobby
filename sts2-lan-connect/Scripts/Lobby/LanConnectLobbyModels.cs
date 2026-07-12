@@ -120,6 +120,45 @@ internal sealed class LobbyHealthResponse
     public double? CreateRoomThresholdRatio { get; set; }
 }
 
+internal sealed class LobbyProbeResponse
+{
+    public bool Ok { get; set; }
+
+    public LobbyProbeCapabilities Capabilities { get; set; } = new();
+}
+
+internal sealed class LobbyProbeCapabilities
+{
+    public int ServerChatVersion { get; set; }
+
+    public int RoomChatProtocolVersion { get; set; }
+
+    public int RichContentVersion { get; set; }
+
+    public int EmojiSetVersion { get; set; }
+
+    public int ItemRefVersion { get; set; }
+
+    public int CombatRefVersion { get; set; }
+
+    public int MaxMessageChars { get; set; }
+
+    public int MaxSegments { get; set; }
+
+    public int MaxEntities { get; set; }
+
+    public int HistoryLimit { get; set; }
+
+    [JsonIgnore]
+    public bool SupportsTextServerChat => ServerChatVersion == 1;
+
+    [JsonIgnore]
+    public bool SupportsRichServerChat => SupportsTextServerChat && RichContentVersion > 0;
+
+    [JsonIgnore]
+    public bool SupportsRoomChat => RoomChatProtocolVersion > 0;
+}
+
 internal sealed class LobbySavedRunInfo
 {
     public string SaveKey { get; set; } = string.Empty;
@@ -189,6 +228,8 @@ internal sealed class LobbyCreateRoomResponse
     public LobbyRoomSummary Room { get; set; } = new();
 
     public LobbyRelayEndpoint? RelayEndpoint { get; set; }
+
+    public string? RoomSessionId { get; set; }
 }
 
 internal sealed class LobbyJoinRoomRequest
@@ -248,6 +289,8 @@ internal sealed class LobbyJoinRoomResponse
     public LobbyRoomSummary Room { get; set; } = new();
 
     public LobbyConnectionPlan ConnectionPlan { get; set; } = new();
+
+    public string? RoomSessionId { get; set; }
 }
 
 internal sealed class LobbyHeartbeatRequest

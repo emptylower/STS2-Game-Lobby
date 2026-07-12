@@ -17,8 +17,13 @@ internal sealed class LobbyApiClient : IDisposable
     private readonly Uri _controlUri;
     private readonly string? _readAccessToken;
     private readonly string? _createRoomToken;
+    private readonly bool _diagnosticsEnabled;
 
-    public LobbyApiClient(string baseUrl, string? readAccessToken = null, string? createRoomToken = null)
+    public LobbyApiClient(
+        string baseUrl,
+        string? readAccessToken = null,
+        string? createRoomToken = null,
+        HttpMessageHandler? httpMessageHandler = null)
     {
         string normalizedBaseUrl = NormalizeBaseUrl(baseUrl);
         string normalizedWsUrl = NormalizeWsUrl(normalizedBaseUrl);
@@ -26,13 +31,17 @@ internal sealed class LobbyApiClient : IDisposable
         _controlUri = new Uri(normalizedWsUrl, UriKind.Absolute);
         _readAccessToken = string.IsNullOrWhiteSpace(readAccessToken) ? null : readAccessToken.Trim();
         _createRoomToken = string.IsNullOrWhiteSpace(createRoomToken) ? null : createRoomToken.Trim();
-        _httpClient = new HttpClient
+        _diagnosticsEnabled = httpMessageHandler == null;
+        _httpClient = new HttpClient(httpMessageHandler ?? new HttpClientHandler())
         {
             BaseAddress = _baseUri,
             Timeout = TimeSpan.FromSeconds(10d)
         };
 
-        GD.Print($"sts2_lan_connect lobby api: configured client {DescribeResolvedConfiguration()}");
+        if (_diagnosticsEnabled)
+        {
+            GD.Print($"sts2_lan_connect lobby api: configured client {DescribeResolvedConfiguration()}");
+        }
     }
 
     public static LobbyApiClient CreateConfigured()
@@ -67,7 +76,10 @@ internal sealed class LobbyApiClient : IDisposable
     public async Task<double> MeasureProbeRttAsync(CancellationToken cancellationToken = default)
     {
         Uri requestUri = new(_baseUri, "probe");
-        GD.Print($"sts2_lan_connect lobby api: GET {requestUri} via {GetEndpointSource()} (probe) config={DescribeResolvedConfiguration()}");
+        if (_diagnosticsEnabled)
+        {
+            GD.Print($"sts2_lan_connect lobby api: GET {requestUri} via {GetEndpointSource()} (probe) config={DescribeResolvedConfiguration()}");
+        }
         using HttpRequestMessage request = new(HttpMethod.Get, "probe");
         Stopwatch stopwatch = Stopwatch.StartNew();
         using HttpResponseMessage response = await _httpClient.SendAsync(
@@ -75,14 +87,34 @@ internal sealed class LobbyApiClient : IDisposable
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
         stopwatch.Stop();
-        GD.Print(
-            $"sts2_lan_connect lobby api: GET {requestUri} -> {(int)response.StatusCode} probeRttMs={stopwatch.Elapsed.TotalMilliseconds:0}");
+        if (_diagnosticsEnabled)
+        {
+            GD.Print(
+                $"sts2_lan_connect lobby api: GET {requestUri} -> {(int)response.StatusCode} probeRttMs={stopwatch.Elapsed.TotalMilliseconds:0}");
+        }
         return stopwatch.Elapsed.TotalMilliseconds;
     }
 
     public Task<LobbyHealthResponse> GetHealthAsync(CancellationToken cancellationToken = default)
     {
         return SendAsync<LobbyHealthResponse>("health", HttpMethod.Get, null, cancellationToken);
+    }
+
+    public Task<LobbyProbeResponse> GetProbeAsync(CancellationToken cancellationToken = default)
+    {
+        return SendAsync<LobbyProbeResponse>("probe", HttpMethod.Get, null, cancellationToken);
+    }
+
+    public Task<ServerChatTicketResponse> CreateServerChatTicketAsync(
+        ServerChatTicketRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return SendAsync<ServerChatTicketResponse>(
+            "chat/tickets",
+            HttpMethod.Post,
+            request,
+            cancellationToken,
+            includeCreateRoomToken: false);
     }
 
     public Task<LobbyCreateRoomResponse> CreateRoomAsync(LobbyCreateRoomRequest request, CancellationToken cancellationToken = default)
@@ -115,12 +147,20 @@ internal sealed class LobbyApiClient : IDisposable
         _httpClient.Dispose();
     }
 
-    private async Task<T> SendAsync<T>(string path, HttpMethod method, object? payload, CancellationToken cancellationToken)
+    private async Task<T> SendAsync<T>(
+        string path,
+        HttpMethod method,
+        object? payload,
+        CancellationToken cancellationToken,
+        bool includeCreateRoomToken = true)
     {
         Uri requestUri = new(_baseUri, path);
-        GD.Print($"sts2_lan_connect lobby api: {method.Method} {requestUri} via {GetEndpointSource()} ({DescribePayload(payload)}) config={DescribeResolvedConfiguration()}");
+        if (_diagnosticsEnabled)
+        {
+            GD.Print($"sts2_lan_connect lobby api: {method.Method} {requestUri} via {GetEndpointSource()} ({DescribePayload(payload)}) config={DescribeResolvedConfiguration()}");
+        }
         using HttpRequestMessage request = new(method, path);
-        ApplyAuthorizationHeaders(request);
+        ApplyAuthorizationHeaders(request, includeCreateRoomToken);
         if (payload != null)
         {
             string json = JsonSerializer.Serialize(payload, LanConnectJson.Options);
@@ -129,7 +169,10 @@ internal sealed class LobbyApiClient : IDisposable
 
         using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
         string text = await response.Content.ReadAsStringAsync(cancellationToken);
-        GD.Print($"sts2_lan_connect lobby api: {method.Method} {requestUri} -> {(int)response.StatusCode}");
+        if (_diagnosticsEnabled)
+        {
+            GD.Print($"sts2_lan_connect lobby api: {method.Method} {requestUri} -> {(int)response.StatusCode}");
+        }
         if (!response.IsSuccessStatusCode)
         {
             throw BuildException(text, (int)response.StatusCode);
@@ -149,14 +192,14 @@ internal sealed class LobbyApiClient : IDisposable
         return parsed;
     }
 
-    private void ApplyAuthorizationHeaders(HttpRequestMessage request)
+    private void ApplyAuthorizationHeaders(HttpRequestMessage request, bool includeCreateRoomToken)
     {
         if (!string.IsNullOrWhiteSpace(_readAccessToken))
         {
             request.Headers.TryAddWithoutValidation("x-lobby-access-token", _readAccessToken);
         }
 
-        if (!string.IsNullOrWhiteSpace(_createRoomToken))
+        if (includeCreateRoomToken && !string.IsNullOrWhiteSpace(_createRoomToken))
         {
             request.Headers.TryAddWithoutValidation("x-create-room-token", _createRoomToken);
         }
@@ -240,6 +283,7 @@ internal sealed class LobbyApiClient : IDisposable
             LobbyHeartbeatRequest heartbeat => $"heartbeat currentPlayers={heartbeat.CurrentPlayers}, status={heartbeat.Status}, connectedSaveSlots={heartbeat.ConnectedPlayerNetIds?.Count ?? 0}",
             LobbyDeleteRoomRequest => "delete-room",
             LobbyConnectionEventRequest connectionEvent => $"connection-event phase={connectionEvent.Phase}, candidate={connectionEvent.CandidateLabel ?? "<none>"}, endpoint={connectionEvent.CandidateEndpoint ?? "<none>"}",
+            ServerChatTicketRequest ticket => $"server-chat-ticket protocolVersion={ticket.ProtocolVersion}",
             _ => payload.GetType().Name
         };
     }
