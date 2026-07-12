@@ -269,3 +269,318 @@ test("close finishes promptly while an HTTP keep-alive connection is open", asyn
     cleanupTempDir(config);
   }
 });
+
+const PHASE1_PROBE_CAPABILITIES = {
+  serverChatVersion: 1,
+  roomChatProtocolVersion: 0,
+  richContentVersion: 0,
+  emojiSetVersion: 0,
+  itemRefVersion: 0,
+  combatRefVersion: 0,
+  maxMessageChars: 300,
+  maxSegments: 32,
+  maxEntities: 0,
+  historyLimit: 50,
+} as const;
+
+test("GET /probe returns exact phase-1 chat capabilities", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const probe = await fetch(`http://127.0.0.1:${address.port}/probe`);
+    assert.equal(probe.status, 200);
+    assert.deepEqual(await probe.json(), {
+      ok: true,
+      capabilities: PHASE1_PROBE_CAPABILITIES,
+    });
+
+    const health = await fetch(`http://127.0.0.1:${address.port}/health`);
+    assert.equal(health.status, 200);
+    const healthBody = (await health.json()) as Record<string, unknown>;
+    assert.equal(healthBody.ok, true);
+    assert.equal("capabilities" in healthBody, false);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("GET /peers/health does not supply negotiation capabilities", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sts2-lobby-probe-peers-"));
+  const config = testConfig({
+    port: 0,
+    peer: {
+      enabled: true,
+      selfAddress: "http://127.0.0.1:9",
+      stateDir: join(tempDir, "peer"),
+      cfDiscoveryBaseUrl: "",
+      displayNameOverride: "",
+    },
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/peers/health?challenge=probe-capability-check`,
+    );
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as Record<string, unknown>;
+    assert.equal("capabilities" in body, false);
+    assert.equal(typeof body.publicKey, "string");
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }
+});
+
+function ticketBody(overrides: Record<string, unknown> = {}) {
+  return {
+    protocolVersion: 1,
+    playerNetId: "net-player-1",
+    playerName: "Ironclad",
+    ...overrides,
+  };
+}
+
+async function postChatTicket(
+  port: number,
+  options: {
+    headers?: Record<string, string>;
+    body?: unknown;
+  } = {},
+) {
+  return fetch(`http://127.0.0.1:${port}/chat/tickets`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(options.headers ?? {}),
+    },
+    body: JSON.stringify(options.body ?? ticketBody()),
+  });
+}
+
+test("POST /chat/tickets issues ticket with lobby header when access enforced", async () => {
+  const config = testConfig({
+    port: 0,
+    enforceLobbyAccessToken: true,
+    lobbyAccessToken: "lobby-secret",
+    createRoomToken: "create-secret",
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await postChatTicket(address.port, {
+      headers: { "x-lobby-access-token": "lobby-secret" },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      ticket: string;
+      expiresAt: string;
+      webSocketUrl: string;
+      protocolVersion: number;
+    };
+    assert.equal(typeof body.ticket, "string");
+    assert.ok(body.ticket.length > 16);
+    assert.equal(typeof body.expiresAt, "string");
+    assert.ok(!Number.isNaN(Date.parse(body.expiresAt)));
+    assert.equal(body.webSocketUrl, `ws://127.0.0.1:${address.port}/chat`);
+    assert.equal(body.protocolVersion, 1);
+    assert.equal(new URL(body.webSocketUrl).search, "", "webSocketUrl must not embed credentials");
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets accepts equivalent Bearer lobby access token", async () => {
+  const config = testConfig({
+    port: 0,
+    enforceLobbyAccessToken: true,
+    lobbyAccessToken: "lobby-bearer-secret",
+    createRoomToken: "create-secret",
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await postChatTicket(address.port, {
+      headers: { authorization: "Bearer lobby-bearer-secret" },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { ticket: string; protocolVersion: number };
+    assert.equal(typeof body.ticket, "string");
+    assert.equal(body.protocolVersion, 1);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets rejects missing or wrong lobby token with 401", async () => {
+  const config = testConfig({
+    port: 0,
+    enforceLobbyAccessToken: true,
+    lobbyAccessToken: "lobby-secret",
+    createRoomToken: "create-secret",
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const missing = await postChatTicket(address.port);
+    assert.equal(missing.status, 401);
+
+    const wrong = await postChatTicket(address.port, {
+      headers: { "x-lobby-access-token": "not-the-lobby-secret" },
+    });
+    assert.equal(wrong.status, 401);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets rejects create-room-token-only requests with 401", async () => {
+  const config = testConfig({
+    port: 0,
+    enforceLobbyAccessToken: true,
+    lobbyAccessToken: "lobby-secret",
+    createRoomToken: "create-secret",
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await postChatTicket(address.port, {
+      headers: { "x-create-room-token": "create-secret" },
+    });
+    assert.equal(response.status, 401);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets rejects invalid protocol, name, and net id with 400", async () => {
+  const config = testConfig({
+    port: 0,
+    enforceLobbyAccessToken: false,
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const badProtocol = await postChatTicket(address.port, {
+      body: ticketBody({ protocolVersion: 2 }),
+    });
+    assert.equal(badProtocol.status, 400);
+
+    const badName = await postChatTicket(address.port, {
+      body: ticketBody({ playerName: "bad\nname" }),
+    });
+    assert.equal(badName.status, 400);
+
+    const badNetId = await postChatTicket(address.port, {
+      body: ticketBody({ playerNetId: "net\u0000id" }),
+    });
+    assert.equal(badNetId.status, 400);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets rate limits with 429 and Retry-After", async () => {
+  const base = testConfig({ port: 0, enforceLobbyAccessToken: false });
+  const config: LobbyServiceConfig = {
+    ...base,
+    chat: {
+      ...base.chat,
+      ticketRequestsPerMinute: 2,
+    },
+  };
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    assert.equal((await postChatTicket(address.port)).status, 200);
+    assert.equal((await postChatTicket(address.port)).status, 200);
+    const limited = await postChatTicket(address.port);
+    assert.equal(limited.status, 429);
+    const retryAfter = limited.headers.get("retry-after");
+    assert.ok(retryAfter, "expected Retry-After header");
+    assert.ok(Number.parseInt(retryAfter, 10) >= 1);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets returns 503 when pending ticket capacity is exhausted", async () => {
+  const base = testConfig({ port: 0, enforceLobbyAccessToken: false });
+  const config: LobbyServiceConfig = {
+    ...base,
+    chat: {
+      ...base.chat,
+      maxPendingTickets: 1,
+      ticketRequestsPerMinute: 100,
+    },
+  };
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    assert.equal((await postChatTicket(address.port)).status, 200);
+    const busy = await postChatTicket(address.port, {
+      body: ticketBody({ playerNetId: "net-player-2" }),
+    });
+    assert.equal(busy.status, 503);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets logs omit submitted access and ticket values", async () => {
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map((entry) => String(entry)).join(" "));
+  };
+
+  const accessToken = "super-secret-lobby-access-token-value";
+  const config = testConfig({
+    port: 0,
+    enforceLobbyAccessToken: true,
+    lobbyAccessToken: accessToken,
+    createRoomToken: "create-secret",
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await postChatTicket(address.port, {
+      headers: { "x-lobby-access-token": accessToken },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { ticket: string };
+    // Allow request logging to flush via response finish handlers.
+    await sleep(20);
+    const joined = logs.join("\n");
+    assert.equal(joined.includes(accessToken), false, "logs must not include lobby access token");
+    assert.equal(joined.includes(body.ticket), false, "logs must not include issued ticket");
+  } finally {
+    console.log = originalLog;
+    await service.close();
+    cleanupTempDir(config);
+  }
+});

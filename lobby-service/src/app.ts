@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { readFileSync } from "node:fs";
-import { createServer, type Server as HttpServer } from "node:http";
+import { createServer, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { LobbyServiceConfig } from "./config.js";
@@ -11,6 +11,8 @@ import {
   getLobbyAccessToken,
   ipMatchesCidr,
   normalizeIp,
+  resolveClientIp,
+  type ClientIpRequest,
 } from "./client-ip.js";
 import { CreateRoomBandwidthGuard } from "./bandwidth-guard.js";
 import { assertRelayCreateReady, assertRelayJoinReady } from "./join-guard.js";
@@ -37,7 +39,14 @@ import { loadSeedsFromCf } from "./peer/seeds-loader.js";
 import { bootstrapPeers } from "./peer/bootstrap.js";
 import { announceToBootstrappedPeers } from "./peer/auto-announce.js";
 import { mountMetrics } from "./peer/handlers/metrics.js";
-import { installUpgradeRouter } from "./chat/upgrade-router.js";
+import { ChatPeerError, ChatPeerRegistry } from "./chat/peer-registry.js";
+import { RateLimitError, SlidingWindowLimiter } from "./chat/rate-limiter.js";
+import {
+  ChatTicketError,
+  ChatTicketStore,
+  type ReservedChatTicket,
+} from "./chat/ticket-store.js";
+import { installUpgradeRouter, type ChatUpgradeDecision } from "./chat/upgrade-router.js";
 
 const MaxLobbyPlayers = 256;
 const MaxRoomNameLength = 80;
@@ -56,6 +65,10 @@ const MaxSavedRunConnectedNetIds = 16;
 const MaxNetIdLength = 64;
 const MaxCharacterIdLength = 64;
 const MaxCharacterNameLength = 64;
+const ChatMaxMessageChars = 300;
+const ChatMaxSegments = 32;
+const ChatMaxEntitiesPhase1 = 0;
+const ChatProtocolVersion = 1;
 
 
 function readLobbyServiceVersion() {
@@ -161,6 +174,20 @@ export async function createLobbyService(
   const createRoomBandwidthGuard = new CreateRoomBandwidthGuard();
   const serverAdminSessions = new Map<string, ServerAdminSession>();
   const createJoinRateLimitHits = new Map<string, RateLimitBucket>();
+  const chatTicketStore = new ChatTicketStore({
+    maxPendingTickets: env.chat.maxPendingTickets,
+  });
+  const chatTicketRateLimiter = new SlidingWindowLimiter({
+    purpose: "ticket",
+    maxRequests: env.chat.ticketRequestsPerMinute,
+    windowMs: 60_000,
+  });
+  const chatPeerRegistry = new ChatPeerRegistry({
+    maxTotal: env.chat.maxConnectionsTotal,
+    maxPerIp: env.chat.maxConnectionsPerIp,
+    slowClientBytes: env.chat.slowClientBytes,
+  });
+  const reservedChatTicketsByUpgrade = new WeakMap<IncomingMessage, ReservedChatTicket>();
   let peerStore: PeerStore | null = null;
   let gossipScheduler: GossipScheduler | null = null;
   let cleanupInterval: NodeJS.Timeout | null = null;
@@ -226,7 +253,91 @@ export async function createLobbyService(
   app.get("/probe", (_req, res) => {
     res.json({
       ok: true,
+      capabilities: {
+        serverChatVersion: 1,
+        roomChatProtocolVersion: 0,
+        richContentVersion: 0,
+        emojiSetVersion: 0,
+        itemRefVersion: 0,
+        combatRefVersion: 0,
+        maxMessageChars: ChatMaxMessageChars,
+        maxSegments: ChatMaxSegments,
+        maxEntities: ChatMaxEntitiesPhase1,
+        // Phase 1 probe historyLimit advertises snapshot depth clients should expect.
+        historyLimit: env.chat.snapshotLimit,
+      },
     });
+  });
+
+  app.post("/chat/tickets", (req, res) => {
+    assertLobbyAccessForChat(req);
+
+    const clientIp = resolveChatClientIp(req);
+    if (!clientIp) {
+      throw new HttpError(400, "invalid_request", "无法解析客户端地址。");
+    }
+
+    let rateResult;
+    try {
+      rateResult = chatTicketRateLimiter.consume(clientIp);
+    } catch (error) {
+      if (error instanceof RateLimitError) {
+        throw new HttpError(503, "server_busy", "聊天票据服务繁忙，请稍后再试。");
+      }
+      throw error;
+    }
+
+    if (!rateResult.allowed) {
+      const retryAfterSeconds = Math.max(1, Math.ceil(rateResult.retryAfterMs / 1000));
+      res.setHeader("Retry-After", String(retryAfterSeconds));
+      throw new HttpError(429, "rate_limited", "请求过于频繁，请稍后再试。");
+    }
+
+    const body = req.body as {
+      protocolVersion?: unknown;
+      playerNetId?: unknown;
+      playerName?: unknown;
+    } | undefined;
+
+    if (typeof body?.protocolVersion !== "number" || !Number.isInteger(body.protocolVersion)) {
+      throw new InputError("protocolVersion 必须为整数。");
+    }
+
+    if (typeof body.playerNetId !== "string" || typeof body.playerName !== "string") {
+      throw new InputError("playerNetId 与 playerName 必须为字符串。");
+    }
+
+    let issued: { ticket: string; expiresAt: string };
+    try {
+      issued = chatTicketStore.issue({
+        protocolVersion: body.protocolVersion,
+        playerNetId: body.playerNetId,
+        playerName: body.playerName,
+        clientIp,
+      });
+    } catch (error) {
+      if (error instanceof ChatTicketError) {
+        if (error.code === "invalid_claims") {
+          throw new InputError(error.message);
+        }
+        if (error.code === "server_busy") {
+          throw new HttpError(503, "server_busy", "聊天票据服务繁忙，请稍后再试。");
+        }
+        throw new HttpError(400, "invalid_request", error.message);
+      }
+      throw error;
+    }
+
+    const webSocketUrl = buildChatWebSocketUrl(req);
+    res.json({
+      ticket: issued.ticket,
+      expiresAt: issued.expiresAt,
+      webSocketUrl,
+      protocolVersion: ChatProtocolVersion,
+    });
+    console.log(
+      `[chat] ticket issued playerNetId=${body.playerNetId.trim()} playerName=${body.playerName.normalize("NFC").trim()} remote=${clientIp} expiresAt=${issued.expiresAt}`,
+    );
   });
 
   app.get("/rooms", (req, res) => {
@@ -556,13 +667,12 @@ export async function createLobbyService(
   // Both WebSocket servers are noServer; the single upgrade router owns path dispatch.
   const wss = new WebSocketServer({ noServer: true });
   const chatWss = new WebSocketServer({ noServer: true });
-  // Ticket/capacity preflight lands in later tasks; reject /chat upgrades until then.
   const uninstallUpgradeRouter = installUpgradeRouter({
     server,
     controlPath: env.wsPath,
     controlWss: wss,
     chatWss,
-    authorizeChat: () => ({ ok: false, statusCode: 503 }),
+    authorizeChat: authorizeChatUpgrade,
   });
   const roomPeers = new Map<string, Set<ControlPeer>>();
 
@@ -1135,6 +1245,102 @@ export async function createLobbyService(
 
   function requestIp(req: Request) {
     return normalizeIp(req.socket.remoteAddress ?? "");
+  }
+
+  function asClientIpRequest(req: Request | IncomingMessage): ClientIpRequest {
+    return {
+      socket: { remoteAddress: req.socket.remoteAddress },
+      headers: req.headers as Record<string, string | string[] | undefined>,
+    };
+  }
+
+  function resolveChatClientIp(req: Request | IncomingMessage): string {
+    return resolveClientIp(asClientIpRequest(req), env.chat.trustedProxyCidrs);
+  }
+
+  function buildChatWebSocketUrl(req: Request): string {
+    const hostHeader = req.headers.host?.trim();
+    const host = hostHeader && hostHeader.length > 0 ? hostHeader : "127.0.0.1";
+    const forwardedProto = typeof req.headers["x-forwarded-proto"] === "string"
+      ? req.headers["x-forwarded-proto"].split(",", 1)[0]?.trim().toLowerCase()
+      : undefined;
+    const secure = req.secure || forwardedProto === "https";
+    return `${secure ? "wss" : "ws"}://${host}/chat`;
+  }
+
+  function extractBearerToken(authorization: string | string[] | undefined): string | undefined {
+    const value = Array.isArray(authorization) ? authorization[0] : authorization;
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const match = /^Bearer\s+(\S+)$/i.exec(value.trim());
+    return match?.[1];
+  }
+
+  function assertLobbyAccessForChat(req: Request) {
+    if (!env.enforceLobbyAccessToken) {
+      return;
+    }
+
+    if (!env.lobbyAccessToken) {
+      throw new HttpError(
+        503,
+        "lobby_access_token_not_configured",
+        "服务端已开启大厅访问令牌校验，但未配置访问令牌。",
+      );
+    }
+
+    const providedToken = getLobbyAccessToken(req);
+    // CREATE_ROOM_TOKEN (x-create-room-token) never authorizes chat tickets.
+    if (!providedToken || providedToken !== env.lobbyAccessToken) {
+      throw new HttpError(401, "lobby_access_forbidden", "需要有效的大厅访问令牌。");
+    }
+  }
+
+  function authorizeChatUpgrade(req: IncomingMessage): ChatUpgradeDecision {
+    const clientIp = resolveChatClientIp(req);
+    if (!clientIp) {
+      return { ok: false, statusCode: 401 };
+    }
+
+    const ticket = extractBearerToken(req.headers.authorization);
+    if (!ticket) {
+      return { ok: false, statusCode: 401 };
+    }
+
+    try {
+      chatPeerRegistry.assertCapacity(clientIp);
+    } catch (error) {
+      if (error instanceof ChatPeerError) {
+        return { ok: false, statusCode: 503 };
+      }
+      throw error;
+    }
+
+    let reserved: ReservedChatTicket;
+    try {
+      reserved = chatTicketStore.reserve(ticket, clientIp, ChatProtocolVersion);
+    } catch (error) {
+      if (error instanceof ChatTicketError) {
+        if (error.code === "server_busy") {
+          return { ok: false, statusCode: 503 };
+        }
+        return { ok: false, statusCode: 401 };
+      }
+      throw error;
+    }
+
+    reservedChatTicketsByUpgrade.set(req, reserved);
+    return {
+      ok: true,
+      commit: () => {
+        chatTicketStore.commit(reserved.id);
+      },
+      release: () => {
+        reservedChatTicketsByUpgrade.delete(req);
+        chatTicketStore.release(reserved.id);
+      },
+    };
   }
 
   function parseCookies(header: string | undefined) {
