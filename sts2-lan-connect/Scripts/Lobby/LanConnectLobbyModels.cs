@@ -153,7 +153,7 @@ internal sealed class LobbyProbeCapabilities
     public bool SupportsTextServerChat => ServerChatVersion == 1;
 
     [JsonIgnore]
-    public bool SupportsRichServerChat => SupportsTextServerChat && RichContentVersion > 0;
+    public bool SupportsRichServerChat => false; // Phase 1 is text-only even if a future probe advertises rich content.
 
     [JsonIgnore]
     public bool SupportsRoomChat => RoomChatProtocolVersion > 0;

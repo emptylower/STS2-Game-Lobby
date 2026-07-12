@@ -21,6 +21,11 @@ public sealed class LanConnectLobbyChatApiTests
         Assert.Equal(300, probe.Capabilities.MaxMessageChars);
         Assert.Equal(50, probe.Capabilities.HistoryLimit);
 
+        LobbyProbeResponse futureRichProbe = Deserialize<LobbyProbeResponse>("""
+            {"ok":true,"capabilities":{"serverChatVersion":1,"richContentVersion":1}}
+            """);
+        Assert.False(futureRichProbe.Capabilities.SupportsRichServerChat);
+
         ServerChatTicketResponse ticket = Deserialize<ServerChatTicketResponse>("""
             {"ticket":"one-time-secret","expiresAt":"2026-07-13T04:05:06.000Z","webSocketUrl":"wss://lobby.example/chat","protocolVersion":1}
             """);
