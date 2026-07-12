@@ -255,6 +255,9 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         catch (ObjectDisposedException) when (Volatile.Read(ref _disposed) != 0)
         {
         }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception exception)
         {
             RaiseFaulted(exception);

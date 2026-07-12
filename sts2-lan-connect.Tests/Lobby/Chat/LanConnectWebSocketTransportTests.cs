@@ -333,6 +333,38 @@ public sealed class LanConnectWebSocketTransportTests
     }
 
     [Fact]
+    public async Task DisposeAbortReceiveErrorDoesNotRaiseFaultOrClosed()
+    {
+        FakeWebSocket socket = new() { HangReceiveUntilAbort = true };
+        LanConnectWebSocketTransport transport = new(socket);
+        int faultCount = 0;
+        int closedCount = 0;
+        transport.Faulted += _ => Interlocked.Increment(ref faultCount);
+        transport.Closed += () => Interlocked.Increment(ref closedCount);
+        await transport.ConnectAsync(new Uri("wss://lobby.example/chat"), cancellationToken: TestCancellation);
+        await socket.ReceiveStarted.Task.WaitAsync(TestCancellation);
+
+        await transport.DisposeAsync();
+
+        Assert.Equal(0, faultCount);
+        Assert.Equal(0, closedCount);
+        Assert.Equal(1, socket.AbortCount);
+        Assert.Equal(1, socket.DisposeCount);
+    }
+
+    [Fact]
+    public async Task AbortExceptionDoesNotPreventSocketDisposal()
+    {
+        FakeWebSocket socket = new() { AbortException = new WebSocketException(WebSocketError.Faulted) };
+        LanConnectWebSocketTransport transport = new(socket);
+
+        await transport.DisposeAsync();
+
+        Assert.Equal(1, socket.AbortCount);
+        Assert.Equal(1, socket.DisposeCount);
+    }
+
+    [Fact]
     public async Task ThrowingPayloadHandlerDoesNotStopLaterDeliveryOrCleanup()
     {
         FakeWebSocket socket = new();
@@ -404,8 +436,10 @@ public sealed class LanConnectWebSocketTransportTests
         public bool HoldConnect { get; init; }
         public bool HoldFirstSend { get; init; }
         public bool HangFirstSendUntilAbort { get; init; }
+        public bool HangReceiveUntilAbort { get; init; }
         public Exception? ReceiveException { get; set; }
         public Exception? CloseException { get; init; }
+        public Exception? AbortException { get; init; }
         public int ReceiveCallCount => Volatile.Read(ref _receiveCallCount);
         public int SendCallCount => Volatile.Read(ref _sendCallCount);
         public int ConnectCallCount => Volatile.Read(ref _connectCallCount);
@@ -436,6 +470,11 @@ public sealed class LanConnectWebSocketTransportTests
             ReceiveStarted.TrySetResult();
             try
             {
+                if (HangReceiveUntilAbort)
+                {
+                    await _abortSignal.Task;
+                    throw new WebSocketException(WebSocketError.ConnectionClosedPrematurely);
+                }
                 if (ReceiveException is Exception receiveException)
                 {
                     ReceiveException = null;
@@ -478,6 +517,10 @@ public sealed class LanConnectWebSocketTransportTests
             Interlocked.Increment(ref _abortCount);
             State = WebSocketState.Aborted;
             _abortSignal.TrySetResult();
+            if (AbortException is Exception abortException)
+            {
+                throw abortException;
+            }
         }
 
         public Task CloseAsync(WebSocketCloseStatus closeStatus, string statusDescription, CancellationToken cancellationToken)
