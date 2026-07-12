@@ -6,6 +6,42 @@ import { RoomRelayManager } from "./relay.js";
 
 const MAGIC = Buffer.from("STS2R1", "ascii");
 
+test("relay manager does not start cleanup interval until start()", () => {
+  const createdIntervals: NodeJS.Timeout[] = [];
+  const realSetInterval = globalThis.setInterval;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as any).setInterval = ((...args: Parameters<typeof setInterval>) => {
+    const timer = realSetInterval(...args);
+    createdIntervals.push(timer);
+    return timer;
+  }) as typeof setInterval;
+
+  let manager: RoomRelayManager | undefined;
+  try {
+    manager = new RoomRelayManager(
+      {
+        bindHost: "127.0.0.1",
+        portStart: 43110,
+        portEnd: 43110,
+        hostIdleMs: 5_000,
+        clientIdleMs: 5_000,
+      },
+      () => {},
+    );
+    assert.equal(createdIntervals.length, 0, "constructor must not create cleanup interval");
+    manager.start();
+    assert.equal(createdIntervals.length, 1, "start() must create cleanup interval once");
+    manager.start();
+    assert.equal(createdIntervals.length, 1, "start() is idempotent");
+  } finally {
+    (globalThis as typeof globalThis & { setInterval: typeof setInterval }).setInterval = realSetInterval;
+    for (const timer of createdIntervals) {
+      clearInterval(timer);
+    }
+    manager?.close();
+  }
+});
+
 test("relay traffic snapshot reports active sessions and bytes in window", async () => {
   const manager = new RoomRelayManager(
     {
@@ -17,6 +53,7 @@ test("relay traffic snapshot reports active sessions and bytes in window", async
     },
     () => {},
   );
+  manager.start();
 
   const endpoint = manager.allocateRoom("room-test", "token-test", "127.0.0.1");
   assert.ok(endpoint);

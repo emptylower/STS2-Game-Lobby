@@ -892,6 +892,7 @@ export async function createLobbyService(
     }, 5000);
     cleanupInterval.unref();
 
+    relayManager.start();
     await startPeerRuntime();
 
     return boundAddress;
@@ -914,6 +915,27 @@ export async function createLobbyService(
     if (gossipScheduler) {
       gossipScheduler.stop();
       gossipScheduler = null;
+    }
+
+    // Force-terminate active control-channel peers so wss.close()/http close
+    // cannot hang waiting for clients that never disconnect.
+    for (const peers of roomPeers.values()) {
+      for (const peer of peers) {
+        try {
+          peer.socket.terminate();
+        } catch {
+          // ignore socket termination races
+        }
+      }
+    }
+    roomPeers.clear();
+
+    for (const client of wss.clients) {
+      try {
+        client.terminate();
+      } catch {
+        // ignore socket termination races
+      }
     }
 
     await new Promise<void>((resolve) => {
