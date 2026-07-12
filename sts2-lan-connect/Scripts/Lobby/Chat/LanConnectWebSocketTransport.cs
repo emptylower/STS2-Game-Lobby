@@ -25,6 +25,8 @@ internal interface ILanConnectWebSocket : IAsyncDisposable
         CancellationToken cancellationToken);
 
     Task CloseAsync(WebSocketCloseStatus closeStatus, string statusDescription, CancellationToken cancellationToken);
+
+    void Abort();
 }
 
 internal sealed class LanConnectClientWebSocket : ILanConnectWebSocket
@@ -50,6 +52,8 @@ internal sealed class LanConnectClientWebSocket : ILanConnectWebSocket
     public Task CloseAsync(WebSocketCloseStatus closeStatus, string statusDescription, CancellationToken cancellationToken) =>
         _socket.CloseAsync(closeStatus, statusDescription, cancellationToken);
 
+    public void Abort() => _socket.Abort();
+
     public ValueTask DisposeAsync()
     {
         _socket.Dispose();
@@ -71,6 +75,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
     private Task _receiveLoop = Task.CompletedTask;
     private Task? _disposeTask;
     private int _connectStarted;
+    private int _closedRaised;
     private int _disposed;
 
     public LanConnectWebSocketTransport()
@@ -84,6 +89,8 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
     }
 
     public event Action<string>? PayloadReceived;
+
+    public event Action<Exception>? Faulted;
 
     public event Action? Closed;
 
@@ -116,22 +123,33 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
     public async Task SendAsync(string payload, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(payload);
-        ThrowIfDisposed();
         byte[] bytes = StrictUtf8.GetBytes(payload);
-        await _sendLock.WaitAsync(cancellationToken);
-        try
+        CancellationTokenSource sendCancellation;
+        lock (_lifecycleLock)
         {
             ThrowIfDisposed();
-            if (_socket.State != WebSocketState.Open)
-            {
-                throw new InvalidOperationException("The WebSocket transport is not connected.");
-            }
-
-            await _socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
+            sendCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                _disposeCancellation.Token);
         }
-        finally
+
+        using (sendCancellation)
         {
-            _sendLock.Release();
+            await _sendLock.WaitAsync(sendCancellation.Token);
+            try
+            {
+                ThrowIfDisposed();
+                if (_socket.State != WebSocketState.Open)
+                {
+                    throw new InvalidOperationException("The WebSocket transport is not connected.");
+                }
+
+                await _socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, sendCancellation.Token);
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
         }
     }
 
@@ -143,6 +161,13 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
             {
                 Interlocked.Exchange(ref _disposed, 1);
                 _disposeCancellation.Cancel();
+                try
+                {
+                    _socket.Abort();
+                }
+                catch
+                {
+                }
                 _disposeTask = DisposeCoreAsync(_connectTask);
             }
             return new ValueTask(_disposeTask);
@@ -187,7 +212,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
                     await CompleteRemoteCloseAsync(cancellationToken);
-                    RaiseClosed();
+                    RaiseClosedOnce();
                     return;
                 }
 
@@ -230,6 +255,11 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         catch (ObjectDisposedException) when (Volatile.Read(ref _disposed) != 0)
         {
         }
+        catch (Exception exception)
+        {
+            RaiseFaulted(exception);
+            RaiseClosedOnce();
+        }
     }
 
     private async Task CompleteRemoteCloseAsync(CancellationToken cancellationToken)
@@ -244,7 +274,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
     {
         await CloseSocketAsync(closeStatus, description, cancellationToken);
 
-        RaiseClosed();
+        RaiseClosedOnce();
     }
 
     private async Task CloseSocketAsync(
@@ -286,8 +316,33 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         }
     }
 
-    private void RaiseClosed()
+    private void RaiseFaulted(Exception exception)
     {
+        Action<Exception>? handlers = Faulted;
+        if (handlers == null)
+        {
+            return;
+        }
+
+        foreach (Action<Exception> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(exception);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private void RaiseClosedOnce()
+    {
+        if (Interlocked.Exchange(ref _closedRaised, 1) != 0)
+        {
+            return;
+        }
+
         Action? handlers = Closed;
         if (handlers == null)
         {
@@ -337,6 +392,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         finally
         {
             _sendLock.Release();
+            _sendLock.Dispose();
             _receiveCancellation?.Dispose();
             _disposeCancellation.Dispose();
         }
@@ -344,18 +400,25 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
-    private static string LimitCloseDescription(string description)
+    internal static string LimitCloseDescription(string description)
     {
         if (StrictUtf8.GetByteCount(description) <= 123)
         {
             return description;
         }
 
-        int length = description.Length;
-        while (length > 0 && StrictUtf8.GetByteCount(description.AsSpan(0, length)) > 123)
+        StringBuilder result = new(description.Length);
+        int byteCount = 0;
+        foreach (Rune rune in description.EnumerateRunes())
         {
-            length--;
+            if (byteCount + rune.Utf8SequenceLength > 123)
+            {
+                break;
+            }
+
+            result.Append(rune);
+            byteCount += rune.Utf8SequenceLength;
         }
-        return description[..length];
+        return result.ToString();
     }
 }
