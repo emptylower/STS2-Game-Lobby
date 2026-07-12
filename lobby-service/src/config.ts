@@ -55,6 +55,7 @@ export interface LobbyServiceConfig {
   enforceLobbyAccessToken: boolean;
   enforceCreateRoomToken: boolean;
   lobbyAccessToken?: string;
+  chatAccessToken?: string;
   createRoomToken?: string;
   createRoomTrustedProxies: string[];
   createJoinRateLimitWindowMs: number;
@@ -77,7 +78,8 @@ export interface LobbyServiceConfig {
 
 export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceConfig {
   const host = source.HOST ?? "0.0.0.0";
-  const lobbyAccessToken = optionalEnv(source.LOBBY_ACCESS_TOKEN) ?? optionalEnv(source.CREATE_ROOM_TOKEN);
+  const chatAccessToken = optionalEnv(source.LOBBY_ACCESS_TOKEN);
+  const lobbyAccessToken = chatAccessToken ?? optionalEnv(source.CREATE_ROOM_TOKEN);
   const createRoomToken = optionalEnv(source.CREATE_ROOM_TOKEN) ?? optionalEnv(source.LOBBY_ACCESS_TOKEN);
   const serverAdminPasswordHash = optionalEnv(source.SERVER_ADMIN_PASSWORD_HASH);
   const serverAdminSessionSecret = optionalEnv(source.SERVER_ADMIN_SESSION_SECRET);
@@ -102,6 +104,7 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
     enforceLobbyAccessToken: parseLegacyBoolean(source.ENFORCE_LOBBY_ACCESS_TOKEN, true),
     enforceCreateRoomToken: parseLegacyBoolean(source.ENFORCE_CREATE_ROOM_TOKEN, true),
     ...(lobbyAccessToken == null ? {} : { lobbyAccessToken }),
+    ...(chatAccessToken == null ? {} : { chatAccessToken }),
     ...(createRoomToken == null ? {} : { createRoomToken }),
     createRoomTrustedProxies: parseCommaSeparatedValues(source.CREATE_ROOM_TRUSTED_PROXIES),
     createJoinRateLimitWindowMs: parseLegacyInteger(source, "CREATE_JOIN_RATE_LIMIT_WINDOW_MS", 60000),

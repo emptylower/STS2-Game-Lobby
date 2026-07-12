@@ -68,6 +68,7 @@ const MaxCharacterNameLength = 64;
 const ChatMaxMessageChars = 300;
 const ChatMaxSegments = 32;
 const ChatMaxEntitiesPhase1 = 0;
+const ChatHistoryLimitPhase1 = 50;
 const ChatProtocolVersion = 1;
 
 
@@ -211,7 +212,7 @@ export async function createLobbyService(
     res.on("finish", () => {
       const durationMs = Date.now() - startedAt;
       console.log(
-        `[http] ${req.method} ${req.originalUrl} ip=${requestIp(req)} status=${res.statusCode} durationMs=${durationMs}`,
+        `[http] ${req.method} ${req.path} ip=${requestIp(req)} status=${res.statusCode} durationMs=${durationMs}`,
       );
     });
     next();
@@ -263,13 +264,16 @@ export async function createLobbyService(
         maxMessageChars: ChatMaxMessageChars,
         maxSegments: ChatMaxSegments,
         maxEntities: ChatMaxEntitiesPhase1,
-        // Phase 1 probe historyLimit advertises snapshot depth clients should expect.
-        historyLimit: env.chat.snapshotLimit,
+        historyLimit: ChatHistoryLimitPhase1,
       },
     });
   });
 
   app.post("/chat/tickets", (req, res) => {
+    if (Object.keys(req.query).length > 0) {
+      throw new InputError("聊天票据请求不接受查询参数。");
+    }
+
     assertLobbyAccessForChat(req);
 
     const clientIp = resolveChatClientIp(req);
@@ -298,6 +302,11 @@ export async function createLobbyService(
       playerNetId?: unknown;
       playerName?: unknown;
     } | undefined;
+
+    const allowedFields = new Set(["protocolVersion", "playerNetId", "playerName"]);
+    if (!body || Array.isArray(body) || Object.keys(body).some((key) => !allowedFields.has(key))) {
+      throw new InputError("请求体只能包含 protocolVersion、playerNetId 与 playerName。");
+    }
 
     if (typeof body?.protocolVersion !== "number" || !Number.isInteger(body.protocolVersion)) {
       throw new InputError("protocolVersion 必须为整数。");
@@ -1261,10 +1270,17 @@ export async function createLobbyService(
   function buildChatWebSocketUrl(req: Request): string {
     const hostHeader = req.headers.host?.trim();
     const host = hostHeader && hostHeader.length > 0 ? hostHeader : "127.0.0.1";
-    const forwardedProto = typeof req.headers["x-forwarded-proto"] === "string"
-      ? req.headers["x-forwarded-proto"].split(",", 1)[0]?.trim().toLowerCase()
-      : undefined;
-    const secure = req.secure || forwardedProto === "https";
+    const remoteIp = requestIp(req);
+    const trustedProxy = remoteIp.length > 0
+      && env.chat.trustedProxyCidrs.some((candidate) => ipMatchesCidr(remoteIp, candidate));
+    const forwardedProtoHeader = req.headers["x-forwarded-proto"];
+    const forwardedProto = (Array.isArray(forwardedProtoHeader)
+      ? forwardedProtoHeader[0]
+      : forwardedProtoHeader)
+      ?.split(",", 1)[0]
+      ?.trim()
+      .toLowerCase();
+    const secure = req.secure || (trustedProxy && forwardedProto === "https");
     return `${secure ? "wss" : "ws"}://${host}/chat`;
   }
 
@@ -1282,7 +1298,7 @@ export async function createLobbyService(
       return;
     }
 
-    if (!env.lobbyAccessToken) {
+    if (!env.chatAccessToken) {
       throw new HttpError(
         503,
         "lobby_access_token_not_configured",
@@ -1292,7 +1308,7 @@ export async function createLobbyService(
 
     const providedToken = getLobbyAccessToken(req);
     // CREATE_ROOM_TOKEN (x-create-room-token) never authorizes chat tickets.
-    if (!providedToken || providedToken !== env.lobbyAccessToken) {
+    if (!providedToken || providedToken !== env.chatAccessToken) {
       throw new HttpError(401, "lobby_access_forbidden", "需要有效的大厅访问令牌。");
     }
   }

@@ -26,6 +26,9 @@ function testConfig(overrides: Partial<LobbyServiceConfig> = {}): LobbyServiceCo
   return {
     ...base,
     ...overrides,
+    ...(overrides.lobbyAccessToken != null && overrides.chatAccessToken == null
+      ? { chatAccessToken: overrides.lobbyAccessToken }
+      : {}),
     peer: {
       ...base.peer,
       ...(overrides.peer ?? {}),
@@ -307,6 +310,26 @@ test("GET /probe returns exact phase-1 chat capabilities", async () => {
   }
 });
 
+test("GET /probe keeps phase-1 historyLimit fixed when snapshot config changes", async () => {
+  const base = testConfig({ port: 0 });
+  const config: LobbyServiceConfig = {
+    ...base,
+    chat: { ...base.chat, snapshotLimit: 7 },
+  };
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const probe = await fetch(`http://127.0.0.1:${address.port}/probe`);
+    assert.equal(probe.status, 200);
+    const body = (await probe.json()) as { capabilities: { historyLimit: number } };
+    assert.equal(body.capabilities.historyLimit, 50);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
 test("GET /peers/health does not supply negotiation capabilities", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "sts2-lobby-probe-peers-"));
   const config = testConfig({
@@ -425,6 +448,46 @@ test("POST /chat/tickets accepts equivalent Bearer lobby access token", async ()
   }
 });
 
+test("POST /chat/tickets ignores forwarded proto from an untrusted direct caller", async () => {
+  const config = testConfig({ port: 0, enforceLobbyAccessToken: false });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await postChatTicket(address.port, {
+      headers: { "x-forwarded-proto": "https" },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { webSocketUrl: string };
+    assert.equal(body.webSocketUrl, `ws://127.0.0.1:${address.port}/chat`);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets honors forwarded proto from a trusted chat proxy", async () => {
+  const base = testConfig({ port: 0, enforceLobbyAccessToken: false });
+  const config: LobbyServiceConfig = {
+    ...base,
+    chat: { ...base.chat, trustedProxyCidrs: ["127.0.0.0/8"] },
+  };
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await postChatTicket(address.port, {
+      headers: { "x-forwarded-proto": "https" },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { webSocketUrl: string };
+    assert.equal(body.webSocketUrl, `wss://127.0.0.1:${address.port}/chat`);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
 test("POST /chat/tickets rejects missing or wrong lobby token with 401", async () => {
   const config = testConfig({
     port: 0,
@@ -470,6 +533,36 @@ test("POST /chat/tickets rejects create-room-token-only requests with 401", asyn
   }
 });
 
+test("POST /chat/tickets never accepts the legacy CREATE_ROOM_TOKEN fallback", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sts2-lobby-chat-access-"));
+  const config = loadLobbyServiceConfig({
+    HOST: "127.0.0.1",
+    PORT: "0",
+    PEER_NETWORK_ENABLED: "false",
+    SERVER_ADMIN_STATE_FILE: join(tempDir, "server-admin.json"),
+    PEER_STATE_DIR: join(tempDir, "peer"),
+    ENFORCE_LOBBY_ACCESS_TOKEN: "true",
+    ENFORCE_CREATE_ROOM_TOKEN: "true",
+    CREATE_ROOM_TOKEN: "create-only-secret",
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await postChatTicket(address.port, {
+      headers: { authorization: "Bearer create-only-secret" },
+    });
+    assert.equal(response.status, 503);
+    assert.equal(
+      (await response.json() as { code: string }).code,
+      "lobby_access_token_not_configured",
+    );
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
 test("POST /chat/tickets rejects invalid protocol, name, and net id with 400", async () => {
   const config = testConfig({
     port: 0,
@@ -493,6 +586,23 @@ test("POST /chat/tickets rejects invalid protocol, name, and net id with 400", a
       body: ticketBody({ playerNetId: "net\u0000id" }),
     });
     assert.equal(badNetId.status, 400);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets rejects unexpected body fields", async () => {
+  const config = testConfig({ port: 0, enforceLobbyAccessToken: false });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await postChatTicket(address.port, {
+      body: ticketBody({ unexpected: true }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json() as { code: string }).code, "invalid_request");
   } finally {
     await service.close();
     cleanupTempDir(config);
@@ -578,6 +688,37 @@ test("POST /chat/tickets logs omit submitted access and ticket values", async ()
     const joined = logs.join("\n");
     assert.equal(joined.includes(accessToken), false, "logs must not include lobby access token");
     assert.equal(joined.includes(body.ticket), false, "logs must not include issued ticket");
+  } finally {
+    console.log = originalLog;
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets rejects query credentials without logging them", async () => {
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map((entry) => String(entry)).join(" "));
+  };
+
+  const marker = "query-leak-marker";
+  const config = testConfig({ port: 0, enforceLobbyAccessToken: false });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/chat/tickets?access_token=${marker}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(ticketBody()),
+      },
+    );
+    assert.equal(response.status, 400);
+    await sleep(20);
+    assert.equal(logs.join("\n").includes(marker), false, "logs must omit query credentials");
   } finally {
     console.log = originalLog;
     await service.close();
