@@ -393,50 +393,88 @@ async function postChatTicket(
 }
 
 type ChatFrame = Record<string, unknown> & { type: string };
-const bufferedChatFrames = new WeakMap<WebSocket, ChatFrame[]>();
+
+interface ChatFrameWaiter {
+  predicate(frame: ChatFrame): boolean;
+  resolve(frame: ChatFrame): void;
+  reject(error: Error): void;
+  timer: NodeJS.Timeout;
+}
+
+interface ChatSocketState {
+  frames: ChatFrame[];
+  waiters: ChatFrameWaiter[];
+  closedError?: Error;
+}
+
+const chatSocketStates = new WeakMap<WebSocket, ChatSocketState>();
+
+function chatSocketState(socket: WebSocket): ChatSocketState {
+  const existing = chatSocketStates.get(socket);
+  if (existing) {
+    return existing;
+  }
+
+  const state: ChatSocketState = { frames: [], waiters: [] };
+  const onMessage = (data: WebSocket.RawData) => {
+    let frame: ChatFrame;
+    try {
+      frame = JSON.parse(data.toString()) as ChatFrame;
+    } catch {
+      return;
+    }
+    const waiterIndex = state.waiters.findIndex((waiter) => waiter.predicate(frame));
+    if (waiterIndex < 0) {
+      state.frames.push(frame);
+      return;
+    }
+    const waiter = state.waiters.splice(waiterIndex, 1)[0]!;
+    clearTimeout(waiter.timer);
+    waiter.resolve(frame);
+  };
+  const onClose = (code: number) => {
+    state.closedError = new Error(`chat websocket closed before frame (${code})`);
+    const waiters = state.waiters.splice(0);
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(state.closedError);
+    }
+    socket.off("message", onMessage);
+    socket.off("close", onClose);
+  };
+  socket.on("message", onMessage);
+  socket.once("close", onClose);
+  chatSocketStates.set(socket, state);
+  return state;
+}
 
 function waitForChatFrame(
   socket: WebSocket,
   predicate: (frame: ChatFrame) => boolean,
   timeoutMs = 2_000,
 ): Promise<ChatFrame> {
-  const buffered = bufferedChatFrames.get(socket) ?? [];
-  const bufferedIndex = buffered.findIndex(predicate);
+  const state = chatSocketState(socket);
+  const bufferedIndex = state.frames.findIndex(predicate);
   if (bufferedIndex >= 0) {
-    return Promise.resolve(buffered.splice(bufferedIndex, 1)[0]!);
+    return Promise.resolve(state.frames.splice(bufferedIndex, 1)[0]!);
+  }
+  if (state.closedError) {
+    return Promise.reject(state.closedError);
   }
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error("chat websocket frame timeout"));
-    }, timeoutMs);
-    const onMessage = (data: WebSocket.RawData) => {
-      let frame: ChatFrame;
-      try {
-        frame = JSON.parse(data.toString()) as ChatFrame;
-      } catch {
-        return;
-      }
-      if (predicate(frame)) {
-        const queuedIndex = buffered.indexOf(frame);
-        if (queuedIndex >= 0) {
-          buffered.splice(queuedIndex, 1);
+    const waiter: ChatFrameWaiter = {
+      predicate,
+      resolve,
+      reject,
+      timer: setTimeout(() => {
+        const waiterIndex = state.waiters.indexOf(waiter);
+        if (waiterIndex >= 0) {
+          state.waiters.splice(waiterIndex, 1);
         }
-        cleanup();
-        resolve(frame);
-      }
+        reject(new Error("chat websocket frame timeout"));
+      }, timeoutMs),
     };
-    const onClose = (code: number) => {
-      cleanup();
-      reject(new Error(`chat websocket closed before frame (${code})`));
-    };
-    const cleanup = () => {
-      clearTimeout(timer);
-      socket.off("message", onMessage);
-      socket.off("close", onClose);
-    };
-    socket.on("message", onMessage);
-    socket.once("close", onClose);
+    state.waiters.push(waiter);
   });
 }
 
@@ -461,6 +499,49 @@ function waitForChatClose(
   });
 }
 
+function waitForServerPings(
+  socket: WebSocket,
+  targetCount: number,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let pingCount = 0;
+    let settled = false;
+    const timer = setTimeout(
+      () => settleReject(new Error("chat websocket server ping timeout")),
+      timeoutMs,
+    );
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off("ping", onPing);
+      socket.off("close", onClose);
+    };
+    const settleResolve = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const settleReject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onPing = () => {
+      pingCount += 1;
+      if (pingCount >= targetCount) {
+        settleResolve();
+      }
+    };
+    const onClose = (code: number) => {
+      settleReject(new Error(`chat websocket closed before heartbeat (${code})`));
+    };
+    socket.on("ping", onPing);
+    socket.once("close", onClose);
+  });
+}
+
 function openChatWebSocket(
   url: string,
   ticket: string,
@@ -469,15 +550,7 @@ function openChatWebSocket(
   const socket = new WebSocket(url, {
     headers: { authorization: `Bearer ${ticket}`, ...headers },
   });
-  const buffered: ChatFrame[] = [];
-  bufferedChatFrames.set(socket, buffered);
-  socket.on("message", (data) => {
-    try {
-      buffered.push(JSON.parse(data.toString()) as ChatFrame);
-    } catch {
-      // Individual waiters ignore non-JSON frames as well.
-    }
-  });
+  chatSocketState(socket);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       socket.terminate();
@@ -591,15 +664,29 @@ test("chat websocket redeems a ticket once and delivers ready, snapshot, ack, an
       (frame) => frame.type === "chat_ack" && frame.clientMessageId === clientMessageId,
     );
     const broadcastPromise = waitForChatFrame(socket, (frame) => frame.type === "chat_message");
-    socket.send(JSON.stringify({
+    const payload = JSON.stringify({
       type: "chat_send",
       protocolVersion: 1,
       channel: "server",
       clientMessageId,
       content: { formatVersion: 1, segments: [{ kind: "text", text: "real socket" }] },
-    }));
+    });
+    socket.send(payload);
     const [ack, broadcast] = await Promise.all([ackPromise, broadcastPromise]);
     assert.deepEqual(ack.message, broadcast.message);
+
+    let replayResolved = false;
+    const replayPromise = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_ack" && frame.clientMessageId === clientMessageId,
+    ).then((frame) => {
+      replayResolved = true;
+      return frame;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(replayResolved, false, "a consumed frame must not satisfy a later waiter");
+    socket.send(payload);
+    assert.deepEqual(await replayPromise, ack);
 
     assert.equal(
       await rejectedChatWebSocketStatus(issued.webSocketUrl, {
@@ -791,23 +878,10 @@ test("chat websocket receives a server heartbeat and remains usable after automa
     assert.equal(response.status, 200);
     const issued = (await response.json()) as { ticket: string; webSocketUrl: string };
     socket = await openChatWebSocket(issued.webSocketUrl, issued.ticket);
-    const sustainedHeartbeats = new Promise<void>((resolve, reject) => {
-      let pingCount = 0;
-      const timer = setTimeout(
-        () => reject(new Error("chat websocket server ping timeout")),
-        800,
-      );
-      socket!.on("ping", () => {
-        pingCount += 1;
-        if (pingCount === 10) {
-          clearTimeout(timer);
-          resolve();
-        }
-      });
-    });
     await waitForChatFrame(socket, (frame) => frame.type === "chat_snapshot_end");
     // Ten 10ms heartbeat periods exceed the 80ms no-pong timeout.
-    await sustainedHeartbeats;
+    await waitForServerPings(socket, 10, 800);
+    assert.equal(socket.listenerCount("ping"), 0, "heartbeat waiter must remove its listener");
 
     const clientMessageId = "45454545-4545-4545-8545-454545454545";
     const ackPromise = waitForChatFrame(

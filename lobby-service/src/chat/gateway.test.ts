@@ -585,6 +585,17 @@ test("clearHistory defaults changedAt from the injected clock", async () => {
   assert.equal(cleared.changedAt, "2026-07-13T08:09:10.123Z");
 });
 
+test("heartbeatTickMs requires a finite positive integer", () => {
+  for (const heartbeatTickMs of [0, -1, Number.NaN]) {
+    assert.throws(
+      () => new ServerChatGateway({ heartbeatTickMs }),
+      /heartbeatTickMs must be a finite positive integer/,
+    );
+  }
+  assert.doesNotThrow(() => new ServerChatGateway());
+  assert.doesNotThrow(() => new ServerChatGateway({ heartbeatTickMs: 5 }));
+});
+
 test("heartbeat lives exactly while at least one successfully added peer exists", async () => {
   let intervalStarts = 0;
   let intervalClears = 0;

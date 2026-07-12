@@ -81,7 +81,15 @@ export class ServerChatGateway {
     this.randomUuid = options.randomUuid ?? randomUUID;
     this.randomSenderId = options.randomSenderId ?? (() => randomBytes(16).toString("base64url"));
     this.protocolErrorCloseGraceMs = options.protocolErrorCloseGraceMs ?? 1_000;
-    this.heartbeatTickMs = options.heartbeatTickMs ?? 5_000;
+    const heartbeatTickMs = options.heartbeatTickMs ?? 5_000;
+    if (
+      !Number.isFinite(heartbeatTickMs)
+      || !Number.isInteger(heartbeatTickMs)
+      || heartbeatTickMs <= 0
+    ) {
+      throw new RangeError("heartbeatTickMs must be a finite positive integer");
+    }
+    this.heartbeatTickMs = heartbeatTickMs;
     this.setIntervalFn = options.setInterval ?? setInterval;
     this.clearIntervalFn = options.clearInterval ?? clearInterval;
     this.history = new ChatHistoryBuffer({
