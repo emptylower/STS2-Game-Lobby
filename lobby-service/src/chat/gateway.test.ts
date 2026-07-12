@@ -72,8 +72,19 @@ function chatSend(clientMessageId: string, text: string): string {
   return JSON.stringify({
     type: "chat_send",
     protocolVersion: 1,
+    channel: "server",
     clientMessageId,
     content: { formatVersion: 1, segments: [{ kind: "text", text }] },
+  });
+}
+
+function chatSendContent(clientMessageId: string, content: unknown): string {
+  return JSON.stringify({
+    type: "chat_send",
+    protocolVersion: 1,
+    channel: "server",
+    clientMessageId,
+    content,
   });
 }
 
@@ -112,6 +123,7 @@ test("accept sends ready before snapshot and rejects input until the snapshot ba
   assert.match(String(ready.instanceId), /^[0-9a-f-]{36}$/);
   assert.equal(ready.historyEpoch, 0);
   assert.equal(ready.chatEnabled, true);
+  assert.equal(ready.channel, "server");
   assert.equal(ready.serverChatVersion, 1);
   assert.deepEqual(ready.enabledFeatures, {
     richContentVersion: 0,
@@ -182,6 +194,7 @@ test("disabled chat, rich content, and connection rate limits reject without bro
   socket.emit("message", JSON.stringify({
     type: "chat_send",
     protocolVersion: 1,
+    channel: "server",
     clientMessageId: "44444444-4444-4444-8444-444444444444",
     content: { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "wave" }] },
   }), false);
@@ -196,6 +209,172 @@ test("disabled chat, rich content, and connection rate limits reject without bro
   const limited = frames(socket).at(-1)!;
   assert.equal(limited.code, "rate_limited");
   assert.ok(Number(limited.retryAfterMs) > 0);
+});
+
+test("requires chat_send channel to be exactly server", async () => {
+  for (const channel of [undefined, "room", "SERVER"]) {
+    const socket = new FakeSocket();
+    const gateway = new ServerChatGateway({ chatEnabled: true });
+    gateway.accept(socket as unknown as WebSocket, ticket);
+    await settle(socket);
+    const payload: Record<string, unknown> = {
+      type: "chat_send",
+      protocolVersion: 1,
+      clientMessageId: "99999999-9999-4999-8999-999999999999",
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "channel" }] },
+    };
+    if (channel !== undefined) {
+      payload.channel = channel;
+    }
+
+    socket.emit("message", JSON.stringify(payload), false);
+    await settle(socket);
+    assert.equal(frames(socket).at(-1)?.code, "protocol_mismatch");
+    assert.equal(socket.closes.at(-1)?.code, 1002);
+    await gateway.close();
+  }
+});
+
+test("replays a cached chat_disabled error after state changes and conflicts on changed content", async () => {
+  const gateway = new ServerChatGateway({ chatEnabled: false });
+  const socket = new FakeSocket();
+  gateway.accept(socket as unknown as WebSocket, ticket);
+  await settle(socket);
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+  socket.emit("message", chatSend(id, "disabled result"), false);
+  await settle(socket);
+  const original = frames(socket).at(-1)!;
+  assert.equal(original.code, "chat_disabled");
+
+  gateway.setState({ chatEnabled: true });
+  await settle(socket);
+  socket.emit("message", chatSend(id, "disabled result"), false);
+  await settle(socket);
+  assert.deepEqual(frames(socket).at(-1), original);
+
+  socket.emit("message", chatSend(id, "changed result"), false);
+  await settle(socket);
+  assert.equal(frames(socket).at(-1)?.code, "duplicate_message");
+
+  const newcomer = new FakeSocket();
+  gateway.accept(newcomer as unknown as WebSocket, { ...ticket, id: "disabled-newcomer" });
+  await settle(newcomer);
+  assert.equal(frames(newcomer).find((frame) => frame.type === "chat_snapshot_begin")?.totalMessages, 0);
+});
+
+test("replays invalid and feature-disabled errors using a stable content fingerprint", async () => {
+  const cases = [
+    {
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      code: "invalid_content",
+      content: { segments: [{ text: "   ", kind: "text" }], formatVersion: 1 },
+      reordered: { formatVersion: 1, segments: [{ kind: "text", text: "   " }] },
+      changed: { formatVersion: 1, segments: [{ kind: "text", text: "different" }] },
+    },
+    {
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      code: "feature_disabled",
+      content: { segments: [{ emojiId: "wave", kind: "emoji" }], formatVersion: 1 },
+      reordered: { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "wave" }] },
+      changed: { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "point" }] },
+    },
+  ] as const;
+
+  for (const entry of cases) {
+    const gateway = new ServerChatGateway({ chatEnabled: true });
+    const socket = new FakeSocket();
+    gateway.accept(socket as unknown as WebSocket, ticket);
+    await settle(socket);
+    socket.emit("message", chatSendContent(entry.id, entry.content), false);
+    await settle(socket);
+    const original = frames(socket).at(-1)!;
+    assert.equal(original.code, entry.code);
+
+    socket.emit("message", chatSendContent(entry.id, entry.reordered), false);
+    await settle(socket);
+    assert.deepEqual(frames(socket).at(-1), original);
+
+    socket.emit("message", chatSendContent(entry.id, entry.changed), false);
+    await settle(socket);
+    assert.equal(frames(socket).at(-1)?.code, "duplicate_message");
+    await gateway.close();
+  }
+});
+
+test("fingerprints deeply nested invalid content within bounded stack and CPU", async () => {
+  const gateway = new ServerChatGateway({ chatEnabled: true, maxPayloadBytes: 65_536 });
+  const socket = new FakeSocket();
+  gateway.accept(socket as unknown as WebSocket, ticket);
+  await settle(socket);
+  const nested = `${"[".repeat(5_000)}0${"]".repeat(5_000)}`;
+  const payload = `{"type":"chat_send","protocolVersion":1,"channel":"server",`
+    + `"clientMessageId":"abababab-abab-4bab-8bab-abababababab","content":${nested}}`;
+  assert.ok(Buffer.byteLength(payload, "utf8") < 65_536);
+
+  socket.emit("message", payload, false);
+  await settle(socket);
+  const original = frames(socket).at(-1)!;
+  assert.equal(original.code, "invalid_content");
+  socket.emit("message", payload, false);
+  await settle(socket);
+  assert.deepEqual(frames(socket).at(-1), original);
+});
+
+test("replays cached rate limits after refill without appending another history message", async () => {
+  let now = 0;
+  const gateway = new ServerChatGateway({
+    chatEnabled: true,
+    now: () => now,
+    connectionBurst: 1,
+    connectionRefillMs: 1_000,
+  });
+  const socket = new FakeSocket();
+  gateway.accept(socket as unknown as WebSocket, ticket);
+  await settle(socket);
+  socket.emit("message", chatSend("dddddddd-dddd-4ddd-8ddd-dddddddddddd", "accepted"), false);
+  await settle(socket);
+
+  const limitedId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  socket.emit("message", chatSend(limitedId, "limited"), false);
+  await settle(socket);
+  const original = frames(socket).at(-1)!;
+  assert.equal(original.code, "rate_limited");
+
+  now = 2_000;
+  socket.emit("message", chatSend(limitedId, "limited"), false);
+  await settle(socket);
+  assert.deepEqual(frames(socket).at(-1), original);
+  socket.emit("message", chatSend(limitedId, "changed"), false);
+  await settle(socket);
+  assert.equal(frames(socket).at(-1)?.code, "duplicate_message");
+
+  const newcomer = new FakeSocket();
+  gateway.accept(newcomer as unknown as WebSocket, { ...ticket, id: "rate-newcomer" });
+  await settle(newcomer);
+  assert.equal(frames(newcomer).find((frame) => frame.type === "chat_snapshot_begin")?.totalMessages, 1);
+});
+
+test("bounds every outbound chat_error and never reflects attacker-controlled field names", async () => {
+  const gateway = new ServerChatGateway({ chatEnabled: true, maxPayloadBytes: 1024 });
+  const socket = new FakeSocket();
+  gateway.accept(socket as unknown as WebSocket, ticket);
+  await settle(socket);
+  const attackerKey = `attack_${"x".repeat(790)}`;
+  const payload = chatSendContent("ffffffff-ffff-4fff-8fff-ffffffffffff", {
+    formatVersion: 1,
+    segments: [{ kind: "text", text: "safe" }],
+    [attackerKey]: true,
+  });
+  assert.ok(Buffer.byteLength(payload, "utf8") <= 1024);
+
+  socket.emit("message", payload, false);
+  await settle(socket);
+  const errorPayload = socket.sent.at(-1)!;
+  const error = JSON.parse(errorPayload) as Record<string, unknown>;
+  assert.equal(error.code, "invalid_content");
+  assert.ok(Buffer.byteLength(errorPayload, "utf8") <= 1024);
+  assert.equal(errorPayload.includes("attack_"), false);
 });
 
 test("closes unsupported websocket payloads with the required close codes", async () => {
@@ -261,6 +440,29 @@ test("state changes and history clears remain ordered after an accepting peer sn
   });
   assert.equal(all[4]?.historyEpoch, 1);
   assert.equal(all[4]?.changedAt, "2026-07-13T04:05:06.000Z");
+});
+
+test("chat_state includes current history epoch and fake-clock event time", async () => {
+  let now = Date.parse("2026-07-13T06:00:00.000Z");
+  const socket = new FakeSocket();
+  const gateway = new ServerChatGateway({ chatEnabled: true, now: () => now });
+  gateway.accept(socket as unknown as WebSocket, ticket);
+  await settle(socket);
+  gateway.clearHistory(new Date("2026-07-13T06:01:00.000Z"));
+  await settle(socket);
+
+  now = Date.parse("2026-07-13T06:02:03.456Z");
+  gateway.setState({ chatEnabled: false });
+  await settle(socket);
+  const state = frames(socket).at(-1)!;
+  assert.equal(state.type, "chat_state");
+  assert.equal(state.historyEpoch, 1);
+  assert.equal(state.changedAt, "2026-07-13T06:02:03.456Z");
+  assert.deepEqual(state.enabledFeatures, {
+    richContentVersion: 0,
+    emojiSetVersion: 0,
+    itemRefVersion: 0,
+  });
 });
 
 test("serializes sends before later state and history mutations", async () => {

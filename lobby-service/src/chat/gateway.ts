@@ -105,6 +105,7 @@ export class ServerChatGateway {
     this.peerRegistry.send(sessionId, {
       type: "chat_ready",
       protocolVersion: 1,
+      channel: "server",
       sessionId,
       senderId: state.senderId,
       instanceId: this.history.instanceId,
@@ -124,12 +125,12 @@ export class ServerChatGateway {
       const acceptedAfterSnapshot = state.snapshotComplete;
       this.enqueueEvent(async () => {
         if (!acceptedAfterSnapshot) {
-          await this.closeProtocolError(state, "chat snapshot is not complete");
+          await this.closeProtocolError(state);
           return;
         }
         await this.handleMessage(state, data, isBinary);
       }, () => {
-        this.sendError(state, "server_busy", "chat service is busy");
+        this.sendError(state, "server_busy");
       });
     });
     socket.on("pong", () => this.peerRegistry.markPong(sessionId));
@@ -149,6 +150,8 @@ export class ServerChatGateway {
         protocolVersion: 1,
         chatEnabled: this.chatEnabled,
         enabledFeatures: PHASE_ONE_FEATURES,
+        historyEpoch: this.history.historyEpoch,
+        changedAt: new Date(this.now()).toISOString(),
       });
     });
   }
@@ -225,50 +228,52 @@ export class ServerChatGateway {
         state.socket.close(1007, "invalid UTF-8");
         return;
       }
-      await this.closeProtocolError(state, "message must be valid JSON");
+      await this.closeProtocolError(state);
       return;
     }
 
     let envelope: ChatSendEnvelope;
     try {
       envelope = parseChatSend(parsed);
-    } catch (error) {
-      await this.closeProtocolError(
-        state,
-        error instanceof Error ? error.message : "invalid chat protocol",
-      );
+    } catch {
+      await this.closeProtocolError(state);
       return;
     }
 
     let content;
+    let canonicalJson: string;
     try {
       content = canonicalizeServerContent(envelope.content);
+      canonicalJson = deterministicContentJson(content);
     } catch (error) {
       if (error instanceof ChatProtocolError) {
-        this.sendError(state, error.code, error.message, envelope.clientMessageId);
+        const dedupeKey = fingerprintUncanonicalContent(envelope.content, raw);
+        if (this.replayOrRejectConflict(state, envelope.clientMessageId, dedupeKey)) {
+          return;
+        }
+        this.cacheAndSendError(
+          state,
+          dedupeKey,
+          error.code,
+          envelope.clientMessageId,
+        );
         return;
       }
       throw error;
     }
 
-    const canonicalJson = deterministicContentJson(content);
-    const dedupe = this.dedupe.lookup(state.sessionId, envelope.clientMessageId, canonicalJson);
-    if (dedupe.kind === "replay") {
-      this.peerRegistry.send(state.sessionId, dedupe.result);
-      return;
-    }
-    if (dedupe.kind === "conflict") {
-      this.sendError(
-        state,
-        "duplicate_message",
-        "clientMessageId was already used for different content",
-        envelope.clientMessageId,
-      );
+    const dedupeKey = `canonical:${createHash("sha256").update(canonicalJson).digest("hex")}`;
+    if (this.replayOrRejectConflict(state, envelope.clientMessageId, dedupeKey)) {
       return;
     }
 
     if (!this.chatEnabled) {
-      this.sendError(state, "chat_disabled", "server chat is disabled", envelope.clientMessageId);
+      this.cacheAndSendError(
+        state,
+        dedupeKey,
+        "chat_disabled",
+        envelope.clientMessageId,
+      );
       return;
     }
 
@@ -277,10 +282,10 @@ export class ServerChatGateway {
     try {
       connectionRate = this.connectionLimiter.consume(state.sessionId);
       if (!connectionRate.allowed) {
-        this.sendError(
+        this.cacheAndSendError(
           state,
+          dedupeKey,
           "rate_limited",
-          "message rate limit exceeded",
           envelope.clientMessageId,
           connectionRate.retryAfterMs,
         );
@@ -289,16 +294,21 @@ export class ServerChatGateway {
       ipRate = this.ipLimiter.consume(state.ticket.clientIp);
     } catch (error) {
       if (error instanceof RateLimitError) {
-        this.sendError(state, "server_busy", error.message, envelope.clientMessageId);
+        this.cacheAndSendError(
+          state,
+          dedupeKey,
+          "server_busy",
+          envelope.clientMessageId,
+        );
         return;
       }
       throw error;
     }
     if (!ipRate.allowed) {
-      this.sendError(
+      this.cacheAndSendError(
         state,
+        dedupeKey,
         "rate_limited",
-        "IP message rate limit exceeded",
         envelope.clientMessageId,
         ipRate.retryAfterMs,
       );
@@ -317,7 +327,12 @@ export class ServerChatGateway {
       assertWireBudget(message, this.maxPayloadBytes);
     } catch (error) {
       if (error instanceof ChatProtocolError) {
-        this.sendError(state, error.code, error.message, envelope.clientMessageId);
+        this.cacheAndSendError(
+          state,
+          dedupeKey,
+          error.code,
+          envelope.clientMessageId,
+        );
         return;
       }
       throw error;
@@ -329,16 +344,16 @@ export class ServerChatGateway {
       clientMessageId: envelope.clientMessageId,
       message,
     };
-    this.history.append(message);
     try {
-      this.dedupe.store(state.sessionId, envelope.clientMessageId, canonicalJson, ack);
+      this.dedupe.store(state.sessionId, envelope.clientMessageId, dedupeKey, ack);
     } catch (error) {
       if (error instanceof ChatDedupeError) {
-        this.sendError(state, "server_busy", error.message, envelope.clientMessageId);
+        this.sendError(state, "server_busy", envelope.clientMessageId);
         return;
       }
       throw error;
     }
+    this.history.append(message);
     this.peerRegistry.send(state.sessionId, ack);
     this.peerRegistry.broadcast({
       type: "chat_message",
@@ -357,7 +372,6 @@ export class ServerChatGateway {
   private sendError(
     state: ConnectionState,
     code: ChatProtocolErrorCode,
-    message: string,
     clientMessageId?: string,
     retryAfterMs?: number,
   ): void {
@@ -366,7 +380,7 @@ export class ServerChatGateway {
       protocolVersion: 1,
       clientMessageId: clientMessageId ?? "",
       code,
-      message,
+      message: safeChatErrorMessage(code),
       ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
     };
     this.peerRegistry.send(state.sessionId, frame);
@@ -376,13 +390,65 @@ export class ServerChatGateway {
     );
   }
 
-  private async closeProtocolError(state: ConnectionState, message: string): Promise<void> {
+  private replayOrRejectConflict(
+    state: ConnectionState,
+    clientMessageId: string,
+    dedupeKey: string,
+  ): boolean {
+    const dedupe = this.dedupe.lookup(state.sessionId, clientMessageId, dedupeKey);
+    if (dedupe.kind === "replay") {
+      this.peerRegistry.send(state.sessionId, dedupe.result);
+      return true;
+    }
+    if (dedupe.kind === "conflict") {
+      this.sendError(
+        state,
+        "duplicate_message",
+        clientMessageId,
+      );
+      return true;
+    }
+    return false;
+  }
+
+  private cacheAndSendError(
+    state: ConnectionState,
+    dedupeKey: string,
+    code: ChatProtocolErrorCode,
+    clientMessageId: string,
+    retryAfterMs?: number,
+  ): void {
+    const frame: ChatErrorEnvelope = {
+      type: "chat_error",
+      protocolVersion: 1,
+      clientMessageId,
+      code,
+      message: safeChatErrorMessage(code),
+      ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+    };
+    try {
+      this.dedupe.store(state.sessionId, clientMessageId, dedupeKey, frame);
+    } catch (error) {
+      if (error instanceof ChatDedupeError) {
+        this.sendError(state, "server_busy", clientMessageId);
+        return;
+      }
+      throw error;
+    }
+    this.peerRegistry.send(state.sessionId, frame);
+    console.log(
+      `[chat] event=message_rejected sessionId=${state.sessionId}`
+      + ` clientMessageId=${clientMessageId} code=${code}`,
+    );
+  }
+
+  private async closeProtocolError(state: ConnectionState): Promise<void> {
     const frame: ChatErrorEnvelope = {
       type: "chat_error",
       protocolVersion: 1,
       clientMessageId: "",
       code: "protocol_mismatch",
-      message,
+      message: safeChatErrorMessage("protocol_mismatch"),
     };
     await this.peerRegistry.enqueueSnapshot(state.sessionId, [frame]);
     console.log(
@@ -407,6 +473,7 @@ export class ServerChatGateway {
 interface ChatSendEnvelope {
   type: "chat_send";
   protocolVersion: 1;
+  channel: "server";
   clientMessageId: string;
   content: unknown;
 }
@@ -418,12 +485,15 @@ function parseChatSend(value: unknown): ChatSendEnvelope {
     throw new Error("message must be an object");
   }
   const record = value as Record<string, unknown>;
-  const allowed = new Set(["type", "protocolVersion", "clientMessageId", "content"]);
+  const allowed = new Set(["type", "protocolVersion", "channel", "clientMessageId", "content"]);
   if (Object.keys(record).some((key) => !allowed.has(key))) {
     throw new Error("message has unknown fields");
   }
   if (record.type !== "chat_send" || record.protocolVersion !== 1) {
     throw new Error("unsupported chat protocol");
+  }
+  if (record.channel !== "server") {
+    throw new Error("channel must be server");
   }
   if (typeof record.clientMessageId !== "string" || !CLIENT_MESSAGE_ID.test(record.clientMessageId)) {
     throw new Error("clientMessageId must be a lowercase UUID");
@@ -431,6 +501,7 @@ function parseChatSend(value: unknown): ChatSendEnvelope {
   return {
     type: "chat_send",
     protocolVersion: 1,
+    channel: "server",
     clientMessageId: record.clientMessageId,
     content: record.content,
   };
@@ -460,4 +531,52 @@ function rawDataByteLength(data: RawData): number {
     return data.byteLength;
   }
   return data.reduce((total, part) => total + part.byteLength, 0);
+}
+
+function fingerprintUncanonicalContent(content: unknown, raw: Buffer): string {
+  try {
+    const stable = stableJsonValue(content, 0, { nodes: 0 });
+    return `uncanonical:${createHash("sha256").update(stable).digest("hex")}`;
+  } catch {
+    return `raw:${createHash("sha256").update(raw).digest("hex")}`;
+  }
+}
+
+function safeChatErrorMessage(code: ChatProtocolErrorCode): string {
+  switch (code) {
+    case "invalid_content":
+      return "invalid chat content";
+    case "feature_disabled":
+      return "requested chat feature is disabled";
+    case "invalid_message":
+      return "invalid chat message";
+    case "chat_disabled":
+      return "server chat is disabled";
+    case "rate_limited":
+      return "message rate limit exceeded";
+    case "duplicate_message":
+      return "clientMessageId was already used for different content";
+    case "protocol_mismatch":
+      return "chat protocol mismatch";
+    case "server_busy":
+      return "chat service is busy";
+  }
+}
+
+function stableJsonValue(value: unknown, depth: number, budget: { nodes: number }): string {
+  budget.nodes += 1;
+  if (depth > 64 || budget.nodes > 4_096) {
+    throw new RangeError("content fingerprint complexity exceeded");
+  }
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "undefined";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJsonValue(entry, depth + 1, budget)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJsonValue(record[key], depth + 1, budget)}`)
+    .join(",")}}`;
 }
