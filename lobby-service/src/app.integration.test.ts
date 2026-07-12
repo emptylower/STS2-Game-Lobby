@@ -391,6 +391,414 @@ async function postChatTicket(
   });
 }
 
+type ChatFrame = Record<string, unknown> & { type: string };
+const bufferedChatFrames = new WeakMap<WebSocket, ChatFrame[]>();
+
+function waitForChatFrame(
+  socket: WebSocket,
+  predicate: (frame: ChatFrame) => boolean,
+  timeoutMs = 2_000,
+): Promise<ChatFrame> {
+  const buffered = bufferedChatFrames.get(socket) ?? [];
+  const bufferedIndex = buffered.findIndex(predicate);
+  if (bufferedIndex >= 0) {
+    return Promise.resolve(buffered.splice(bufferedIndex, 1)[0]!);
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("chat websocket frame timeout"));
+    }, timeoutMs);
+    const onMessage = (data: WebSocket.RawData) => {
+      let frame: ChatFrame;
+      try {
+        frame = JSON.parse(data.toString()) as ChatFrame;
+      } catch {
+        return;
+      }
+      if (predicate(frame)) {
+        const queuedIndex = buffered.indexOf(frame);
+        if (queuedIndex >= 0) {
+          buffered.splice(queuedIndex, 1);
+        }
+        cleanup();
+        resolve(frame);
+      }
+    };
+    const onClose = (code: number) => {
+      cleanup();
+      reject(new Error(`chat websocket closed before frame (${code})`));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off("message", onMessage);
+      socket.off("close", onClose);
+    };
+    socket.on("message", onMessage);
+    socket.once("close", onClose);
+  });
+}
+
+function waitForChatClose(
+  socket: WebSocket,
+  timeoutMs = 2_000,
+): Promise<{ code: number; reason: string }> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("chat websocket close timeout"));
+    }, timeoutMs);
+    const onClose = (code: number, reason: Buffer) => {
+      cleanup();
+      resolve({ code, reason: reason.toString("utf8") });
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off("close", onClose);
+    };
+    socket.once("close", onClose);
+  });
+}
+
+function openChatWebSocket(
+  url: string,
+  ticket: string,
+  headers: Record<string, string> = {},
+): Promise<WebSocket> {
+  const socket = new WebSocket(url, {
+    headers: { authorization: `Bearer ${ticket}`, ...headers },
+  });
+  const buffered: ChatFrame[] = [];
+  bufferedChatFrames.set(socket, buffered);
+  socket.on("message", (data) => {
+    try {
+      buffered.push(JSON.parse(data.toString()) as ChatFrame);
+    } catch {
+      // Individual waiters ignore non-JSON frames as well.
+    }
+  });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.terminate();
+      reject(new Error("chat websocket connect timeout"));
+    }, 2_000);
+    socket.once("open", () => {
+      clearTimeout(timer);
+      resolve(socket);
+    });
+    socket.once("unexpected-response", (_request, response) => {
+      clearTimeout(timer);
+      response.resume();
+      reject(new Error(`chat websocket upgrade rejected (${response.statusCode})`));
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+async function rejectedChatWebSocketStatus(
+  url: string,
+  headers: Record<string, string> = {},
+): Promise<number> {
+  const socket = new WebSocket(url, { headers });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.terminate();
+      reject(new Error("chat websocket rejection timeout"));
+    }, 2_000);
+    socket.once("open", () => {
+      clearTimeout(timer);
+      socket.terminate();
+      reject(new Error("chat websocket unexpectedly upgraded"));
+    });
+    socket.once("unexpected-response", (_request, response) => {
+      clearTimeout(timer);
+      const status = response.statusCode ?? 0;
+      response.resume();
+      resolve(status);
+    });
+    socket.once("error", () => {
+      // `unexpected-response` is the authoritative result for HTTP rejections.
+    });
+  });
+}
+
+function attemptChatWebSocketUpgrade(
+  url: string,
+  ticket: string,
+): Promise<{ status: 101 | number; socket?: WebSocket }> {
+  const socket = new WebSocket(url, {
+    headers: { authorization: `Bearer ${ticket}` },
+  });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.terminate();
+      reject(new Error("chat websocket upgrade attempt timeout"));
+    }, 2_000);
+    socket.once("open", () => {
+      clearTimeout(timer);
+      resolve({ status: 101, socket });
+    });
+    socket.once("unexpected-response", (_request, response) => {
+      clearTimeout(timer);
+      const status = response.statusCode ?? 0;
+      response.resume();
+      resolve({ status });
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+test("chat websocket redeems a ticket once and delivers ready, snapshot, ack, and self-broadcast", async () => {
+  const base = testConfig({ port: 0 });
+  const config = { ...base, chat: { ...base.chat, enabled: true } };
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  let socket: WebSocket | undefined;
+
+  try {
+    const response = await postChatTicket(address.port);
+    assert.equal(response.status, 200);
+    const issued = (await response.json()) as { ticket: string; webSocketUrl: string };
+
+    socket = await openChatWebSocket(issued.webSocketUrl, issued.ticket);
+    const readyPromise = waitForChatFrame(socket, (frame) => frame.type === "chat_ready");
+    const snapshotBeginPromise = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_snapshot_begin",
+    );
+    const snapshotEndPromise = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_snapshot_end",
+    );
+    const [ready, snapshotBegin] = await Promise.all([
+      readyPromise,
+      snapshotBeginPromise,
+      snapshotEndPromise,
+    ]);
+    assert.equal(ready.channel, "server");
+    assert.equal(snapshotBegin.totalMessages, 0);
+
+    const clientMessageId = "15151515-1515-4515-8515-151515151515";
+    const ackPromise = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_ack" && frame.clientMessageId === clientMessageId,
+    );
+    const broadcastPromise = waitForChatFrame(socket, (frame) => frame.type === "chat_message");
+    socket.send(JSON.stringify({
+      type: "chat_send",
+      protocolVersion: 1,
+      channel: "server",
+      clientMessageId,
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "real socket" }] },
+    }));
+    const [ack, broadcast] = await Promise.all([ackPromise, broadcastPromise]);
+    assert.deepEqual(ack.message, broadcast.message);
+
+    assert.equal(
+      await rejectedChatWebSocketStatus(issued.webSocketUrl, {
+        authorization: `Bearer ${issued.ticket}`,
+      }),
+      401,
+    );
+  } finally {
+    socket?.terminate();
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("chat websocket rejects wrong IP, missing bearer, query tickets, and unknown paths", async () => {
+  const base = testConfig({ port: 0 });
+  const config = {
+    ...base,
+    chat: { ...base.chat, trustedProxyCidrs: ["127.0.0.0/8"] },
+  };
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await postChatTicket(address.port, {
+      headers: { "x-forwarded-for": "198.51.100.10" },
+    });
+    assert.equal(response.status, 200);
+    const issued = (await response.json()) as { ticket: string; webSocketUrl: string };
+
+    assert.equal(
+      await rejectedChatWebSocketStatus(issued.webSocketUrl, {
+        authorization: `Bearer ${issued.ticket}`,
+        "x-forwarded-for": "198.51.100.11",
+      }),
+      401,
+    );
+    assert.equal(await rejectedChatWebSocketStatus(issued.webSocketUrl), 401);
+    assert.equal(
+      await rejectedChatWebSocketStatus(
+        `${issued.webSocketUrl}?ticket=${encodeURIComponent(issued.ticket)}`,
+      ),
+      401,
+    );
+    assert.equal(
+      await rejectedChatWebSocketStatus(
+        `ws://127.0.0.1:${address.port}/not-chat`,
+        { authorization: `Bearer ${issued.ticket}` },
+      ),
+      404,
+    );
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("chat websocket allows exactly one concurrent redemption of a ticket", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  const opened: WebSocket[] = [];
+
+  try {
+    const response = await postChatTicket(address.port);
+    assert.equal(response.status, 200);
+    const issued = (await response.json()) as { ticket: string; webSocketUrl: string };
+    const results = await Promise.all([
+      attemptChatWebSocketUpgrade(issued.webSocketUrl, issued.ticket),
+      attemptChatWebSocketUpgrade(issued.webSocketUrl, issued.ticket),
+    ]);
+    opened.push(...results.flatMap((result) => result.socket ? [result.socket] : []));
+    assert.deepEqual(results.map((result) => result.status).sort(), [101, 401]);
+  } finally {
+    for (const socket of opened) {
+      socket.terminate();
+    }
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("chat websocket assembles fragmented text into one JSON message", async () => {
+  const base = testConfig({ port: 0 });
+  const config = { ...base, chat: { ...base.chat, enabled: true } };
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  let socket: WebSocket | undefined;
+
+  try {
+    const response = await postChatTicket(address.port);
+    assert.equal(response.status, 200);
+    const issued = (await response.json()) as { ticket: string; webSocketUrl: string };
+    socket = await openChatWebSocket(issued.webSocketUrl, issued.ticket);
+    await waitForChatFrame(socket, (frame) => frame.type === "chat_snapshot_end");
+
+    const clientMessageId = "25252525-2525-4525-8525-252525252525";
+    const payload = JSON.stringify({
+      type: "chat_send",
+      protocolVersion: 1,
+      channel: "server",
+      clientMessageId,
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "fragmented" }] },
+    });
+    const splitAt = Math.floor(payload.length / 2);
+    const ackPromise = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_ack" && frame.clientMessageId === clientMessageId,
+    );
+    socket.send(payload.slice(0, splitAt), { fin: false });
+    socket.send(payload.slice(splitAt), { fin: true });
+    const ack = await ackPromise;
+    assert.equal((ack.message as { plainTextFallback: string }).plainTextFallback, "fragmented");
+  } finally {
+    socket?.terminate();
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("chat websocket closes binary messages with 1003", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  let socket: WebSocket | undefined;
+
+  try {
+    const response = await postChatTicket(address.port);
+    assert.equal(response.status, 200);
+    const issued = (await response.json()) as { ticket: string; webSocketUrl: string };
+    socket = await openChatWebSocket(issued.webSocketUrl, issued.ticket);
+    await waitForChatFrame(socket, (frame) => frame.type === "chat_snapshot_end");
+    const closePromise = waitForChatClose(socket);
+    socket.send(Buffer.from([0x01, 0x02, 0x03]), { binary: true });
+    assert.equal((await closePromise).code, 1003);
+  } finally {
+    socket?.terminate();
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("chat websocket closes text payloads over 8 KiB with 1009", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  let socket: WebSocket | undefined;
+
+  try {
+    const response = await postChatTicket(address.port);
+    assert.equal(response.status, 200);
+    const issued = (await response.json()) as { ticket: string; webSocketUrl: string };
+    socket = await openChatWebSocket(issued.webSocketUrl, issued.ticket);
+    await waitForChatFrame(socket, (frame) => frame.type === "chat_snapshot_end");
+    const payload = JSON.stringify({
+      type: "chat_send",
+      protocolVersion: 1,
+      channel: "server",
+      clientMessageId: "35353535-3535-4535-8535-353535353535",
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "x".repeat(8_192) }] },
+    });
+    assert.ok(Buffer.byteLength(payload, "utf8") > 8_192);
+    const closePromise = waitForChatClose(socket);
+    socket.send(payload);
+    assert.equal((await closePromise).code, 1009);
+  } finally {
+    socket?.terminate();
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("chat websocket completes a real heartbeat ping-pong without production timers", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  let socket: WebSocket | undefined;
+
+  try {
+    const response = await postChatTicket(address.port);
+    assert.equal(response.status, 200);
+    const issued = (await response.json()) as { ticket: string; webSocketUrl: string };
+    socket = await openChatWebSocket(issued.webSocketUrl, issued.ticket);
+    await waitForChatFrame(socket, (frame) => frame.type === "chat_snapshot_end");
+    const pong = new Promise<Buffer>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("chat websocket pong timeout")), 2_000);
+      socket!.once("pong", (data) => {
+        clearTimeout(timer);
+        resolve(data);
+      });
+    });
+    socket.ping("heartbeat-smoke");
+    assert.equal((await pong).toString("utf8"), "heartbeat-smoke");
+  } finally {
+    socket?.terminate();
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
 test("POST /chat/tickets issues ticket with lobby header when access enforced", async () => {
   const config = testConfig({
     port: 0,
