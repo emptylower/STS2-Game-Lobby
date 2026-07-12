@@ -216,6 +216,32 @@ public sealed class LanConnectWebSocketTransportTests
     }
 
     [Fact]
+    public async Task CallerCancellationAfterSocketOpensDoesNotAllowSecondConnectAttempt()
+    {
+        FakeWebSocket socket = new() { HoldConnect = true };
+        LanConnectWebSocketTransport transport = new(socket);
+        using CancellationTokenSource cancellation = new();
+        Task firstConnect = transport.ConnectAsync(new Uri("wss://lobby.example/chat"), cancellationToken: cancellation.Token);
+        await socket.ConnectReachedGate.Task.WaitAsync(TestCancellation);
+
+        cancellation.Cancel();
+        socket.ReleaseConnect();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => firstConnect);
+
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                transport.ConnectAsync(new Uri("wss://lobby.example/chat"), cancellationToken: TestCancellation));
+            Assert.Equal(1, socket.ConnectCallCount);
+        }
+        finally
+        {
+            await transport.DisposeAsync();
+        }
+        Assert.Equal(1, socket.DisposeCount);
+    }
+
+    [Fact]
     public async Task DisposeCancelsReceiveAndWaitsForInflightSend()
     {
         FakeWebSocket socket = new() { HoldFirstSend = true };
@@ -265,6 +291,7 @@ public sealed class LanConnectWebSocketTransportTests
         private readonly TaskCompletionSource _sendRelease = NewSignal();
         private int _receiveCallCount;
         private int _sendCallCount;
+        private int _connectCallCount;
 
         public WebSocketState State { get; private set; } = WebSocketState.None;
         public Dictionary<string, string> Headers { get; } = [];
@@ -281,6 +308,7 @@ public sealed class LanConnectWebSocketTransportTests
         public bool HoldFirstSend { get; init; }
         public int ReceiveCallCount => Volatile.Read(ref _receiveCallCount);
         public int SendCallCount => Volatile.Read(ref _sendCallCount);
+        public int ConnectCallCount => Volatile.Read(ref _connectCallCount);
         public int DisposeCount { get; private set; }
 
         public void SetRequestHeader(string headerName, string headerValue)
@@ -291,6 +319,7 @@ public sealed class LanConnectWebSocketTransportTests
 
         public async Task ConnectAsync(Uri uri, CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref _connectCallCount);
             Operations.Add("connect");
             State = WebSocketState.Open;
             ConnectReachedGate.TrySetResult();

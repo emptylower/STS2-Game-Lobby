@@ -156,39 +156,20 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         Task start)
     {
         await start;
-        try
+        if (requestHeaders != null)
         {
-            if (requestHeaders != null)
+            foreach ((string name, string value) in requestHeaders)
             {
-                foreach ((string name, string value) in requestHeaders)
-                {
-                    _socket.SetRequestHeader(name, value);
-                }
-            }
-
-            await _socket.ConnectAsync(uri, receiveCancellation.Token);
-            receiveCancellation.Token.ThrowIfCancellationRequested();
-            Task receiveLoop = ReceiveLoopAsync(receiveCancellation.Token);
-            lock (_lifecycleLock)
-            {
-                _receiveLoop = receiveLoop;
+                _socket.SetRequestHeader(name, value);
             }
         }
-        catch
+
+        await _socket.ConnectAsync(uri, receiveCancellation.Token);
+        receiveCancellation.Token.ThrowIfCancellationRequested();
+        Task receiveLoop = ReceiveLoopAsync(receiveCancellation.Token);
+        lock (_lifecycleLock)
         {
-            lock (_lifecycleLock)
-            {
-                if (Volatile.Read(ref _disposed) == 0)
-                {
-                    _connectStarted = 0;
-                    if (ReferenceEquals(_receiveCancellation, receiveCancellation))
-                    {
-                        _receiveCancellation = null;
-                    }
-                    receiveCancellation.Dispose();
-                }
-            }
-            throw;
+            _receiveLoop = receiveLoop;
         }
     }
 
