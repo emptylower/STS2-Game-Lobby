@@ -95,6 +95,21 @@ function isDisallowedControlChar(ch: string): boolean {
     return true;
   }
 
+  // Deprecated format controls U+206A..U+206F (symmetric swapping / digit shapes).
+  if (code >= 0x206a && code <= 0x206f) {
+    return true;
+  }
+
+  // Variation selectors (VS1–VS16, VS17–VS256) used for spoofing / invisible styling.
+  if ((code >= 0xfe00 && code <= 0xfe0f) || (code >= 0xe0100 && code <= 0xe01ef)) {
+    return true;
+  }
+
+  // Language tags / tag characters U+E0000..U+E007F (format-ish, invisible).
+  if (code >= 0xe0000 && code <= 0xe007f) {
+    return true;
+  }
+
   // Invisible format characters commonly abused for spoofing / zero-width injection.
   // Cf category subset used by the design: ZWSP/ZWNJ/ZWJ/LRM/RLM/BOM/soft hyphen/etc.
   switch (code) {
@@ -185,15 +200,16 @@ export function canonicalizeServerContent(input: unknown): ChatContent {
       continue;
     }
 
-    // Phase 1: any non-text kind is a future rich feature, not partially accepted.
-    // Unknown kinds also map to feature_disabled so clients do not probe for partial support.
-    if (RICH_KINDS.has(kind) || kind !== "text") {
+    // Phase 1: known rich kinds are not enabled yet; unknown kinds are invalid content.
+    if (RICH_KINDS.has(kind)) {
       throw new ChatProtocolError("feature_disabled", `segment kind "${kind}" is not enabled in phase 1`);
     }
+    throw new ChatProtocolError("invalid_content", `segment kind "${kind}" is not valid`);
   }
 
-  // Merge adjacent text segments (all are text in phase 1).
-  let merged = normalizedTexts.join("");
+  // Merge adjacent text segments (all are text in phase 1), then re-apply NFC so
+  // combining marks that arrived in a later segment precompose with prior bases.
+  let merged = normalizedTexts.join("").normalize("NFC");
 
   // Trim leading/trailing whitespace (spaces, tabs, newlines). Internal spaces/newlines kept.
   merged = merged.replace(/^[\s\u00a0]+|[\s\u00a0]+$/g, "");

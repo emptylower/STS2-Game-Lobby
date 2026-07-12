@@ -6,6 +6,8 @@ import {
   type CanonicalChatMessage,
   type ChatContent,
   deterministicContentJson,
+  measureChatWireBytes,
+  projectChatWireEnvelopes,
   renderPlainTextFallback,
   utf8JsonBytes,
 } from "./protocol.js";
@@ -18,8 +20,6 @@ function hasCode(code: string) {
 }
 
 const UUID_A = "01234567-89ab-cdef-0123-456789abcdef";
-const UUID_B = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-const UUID_C = "11111111-2222-3333-4444-555555555555";
 const SENDER_ID = "ABCDEFGHIJKLMNOPQRSTUV"; // 22 ASCII base64url
 const SENT_AT = "2026-07-12T12:00:00.000Z"; // 24 ASCII
 
@@ -51,31 +51,41 @@ test("normalizes NFC/newlines and merges text", () => {
   );
 });
 
-test("phase 1 rejects rich kinds", () => {
-  assert.throws(
-    () =>
-      canonicalizeServerContent({
-        formatVersion: 1,
-        segments: [{ kind: "emoji", emojiId: "thumbs-up" }],
-      }),
-    hasCode("feature_disabled"),
+test("re-applies NFC after merging adjacent text segments", () => {
+  // Combining mark arrives in a later segment so per-segment NFC cannot precompose.
+  const content = canonicalizeServerContent({
+    formatVersion: 1,
+    segments: [
+      { kind: "text", text: "e" },
+      { kind: "text", text: "\u0301x" },
+    ],
+  });
+  assert.deepEqual(content, {
+    formatVersion: 1,
+    segments: [{ kind: "text", text: "\u00e9x" }],
+  });
+  const mergedText = content.segments[0]!.text;
+  assert.equal(mergedText, mergedText.normalize("NFC"));
+  assert.notEqual(mergedText, "e\u0301x");
+  assert.equal(
+    deterministicContentJson(content),
+    '{"formatVersion":1,"segments":[{"kind":"text","text":"\u00e9x"}]}',
   );
-  assert.throws(
-    () =>
-      canonicalizeServerContent({
-        formatVersion: 1,
-        segments: [{ kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike" }],
-      }),
-    hasCode("feature_disabled"),
-  );
-  assert.throws(
-    () =>
-      canonicalizeServerContent({
-        formatVersion: 1,
-        segments: [{ kind: "power_state", modelId: "x", amount: 1, roomSessionId: UUID_A }],
-      }),
-    hasCode("feature_disabled"),
-  );
+});
+
+test("phase 1 rejects known rich kinds with feature_disabled", () => {
+  for (const segment of [
+    { kind: "emoji", emojiId: "thumbs-up" },
+    { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike" },
+    { kind: "power_state", modelId: "x", amount: 1, roomSessionId: UUID_A },
+    { kind: "target_ref", targetId: UUID_A },
+  ]) {
+    assert.throws(
+      () => canonicalizeServerContent({ formatVersion: 1, segments: [segment] }),
+      hasCode("feature_disabled"),
+      `expected feature_disabled for kind ${segment.kind}`,
+    );
+  }
 });
 
 test("rejects unknown kinds and reserved fields with invalid_content", () => {
@@ -85,7 +95,7 @@ test("rejects unknown kinds and reserved fields with invalid_content", () => {
         formatVersion: 1,
         segments: [{ kind: "unknown_widget", text: "x" }],
       }),
-    hasCode("feature_disabled"),
+    hasCode("invalid_content"),
   );
   assert.throws(
     () =>
@@ -236,6 +246,18 @@ test("rejects NUL/C0/C1/bidi/format characters but allows LF", () => {
     "\u200e", // LRM
     "\ufeff", // BOM
     "\u00ad", // soft hyphen
+    "\u206a", // inhibit symmetric swapping (format)
+    "\u206b", // activate symmetric swapping
+    "\u206c", // inhibit Arabic form shaping
+    "\u206d", // activate Arabic form shaping
+    "\u206e", // national digit shapes
+    "\u206f", // nominal digit shapes
+    "\ufe00", // variation selector-1
+    "\ufe0f", // variation selector-16
+    "\u{e0001}", // language tag
+    "\u{e0020}", // tag space
+    "\u{e007f}", // cancel tag
+    "\u{e0100}", // variation selector-17
   ];
 
   for (const ch of disallowed) {
@@ -285,44 +307,26 @@ test("utf8JsonBytes measures UTF-8 JSON size", () => {
 test("assertWireBudget accepts exact 8192 and rejects 8193 worst-case projections", () => {
   // Phase-1 text (300 scalars) never reaches 8 KiB by itself. Budget enforcement still
   // measures the max of chat_ack / chat_message / one-message chat_snapshot_chunk so a
-  // message that cannot be replayed in one chunk is rejected. Use standardized ID widths
-  // and pad plainTextFallback only inside the projected envelopes for exact boundaries.
+  // message that cannot be replayed in one chunk is rejected. Use production
+  // measureChatWireBytes / projectChatWireEnvelopes and pad plainTextFallback only for
+  // exact boundaries (content text + fallback both padded would step by 2).
   const content = textContent("hello");
-  const baseMessage: CanonicalChatMessage = {
-    messageId: UUID_A, // 36
-    senderId: SENDER_ID, // 22
-    senderName: "Ironclad",
-    content,
-    plainTextFallback: "hello",
-    sentAt: SENT_AT, // 24
-  };
+  const baseMessage = sampleMessage(content);
 
-  const baseBytes = measureProjections(baseMessage);
+  const baseBytes = measureChatWireBytes(baseMessage);
   assert.ok(baseBytes < 8192);
   assertWireBudget(baseMessage, 8192);
 
-  // Snapshot chunk is the largest of the three for a single message.
-  const ackBytes = utf8JsonBytes({
-    type: "chat_ack",
-    protocolVersion: 1,
-    clientMessageId: UUID_B,
-    message: baseMessage,
-  });
-  const messageBytes = utf8JsonBytes({
-    type: "chat_message",
-    protocolVersion: 1,
-    message: baseMessage,
-  });
-  const chunkBytes = utf8JsonBytes({
-    type: "chat_snapshot_chunk",
-    protocolVersion: 1,
-    snapshotId: UUID_C,
-    chunkIndex: 0,
-    messages: [baseMessage],
-  });
-  assert.equal(measureProjections(baseMessage), Math.max(ackBytes, messageBytes, chunkBytes));
-  assert.ok(chunkBytes >= messageBytes);
-  assert.ok(chunkBytes >= ackBytes || ackBytes > 0);
+  const { ack, chatMessage, snapshotChunk } = projectChatWireEnvelopes(baseMessage);
+  const ackBytes = utf8JsonBytes(ack);
+  const messageBytes = utf8JsonBytes(chatMessage);
+  const chunkBytes = utf8JsonBytes(snapshotChunk);
+  assert.equal(measureChatWireBytes(baseMessage), Math.max(ackBytes, messageBytes, chunkBytes));
+  // Snapshot chunk wraps messages[] + snapshotId, so it is strictly larger than chat_message.
+  // Ack includes clientMessageId but still typically smaller than the chunk envelope.
+  assert.ok(chunkBytes > messageBytes, `chunkBytes (${chunkBytes}) should exceed messageBytes (${messageBytes})`);
+  assert.ok(chunkBytes > ackBytes, `chunkBytes (${chunkBytes}) should exceed ackBytes (${ackBytes})`);
+  assert.ok(ackBytes > 0 && messageBytes > 0);
 
   // Exact envelope-level 8192 / 8193 boundaries via raw wire values.
   const exact8192 = makeExactByteObject(8192);
@@ -333,40 +337,24 @@ test("assertWireBudget accepts exact 8192 and rejects 8193 worst-case projection
   assert.equal(utf8JsonBytes(exact8193), 8193);
   assert.throws(() => assertWireBudget(exact8193, 8192), hasCode("invalid_content"));
 
-  // Pad only plainTextFallback so each ASCII char adds one projected byte and exact
-  // 8192/8193 sizes are reachable (content text + fallback both padded would step by 2).
+  // Pad only plainTextFallback so each ASCII char adds one projected byte.
+  // Realistic path: content is fixed; fallback is intentionally longer only for size probes.
   const exactProjected = padFallbackToExactBytes(baseMessage, 8192);
   assert.ok(exactProjected, "expected exact 8192 projected message");
-  assert.equal(measureProjections(exactProjected), 8192);
+  assert.equal(measureChatWireBytes(exactProjected), 8192);
   assertWireBudget(exactProjected, 8192);
 
   const exactProjectedOver = padFallbackToExactBytes(baseMessage, 8193);
   assert.ok(exactProjectedOver, "expected exact 8193 projected message");
-  assert.equal(measureProjections(exactProjectedOver), 8193);
+  assert.equal(measureChatWireBytes(exactProjectedOver), 8193);
   assert.throws(() => assertWireBudget(exactProjectedOver, 8192), hasCode("invalid_content"));
-});
 
-function measureProjections(message: CanonicalChatMessage): number {
-  const ack = {
-    type: "chat_ack",
-    protocolVersion: 1,
-    clientMessageId: UUID_B,
-    message,
-  };
-  const chatMessage = {
-    type: "chat_message",
-    protocolVersion: 1,
-    message,
-  };
-  const chunk = {
-    type: "chat_snapshot_chunk",
-    protocolVersion: 1,
-    snapshotId: UUID_C,
-    chunkIndex: 0,
-    messages: [message],
-  };
-  return Math.max(utf8JsonBytes(ack), utf8JsonBytes(chatMessage), utf8JsonBytes(chunk));
-}
+  // Consistent plainTextFallback path: re-derive fallback from content (realistic production shape).
+  const realistic = sampleMessage(textContent("hello world"));
+  assert.equal(realistic.plainTextFallback, renderPlainTextFallback(realistic.content));
+  assertWireBudget(realistic, 8192);
+  assert.ok(measureChatWireBytes(realistic) < 8192);
+});
 
 function makeExactByteObject(targetBytes: number): { p: string } {
   // {"p":"..."} => 8 overhead bytes for ASCII payload.
@@ -379,7 +367,7 @@ function padFallbackToExactBytes(
   base: CanonicalChatMessage,
   targetBytes: number,
 ): CanonicalChatMessage | null {
-  const baseSize = measureProjections(base);
+  const baseSize = measureChatWireBytes(base);
   if (baseSize > targetBytes) {
     return null;
   }
@@ -388,5 +376,5 @@ function padFallbackToExactBytes(
     ...base,
     plainTextFallback: `${base.plainTextFallback}${"x".repeat(pad)}`,
   };
-  return measureProjections(message) === targetBytes ? message : null;
+  return measureChatWireBytes(message) === targetBytes ? message : null;
 }
