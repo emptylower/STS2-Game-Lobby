@@ -1,6 +1,36 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { LobbyServiceConfigError, loadLobbyServiceConfig } from "./config.js";
+
+const PHASE_ONE_CHAT_TEMPLATE_SETTINGS = [
+  "SERVER_CHAT_ENABLED",
+  "SERVER_CHAT_HISTORY_LIMIT",
+  "SERVER_CHAT_HISTORY_TTL_HOURS",
+  "SERVER_CHAT_SNAPSHOT_LIMIT",
+  "SERVER_CHAT_MAX_PAYLOAD_BYTES",
+  "SERVER_CHAT_MAX_CONNECTIONS_PER_IP",
+  "SERVER_CHAT_MAX_CONNECTIONS_TOTAL",
+  "SERVER_CHAT_MAX_PENDING_TICKETS",
+  "SERVER_CHAT_TRUSTED_PROXY_CIDRS",
+];
+
+test("config templates define phase 1 chat settings exactly once", () => {
+  const templates: Array<[string, string]> = [
+    ["lobby-service/.env.example", readFileSync(new URL("../.env.example", import.meta.url), "utf8")],
+    [
+      "deploy/lobby-service.env.example",
+      readFileSync(new URL("../../deploy/lobby-service.env.example", import.meta.url), "utf8"),
+    ],
+  ];
+
+  for (const [templateName, template] of templates) {
+    for (const setting of PHASE_ONE_CHAT_TEMPLATE_SETTINGS) {
+      const matches = template.match(new RegExp(`^${setting}=`, "gm")) ?? [];
+      assert.equal(matches.length, 1, `${templateName} must define ${setting} exactly once`);
+    }
+  }
+});
 
 test("loadLobbyServiceConfig applies phase 1 chat defaults", () => {
   const chat = loadLobbyServiceConfig({}).chat;

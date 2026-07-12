@@ -418,6 +418,12 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 | `CREATE_JOIN_RATE_LIMIT_WINDOW_MS` | 建房 / 加房请求限流窗口 |
 | `CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS` | 单来源窗口内允许请求数 |
 
+### Phase 1 server chat
+
+Phase 1 server chat is text-only. It keeps a bounded, process-memory history for the current lobby-service process; messages are not persistent and are lost when the process restarts. Chat nicknames come from unverified client session data and must not be treated as identities or authorization claims.
+
+Server chat channels are node-local: peer-network nodes do not share or replicate messages. `SERVER_CHAT_TRUSTED_PROXY_CIDRS` controls which reverse-proxy peers may supply forwarded client addressing; leave it empty unless those proxy addresses are explicitly trusted. `CREATE_ROOM_TOKEN` authorizes room creation only and does not authorize chat access.
+
 ### 子服务管理面板
 
 | 变量 | 说明 |
