@@ -51,6 +51,10 @@ test("ipMatchesCidr supports IPv4 and IPv6 CIDRs", () => {
   assert.equal(ipMatchesCidr("2001:db9::10", "2001:db8::/64"), false);
 });
 
+test("ipMatchesCidr preserves IPv4-mapped IPv6 CIDR prefix semantics", () => {
+  assert.equal(ipMatchesCidr("::ffff:192.0.2.1", "::ffff:192.0.2.0/120"), true);
+});
+
 test("untrusted peer cannot spoof forwarding headers", () => {
   assert.equal(resolveClientIp(req("203.0.113.8", { "x-forwarded-for": "198.51.100.7" }), []), "203.0.113.8");
 });
@@ -97,6 +101,33 @@ test("trusted proxy rejects unquoted and malformed Forwarded IPv6 values", () =>
   assert.equal(
     resolveClientIp(req("10.0.0.4", {
       forwarded: "for=\"[:1:2:3:4:5:6:7:8]\"",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects a Forwarded IPv6 port outside the valid range", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=\"[2001:db8::9]:65536\"",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy rejects malformed Forwarded quoted strings and parameter whitespace", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=203.0.113.9;proto=\"a\"b\"c\"",
+      "x-forwarded-for": "198.51.100.7",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for = 203.0.113.9",
       "x-forwarded-for": "198.51.100.7",
     }), ["10.0.0.0/8"]),
     "198.51.100.7",

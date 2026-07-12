@@ -35,34 +35,45 @@ export function normalizeIp(value: string): string {
 }
 
 export function ipMatchesCidr(ip: string, cidr: string): boolean {
-  const normalizedIp = normalizeIp(ip);
   const normalizedCidr = cidr.trim();
-  if (!normalizedIp || !normalizedCidr) {
+  if (!normalizedCidr) {
     return false;
   }
   if (normalizedCidr === "*") {
-    return true;
+    return Boolean(normalizeIp(ip));
   }
 
   const slashIndex = normalizedCidr.indexOf("/");
   if (slashIndex < 0) {
-    return normalizedIp === normalizeIp(normalizedCidr);
+    return normalizeIp(ip) === normalizeIp(normalizedCidr);
   }
 
   if (slashIndex !== normalizedCidr.lastIndexOf("/")) {
     return false;
   }
 
-  const base = normalizeIp(normalizedCidr.slice(0, slashIndex));
+  const base = normalizedCidr.slice(0, slashIndex).trim();
   const prefix = normalizedCidr.slice(slashIndex + 1);
-  if (!base || !/^\d+$/.test(prefix)) {
+  if (!/^\d+$/.test(prefix)) {
     return false;
   }
 
   const prefixLength = Number.parseInt(prefix, 10);
-  const ipBytes = ipToBytes(normalizedIp);
-  const baseBytes = ipToBytes(base);
-  if (!ipBytes || !baseBytes || ipBytes.length !== baseBytes.length || prefixLength > ipBytes.length * 8) {
+  let ipBytes = ipToBytes(ip.trim());
+  let baseBytes = ipToBytes(base);
+  if (!ipBytes || !baseBytes) {
+    return false;
+  }
+  if (ipBytes.length !== baseBytes.length) {
+    const normalizedIpBytes = ipv4ToBytes(normalizeIp(ip));
+    const normalizedBaseBytes = ipv4ToBytes(normalizeIp(base));
+    if (!normalizedIpBytes || !normalizedBaseBytes) {
+      return false;
+    }
+    ipBytes = normalizedIpBytes;
+    baseBytes = normalizedBaseBytes;
+  }
+  if (prefixLength > ipBytes.length * 8) {
     return false;
   }
 
@@ -157,9 +168,13 @@ function resolveForwardedIp(header: string | undefined): string | undefined {
     const parameterNames = new Set<string>();
     for (const parameter of parameters) {
       const separatorIndex = parameter.indexOf("=");
-      const name = parameter.slice(0, separatorIndex).trim().toLowerCase();
-      const value = parameter.slice(separatorIndex + 1).trim();
-      if (separatorIndex <= 0 || parameterNames.has(name) || !isForwardedToken(name) || !isForwardedValue(value)) {
+      if (separatorIndex <= 0 || /\s/.test(parameter.slice(0, separatorIndex)) || /\s/.test(parameter.slice(separatorIndex + 1, separatorIndex + 2))) {
+        return undefined;
+      }
+
+      const name = parameter.slice(0, separatorIndex).toLowerCase();
+      const value = parameter.slice(separatorIndex + 1);
+      if (parameterNames.has(name) || !isForwardedToken(name) || !isForwardedValue(value)) {
         return undefined;
       }
       parameterNames.add(name);
@@ -197,7 +212,11 @@ function normalizeForwardedValue(value: string): string {
 
   if (unquoted.startsWith("[")) {
     const endBracket = unquoted.indexOf("]");
-    if (!quoted || endBracket < 0 || !/^(?::\d{1,5})?$/.test(unquoted.slice(endBracket + 1))) {
+    const port = unquoted.slice(endBracket + 1);
+    if (!quoted || endBracket < 0 || !/^(?::\d{1,5})?$/.test(port)) {
+      return "";
+    }
+    if (port && Number.parseInt(port.slice(1), 10) > 65535) {
       return "";
     }
     return normalizeIp(unquoted.slice(1, endBracket));
@@ -215,11 +234,34 @@ function isForwardedValue(value: string): boolean {
     return false;
   }
 
-  if (value.startsWith("\"")) {
-    return value.length >= 2 && value.endsWith("\"");
+  return value.startsWith("\"") ? isQuotedString(value) : isForwardedToken(value);
+}
+
+function isQuotedString(value: string): boolean {
+  if (value.length < 2 || !value.startsWith("\"") || !value.endsWith("\"")) {
+    return false;
   }
 
-  return isForwardedToken(value);
+  let escaped = false;
+  for (let index = 1; index < value.length - 1; index++) {
+    const code = value.charCodeAt(index);
+    if (escaped) {
+      if (code < 0x20 || code > 0x7e) {
+        return false;
+      }
+      escaped = false;
+      continue;
+    }
+    if (value[index] === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (value[index] === "\"" || code < 0x20 || code === 0x7f) {
+      return false;
+    }
+  }
+
+  return !escaped;
 }
 
 function unquote(value: string): string {
@@ -273,8 +315,25 @@ function splitHeaderValues(value: string, separator: string): string[] | undefin
 }
 
 function ipToBytes(value: string): number[] | null {
-  const ipv4 = ipv4ToBytes(value);
-  return ipv4 ?? ipv6ToBytes(value);
+  const normalized = value.trim().toLowerCase();
+  const ipv4 = ipv4ToBytes(normalized);
+  return ipv4 ?? ipv6ToBytes(normalized) ?? ipv4TailIpv6ToBytes(normalized);
+}
+
+function ipv4TailIpv6ToBytes(value: string): number[] | null {
+  const lastColon = value.lastIndexOf(":");
+  if (lastColon < 0) {
+    return null;
+  }
+
+  const ipv4 = ipv4ToBytes(value.slice(lastColon + 1));
+  if (!ipv4) {
+    return null;
+  }
+
+  const high = ((ipv4[0]! << 8) | ipv4[1]!).toString(16);
+  const low = ((ipv4[2]! << 8) | ipv4[3]!).toString(16);
+  return ipv6ToBytes(`${value.slice(0, lastColon + 1)}${high}:${low}`);
 }
 
 function ipv4MappedIpv6ToIpv4(value: string): string {
