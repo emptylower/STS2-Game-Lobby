@@ -54,6 +54,48 @@ test("loadLobbyServiceConfig accepts true and false chat booleans", () => {
   assert.equal(loadLobbyServiceConfig({ SERVER_CHAT_ENABLED: "false" }).chat.enabled, false);
 });
 
+test("loadLobbyServiceConfig preserves legacy boolean aliases and blank defaults", () => {
+  const booleanSettings = [
+    ["STRICT_GAME_VERSION_CHECK", "strictGameVersionCheck", true],
+    ["STRICT_MOD_VERSION_CHECK", "strictModVersionCheck", true],
+    ["PUBLIC_ROOM_LIST_ENABLED", "publicRoomListEnabled", false],
+    ["PUBLIC_DETAILED_HEALTH_ENABLED", "publicDetailedHealthEnabled", false],
+    ["ENFORCE_LOBBY_ACCESS_TOKEN", "enforceLobbyAccessToken", true],
+    ["ENFORCE_CREATE_ROOM_TOKEN", "enforceCreateRoomToken", true],
+    ["PEER_PUBLIC_LISTING_ENABLED", "peerPublicListingEnabledDefault", true],
+  ] as const;
+
+  for (const [environmentKey, configKey, fallback] of booleanSettings) {
+    assert.equal(loadLobbyServiceConfig({ [environmentKey]: "" })[configKey], fallback);
+
+    for (const value of ["1", "TRUE", "yes", "On"]) {
+      assert.equal(loadLobbyServiceConfig({ [environmentKey]: value })[configKey], true);
+    }
+    for (const value of ["0", "FALSE", "no", "Off"]) {
+      assert.equal(loadLobbyServiceConfig({ [environmentKey]: value })[configKey], false);
+    }
+  }
+});
+
+test("loadLobbyServiceConfig preserves PEER_NETWORK_ENABLED exact false behavior", () => {
+  assert.equal(loadLobbyServiceConfig({ PEER_NETWORK_ENABLED: "false" }).peer.enabled, false);
+  assert.equal(loadLobbyServiceConfig({ PEER_NETWORK_ENABLED: "FALSE" }).peer.enabled, true);
+  assert.equal(loadLobbyServiceConfig({ PEER_NETWORK_ENABLED: "0" }).peer.enabled, true);
+  assert.equal(loadLobbyServiceConfig({ PEER_NETWORK_ENABLED: "" }).peer.enabled, true);
+});
+
+test("loadLobbyServiceConfig preserves legacy numeric prefix parsing and rate limit clamping inputs", () => {
+  const config = loadLobbyServiceConfig({
+    HEARTBEAT_TIMEOUT_SECONDS: "30s",
+    CREATE_JOIN_RATE_LIMIT_WINDOW_MS: "0",
+    CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS: "0",
+  });
+
+  assert.equal(config.heartbeatTimeoutMs, 30_000);
+  assert.equal(Math.max(1000, config.createJoinRateLimitWindowMs), 1000);
+  assert.equal(Math.max(1, config.createJoinRateLimitMaxRequests), 1);
+});
+
 test("loadLobbyServiceConfig rejects malformed integer values", () => {
   assert.throws(
     () => loadLobbyServiceConfig({ SERVER_CHAT_HISTORY_LIMIT: "twenty" }),
@@ -118,14 +160,7 @@ test("loadLobbyServiceConfig parses comma-separated chat trusted proxy CIDRs", (
   assert.deepEqual(trustedProxyCidrs, ["10.0.0.0/8", "192.168.0.0/16", "2001:db8::/32"]);
 });
 
-test("loadLobbyServiceConfig requires WS_PATH to begin with a slash", () => {
-  assert.throws(
-    () => loadLobbyServiceConfig({ WS_PATH: "control" }),
-    /WS_PATH must begin with \//,
-  );
-});
-
-test("loadLobbyServiceConfig reserves the chat WebSocket path", () => {
-  assert.throws(
-    () => loadLobbyServiceConfig({ WS_PATH: "/chat" }), /WS_PATH must not be \/chat/);
+test("loadLobbyServiceConfig preserves legacy WS_PATH values", () => {
+  assert.equal(loadLobbyServiceConfig({ WS_PATH: "control" }).wsPath, "control");
+  assert.equal(loadLobbyServiceConfig({ WS_PATH: "/chat" }).wsPath, "/chat");
 });

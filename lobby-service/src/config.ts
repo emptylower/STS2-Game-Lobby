@@ -77,52 +77,43 @@ export interface LobbyServiceConfig {
 
 export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceConfig {
   const host = source.HOST ?? "0.0.0.0";
-  const relayPortStart = parseInteger(source, "RELAY_PORT_START", 39000, 1, 65535);
-  const relayPortEnd = parseInteger(source, "RELAY_PORT_END", 39149, 1, 65535);
   const lobbyAccessToken = optionalEnv(source.LOBBY_ACCESS_TOKEN) ?? optionalEnv(source.CREATE_ROOM_TOKEN);
   const createRoomToken = optionalEnv(source.CREATE_ROOM_TOKEN) ?? optionalEnv(source.LOBBY_ACCESS_TOKEN);
   const serverAdminPasswordHash = optionalEnv(source.SERVER_ADMIN_PASSWORD_HASH);
   const serverAdminSessionSecret = optionalEnv(source.SERVER_ADMIN_SESSION_SECRET);
-  if (relayPortEnd < relayPortStart) {
-    throw new LobbyServiceConfigError(
-      "invalid_range",
-      "RELAY_PORT_END",
-      "RELAY_PORT_END must be greater than or equal to RELAY_PORT_START",
-    );
-  }
 
   return {
     host,
-    port: parseInteger(source, "PORT", 8787, 1, 65535),
-    heartbeatTimeoutMs: parsePositiveInteger(source, "HEARTBEAT_TIMEOUT_SECONDS", 35) * 1000,
-    ticketTtlMs: parsePositiveInteger(source, "TICKET_TTL_SECONDS", 120) * 1000,
-    wsPath: parseWebSocketPath(source.WS_PATH ?? "/control"),
+    port: parseLegacyInteger(source, "PORT", 8787),
+    heartbeatTimeoutMs: parseLegacyInteger(source, "HEARTBEAT_TIMEOUT_SECONDS", 35) * 1000,
+    ticketTtlMs: parseLegacyInteger(source, "TICKET_TTL_SECONDS", 120) * 1000,
+    wsPath: source.WS_PATH ?? "/control",
     relayBindHost: source.RELAY_BIND_HOST ?? host,
     relayPublicHost: source.RELAY_PUBLIC_HOST ?? "",
-    relayPortStart,
-    relayPortEnd,
-    relayHostIdleMs: parsePositiveInteger(source, "RELAY_HOST_IDLE_SECONDS", 20) * 1000,
-    relayClientIdleMs: parsePositiveInteger(source, "RELAY_CLIENT_IDLE_SECONDS", 90) * 1000,
-    strictGameVersionCheck: parseBoolean(source, "STRICT_GAME_VERSION_CHECK", true),
-    strictModVersionCheck: parseBoolean(source, "STRICT_MOD_VERSION_CHECK", true),
+    relayPortStart: parseLegacyInteger(source, "RELAY_PORT_START", 39000),
+    relayPortEnd: parseLegacyInteger(source, "RELAY_PORT_END", 39149),
+    relayHostIdleMs: parseLegacyInteger(source, "RELAY_HOST_IDLE_SECONDS", 20) * 1000,
+    relayClientIdleMs: parseLegacyInteger(source, "RELAY_CLIENT_IDLE_SECONDS", 90) * 1000,
+    strictGameVersionCheck: parseLegacyBoolean(source.STRICT_GAME_VERSION_CHECK, true),
+    strictModVersionCheck: parseLegacyBoolean(source.STRICT_MOD_VERSION_CHECK, true),
     connectionStrategy: parseConnectionStrategy(source.CONNECTION_STRATEGY),
-    publicRoomListEnabled: parseBoolean(source, "PUBLIC_ROOM_LIST_ENABLED", false),
-    publicDetailedHealthEnabled: parseBoolean(source, "PUBLIC_DETAILED_HEALTH_ENABLED", false),
-    enforceLobbyAccessToken: parseBoolean(source, "ENFORCE_LOBBY_ACCESS_TOKEN", true),
-    enforceCreateRoomToken: parseBoolean(source, "ENFORCE_CREATE_ROOM_TOKEN", true),
+    publicRoomListEnabled: parseLegacyBoolean(source.PUBLIC_ROOM_LIST_ENABLED, false),
+    publicDetailedHealthEnabled: parseLegacyBoolean(source.PUBLIC_DETAILED_HEALTH_ENABLED, false),
+    enforceLobbyAccessToken: parseLegacyBoolean(source.ENFORCE_LOBBY_ACCESS_TOKEN, true),
+    enforceCreateRoomToken: parseLegacyBoolean(source.ENFORCE_CREATE_ROOM_TOKEN, true),
     ...(lobbyAccessToken == null ? {} : { lobbyAccessToken }),
     ...(createRoomToken == null ? {} : { createRoomToken }),
     createRoomTrustedProxies: parseCommaSeparatedValues(source.CREATE_ROOM_TRUSTED_PROXIES),
-    createJoinRateLimitWindowMs: parsePositiveInteger(source, "CREATE_JOIN_RATE_LIMIT_WINDOW_MS", 60000),
-    createJoinRateLimitMaxRequests: parsePositiveInteger(source, "CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS", 30),
+    createJoinRateLimitWindowMs: parseLegacyInteger(source, "CREATE_JOIN_RATE_LIMIT_WINDOW_MS", 60000),
+    createJoinRateLimitMaxRequests: parseLegacyInteger(source, "CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS", 30),
     serverAdminUsername: source.SERVER_ADMIN_USERNAME ?? "admin",
     ...(serverAdminPasswordHash == null ? {} : { serverAdminPasswordHash }),
     ...(serverAdminSessionSecret == null ? {} : { serverAdminSessionSecret }),
-    serverAdminSessionTtlMs: parsePositiveInteger(source, "SERVER_ADMIN_SESSION_TTL_HOURS", 168) * 60 * 60 * 1000,
+    serverAdminSessionTtlMs: parseLegacyInteger(source, "SERVER_ADMIN_SESSION_TTL_HOURS", 168) * 60 * 60 * 1000,
     serverAdminStateFile: source.SERVER_ADMIN_STATE_FILE ?? `${process.cwd()}/data/server-admin.json`,
-    peerPublicListingEnabledDefault: parseBoolean(source, "PEER_PUBLIC_LISTING_ENABLED", true),
+    peerPublicListingEnabledDefault: parseLegacyBoolean(source.PEER_PUBLIC_LISTING_ENABLED, true),
     peer: {
-      enabled: parseBoolean(source, "PEER_NETWORK_ENABLED", true),
+      enabled: source.PEER_NETWORK_ENABLED !== "false",
       selfAddress: source.PEER_SELF_ADDRESS ?? "",
       cfDiscoveryBaseUrl: source.PEER_CF_DISCOVERY_BASE_URL ?? "",
       stateDir: source.PEER_STATE_DIR ?? "./data/peer",
@@ -161,6 +152,22 @@ function loadChatConfig(source: NodeJS.ProcessEnv): ChatConfig {
   };
 }
 
+function parseLegacyBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value == null || value.trim() === "") {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+
+  throw new Error(`Invalid boolean env value: ${value}`);
+}
+
 function parseBoolean(source: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean {
   const value = source[name];
   if (value == null) {
@@ -180,6 +187,10 @@ function parseBoolean(source: NodeJS.ProcessEnv, name: string, fallback: boolean
     name,
     `Invalid boolean value for ${name}: ${value}. Expected true or false.`,
   );
+}
+
+function parseLegacyInteger(source: NodeJS.ProcessEnv, name: string, fallback: number): number {
+  return Number.parseInt(source[name] ?? `${fallback}`, 10);
 }
 
 function parseInteger(source: NodeJS.ProcessEnv, name: string, fallback: number, min: number, max: number): number {
