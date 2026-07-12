@@ -70,10 +70,12 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly CancellationTokenSource _disposeCancellation = new();
     private readonly object _lifecycleLock = new();
+    private CancellationTokenSource? _connectCancellation;
     private CancellationTokenSource? _receiveCancellation;
     private Task _connectTask = Task.CompletedTask;
     private Task _receiveLoop = Task.CompletedTask;
     private Task? _disposeTask;
+    private Task? _closeTask;
     private int _connectStarted;
     private int _closedRaised;
     private int _disposed;
@@ -99,6 +101,15 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         IReadOnlyDictionary<string, string>? requestHeaders = null,
         CancellationToken cancellationToken = default)
     {
+        return ConnectAsync(uri, requestHeaders, cancellationToken, cancellationToken);
+    }
+
+    public Task ConnectAsync(
+        Uri uri,
+        IReadOnlyDictionary<string, string>? requestHeaders,
+        CancellationToken connectCancellationToken,
+        CancellationToken receiveLifetimeCancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(uri);
         lock (_lifecycleLock)
         {
@@ -109,14 +120,36 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
             }
 
             _connectStarted = 1;
+            CancellationTokenSource connectCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(connectCancellationToken, _disposeCancellation.Token);
             CancellationTokenSource receiveCancellation =
-                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCancellation.Token);
+                CancellationTokenSource.CreateLinkedTokenSource(receiveLifetimeCancellationToken, _disposeCancellation.Token);
+            _connectCancellation = connectCancellation;
             _receiveCancellation = receiveCancellation;
 
             TaskCompletionSource start = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            _connectTask = ConnectCoreAsync(uri, requestHeaders, receiveCancellation, start.Task);
+            _connectTask = ConnectCoreAsync(uri, requestHeaders, connectCancellation, receiveCancellation, start.Task);
             start.SetResult();
             return _connectTask;
+        }
+    }
+
+    public Task CloseAsync(
+        WebSocketCloseStatus closeStatus,
+        string statusDescription,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(statusDescription);
+        lock (_lifecycleLock)
+        {
+            ThrowIfDisposed();
+            if (_connectStarted == 0)
+            {
+                throw new InvalidOperationException("The WebSocket transport is not connected.");
+            }
+
+            _closeTask ??= CloseLocalAsync(closeStatus, statusDescription, cancellationToken);
+            return _closeTask;
         }
     }
 
@@ -177,6 +210,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
     private async Task ConnectCoreAsync(
         Uri uri,
         IReadOnlyDictionary<string, string>? requestHeaders,
+        CancellationTokenSource connectCancellation,
         CancellationTokenSource receiveCancellation,
         Task start)
     {
@@ -189,13 +223,24 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
             }
         }
 
-        await _socket.ConnectAsync(uri, receiveCancellation.Token);
+        await _socket.ConnectAsync(uri, connectCancellation.Token);
         receiveCancellation.Token.ThrowIfCancellationRequested();
         Task receiveLoop = ReceiveLoopAsync(receiveCancellation.Token);
         lock (_lifecycleLock)
         {
             _receiveLoop = receiveLoop;
         }
+    }
+
+    private async Task CloseLocalAsync(
+        WebSocketCloseStatus closeStatus,
+        string statusDescription,
+        CancellationToken cancellationToken)
+    {
+        using CancellationTokenSource closeCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCancellation.Token);
+        await CloseSocketAsync(closeStatus, statusDescription, closeCancellation.Token);
+        RaiseClosedOnce();
     }
 
     private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
@@ -396,6 +441,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         {
             _sendLock.Release();
             _sendLock.Dispose();
+            _connectCancellation?.Dispose();
             _receiveCancellation?.Dispose();
             _disposeCancellation.Dispose();
         }

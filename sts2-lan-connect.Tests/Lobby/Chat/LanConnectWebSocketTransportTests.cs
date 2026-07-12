@@ -106,6 +106,29 @@ public sealed class LanConnectWebSocketTransportTests
     }
 
     [Fact]
+    public async Task ConnectCancellationAfterSuccessDoesNotCancelSeparateReceiveLifetime()
+    {
+        FakeWebSocket socket = new();
+        await using LanConnectWebSocketTransport transport = new(socket);
+        using CancellationTokenSource connectCancellation = new();
+        using CancellationTokenSource receiveLifetime = new();
+
+        await transport.ConnectAsync(
+            new Uri("wss://lobby.example/chat"),
+            requestHeaders: null,
+            connectCancellation.Token,
+            receiveLifetime.Token);
+        await socket.ReceiveStarted.Task.WaitAsync(TestCancellation);
+        connectCancellation.Cancel();
+
+        Task observationWindow = Task.Delay(TimeSpan.FromMilliseconds(100), TestCancellation);
+        Assert.Same(observationWindow, await Task.WhenAny(socket.ReceiveCancelled.Task, observationWindow));
+
+        receiveLifetime.Cancel();
+        await socket.ReceiveCancelled.Task.WaitAsync(TestCancellation);
+    }
+
+    [Fact]
     public async Task UnexpectedReceiveExceptionRaisesFaultAndClosedOnce()
     {
         WebSocketException failure = new(WebSocketError.ConnectionClosedPrematurely);
@@ -217,6 +240,34 @@ public sealed class LanConnectWebSocketTransportTests
         }
         await Task.WhenAll(send, socket.CloseStarted.Task, closed.Task).WaitAsync(TestCancellation);
         Assert.Equal(WebSocketCloseStatus.NormalClosure, Assert.Single(socket.CloseCalls).Status);
+    }
+
+    [Fact]
+    public async Task LocalCloseWaitsForInflightSendAndRaisesClosedOnce()
+    {
+        FakeWebSocket socket = new() { HoldFirstSend = true };
+        await using LanConnectWebSocketTransport transport = new(socket);
+        int closedCount = 0;
+        transport.Closed += () => Interlocked.Increment(ref closedCount);
+        await transport.ConnectAsync(new Uri("wss://lobby.example/chat"), cancellationToken: TestCancellation);
+        Task send = transport.SendAsync("pending", TestCancellation);
+        await socket.FirstSendStarted.Task.WaitAsync(TestCancellation);
+
+        Task close = transport.CloseAsync(
+            WebSocketCloseStatus.NormalClosure,
+            "client_shutdown",
+            TestCancellation);
+        Task observationWindow = Task.Delay(TimeSpan.FromMilliseconds(100), TestCancellation);
+        Assert.Same(observationWindow, await Task.WhenAny(socket.CloseStarted.Task, observationWindow));
+
+        socket.ReleaseFirstSend();
+        await Task.WhenAll(send, close).WaitAsync(TestCancellation);
+        await transport.CloseAsync(WebSocketCloseStatus.NormalClosure, "ignored", TestCancellation);
+
+        CloseCall call = Assert.Single(socket.CloseCalls);
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, call.Status);
+        Assert.Equal("client_shutdown", call.Description);
+        Assert.Equal(1, closedCount);
     }
 
     [Fact]

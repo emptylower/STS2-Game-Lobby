@@ -1,6 +1,5 @@
 using System;
-using System.Net.WebSockets;
-using System.Text;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,10 +9,28 @@ namespace Sts2LanConnect.Scripts;
 
 internal sealed class LobbyControlClient : IAsyncDisposable
 {
-    private readonly ClientWebSocket _socket = new();
+    private readonly LanConnectWebSocketTransport _transport;
+    private readonly CancellationTokenSource _lifetimeCancellation = new();
+    private readonly object _lifecycleLock = new();
     private string _role = "host";
+    private Task? _disposeTask;
+    private int _isConnected;
+    private int _disposed;
 
-    public bool IsConnected => _socket.State == WebSocketState.Open;
+    public LobbyControlClient()
+        : this(new LanConnectClientWebSocket())
+    {
+    }
+
+    internal LobbyControlClient(ILanConnectWebSocket socket)
+    {
+        _transport = new LanConnectWebSocketTransport(socket ?? throw new ArgumentNullException(nameof(socket)));
+        _transport.PayloadReceived += OnPayloadReceived;
+        _transport.Faulted += OnTransportFaulted;
+        _transport.Closed += OnTransportClosed;
+    }
+
+    public bool IsConnected => Volatile.Read(ref _isConnected) != 0;
 
     public event Action<LobbyControlEnvelope>? EnvelopeReceived;
 
@@ -52,90 +69,141 @@ internal sealed class LobbyControlClient : IAsyncDisposable
         }, cancellationToken);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_socket.State == WebSocketState.Open || _socket.State == WebSocketState.CloseReceived)
+        lock (_lifecycleLock)
+        {
+            _disposeTask ??= DisposeCoreAsync();
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    public Task SendAsync(LobbyControlEnvelope envelope, CancellationToken cancellationToken = default)
+    {
+        string payload = JsonSerializer.Serialize(envelope, LanConnectJson.Options);
+        return _transport.SendAsync(payload, cancellationToken);
+    }
+
+    private async Task ConnectAsync(Uri controlUri, LobbyControlEnvelope helloEnvelope, CancellationToken cancellationToken)
+    {
+        await _transport.ConnectAsync(
+            controlUri,
+            requestHeaders: null,
+            cancellationToken,
+            _lifetimeCancellation.Token);
+        Interlocked.Exchange(ref _isConnected, 1);
+        await SendAsync(helloEnvelope, cancellationToken);
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        Interlocked.Exchange(ref _disposed, 1);
+        if (IsConnected)
         {
             try
             {
-                await _socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "client_shutdown", CancellationToken.None);
+                using CancellationTokenSource closeCancellation =
+                    new(TimeSpan.FromSeconds(2));
+                await _transport.CloseAsync(
+                    System.Net.WebSockets.WebSocketCloseStatus.NormalClosure,
+                    "client_shutdown",
+                    closeCancellation.Token);
             }
             catch
             {
             }
         }
 
-        _socket.Dispose();
-    }
-
-    private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
-    {
-        byte[] buffer = new byte[4096];
-        ArraySegment<byte> segment = new(buffer);
-        while (_socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+        Interlocked.Exchange(ref _isConnected, 0);
+        _lifetimeCancellation.Cancel();
+        _transport.PayloadReceived -= OnPayloadReceived;
+        _transport.Faulted -= OnTransportFaulted;
+        _transport.Closed -= OnTransportClosed;
+        try
         {
-            WebSocketReceiveResult result;
-            try
-            {
-                result = await _socket.ReceiveAsync(segment, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"sts2_lan_connect lobby control channel receive loop stopped: {ex.Message}");
-                break;
-            }
-
-            if (result.MessageType == WebSocketMessageType.Close)
-            {
-                break;
-            }
-
-            string payload = Encoding.UTF8.GetString(buffer, 0, result.Count);
-            if (string.IsNullOrWhiteSpace(payload))
-            {
-                continue;
-            }
-
-            try
-            {
-                LobbyControlEnvelope? envelope = JsonSerializer.Deserialize<LobbyControlEnvelope>(payload, LanConnectJson.Options);
-                if (envelope == null)
-                {
-                    continue;
-                }
-
-                if (envelope.Type == "ping")
-                {
-                    await SendAsync(new LobbyControlEnvelope
-                    {
-                        Type = "pong",
-                        RoomId = envelope.RoomId,
-                        ControlChannelId = envelope.ControlChannelId,
-                        Role = _role
-                    }, cancellationToken);
-                    continue;
-                }
-
-                EnvelopeReceived?.Invoke(envelope);
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"sts2_lan_connect failed to parse control payload: {ex.Message}");
-            }
+            await _transport.DisposeAsync();
+        }
+        finally
+        {
+            _lifetimeCancellation.Dispose();
         }
     }
 
-    public Task SendAsync(LobbyControlEnvelope envelope, CancellationToken cancellationToken = default)
+    private void OnPayloadReceived(string payload)
     {
-        byte[] payload = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope, LanConnectJson.Options));
-        ArraySegment<byte> segment = new(payload);
-        return _socket.SendAsync(segment, WebSocketMessageType.Text, true, cancellationToken);
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return;
+        }
+
+        try
+        {
+            LobbyControlEnvelope? envelope =
+                JsonSerializer.Deserialize<LobbyControlEnvelope>(payload, LanConnectJson.Options);
+            if (envelope == null)
+            {
+                return;
+            }
+
+            if (envelope.Type == "ping")
+            {
+                Task send = SendAsync(new LobbyControlEnvelope
+                {
+                    Type = "pong",
+                    RoomId = envelope.RoomId,
+                    ControlChannelId = envelope.ControlChannelId,
+                    Role = _role
+                });
+                if (!send.IsCompletedSuccessfully)
+                {
+                    _ = ObservePongSendAsync(send);
+                }
+                return;
+            }
+
+            EnvelopeReceived?.Invoke(envelope);
+        }
+        catch (Exception ex)
+        {
+            LogParseFailure(ex);
+        }
     }
 
-    private async Task ConnectAsync(Uri controlUri, LobbyControlEnvelope helloEnvelope, CancellationToken cancellationToken)
+    private async Task ObservePongSendAsync(Task send)
     {
-        await _socket.ConnectAsync(controlUri, cancellationToken);
-        await SendAsync(helloEnvelope, cancellationToken);
-        _ = Task.Run(() => ReceiveLoopAsync(CancellationToken.None));
+        try
+        {
+            await send;
+        }
+        catch (Exception ex) when (Volatile.Read(ref _disposed) == 0)
+        {
+            LogPongSendFailure(ex);
+        }
+        catch
+        {
+        }
     }
+
+    private void OnTransportFaulted(Exception exception)
+    {
+        Interlocked.Exchange(ref _isConnected, 0);
+        LogTransportFailure(exception);
+    }
+
+    private void OnTransportClosed()
+    {
+        Interlocked.Exchange(ref _isConnected, 0);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void LogParseFailure(Exception exception) =>
+        Log.Warn($"sts2_lan_connect failed to parse control payload: {exception.Message}");
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void LogPongSendFailure(Exception exception) =>
+        Log.Warn($"sts2_lan_connect failed to send lobby control pong: {exception.Message}");
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void LogTransportFailure(Exception exception) =>
+        Log.Warn($"sts2_lan_connect lobby control channel receive loop stopped: {exception.Message}");
 }
