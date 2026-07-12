@@ -67,6 +67,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
     private readonly CancellationTokenSource _disposeCancellation = new();
     private readonly object _lifecycleLock = new();
     private CancellationTokenSource? _receiveCancellation;
+    private Task _connectTask = Task.CompletedTask;
     private Task _receiveLoop = Task.CompletedTask;
     private Task? _disposeTask;
     private int _connectStarted;
@@ -86,37 +87,29 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
 
     public event Action? Closed;
 
-    public async Task ConnectAsync(
+    public Task ConnectAsync(
         Uri uri,
         IReadOnlyDictionary<string, string>? requestHeaders = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(uri);
-        ThrowIfDisposed();
-        if (Interlocked.CompareExchange(ref _connectStarted, 1, 0) != 0)
+        lock (_lifecycleLock)
         {
-            throw new InvalidOperationException("The WebSocket transport can only be connected once.");
-        }
-
-        try
-        {
-            if (requestHeaders != null)
+            ThrowIfDisposed();
+            if (_connectStarted != 0)
             {
-                foreach ((string name, string value) in requestHeaders)
-                {
-                    _socket.SetRequestHeader(name, value);
-                }
+                throw new InvalidOperationException("The WebSocket transport can only be connected once.");
             }
 
-            await _socket.ConnectAsync(uri, cancellationToken);
-            ThrowIfDisposed();
-            _receiveCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCancellation.Token);
-            _receiveLoop = ReceiveLoopAsync(_receiveCancellation.Token);
-        }
-        catch
-        {
-            Interlocked.Exchange(ref _connectStarted, 0);
-            throw;
+            _connectStarted = 1;
+            CancellationTokenSource receiveCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCancellation.Token);
+            _receiveCancellation = receiveCancellation;
+
+            TaskCompletionSource start = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _connectTask = ConnectCoreAsync(uri, requestHeaders, receiveCancellation, start.Task);
+            start.SetResult();
+            return _connectTask;
         }
     }
 
@@ -146,8 +139,56 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
     {
         lock (_lifecycleLock)
         {
-            _disposeTask ??= DisposeCoreAsync();
+            if (_disposeTask == null)
+            {
+                Interlocked.Exchange(ref _disposed, 1);
+                _disposeCancellation.Cancel();
+                _disposeTask = DisposeCoreAsync(_connectTask);
+            }
             return new ValueTask(_disposeTask);
+        }
+    }
+
+    private async Task ConnectCoreAsync(
+        Uri uri,
+        IReadOnlyDictionary<string, string>? requestHeaders,
+        CancellationTokenSource receiveCancellation,
+        Task start)
+    {
+        await start;
+        try
+        {
+            if (requestHeaders != null)
+            {
+                foreach ((string name, string value) in requestHeaders)
+                {
+                    _socket.SetRequestHeader(name, value);
+                }
+            }
+
+            await _socket.ConnectAsync(uri, receiveCancellation.Token);
+            receiveCancellation.Token.ThrowIfCancellationRequested();
+            Task receiveLoop = ReceiveLoopAsync(receiveCancellation.Token);
+            lock (_lifecycleLock)
+            {
+                _receiveLoop = receiveLoop;
+            }
+        }
+        catch
+        {
+            lock (_lifecycleLock)
+            {
+                if (Volatile.Read(ref _disposed) == 0)
+                {
+                    _connectStarted = 0;
+                    if (ReferenceEquals(_receiveCancellation, receiveCancellation))
+                    {
+                        _receiveCancellation = null;
+                    }
+                    receiveCancellation.Dispose();
+                }
+            }
+            throw;
         }
     }
 
@@ -212,10 +253,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
 
     private async Task CompleteRemoteCloseAsync(CancellationToken cancellationToken)
     {
-        if (_socket.State == WebSocketState.CloseReceived || _socket.State == WebSocketState.Open)
-        {
-            await _socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "remote_close", cancellationToken);
-        }
+        await CloseSocketAsync(WebSocketCloseStatus.NormalClosure, "remote_close", cancellationToken);
     }
 
     private async Task CloseForProtocolErrorAsync(
@@ -223,12 +261,28 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         string description,
         CancellationToken cancellationToken)
     {
-        if (_socket.State == WebSocketState.Open || _socket.State == WebSocketState.CloseReceived)
-        {
-            await _socket.CloseAsync(closeStatus, LimitCloseDescription(description), cancellationToken);
-        }
+        await CloseSocketAsync(closeStatus, description, cancellationToken);
 
         RaiseClosed();
+    }
+
+    private async Task CloseSocketAsync(
+        WebSocketCloseStatus closeStatus,
+        string description,
+        CancellationToken cancellationToken)
+    {
+        await _sendLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_socket.State == WebSocketState.Open || _socket.State == WebSocketState.CloseReceived)
+            {
+                await _socket.CloseAsync(closeStatus, LimitCloseDescription(description), cancellationToken);
+            }
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
     }
 
     private void RaisePayload(string payload)
@@ -271,19 +325,26 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         }
     }
 
-    private async Task DisposeCoreAsync()
+    private async Task DisposeCoreAsync(Task connectTask)
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
-
-        _disposeCancellation.Cancel();
         try
         {
-            await _receiveLoop;
+            await connectTask;
         }
-        catch (OperationCanceledException)
+        catch
+        {
+        }
+
+        Task receiveLoop;
+        lock (_lifecycleLock)
+        {
+            receiveLoop = _receiveLoop;
+        }
+        try
+        {
+            await receiveLoop;
+        }
+        catch
         {
         }
 
