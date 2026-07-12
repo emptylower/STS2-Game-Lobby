@@ -31,7 +31,7 @@ export function normalizeIp(value: string): string {
     return ipv4;
   }
 
-  return ipv6ToBytes(lower) ? lower : "";
+  return ipToBytes(lower) && lower.includes(":") ? lower : "";
 }
 
 export function ipMatchesCidr(ip: string, cidr: string): boolean {
@@ -133,8 +133,9 @@ function optionalHeaderString(req: ClientIpRequest, name: string): string | unde
 }
 
 export function resolveClientIp(req: ClientIpRequest, trusted: readonly string[]): string {
-  const directPeer = normalizeIp(req.socket.remoteAddress ?? "");
-  if (!directPeer || !trusted.some((cidr) => ipMatchesCidr(directPeer, cidr))) {
+  const rawDirectPeer = req.socket.remoteAddress ?? "";
+  const directPeer = normalizeIp(rawDirectPeer);
+  if (!directPeer || !trusted.some((cidr) => ipMatchesCidr(rawDirectPeer, cidr))) {
     return directPeer;
   }
 

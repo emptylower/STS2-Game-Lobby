@@ -37,6 +37,10 @@ test("normalizeIp collapses IPv4-mapped IPv6 addresses and rejects hostnames", (
   assert.equal(normalizeIp(""), "");
 });
 
+test("normalizeIp recognizes IPv6 addresses with embedded IPv4 tails", () => {
+  assert.equal(normalizeIp("2001:db8::192.0.2.1"), "2001:db8::192.0.2.1");
+});
+
 test("normalizeIp rejects IPv6 addresses with a leading or trailing single colon", () => {
   assert.equal(normalizeIp(":1:2:3:4:5:6:7:8"), "");
   assert.equal(normalizeIp("1:2:3:4:5:6:7:8:"), "");
@@ -63,10 +67,34 @@ test("trusted proxy resolves the first Forwarded hop", () => {
   assert.equal(resolveClientIp(req("10.0.0.4", { forwarded: "for=198.51.100.7;proto=https" }), ["10.0.0.0/8"]), "198.51.100.7");
 });
 
+test("trusted mapped IPv6 proxy resolves Forwarded hops", () => {
+  assert.equal(
+    resolveClientIp(req("::ffff:192.0.2.1", {
+      forwarded: "for=198.51.100.7",
+      "x-forwarded-for": "203.0.113.8",
+    }), ["::ffff:192.0.2.0/120"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted mapped IPv6 proxy resolves X-Forwarded-For hops", () => {
+  assert.equal(
+    resolveClientIp(req("::ffff:192.0.2.1", { "x-forwarded-for": "203.0.113.8" }), ["::ffff:192.0.2.0/120"]),
+    "203.0.113.8",
+  );
+});
+
 test("trusted proxy resolves quoted and bracketed Forwarded IPv6 hops", () => {
   assert.equal(
     resolveClientIp(req("10.0.0.4", { forwarded: "for=\"[2001:DB8::7]:443\";proto=https" }), ["10.0.0.0/8"]),
     "2001:db8::7",
+  );
+});
+
+test("trusted proxy resolves bracketed Forwarded IPv6 hops with embedded IPv4 tails", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", { forwarded: "for=\"[2001:db8::192.0.2.1]\"" }), ["10.0.0.0/8"]),
+    "2001:db8::192.0.2.1",
   );
 });
 
