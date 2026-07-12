@@ -23,21 +23,6 @@ function makeRequest(options: {
   } as any;
 }
 
-test("normalizeRemoteIp collapses IPv4-mapped IPv6 addresses", () => {
-  assert.equal(__testHooks.normalizeRemoteIp("::ffff:127.0.0.1"), "127.0.0.1");
-  assert.equal(__testHooks.normalizeRemoteIp(" ::1 "), "::1");
-  assert.equal(__testHooks.normalizeRemoteIp(""), "");
-});
-
-test("ipMatchesCandidate supports IPv4, IPv6, and IPv4-mapped IPv6 loopback forms", () => {
-  assert.equal(__testHooks.ipMatchesCandidate("127.0.0.1", "127.0.0.1"), true);
-  assert.equal(__testHooks.ipMatchesCandidate("::1", "::1"), true);
-  assert.equal(__testHooks.ipMatchesCandidate("::ffff:127.0.0.1", "127.0.0.1"), true);
-  assert.equal(__testHooks.ipMatchesCandidate("127.0.0.42", "127.0.0.0/24"), true);
-  assert.equal(__testHooks.ipMatchesCandidate("2001:db8::10", "2001:db8::/64"), true);
-  assert.equal(__testHooks.ipMatchesCandidate("2001:db9::10", "2001:db8::/64"), false);
-});
-
 test("token extraction reads header and bearer token but ignores query-only token input", () => {
   const headerReq = makeRequest({
     headers: {

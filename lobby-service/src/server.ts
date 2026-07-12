@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { loadLobbyServiceConfig } from "./config.js";
+import { ipMatchesCidr, normalizeIp } from "./client-ip.js";
 import { CreateRoomBandwidthGuard } from "./bandwidth-guard.js";
 import { assertRelayCreateReady, assertRelayJoinReady } from "./join-guard.js";
 import { RoomRelayManager } from "./relay.js";
@@ -882,7 +883,7 @@ function parseEnvelope(payload: WebSocket.RawData): Record<string, unknown> | nu
 }
 
 function requestIp(req: Request) {
-  return normalizeRemoteIp(req.socket.remoteAddress ?? "");
+  return normalizeIp(req.socket.remoteAddress ?? "");
 }
 
 function parseCookies(header: string | undefined) {
@@ -1133,165 +1134,7 @@ function isTrustedOperationsRequest(req: Request) {
     return false;
   }
 
-  return env.createRoomTrustedProxies.some((candidate: string) => ipMatchesCandidate(remote, candidate));
-}
-
-function ipMatchesCandidate(ip: string, candidate: string) {
-  const normalizedCandidate = candidate.trim();
-  if (!normalizedCandidate) {
-    return false;
-  }
-
-  if (normalizedCandidate === "*") {
-    return true;
-  }
-
-  const normalizedIp = normalizeRemoteIp(ip);
-  if (!normalizedIp) {
-    return false;
-  }
-
-  if (normalizedCandidate.includes("/")) {
-    const [base, prefix] = normalizedCandidate.split("/", 2);
-    const prefixLength = Number.parseInt(prefix ?? "", 10);
-    if (!Number.isInteger(prefixLength)) {
-      return false;
-    }
-
-    const normalizedBase = normalizeRemoteIp(base ?? "");
-    if (!normalizedBase) {
-      return false;
-    }
-
-    const ipBytes = ipToBytes(normalizedIp);
-    const baseBytes = ipToBytes(normalizedBase);
-    if (!ipBytes || !baseBytes || ipBytes.length !== baseBytes.length) {
-      return false;
-    }
-
-    return bytesMatchPrefix(ipBytes, baseBytes, prefixLength);
-  }
-
-  return normalizedIp === normalizeRemoteIp(normalizedCandidate);
-}
-
-function normalizeRemoteIp(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  if (trimmed.startsWith("::ffff:")) {
-    const mapped = trimmed.slice("::ffff:".length);
-    return mapped || trimmed;
-  }
-
-  return trimmed;
-}
-
-function ipToBytes(value: string) {
-  const normalized = normalizeRemoteIp(value);
-  if (!normalized) {
-    return null;
-  }
-
-  const ipv4 = ipv4ToBytes(normalized);
-  if (ipv4) {
-    return ipv4;
-  }
-
-  return ipv6ToBytes(normalized);
-}
-
-function ipv4ToBytes(value: string) {
-  const parts = value.split(".");
-  if (parts.length !== 4) {
-    return null;
-  }
-
-  const bytes: number[] = [];
-  for (const part of parts) {
-    const parsed = Number.parseInt(part, 10);
-    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 255) {
-      return null;
-    }
-
-    bytes.push(parsed);
-  }
-
-  return bytes;
-}
-
-function ipv6ToBytes(value: string) {
-  if (!value.includes(":")) {
-    return null;
-  }
-
-  const lower = value.toLowerCase();
-  const doubleColonIndex = lower.indexOf("::");
-  if (doubleColonIndex !== lower.lastIndexOf("::")) {
-    return null;
-  }
-
-  const expandPart = (part: string) => part.split(":").filter((segment) => segment.length > 0);
-  const left = doubleColonIndex >= 0 ? expandPart(lower.slice(0, doubleColonIndex)) : expandPart(lower);
-  const right = doubleColonIndex >= 0 ? expandPart(lower.slice(doubleColonIndex + 2)) : [];
-  if (doubleColonIndex < 0 && left.length !== 8) {
-    return null;
-  }
-
-  const missing = doubleColonIndex >= 0 ? 8 - (left.length + right.length) : 0;
-  if (missing < 0) {
-    return null;
-  }
-
-  const groups = [
-    ...left,
-    ...Array.from({ length: missing }, () => "0"),
-    ...right,
-  ];
-  if (groups.length !== 8) {
-    return null;
-  }
-
-  const bytes: number[] = [];
-  for (const group of groups) {
-    if (!/^[0-9a-f]{1,4}$/.test(group)) {
-      return null;
-    }
-
-    const parsed = Number.parseInt(group, 16);
-    bytes.push((parsed >> 8) & 0xff, parsed & 0xff);
-  }
-
-  return bytes;
-}
-
-function bytesMatchPrefix(ipBytes: number[], baseBytes: number[], prefixLength: number) {
-  if (prefixLength <= 0) {
-    return true;
-  }
-
-  const totalBits = ipBytes.length * 8;
-  if (prefixLength > totalBits) {
-    return false;
-  }
-
-  const fullBytes = Math.floor(prefixLength / 8);
-  const remainingBits = prefixLength % 8;
-
-  for (let index = 0; index < fullBytes; index++) {
-    if (ipBytes[index] !== baseBytes[index]) {
-      return false;
-    }
-  }
-
-  if (remainingBits === 0) {
-    return true;
-  }
-
-  const mask = (0xff << (8 - remainingBits)) & 0xff;
-  return (ipBytes[fullBytes]! & mask) === (baseBytes[fullBytes]! & mask);
+  return env.createRoomTrustedProxies.some((candidate: string) => ipMatchesCidr(remote, candidate));
 }
 
 function optionalString(value: unknown) {
@@ -1493,8 +1336,6 @@ function closeRuntimeResources(onClosed?: () => void) {
 }
 
 export const __testHooks = {
-  normalizeRemoteIp,
-  ipMatchesCandidate,
   hasLobbyReadAccessToken,
   getLobbyAccessToken,
   getCreateRoomToken,

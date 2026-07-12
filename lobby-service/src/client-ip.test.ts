@@ -1,0 +1,74 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  ipMatchesCidr,
+  normalizeIp,
+  parseTrustedProxyCidrs,
+  resolveClientIp,
+  type ClientIpRequest,
+} from "./client-ip.js";
+
+function req(remoteAddress: string | undefined, headers: Record<string, string> = {}): ClientIpRequest {
+  const normalizedHeaders = Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]),
+  );
+
+  return {
+    socket: { remoteAddress },
+    headers: normalizedHeaders,
+  };
+}
+
+test("parseTrustedProxyCidrs trims comma-separated CIDRs", () => {
+  assert.deepEqual(
+    parseTrustedProxyCidrs(" 10.0.0.0/8, 192.168.0.0/16 , 2001:db8::/32 "),
+    ["10.0.0.0/8", "192.168.0.0/16", "2001:db8::/32"],
+  );
+  assert.deepEqual(parseTrustedProxyCidrs(undefined), []);
+});
+
+test("normalizeIp collapses IPv4-mapped IPv6 addresses and rejects hostnames", () => {
+  assert.equal(normalizeIp(" ::ffff:127.0.0.1 "), "127.0.0.1");
+  assert.equal(normalizeIp("2001:DB8::10"), "2001:db8::10");
+  assert.equal(normalizeIp("example.com"), "");
+  assert.equal(normalizeIp(""), "");
+});
+
+test("ipMatchesCidr supports IPv4 and IPv6 CIDRs", () => {
+  assert.equal(ipMatchesCidr("127.0.0.1", "127.0.0.1"), true);
+  assert.equal(ipMatchesCidr("::ffff:127.0.0.1", "127.0.0.1"), true);
+  assert.equal(ipMatchesCidr("127.0.0.42", "127.0.0.0/24"), true);
+  assert.equal(ipMatchesCidr("127.0.1.42", "127.0.0.0/24"), false);
+  assert.equal(ipMatchesCidr("2001:db8::10", "2001:db8::/64"), true);
+  assert.equal(ipMatchesCidr("2001:db9::10", "2001:db8::/64"), false);
+});
+
+test("untrusted peer cannot spoof forwarding headers", () => {
+  assert.equal(resolveClientIp(req("203.0.113.8", { "x-forwarded-for": "198.51.100.7" }), []), "203.0.113.8");
+});
+
+test("trusted proxy resolves the first Forwarded hop", () => {
+  assert.equal(resolveClientIp(req("10.0.0.4", { forwarded: "for=198.51.100.7;proto=https" }), ["10.0.0.0/8"]), "198.51.100.7");
+});
+
+test("trusted proxy resolves quoted and bracketed Forwarded IPv6 hops", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", { forwarded: "for=\"[2001:DB8::7]:443\";proto=https" }), ["10.0.0.0/8"]),
+    "2001:db8::7",
+  );
+});
+
+test("trusted proxy falls back to X-Forwarded-For when Forwarded is malformed", () => {
+  assert.equal(
+    resolveClientIp(req("10.0.0.4", {
+      forwarded: "for=example.com;proto=https, for=198.51.100.9",
+      "x-forwarded-for": "198.51.100.7, 10.0.0.4",
+    }), ["10.0.0.0/8"]),
+    "198.51.100.7",
+  );
+});
+
+test("trusted proxy keeps the direct peer for empty or hostname forwarding values", () => {
+  assert.equal(resolveClientIp(req("10.0.0.4", { forwarded: "for=example.com" }), ["10.0.0.0/8"]), "10.0.0.4");
+  assert.equal(resolveClientIp(req("10.0.0.4", { "x-forwarded-for": "" }), ["10.0.0.0/8"]), "10.0.0.4");
+});
