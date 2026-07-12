@@ -3,17 +3,34 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { LobbyServiceConfigError, loadLobbyServiceConfig } from "./config.js";
 
-const PHASE_ONE_CHAT_TEMPLATE_SETTINGS = [
-  "SERVER_CHAT_ENABLED",
-  "SERVER_CHAT_HISTORY_LIMIT",
-  "SERVER_CHAT_HISTORY_TTL_HOURS",
-  "SERVER_CHAT_SNAPSHOT_LIMIT",
-  "SERVER_CHAT_MAX_PAYLOAD_BYTES",
-  "SERVER_CHAT_MAX_CONNECTIONS_PER_IP",
-  "SERVER_CHAT_MAX_CONNECTIONS_TOTAL",
-  "SERVER_CHAT_MAX_PENDING_TICKETS",
-  "SERVER_CHAT_TRUSTED_PROXY_CIDRS",
-];
+const PHASE_ONE_CHAT_TEMPLATE_DEFAULTS = {
+  SERVER_CHAT_ENABLED: "false",
+  SERVER_CHAT_HISTORY_LIMIT: "100",
+  SERVER_CHAT_HISTORY_TTL_HOURS: "24",
+  SERVER_CHAT_SNAPSHOT_LIMIT: "50",
+  SERVER_CHAT_MAX_PAYLOAD_BYTES: "8192",
+  SERVER_CHAT_MAX_CONNECTIONS_PER_IP: "10",
+  SERVER_CHAT_MAX_CONNECTIONS_TOTAL: "500",
+  SERVER_CHAT_MAX_PENDING_TICKETS: "2000",
+  SERVER_CHAT_TRUSTED_PROXY_CIDRS: "",
+} as const;
+
+function readTemplateSettings(template: string): Map<string, string> {
+  const settings = new Map<string, string>();
+
+  for (const line of template.split(/\r?\n/)) {
+    const match = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line);
+    if (match?.[1] !== undefined && match[2] !== undefined) {
+      settings.set(match[1], match[2]);
+    }
+  }
+
+  return settings;
+}
+
+function countTemplateSettingLines(template: string, setting: string): number {
+  return template.split(/\r?\n/).filter((line) => line.startsWith(`${setting}=`)).length;
+}
 
 test("config templates define phase 1 chat settings exactly once", () => {
   const templates: Array<[string, string]> = [
@@ -25,11 +42,31 @@ test("config templates define phase 1 chat settings exactly once", () => {
   ];
 
   for (const [templateName, template] of templates) {
-    for (const setting of PHASE_ONE_CHAT_TEMPLATE_SETTINGS) {
-      const matches = template.match(new RegExp(`^${setting}=`, "gm")) ?? [];
-      assert.equal(matches.length, 1, `${templateName} must define ${setting} exactly once`);
+    const settings = readTemplateSettings(template);
+
+    for (const [setting, expectedValue] of Object.entries(PHASE_ONE_CHAT_TEMPLATE_DEFAULTS)) {
+      assert.equal(
+        countTemplateSettingLines(template, setting),
+        1,
+        `${templateName} must define ${setting} exactly once`,
+      );
+      assert.equal(
+        settings.get(setting),
+        expectedValue,
+        `${templateName} must define ${setting}=${expectedValue}`,
+      );
     }
   }
+});
+
+test("README documents CREATE_ROOM_TOKEN read fallback without granting chat ticket access", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+
+  assert.match(
+    readme,
+    /When `LOBBY_ACCESS_TOKEN` is unset, `CREATE_ROOM_TOKEN` also authorizes protected room-list and detailed-health reads\./,
+  );
+  assert.match(readme, /`CREATE_ROOM_TOKEN` alone does not authorize chat tickets\./);
 });
 
 test("loadLobbyServiceConfig applies phase 1 chat defaults", () => {
