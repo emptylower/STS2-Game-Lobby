@@ -85,6 +85,14 @@ public sealed class LanConnectLobbyChatApiTests
         Assert.Equal(4, state.HistoryEpoch);
         Assert.Equal(DateTimeOffset.Parse("2026-07-13T06:02:03.456Z"), state.ChangedAt);
 
+        ServerChatHistoryClearedEnvelope historyCleared = Deserialize<ServerChatHistoryClearedEnvelope>("""
+            {"type":"chat_history_cleared","protocolVersion":1,"historyEpoch":5,"changedAt":"2026-07-13T07:08:09.123Z"}
+            """);
+        Assert.Equal("chat_history_cleared", historyCleared.Type);
+        Assert.Equal(1, historyCleared.ProtocolVersion);
+        Assert.Equal(5, historyCleared.HistoryEpoch);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-13T07:08:09.123Z"), historyCleared.ChangedAt);
+
         ServerChatInboundEnvelope projected = Deserialize<ServerChatInboundEnvelope>($$"""
             {"type":"chat_message","protocolVersion":1,"message":{{canonical}}}
             """);
@@ -95,6 +103,23 @@ public sealed class LanConnectLobbyChatApiTests
             {"type":"chat_error","protocolVersion":1,"clientMessageId":"","code":"server_busy","message":"服务繁忙。"}
             """);
         Assert.Equal("服务繁忙。", projectedError.ErrorMessage);
+
+        ServerChatInboundEnvelope projectedHistoryCleared = Deserialize<ServerChatInboundEnvelope>("""
+            {"type":"chat_history_cleared","protocolVersion":1,"historyEpoch":5,"changedAt":"2026-07-13T07:08:09.123Z"}
+            """);
+        Assert.Equal("chat_history_cleared", projectedHistoryCleared.Type);
+        Assert.Equal(5, projectedHistoryCleared.HistoryEpoch);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-13T07:08:09.123Z"), projectedHistoryCleared.ChangedAt);
+    }
+
+    [Theory]
+    [InlineData("{\"type\":\"chat_ready\",\"protocolVersion\":1,\"channel\":0}")]
+    [InlineData("{\"type\":\"chat_ready\",\"protocolVersion\":1}")]
+    [InlineData("{\"type\":\"chat_ready\",\"protocolVersion\":1,\"channel\":\"Server\"}")]
+    [InlineData("{\"type\":\"chat_ready\",\"protocolVersion\":1,\"channel\":\"unknown\"}")]
+    public void ReadyRejectsNonCanonicalOrMissingChannel(string json)
+    {
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ServerChatReadyEnvelope>(json, LanConnectJson.Options));
     }
 
     [Fact]
@@ -140,10 +165,11 @@ public sealed class LanConnectLobbyChatApiTests
     [Fact]
     public async Task ProbeAndTicketApisUseExactRoutesAndTicketAuthorization()
     {
+        List<string> logs = [];
         RecordingHandler handler = new(
             """{"ok":true,"capabilities":{"serverChatVersion":1}}""",
             """{"ticket":"one-time-secret","expiresAt":"2026-07-13T04:05:06Z","webSocketUrl":"wss://lobby.example/base/chat","protocolVersion":1}""");
-        using LobbyApiClient client = new("https://lobby.example/base", "lobby-secret", "create-secret", handler);
+        using LobbyApiClient client = new("https://lobby.example/base", "lobby-secret", "create-secret", handler, logs.Add);
 
         LobbyProbeResponse probe = await client.GetProbeAsync();
         ServerChatTicketResponse ticket = await client.CreateServerChatTicketAsync(new ServerChatTicketRequest
@@ -164,7 +190,34 @@ public sealed class LanConnectLobbyChatApiTests
         Assert.Null(handler.Requests[1].CreateToken);
         Assert.DoesNotContain("?", handler.Requests[1].Uri);
         Assert.Equal("""{"protocolVersion":1,"playerNetId":"net-1","playerName":"Ironclad"}""", handler.Requests[1].Body);
-        Assert.DoesNotContain("one-time-secret", client.ToString(), StringComparison.Ordinal);
+
+        string diagnostics = string.Join("\n", logs);
+        Assert.Contains("GET https://lobby.example/base/probe", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("POST https://lobby.example/base/chat/tickets", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("-> 200", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("protocolVersion=1", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("one-time-secret", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"ticket\":", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("net-1", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ironclad", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("create-secret", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("lobby-secret", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpHandlerOwnershipIsConfigurable()
+    {
+        RecordingHandler retained = new("{}");
+        using (LobbyApiClient client = new("https://lobby.example", httpMessageHandler: retained, diagnosticSink: _ => { }, disposeHttpMessageHandler: false))
+        {
+        }
+        Assert.False(retained.IsDisposed);
+
+        RecordingHandler owned = new("{}");
+        using (LobbyApiClient client = new("https://lobby.example", httpMessageHandler: owned, diagnosticSink: _ => { }))
+        {
+        }
+        Assert.True(owned.IsDisposed);
     }
 
     private static T Deserialize<T>(string json) where T : class
@@ -177,6 +230,8 @@ public sealed class LanConnectLobbyChatApiTests
         private int _index;
 
         public List<RecordedRequest> Requests { get; } = [];
+
+        public bool IsDisposed { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -191,6 +246,12 @@ public sealed class LanConnectLobbyChatApiTests
             {
                 Content = new StringContent(responses[_index++], Encoding.UTF8, "application/json")
             };
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            base.Dispose(disposing);
         }
     }
 

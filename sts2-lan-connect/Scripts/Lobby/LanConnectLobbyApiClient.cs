@@ -17,13 +17,16 @@ internal sealed class LobbyApiClient : IDisposable
     private readonly Uri _controlUri;
     private readonly string? _readAccessToken;
     private readonly string? _createRoomToken;
-    private readonly bool _diagnosticsEnabled;
+    private readonly Action<string> _diagnosticSink;
+    private readonly string _diagnosticConfiguration;
 
     public LobbyApiClient(
         string baseUrl,
         string? readAccessToken = null,
         string? createRoomToken = null,
-        HttpMessageHandler? httpMessageHandler = null)
+        HttpMessageHandler? httpMessageHandler = null,
+        Action<string>? diagnosticSink = null,
+        bool disposeHttpMessageHandler = true)
     {
         string normalizedBaseUrl = NormalizeBaseUrl(baseUrl);
         string normalizedWsUrl = NormalizeWsUrl(normalizedBaseUrl);
@@ -31,17 +34,19 @@ internal sealed class LobbyApiClient : IDisposable
         _controlUri = new Uri(normalizedWsUrl, UriKind.Absolute);
         _readAccessToken = string.IsNullOrWhiteSpace(readAccessToken) ? null : readAccessToken.Trim();
         _createRoomToken = string.IsNullOrWhiteSpace(createRoomToken) ? null : createRoomToken.Trim();
-        _diagnosticsEnabled = httpMessageHandler == null;
-        _httpClient = new HttpClient(httpMessageHandler ?? new HttpClientHandler())
+        _diagnosticSink = diagnosticSink ?? (message => GD.Print(message));
+        _diagnosticConfiguration = diagnosticSink == null
+            ? DescribeResolvedConfiguration()
+            : DescribeInjectedConfiguration();
+        _httpClient = new HttpClient(
+            httpMessageHandler ?? new HttpClientHandler(),
+            disposeHttpMessageHandler)
         {
             BaseAddress = _baseUri,
             Timeout = TimeSpan.FromSeconds(10d)
         };
 
-        if (_diagnosticsEnabled)
-        {
-            GD.Print($"sts2_lan_connect lobby api: configured client {DescribeResolvedConfiguration()}");
-        }
+        _diagnosticSink($"sts2_lan_connect lobby api: configured client {_diagnosticConfiguration}");
     }
 
     public static LobbyApiClient CreateConfigured()
@@ -76,10 +81,7 @@ internal sealed class LobbyApiClient : IDisposable
     public async Task<double> MeasureProbeRttAsync(CancellationToken cancellationToken = default)
     {
         Uri requestUri = new(_baseUri, "probe");
-        if (_diagnosticsEnabled)
-        {
-            GD.Print($"sts2_lan_connect lobby api: GET {requestUri} via {GetEndpointSource()} (probe) config={DescribeResolvedConfiguration()}");
-        }
+        _diagnosticSink($"sts2_lan_connect lobby api: GET {requestUri} (probe) config={_diagnosticConfiguration}");
         using HttpRequestMessage request = new(HttpMethod.Get, "probe");
         Stopwatch stopwatch = Stopwatch.StartNew();
         using HttpResponseMessage response = await _httpClient.SendAsync(
@@ -87,11 +89,8 @@ internal sealed class LobbyApiClient : IDisposable
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
         stopwatch.Stop();
-        if (_diagnosticsEnabled)
-        {
-            GD.Print(
-                $"sts2_lan_connect lobby api: GET {requestUri} -> {(int)response.StatusCode} probeRttMs={stopwatch.Elapsed.TotalMilliseconds:0}");
-        }
+        _diagnosticSink(
+            $"sts2_lan_connect lobby api: GET {requestUri} -> {(int)response.StatusCode} probeRttMs={stopwatch.Elapsed.TotalMilliseconds:0}");
         return stopwatch.Elapsed.TotalMilliseconds;
     }
 
@@ -155,10 +154,7 @@ internal sealed class LobbyApiClient : IDisposable
         bool includeCreateRoomToken = true)
     {
         Uri requestUri = new(_baseUri, path);
-        if (_diagnosticsEnabled)
-        {
-            GD.Print($"sts2_lan_connect lobby api: {method.Method} {requestUri} via {GetEndpointSource()} ({DescribePayload(payload)}) config={DescribeResolvedConfiguration()}");
-        }
+        _diagnosticSink($"sts2_lan_connect lobby api: {method.Method} {requestUri} ({DescribePayload(payload)}) config={_diagnosticConfiguration}");
         using HttpRequestMessage request = new(method, path);
         ApplyAuthorizationHeaders(request, includeCreateRoomToken);
         if (payload != null)
@@ -169,10 +165,7 @@ internal sealed class LobbyApiClient : IDisposable
 
         using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
         string text = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (_diagnosticsEnabled)
-        {
-            GD.Print($"sts2_lan_connect lobby api: {method.Method} {requestUri} -> {(int)response.StatusCode}");
-        }
+        _diagnosticSink($"sts2_lan_connect lobby api: {method.Method} {requestUri} -> {(int)response.StatusCode}");
         if (!response.IsSuccessStatusCode)
         {
             throw BuildException(text, (int)response.StatusCode);
@@ -271,6 +264,11 @@ internal sealed class LobbyApiClient : IDisposable
         bool hasReadToken = !string.IsNullOrWhiteSpace(LanConnectConfig.LobbyReadAccessToken);
         bool hasCreateToken = !string.IsNullOrWhiteSpace(LanConnectConfig.LobbyCreateRoomToken);
         return $"source={source}, baseUrl={baseUrl}, wsUrl={wsUrl}, registryBaseUrl={registryBaseUrl}, hasLobbyReadAccessToken={hasReadToken}, hasCreateRoomToken={hasCreateToken}, matrix={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()}";
+    }
+
+    private string DescribeInjectedConfiguration()
+    {
+        return $"source=injected, baseUrl={_baseUri}, wsUrl={_controlUri}, hasLobbyReadAccessToken={_readAccessToken != null}, hasCreateRoomToken={_createRoomToken != null}";
     }
 
     private static string DescribePayload(object? payload)

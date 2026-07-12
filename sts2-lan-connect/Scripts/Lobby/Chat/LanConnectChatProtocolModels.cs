@@ -5,14 +5,40 @@ using System.Text.Json.Serialization;
 
 namespace Sts2LanConnect.Scripts;
 
-[JsonConverter(typeof(JsonStringEnumConverter<LanConnectChatChannel>))]
+[JsonConverter(typeof(LanConnectChatChannelJsonConverter))]
 internal enum LanConnectChatChannel
 {
-    [JsonStringEnumMemberName("room")]
     Room,
 
-    [JsonStringEnumMemberName("server")]
     Server
+}
+
+internal sealed class LanConnectChatChannelJsonConverter : JsonConverter<LanConnectChatChannel>
+{
+    public override LanConnectChatChannel Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.String)
+        {
+            throw new JsonException("Chat channel must be a string.");
+        }
+
+        return reader.GetString() switch
+        {
+            "room" => LanConnectChatChannel.Room,
+            "server" => LanConnectChatChannel.Server,
+            _ => throw new JsonException("Unsupported chat channel.")
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, LanConnectChatChannel value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(value switch
+        {
+            LanConnectChatChannel.Room => "room",
+            LanConnectChatChannel.Server => "server",
+            _ => throw new JsonException("Unsupported chat channel.")
+        });
+    }
 }
 
 internal sealed class ServerChatTicketRequest
@@ -92,6 +118,7 @@ internal sealed class ServerChatReadyEnvelope
 
     public int ProtocolVersion { get; set; }
 
+    [JsonRequired]
     public LanConnectChatChannel Channel { get; set; }
 
     public string SessionId { get; set; } = string.Empty;
@@ -192,6 +219,17 @@ internal sealed class ServerChatStateEnvelope
     public bool ChatEnabled { get; set; }
 
     public ServerChatEnabledFeatures EnabledFeatures { get; set; } = new();
+
+    public int HistoryEpoch { get; set; }
+
+    public DateTimeOffset ChangedAt { get; set; }
+}
+
+internal sealed class ServerChatHistoryClearedEnvelope
+{
+    public string Type { get; set; } = "chat_history_cleared";
+
+    public int ProtocolVersion { get; set; }
 
     public int HistoryEpoch { get; set; }
 
