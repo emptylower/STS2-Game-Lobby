@@ -222,7 +222,7 @@ export async function createLobbyService(
     const startedAt = Date.now();
     res.on("finish", () => {
       const durationMs = Date.now() - startedAt;
-      const ipField = req.path === "/chat/tickets" ? "" : ` ip=${requestIp(req)}`;
+      const ipField = res.locals.omitClientIpFromLog === true ? "" : ` ip=${requestIp(req)}`;
       console.log(
         `[http] ${req.method} ${req.path}${ipField} status=${res.statusCode} durationMs=${durationMs}`,
       );
@@ -282,6 +282,8 @@ export async function createLobbyService(
   });
 
   app.post("/chat/tickets", (req, res) => {
+    res.locals.omitClientIpFromLog = true;
+
     if (Object.keys(req.query).length > 0) {
       throw new InputError("聊天票据请求不接受查询参数。");
     }

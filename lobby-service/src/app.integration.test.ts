@@ -813,3 +813,32 @@ test("POST /chat/tickets rejects malformed JSON without logging its body", async
     cleanupTempDir(config);
   }
 });
+
+test("POST /chat/tickets/ omits client IP from logs for the equivalent trailing-slash route", async () => {
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => logs.push(args.map((entry) => String(entry)).join(" "));
+
+  const config = testConfig({ port: 0, enforceLobbyAccessToken: false });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/chat/tickets/`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(ticketBody()),
+    });
+    assert.equal(response.status, 200);
+    await sleep(20);
+    assert.equal(
+      logs.join("\n").includes("127.0.0.1"),
+      false,
+      "equivalent chat ticket routes must omit client IP",
+    );
+  } finally {
+    console.log = originalLog;
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
