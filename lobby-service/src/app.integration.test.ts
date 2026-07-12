@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
+import { inspect } from "node:util";
 import { WebSocket } from "ws";
 import { createLobbyService } from "./app.js";
 import { loadLobbyServiceConfig, type LobbyServiceConfig } from "./config.js";
@@ -448,6 +449,58 @@ test("POST /chat/tickets accepts equivalent Bearer lobby access token", async ()
   }
 });
 
+test("POST /chat/tickets requires a complete Bearer authorization scheme", async () => {
+  const config = testConfig({
+    port: 0,
+    enforceLobbyAccessToken: true,
+    lobbyAccessToken: "strict-bearer-secret",
+    createRoomToken: "create-secret",
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const raw = await postChatTicket(address.port, {
+      headers: { authorization: "strict-bearer-secret" },
+    });
+    assert.equal(raw.status, 401);
+
+    const malformed = await postChatTicket(address.port, {
+      headers: { authorization: "Bearer strict-bearer-secret trailing" },
+    });
+    assert.equal(malformed.status, 401);
+
+    const valid = await postChatTicket(address.port, {
+      headers: { authorization: "Bearer strict-bearer-secret" },
+    });
+    assert.equal(valid.status, 200);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets rejects Basic authorization that equals the configured token", async () => {
+  const config = testConfig({
+    port: 0,
+    enforceLobbyAccessToken: true,
+    lobbyAccessToken: "Basic collision-secret",
+    createRoomToken: "create-secret",
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await postChatTicket(address.port, {
+      headers: { authorization: "Basic collision-secret" },
+    });
+    assert.equal(response.status, 401);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
 test("POST /chat/tickets ignores forwarded proto from an untrusted direct caller", async () => {
   const config = testConfig({ port: 0, enforceLobbyAccessToken: false });
   const service = await createLobbyService(config);
@@ -660,7 +713,7 @@ test("POST /chat/tickets returns 503 when pending ticket capacity is exhausted",
   }
 });
 
-test("POST /chat/tickets logs omit submitted access and ticket values", async () => {
+test("POST /chat/tickets logs omit submitted access, ticket, identity, and IP values", async () => {
   const logs: string[] = [];
   const originalLog = console.log;
   console.log = (...args: unknown[]) => {
@@ -668,6 +721,8 @@ test("POST /chat/tickets logs omit submitted access and ticket values", async ()
   };
 
   const accessToken = "super-secret-lobby-access-token-value";
+  const playerNetId = "private-player-net-id-marker";
+  const playerName = "private-player-name-marker";
   const config = testConfig({
     port: 0,
     enforceLobbyAccessToken: true,
@@ -680,6 +735,7 @@ test("POST /chat/tickets logs omit submitted access and ticket values", async ()
   try {
     const response = await postChatTicket(address.port, {
       headers: { "x-lobby-access-token": accessToken },
+      body: ticketBody({ playerNetId, playerName }),
     });
     assert.equal(response.status, 200);
     const body = (await response.json()) as { ticket: string };
@@ -688,6 +744,9 @@ test("POST /chat/tickets logs omit submitted access and ticket values", async ()
     const joined = logs.join("\n");
     assert.equal(joined.includes(accessToken), false, "logs must not include lobby access token");
     assert.equal(joined.includes(body.ticket), false, "logs must not include issued ticket");
+    assert.equal(joined.includes(playerNetId), false, "logs must not include player net id");
+    assert.equal(joined.includes(playerName), false, "logs must not include player name");
+    assert.equal(joined.includes("127.0.0.1"), false, "chat ticket logs must not include client IP");
   } finally {
     console.log = originalLog;
     await service.close();
@@ -721,6 +780,35 @@ test("POST /chat/tickets rejects query credentials without logging them", async 
     assert.equal(logs.join("\n").includes(marker), false, "logs must omit query credentials");
   } finally {
     console.log = originalLog;
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("POST /chat/tickets rejects malformed JSON without logging its body", async () => {
+  const logs: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args: unknown[]) => logs.push(inspect(args));
+  console.error = (...args: unknown[]) => logs.push(inspect(args));
+
+  const marker = "malformed-private-marker";
+  const config = testConfig({ port: 0, enforceLobbyAccessToken: false });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/chat/tickets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: `{"playerName":"${marker}",`,
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json() as { code: string }).code, "invalid_request");
+    assert.equal(logs.join("\n").includes(marker), false, "logs must omit malformed JSON bodies");
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
     await service.close();
     cleanupTempDir(config);
   }

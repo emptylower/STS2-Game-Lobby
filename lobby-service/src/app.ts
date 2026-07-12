@@ -103,6 +103,17 @@ class HttpError extends Error {
   }
 }
 
+function isJsonParseError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as { type?: unknown; status?: unknown; statusCode?: unknown };
+  const status = typeof candidate.status === "number" ? candidate.status : candidate.statusCode;
+  return candidate.type === "entity.parse.failed"
+    || (error instanceof SyntaxError && typeof status === "number" && status >= 400 && status < 500);
+}
+
 interface ControlPeer {
   socket: WebSocket;
   roomId: string;
@@ -211,8 +222,9 @@ export async function createLobbyService(
     const startedAt = Date.now();
     res.on("finish", () => {
       const durationMs = Date.now() - startedAt;
+      const ipField = req.path === "/chat/tickets" ? "" : ` ip=${requestIp(req)}`;
       console.log(
-        `[http] ${req.method} ${req.path} ip=${requestIp(req)} status=${res.statusCode} durationMs=${durationMs}`,
+        `[http] ${req.method} ${req.path}${ipField} status=${res.statusCode} durationMs=${durationMs}`,
       );
     });
     next();
@@ -344,9 +356,7 @@ export async function createLobbyService(
       webSocketUrl,
       protocolVersion: ChatProtocolVersion,
     });
-    console.log(
-      `[chat] ticket issued playerNetId=${body.playerNetId.trim()} playerName=${body.playerName.normalize("NFC").trim()} remote=${clientIp} expiresAt=${issued.expiresAt}`,
-    );
+    console.log(`[chat] ticket issued expiresAt=${issued.expiresAt}`);
   });
 
   app.get("/rooms", (req, res) => {
@@ -640,6 +650,14 @@ export async function createLobbyService(
   });
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (isJsonParseError(error)) {
+      res.status(400).json({
+        code: "invalid_request",
+        message: "请求体必须是有效的 JSON。",
+      });
+      return;
+    }
+
     if (error instanceof LobbyStoreError) {
       res.status(error.statusCode).json({
         code: error.code,
@@ -1306,7 +1324,9 @@ export async function createLobbyService(
       );
     }
 
-    const providedToken = getLobbyAccessToken(req);
+    const lobbyHeader = req.headers["x-lobby-access-token"];
+    const headerToken = (Array.isArray(lobbyHeader) ? lobbyHeader[0] : lobbyHeader)?.trim();
+    const providedToken = headerToken || extractBearerToken(req.headers.authorization);
     // CREATE_ROOM_TOKEN (x-create-room-token) never authorizes chat tickets.
     if (!providedToken || providedToken !== env.chatAccessToken) {
       throw new HttpError(401, "lobby_access_forbidden", "需要有效的大厅访问令牌。");
