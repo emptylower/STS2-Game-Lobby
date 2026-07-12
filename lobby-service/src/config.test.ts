@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadLobbyServiceConfig } from "./config.js";
+import { LobbyServiceConfigError, loadLobbyServiceConfig } from "./config.js";
 
 test("loadLobbyServiceConfig applies phase 1 chat defaults", () => {
   const chat = loadLobbyServiceConfig({}).chat;
@@ -127,6 +127,17 @@ test("loadLobbyServiceConfig validates chat history bounds", () => {
   );
 });
 
+test("loadLobbyServiceConfig accepts chat history limit lower and upper bounds", () => {
+  assert.equal(
+    loadLobbyServiceConfig({ SERVER_CHAT_HISTORY_LIMIT: "1", SERVER_CHAT_SNAPSHOT_LIMIT: "1" }).chat.historyLimit,
+    1,
+  );
+  assert.equal(
+    loadLobbyServiceConfig({ SERVER_CHAT_HISTORY_LIMIT: "1000", SERVER_CHAT_SNAPSHOT_LIMIT: "1000" }).chat.historyLimit,
+    1000,
+  );
+});
+
 test("loadLobbyServiceConfig validates chat history TTL bounds", () => {
   assert.throws(
     () => loadLobbyServiceConfig({ SERVER_CHAT_HISTORY_TTL_HOURS: "0" }),
@@ -137,6 +148,10 @@ test("loadLobbyServiceConfig validates chat history TTL bounds", () => {
     /SERVER_CHAT_HISTORY_TTL_HOURS must be between 1 and 168/,
   );
   assert.equal(loadLobbyServiceConfig({ SERVER_CHAT_HISTORY_TTL_HOURS: "168" }).chat.historyTtlMs, 604_800_000);
+});
+
+test("loadLobbyServiceConfig accepts the chat history TTL lower bound", () => {
+  assert.equal(loadLobbyServiceConfig({ SERVER_CHAT_HISTORY_TTL_HOURS: "1" }).chat.historyTtlMs, 3_600_000);
 });
 
 test("loadLobbyServiceConfig requires positive chat capacities", () => {
@@ -160,7 +175,35 @@ test("loadLobbyServiceConfig parses comma-separated chat trusted proxy CIDRs", (
   assert.deepEqual(trustedProxyCidrs, ["10.0.0.0/8", "192.168.0.0/16", "2001:db8::/32"]);
 });
 
-test("loadLobbyServiceConfig preserves legacy WS_PATH values", () => {
-  assert.equal(loadLobbyServiceConfig({ WS_PATH: "control" }).wsPath, "control");
-  assert.equal(loadLobbyServiceConfig({ WS_PATH: "/chat" }).wsPath, "/chat");
+test("loadLobbyServiceConfig requires WS_PATH to begin with a slash", () => {
+  assert.throws(
+    () => loadLobbyServiceConfig({ WS_PATH: "control" }),
+    (error: unknown) =>
+      error instanceof LobbyServiceConfigError &&
+      error.code === "invalid_path" &&
+      error.environmentKey === "WS_PATH" &&
+      error.message === "WS_PATH must begin with /",
+  );
+});
+
+test("loadLobbyServiceConfig reserves WS_PATH /chat for the chat upgrade route", () => {
+  assert.throws(
+    () => loadLobbyServiceConfig({ WS_PATH: "/chat" }),
+    (error: unknown) =>
+      error instanceof LobbyServiceConfigError &&
+      error.code === "invalid_path" &&
+      error.environmentKey === "WS_PATH" &&
+      error.message === "WS_PATH must not be /chat",
+  );
+});
+
+test("loadLobbyServiceConfig preserves the legacy CONNECTION_STRATEGY error", () => {
+  assert.throws(
+    () => loadLobbyServiceConfig({ CONNECTION_STRATEGY: "unsupported" }),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.constructor === Error &&
+      error.name === "Error" &&
+      error.message === "Invalid CONNECTION_STRATEGY value: unsupported",
+  );
 });

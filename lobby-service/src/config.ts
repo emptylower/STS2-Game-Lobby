@@ -87,7 +87,7 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
     port: parseLegacyInteger(source, "PORT", 8787),
     heartbeatTimeoutMs: parseLegacyInteger(source, "HEARTBEAT_TIMEOUT_SECONDS", 35) * 1000,
     ticketTtlMs: parseLegacyInteger(source, "TICKET_TTL_SECONDS", 120) * 1000,
-    wsPath: source.WS_PATH ?? "/control",
+    wsPath: parseWebSocketPath(source.WS_PATH ?? "/control"),
     relayBindHost: source.RELAY_BIND_HOST ?? host,
     relayPublicHost: source.RELAY_PUBLIC_HOST ?? "",
     relayPortStart: parseLegacyInteger(source, "RELAY_PORT_START", 39000),
@@ -247,11 +247,7 @@ function parseConnectionStrategy(value: string | undefined): ConnectionStrategy 
     return normalized;
   }
 
-  throw new LobbyServiceConfigError(
-    "invalid_connection_strategy",
-    "CONNECTION_STRATEGY",
-    `Invalid CONNECTION_STRATEGY value: ${value}`,
-  );
+  throw new Error(`Invalid CONNECTION_STRATEGY value: ${value}`);
 }
 
 function parseCommaSeparatedValues(value: string | undefined): string[] {
