@@ -37,6 +37,7 @@ import { loadSeedsFromCf } from "./peer/seeds-loader.js";
 import { bootstrapPeers } from "./peer/bootstrap.js";
 import { announceToBootstrappedPeers } from "./peer/auto-announce.js";
 import { mountMetrics } from "./peer/handlers/metrics.js";
+import { installUpgradeRouter } from "./chat/upgrade-router.js";
 
 const MaxLobbyPlayers = 256;
 const MaxRoomNameLength = 80;
@@ -552,7 +553,17 @@ export async function createLobbyService(
   });
 
   const server = createServer(app);
-  const wss = new WebSocketServer({ server, path: env.wsPath });
+  // Both WebSocket servers are noServer; the single upgrade router owns path dispatch.
+  const wss = new WebSocketServer({ noServer: true });
+  const chatWss = new WebSocketServer({ noServer: true });
+  // Ticket/capacity preflight lands in later tasks; reject /chat upgrades until then.
+  const uninstallUpgradeRouter = installUpgradeRouter({
+    server,
+    controlPath: env.wsPath,
+    controlWss: wss,
+    chatWss,
+    authorizeChat: () => ({ ok: false, statusCode: 503 }),
+  });
   const roomPeers = new Map<string, Set<ControlPeer>>();
 
   wss.on("connection", (socket, req) => {
@@ -1009,7 +1020,16 @@ export async function createLobbyService(
     }
     roomPeers.clear();
 
+    uninstallUpgradeRouter();
+
     for (const client of wss.clients) {
+      try {
+        client.terminate();
+      } catch {
+        // ignore socket termination races
+      }
+    }
+    for (const client of chatWss.clients) {
       try {
         client.terminate();
       } catch {
@@ -1019,6 +1039,9 @@ export async function createLobbyService(
 
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      chatWss.close(() => resolve());
     });
 
     relayManager.close();
