@@ -40,6 +40,7 @@ import { bootstrapPeers } from "./peer/bootstrap.js";
 import { announceToBootstrappedPeers } from "./peer/auto-announce.js";
 import { mountMetrics } from "./peer/handlers/metrics.js";
 import { ChatPeerError, ChatPeerRegistry } from "./chat/peer-registry.js";
+import { ServerChatGateway } from "./chat/gateway.js";
 import { RateLimitError, SlidingWindowLimiter } from "./chat/rate-limiter.js";
 import {
   ChatTicketError,
@@ -198,6 +199,17 @@ export async function createLobbyService(
     maxTotal: env.chat.maxConnectionsTotal,
     maxPerIp: env.chat.maxConnectionsPerIp,
     slowClientBytes: env.chat.slowClientBytes,
+  });
+  const chatGateway = new ServerChatGateway({
+    peerRegistry: chatPeerRegistry,
+    chatEnabled: env.chat.enabled,
+    maxPayloadBytes: env.chat.maxPayloadBytes,
+    historyLimit: env.chat.historyLimit,
+    historyTtlMs: env.chat.historyTtlMs,
+    snapshotLimit: env.chat.snapshotLimit,
+    connectionBurst: env.chat.connectionBurst,
+    connectionRefillMs: env.chat.connectionRefillMs,
+    ipMessagesPerMinute: env.chat.ipMessagesPerMinute,
   });
   const reservedChatTicketsByUpgrade = new WeakMap<IncomingMessage, ReservedChatTicket>();
   let peerStore: PeerStore | null = null;
@@ -705,6 +717,20 @@ export async function createLobbyService(
   });
   const roomPeers = new Map<string, Set<ControlPeer>>();
 
+  chatWss.on("connection", (socket, req) => {
+    const reserved = reservedChatTicketsByUpgrade.get(req);
+    reservedChatTicketsByUpgrade.delete(req);
+    if (!reserved) {
+      socket.terminate();
+      return;
+    }
+    try {
+      chatGateway.accept(socket, reserved);
+    } catch {
+      socket.terminate();
+    }
+  });
+
   wss.on("connection", (socket, req) => {
     try {
       const requestUrl = new URL(req.url ?? env.wsPath, `http://${req.headers.host ?? "127.0.0.1"}`);
@@ -1160,6 +1186,8 @@ export async function createLobbyService(
     roomPeers.clear();
 
     uninstallUpgradeRouter();
+
+    await chatGateway.close();
 
     for (const client of wss.clients) {
       try {
