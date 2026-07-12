@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createLobbyService, type LobbyService } from "./app.js";
+import { loadLobbyServiceConfig } from "./config.js";
 import { hashServerAdminPassword } from "./server-admin-auth.js";
 
 type PeerRuntimeState = "disabled" | "unconfigured" | "private" | "joining" | "joined";
@@ -18,7 +19,7 @@ interface PeerRecordSeed {
 
 interface StartedServer {
   baseUrl: string;
-  child: ChildProcess;
+  close: () => Promise<void>;
   stateFile: string;
   tempDir: string;
 }
@@ -131,6 +132,58 @@ test("server admin settings PATCH returns runtime fields without persisting them
   assert.equal(Object.prototype.hasOwnProperty.call(persisted, "peerRuntimeState"), false);
 });
 
+test("CLI process exits cleanly on SIGTERM", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sts2-peer-runtime-cli-"));
+  const stateFile = join(tempDir, "server-admin.json");
+  writeFileSync(
+    stateFile,
+    JSON.stringify({
+      displayName: "",
+      publicListingEnabled: true,
+      announcements: [],
+    }),
+    "utf8",
+  );
+
+  const child = spawn(process.execPath, [serverEntry], {
+    env: {
+      ...process.env,
+      HOST: "127.0.0.1",
+      PORT: "0",
+      SERVER_ADMIN_USERNAME: "admin",
+      SERVER_ADMIN_PASSWORD_HASH: adminPasswordHash,
+      SERVER_ADMIN_SESSION_SECRET: "test-session-secret",
+      SERVER_ADMIN_STATE_FILE: stateFile,
+      PEER_NETWORK_ENABLED: "false",
+      PEER_SELF_ADDRESS: "",
+      PEER_STATE_DIR: join(tempDir, "peer"),
+      PEER_CF_DISCOVERY_BASE_URL: "",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let logs = "";
+  child.stdout?.on("data", (chunk) => {
+    logs += String(chunk);
+  });
+  child.stderr?.on("data", (chunk) => {
+    logs += String(chunk);
+  });
+
+  try {
+    await waitForCliReady(child, () => logs);
+    child.kill("SIGTERM");
+    const code = await waitForExit(child, 5_000);
+    assert.equal(code, 0, logs);
+  } finally {
+    if (child.exitCode === null) {
+      child.kill("SIGKILL");
+      await waitForExit(child, 2_000);
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 async function startLobbyServer(options: {
   peerNetworkEnabled: boolean;
   selfAddress: string;
@@ -138,7 +191,6 @@ async function startLobbyServer(options: {
   peers?: PeerRecordSeed[];
 }): Promise<StartedServer> {
   const tempDir = mkdtempSync(join(tmpdir(), "sts2-peer-runtime-state-"));
-  const port = await reservePort();
   const stateFile = join(tempDir, "server-admin.json");
   const peerStateDir = join(tempDir, "peer");
   const peerStoreFile = join(peerStateDir, "peers.json");
@@ -174,42 +226,38 @@ async function startLobbyServer(options: {
     );
   }
 
-  const child = spawn(process.execPath, [serverEntry], {
-    env: {
-      ...process.env,
-      HOST: "127.0.0.1",
-      PORT: String(port),
-      SERVER_ADMIN_USERNAME: "admin",
-      SERVER_ADMIN_PASSWORD_HASH: adminPasswordHash,
-      SERVER_ADMIN_SESSION_SECRET: "test-session-secret",
-      SERVER_ADMIN_STATE_FILE: stateFile,
-      PEER_NETWORK_ENABLED: options.peerNetworkEnabled ? "true" : "false",
-      PEER_SELF_ADDRESS: options.selfAddress,
-      PEER_STATE_DIR: peerStateDir,
-      PEER_CF_DISCOVERY_BASE_URL: "",
+  const config = loadLobbyServiceConfig({
+    HOST: "127.0.0.1",
+    PORT: "0",
+    SERVER_ADMIN_USERNAME: "admin",
+    SERVER_ADMIN_PASSWORD_HASH: adminPasswordHash,
+    SERVER_ADMIN_SESSION_SECRET: "test-session-secret",
+    SERVER_ADMIN_STATE_FILE: stateFile,
+    PEER_NETWORK_ENABLED: options.peerNetworkEnabled ? "true" : "false",
+    PEER_SELF_ADDRESS: options.selfAddress,
+    PEER_STATE_DIR: peerStateDir,
+    PEER_CF_DISCOVERY_BASE_URL: "",
+    ENFORCE_LOBBY_ACCESS_TOKEN: "false",
+    ENFORCE_CREATE_ROOM_TOKEN: "false",
+  });
+
+  const service: LobbyService = await createLobbyService(config);
+  const address = await service.start();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  return {
+    baseUrl,
+    stateFile,
+    tempDir,
+    close: async () => {
+      await service.close();
     },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  let logs = "";
-  child.stdout?.on("data", (chunk) => {
-    logs += String(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
-    logs += String(chunk);
-  });
-
-  const baseUrl = `http://127.0.0.1:${port}`;
-  await waitForServerReady(baseUrl, child, () => logs);
-  return { baseUrl, child, stateFile, tempDir };
+  };
 }
 
 async function stopLobbyServer(started: StartedServer) {
   try {
-    if (started.child.exitCode === null) {
-      started.child.kill("SIGTERM");
-      await waitForExit(started.child, 5_000);
-    }
+    await started.close();
   } finally {
     rmSync(started.tempDir, { recursive: true, force: true });
   }
@@ -256,51 +304,21 @@ async function login(baseUrl: string): Promise<string> {
   return setCookie.split(";", 1)[0]!;
 }
 
-async function reservePort(): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    const server = createNetServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("failed to reserve test port")));
-        return;
-      }
-
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(address.port);
-      });
-    });
-  });
-}
-
-async function waitForServerReady(baseUrl: string, child: ChildProcess, getLogs: () => string): Promise<void> {
+async function waitForCliReady(child: ChildProcess, getLogs: () => string): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10_000) {
     if (child.exitCode !== null) {
       throw new Error(`server exited before becoming ready\n${getLogs()}`);
     }
-
-    try {
-      const response = await fetch(`${baseUrl}/probe`);
-      if (response.ok) {
-        return;
-      }
-    } catch {
-      // keep polling until the server is reachable
+    if (getLogs().includes("[lobby] listening on")) {
+      return;
     }
-
-    await delay(100);
+    await delay(50);
   }
-
-  throw new Error(`timed out waiting for server readiness\n${getLogs()}`);
+  throw new Error(`timed out waiting for CLI readiness\n${getLogs()}`);
 }
 
-async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<void> {
+async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<number | null> {
   const startedAt = Date.now();
   while (child.exitCode === null && Date.now() - startedAt < timeoutMs) {
     await delay(50);
@@ -312,6 +330,8 @@ async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<void
       await delay(20);
     }
   }
+
+  return child.exitCode;
 }
 
 async function delay(ms: number): Promise<void> {
