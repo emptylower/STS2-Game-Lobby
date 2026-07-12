@@ -54,6 +54,15 @@ test("loadLobbyServiceConfig accepts true and false chat booleans", () => {
   assert.equal(loadLobbyServiceConfig({ SERVER_CHAT_ENABLED: "false" }).chat.enabled, false);
 });
 
+test("loadLobbyServiceConfig rejects non-literal chat booleans", () => {
+  for (const value of ["TRUE", "1", "yes", " true ", ""]) {
+    assert.throws(
+      () => loadLobbyServiceConfig({ SERVER_CHAT_ENABLED: value }),
+      /Invalid boolean value for SERVER_CHAT_ENABLED/,
+    );
+  }
+});
+
 test("loadLobbyServiceConfig preserves legacy boolean aliases and blank defaults", () => {
   const booleanSettings = [
     ["STRICT_GAME_VERSION_CHECK", "strictGameVersionCheck", true],

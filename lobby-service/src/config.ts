@@ -174,7 +174,7 @@ function parseBoolean(source: NodeJS.ProcessEnv, name: string, fallback: boolean
     return fallback;
   }
 
-  const normalized = value.trim();
+  const normalized = value;
   if (normalized === "true") {
     return true;
   }
