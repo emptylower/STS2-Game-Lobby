@@ -40,7 +40,7 @@ import { bootstrapPeers } from "./peer/bootstrap.js";
 import { announceToBootstrappedPeers } from "./peer/auto-announce.js";
 import { mountMetrics } from "./peer/handlers/metrics.js";
 import { ChatPeerError, ChatPeerRegistry } from "./chat/peer-registry.js";
-import { ServerChatGateway } from "./chat/gateway.js";
+import { ServerChatGateway, type ServerChatGatewayOptions } from "./chat/gateway.js";
 import { RateLimitError, SlidingWindowLimiter } from "./chat/rate-limiter.js";
 import {
   ChatTicketError,
@@ -141,7 +141,8 @@ export interface LobbyService {
 }
 
 export interface LobbyServiceDependencies {
-  // Reserved for future injectable collaborators (clock, fetch, etc.).
+  createChatPeerRegistry?: () => ChatPeerRegistry;
+  chatGatewayOptions?: Pick<ServerChatGatewayOptions, "heartbeatTickMs">;
 }
 
 export function createProductionDependencies(): LobbyServiceDependencies {
@@ -150,7 +151,7 @@ export function createProductionDependencies(): LobbyServiceDependencies {
 
 export async function createLobbyService(
   config: LobbyServiceConfig,
-  _dependencies: LobbyServiceDependencies = createProductionDependencies(),
+  dependencies: LobbyServiceDependencies = createProductionDependencies(),
 ): Promise<LobbyService> {
   const env = config;
   const peerEnv = env.peer;
@@ -195,7 +196,7 @@ export async function createLobbyService(
     maxRequests: env.chat.ticketRequestsPerMinute,
     windowMs: 60_000,
   });
-  const chatPeerRegistry = new ChatPeerRegistry({
+  const chatPeerRegistry = dependencies.createChatPeerRegistry?.() ?? new ChatPeerRegistry({
     maxTotal: env.chat.maxConnectionsTotal,
     maxPerIp: env.chat.maxConnectionsPerIp,
     slowClientBytes: env.chat.slowClientBytes,
@@ -210,6 +211,7 @@ export async function createLobbyService(
     connectionBurst: env.chat.connectionBurst,
     connectionRefillMs: env.chat.connectionRefillMs,
     ipMessagesPerMinute: env.chat.ipMessagesPerMinute,
+    ...dependencies.chatGatewayOptions,
   });
   const reservedChatTicketsByUpgrade = new WeakMap<IncomingMessage, ReservedChatTicket>();
   let peerStore: PeerStore | null = null;

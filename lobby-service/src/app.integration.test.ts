@@ -8,6 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { inspect } from "node:util";
 import { WebSocket } from "ws";
 import { createLobbyService } from "./app.js";
+import { ChatPeerRegistry } from "./chat/peer-registry.js";
 import { loadLobbyServiceConfig, type LobbyServiceConfig } from "./config.js";
 
 function testConfig(overrides: Partial<LobbyServiceConfig> = {}): LobbyServiceConfig {
@@ -771,9 +772,17 @@ test("chat websocket closes text payloads over 8 KiB with 1009", async () => {
   }
 });
 
-test("chat websocket completes a real heartbeat ping-pong without production timers", async () => {
-  const config = testConfig({ port: 0 });
-  const service = await createLobbyService(config);
+test("chat websocket receives a server heartbeat and remains usable after automatic pong", async () => {
+  const base = testConfig({ port: 0 });
+  const config = { ...base, chat: { ...base.chat, enabled: true } };
+  const chatPeerRegistry = new ChatPeerRegistry({
+    pingIntervalMs: 10,
+    pongTimeoutMs: 80,
+  });
+  const service = await createLobbyService(config, {
+    createChatPeerRegistry: () => chatPeerRegistry,
+    chatGatewayOptions: { heartbeatTickMs: 5 },
+  });
   const address = await service.start();
   let socket: WebSocket | undefined;
 
@@ -782,16 +791,37 @@ test("chat websocket completes a real heartbeat ping-pong without production tim
     assert.equal(response.status, 200);
     const issued = (await response.json()) as { ticket: string; webSocketUrl: string };
     socket = await openChatWebSocket(issued.webSocketUrl, issued.ticket);
-    await waitForChatFrame(socket, (frame) => frame.type === "chat_snapshot_end");
-    const pong = new Promise<Buffer>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("chat websocket pong timeout")), 2_000);
-      socket!.once("pong", (data) => {
-        clearTimeout(timer);
-        resolve(data);
+    const sustainedHeartbeats = new Promise<void>((resolve, reject) => {
+      let pingCount = 0;
+      const timer = setTimeout(
+        () => reject(new Error("chat websocket server ping timeout")),
+        800,
+      );
+      socket!.on("ping", () => {
+        pingCount += 1;
+        if (pingCount === 10) {
+          clearTimeout(timer);
+          resolve();
+        }
       });
     });
-    socket.ping("heartbeat-smoke");
-    assert.equal((await pong).toString("utf8"), "heartbeat-smoke");
+    await waitForChatFrame(socket, (frame) => frame.type === "chat_snapshot_end");
+    // Ten 10ms heartbeat periods exceed the 80ms no-pong timeout.
+    await sustainedHeartbeats;
+
+    const clientMessageId = "45454545-4545-4545-8545-454545454545";
+    const ackPromise = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_ack" && frame.clientMessageId === clientMessageId,
+    );
+    socket.send(JSON.stringify({
+      type: "chat_send",
+      protocolVersion: 1,
+      channel: "server",
+      clientMessageId,
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "after pong" }] },
+    }));
+    assert.equal((await ackPromise).type, "chat_ack");
   } finally {
     socket?.terminate();
     await service.close();

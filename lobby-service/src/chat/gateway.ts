@@ -29,6 +29,7 @@ export interface ServerChatGatewayOptions {
   randomUuid?: () => string;
   randomSenderId?: () => string;
   protocolErrorCloseGraceMs?: number;
+  heartbeatTickMs?: number;
   setInterval?: typeof setInterval;
   clearInterval?: typeof clearInterval;
 }
@@ -59,6 +60,7 @@ export class ServerChatGateway {
   private readonly randomUuid: () => string;
   private readonly randomSenderId: () => string;
   private readonly protocolErrorCloseGraceMs: number;
+  private readonly heartbeatTickMs: number;
   private readonly setIntervalFn: typeof setInterval;
   private readonly clearIntervalFn: typeof clearInterval;
   private readonly dedupe: ChatDedupeCache;
@@ -79,6 +81,7 @@ export class ServerChatGateway {
     this.randomUuid = options.randomUuid ?? randomUUID;
     this.randomSenderId = options.randomSenderId ?? (() => randomBytes(16).toString("base64url"));
     this.protocolErrorCloseGraceMs = options.protocolErrorCloseGraceMs ?? 1_000;
+    this.heartbeatTickMs = options.heartbeatTickMs ?? 5_000;
     this.setIntervalFn = options.setInterval ?? setInterval;
     this.clearIntervalFn = options.clearInterval ?? clearInterval;
     this.history = new ChatHistoryBuffer({
@@ -278,7 +281,10 @@ export class ServerChatGateway {
     if (this.heartbeatTimer) {
       return;
     }
-    this.heartbeatTimer = this.setIntervalFn(() => this.peerRegistry.heartbeat(), 5_000);
+    this.heartbeatTimer = this.setIntervalFn(
+      () => this.peerRegistry.heartbeat(),
+      this.heartbeatTickMs,
+    );
     this.heartbeatTimer.unref();
   }
 
