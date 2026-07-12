@@ -3,6 +3,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
+import { loadLobbyServiceConfig } from "./config.js";
 import { CreateRoomBandwidthGuard } from "./bandwidth-guard.js";
 import { assertRelayCreateReady, assertRelayJoinReady } from "./join-guard.js";
 import { RoomRelayManager } from "./relay.js";
@@ -13,7 +14,6 @@ import { renderServerAdminPage } from "./server-admin-ui.js";
 import {
   LobbyStore,
   LobbyStoreError,
-  type ConnectionStrategy,
   type CreateRoomInput,
   type HeartbeatInput,
   type JoinRoomInput,
@@ -52,51 +52,8 @@ const lobbyServiceVersion = readLobbyServiceVersion();
 
 type PeerRuntimeState = "disabled" | "unconfigured" | "private" | "joining" | "joined";
 
-const env = {
-  host: process.env.HOST ?? "0.0.0.0",
-  port: Number.parseInt(process.env.PORT ?? "8787", 10),
-  heartbeatTimeoutMs: Number.parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS ?? "35", 10) * 1000,
-  ticketTtlMs: Number.parseInt(process.env.TICKET_TTL_SECONDS ?? "120", 10) * 1000,
-  wsPath: process.env.WS_PATH ?? "/control",
-  relayBindHost: process.env.RELAY_BIND_HOST ?? process.env.HOST ?? "0.0.0.0",
-  relayPublicHost: process.env.RELAY_PUBLIC_HOST ?? "",
-  relayPortStart: Number.parseInt(process.env.RELAY_PORT_START ?? "39000", 10),
-  relayPortEnd: Number.parseInt(process.env.RELAY_PORT_END ?? "39149", 10),
-  relayHostIdleMs: Number.parseInt(process.env.RELAY_HOST_IDLE_SECONDS ?? "20", 10) * 1000,
-  relayClientIdleMs: Number.parseInt(process.env.RELAY_CLIENT_IDLE_SECONDS ?? "90", 10) * 1000,
-  strictGameVersionCheck: parseBooleanEnv(process.env.STRICT_GAME_VERSION_CHECK, true),
-  strictModVersionCheck: parseBooleanEnv(process.env.STRICT_MOD_VERSION_CHECK, true),
-  connectionStrategy: parseConnectionStrategyEnv(process.env.CONNECTION_STRATEGY),
-  publicRoomListEnabled: parseBooleanEnv(process.env.PUBLIC_ROOM_LIST_ENABLED, false),
-  publicDetailedHealthEnabled: parseBooleanEnv(process.env.PUBLIC_DETAILED_HEALTH_ENABLED, false),
-  enforceLobbyAccessToken: parseBooleanEnv(process.env.ENFORCE_LOBBY_ACCESS_TOKEN, true),
-  enforceCreateRoomToken: parseBooleanEnv(process.env.ENFORCE_CREATE_ROOM_TOKEN, true),
-  lobbyAccessToken: optionalEnv(process.env.LOBBY_ACCESS_TOKEN) ?? optionalEnv(process.env.CREATE_ROOM_TOKEN),
-  createRoomToken: optionalEnv(process.env.CREATE_ROOM_TOKEN) ?? optionalEnv(process.env.LOBBY_ACCESS_TOKEN),
-  createRoomTrustedProxies: parseTrustedProxyCidrs(process.env.CREATE_ROOM_TRUSTED_PROXIES),
-  createJoinRateLimitWindowMs: Number.parseInt(process.env.CREATE_JOIN_RATE_LIMIT_WINDOW_MS ?? "60000", 10),
-  createJoinRateLimitMaxRequests: Number.parseInt(process.env.CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS ?? "30", 10),
-  serverAdminUsername: process.env.SERVER_ADMIN_USERNAME ?? "admin",
-  serverAdminPasswordHash: optionalEnv(process.env.SERVER_ADMIN_PASSWORD_HASH),
-  serverAdminSessionSecret: optionalEnv(process.env.SERVER_ADMIN_SESSION_SECRET),
-  serverAdminSessionTtlMs: Number.parseInt(process.env.SERVER_ADMIN_SESSION_TTL_HOURS ?? "168", 10) * 60 * 60 * 1000,
-  serverAdminStateFile: process.env.SERVER_ADMIN_STATE_FILE ?? `${process.cwd()}/data/server-admin.json`,
-  // Initial value used when the persisted admin state file does not yet
-  // contain `publicListingEnabled`. The admin panel toggle is the source of
-  // truth at runtime; this only seeds fresh installs.
-  peerPublicListingEnabledDefault: parseBooleanEnv(process.env.PEER_PUBLIC_LISTING_ENABLED, true),
-};
-
-const peerEnv = {
-  enabled: process.env.PEER_NETWORK_ENABLED !== "false",
-  selfAddress: process.env.PEER_SELF_ADDRESS ?? "",
-  cfDiscoveryBaseUrl: process.env.PEER_CF_DISCOVERY_BASE_URL ?? "",
-  stateDir: process.env.PEER_STATE_DIR ?? "./data/peer",
-  // Optional override for the public-facing server name. When unset, falls back
-  // to the admin-panel-managed displayName, which itself falls back to a host-
-  // based label. Resolved per-request so admin panel edits propagate live.
-  displayNameOverride: (process.env.PEER_DISPLAY_NAME ?? "").trim(),
-};
+const env = loadLobbyServiceConfig(process.env);
+const peerEnv = env.peer;
 
 const store = new LobbyStore({
   heartbeatTimeoutMs: env.heartbeatTimeoutMs,
@@ -1127,17 +1084,6 @@ function optionalBoundedString(value: unknown, name: string, maxLength: number) 
   return normalized;
 }
 
-function parseTrustedProxyCidrs(value: string | undefined) {
-  if (!value) {
-    return [];
-  }
-
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 function assertCreateRoomAuthorized(req: Request) {
   if (isTrustedOperationsRequest(req)) {
     return;
@@ -1357,11 +1303,6 @@ function optionalString(value: unknown) {
   return trimmed === "" ? undefined : trimmed;
 }
 
-function optionalEnv(value: string | undefined) {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
-}
-
 function optionalStringArray(value: unknown) {
   if (!Array.isArray(value)) {
     return undefined;
@@ -1460,23 +1401,6 @@ function toRoomListView(room: ReturnType<LobbyStore["listRooms"]>[number], inclu
   };
 }
 
-function parseBooleanEnv(value: string | undefined, fallback: boolean) {
-  if (value == null || value.trim() === "") {
-    return fallback;
-  }
-
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-
-  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
-    return false;
-  }
-
-  throw new Error(`Invalid boolean env value: ${value}`);
-}
-
 function readLobbyServiceVersion() {
   try {
     const raw = readFileSync(new URL("../package.json", import.meta.url), "utf8");
@@ -1485,15 +1409,6 @@ function readLobbyServiceVersion() {
   } catch {
     return "unknown";
   }
-}
-
-function parseConnectionStrategyEnv(value: string | undefined): ConnectionStrategy {
-  const normalized = value?.trim().toLowerCase() ?? "direct-first";
-  if (normalized === "direct-first" || normalized === "relay-first" || normalized === "relay-only") {
-    return normalized;
-  }
-
-  throw new Error(`Invalid CONNECTION_STRATEGY value: ${value}`);
 }
 
 function positiveInt(value: unknown, name: string, min: number, max: number) {
