@@ -157,6 +157,49 @@ public sealed class LanConnectChatChannelStateTests
     }
 
     [Fact]
+    public void RichInboundAndAckUseCompleteFallbackWhenTextAndEntitySegmentsAreMixed()
+    {
+        ServerChatCanonicalMessage rich = BuildRichCanonical(
+            "rich-mixed",
+            "Ironclad",
+            partialText: "played Strike",
+            plainTextFallback: "played Strike [card: Strike]");
+        LanConnectChatChannelState live = new(LanConnectChatChannel.Server);
+        LanConnectChatChannelState ack = new(LanConnectChatChannel.Server);
+        ack.Queue(Pending("client-rich", "Ironclad", "local draft"));
+
+        live.Apply(BuildMessage(rich));
+        ack.Apply(BuildAck("client-rich", rich));
+
+        Assert.Equal("played Strike [card: Strike]", Assert.Single(live.Messages).Text);
+        ServerChatMessageState confirmed = Assert.Single(ack.Messages);
+        Assert.Equal("played Strike [card: Strike]", confirmed.Text);
+        Assert.Equal(ServerChatDeliveryState.Confirmed, confirmed.Delivery);
+    }
+
+    [Fact]
+    public void RichWithoutFallbackIsIgnoredConsistentlyByLiveAndSnapshot()
+    {
+        ServerChatCanonicalMessage rich = BuildRichCanonical(
+            "rich-empty",
+            "Ironclad",
+            partialText: "partial",
+            plainTextFallback: string.Empty);
+        LanConnectChatChannelState live = new(LanConnectChatChannel.Server);
+        LanConnectChatChannelState snapshot = new(LanConnectChatChannel.Server);
+        snapshot.AppendConfirmedForTests("old-1", "Silent", "old", 0, isLocal: false);
+
+        live.Apply(BuildMessage(rich));
+        snapshot.Apply(BuildSnapshotBegin("snap-rich", "instance-1", historyEpoch: 1, totalMessages: 1));
+        snapshot.Apply(BuildSnapshotChunk("snap-rich", 0, rich));
+        LanConnectChatApplyResult end = snapshot.Apply(BuildSnapshotEnd("snap-rich", historyEpoch: 1));
+
+        Assert.Empty(live.Messages);
+        Assert.False(end.ReconnectRequired);
+        Assert.Empty(snapshot.Messages);
+    }
+
+    [Fact]
     public void SnapshotReplacesConfirmedMessagesAndAdvancesRevision()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
@@ -285,12 +328,28 @@ public sealed class LanConnectChatChannelStateTests
         return JsonSerializer.Deserialize<ServerChatInboundEnvelope>(JsonSerializer.Serialize(envelope, LanConnectJson.Options), LanConnectJson.Options)!;
     }
 
+    private static ServerChatInboundEnvelope BuildAck(string clientMessageId, ServerChatCanonicalMessage message)
+    {
+        ServerChatAckEnvelope envelope = new()
+        {
+            ClientMessageId = clientMessageId,
+            Message = message
+        };
+        return JsonSerializer.Deserialize<ServerChatInboundEnvelope>(JsonSerializer.Serialize(envelope, LanConnectJson.Options), LanConnectJson.Options)!;
+    }
+
     private static ServerChatInboundEnvelope BuildMessage(string messageId, string senderName, string text)
     {
         ServerChatMessageEnvelope envelope = new()
         {
             Message = BuildCanonical(messageId, senderName, text, sequence: 0)
         };
+        return JsonSerializer.Deserialize<ServerChatInboundEnvelope>(JsonSerializer.Serialize(envelope, LanConnectJson.Options), LanConnectJson.Options)!;
+    }
+
+    private static ServerChatInboundEnvelope BuildMessage(ServerChatCanonicalMessage message)
+    {
+        ServerChatMessageEnvelope envelope = new() { Message = message };
         return JsonSerializer.Deserialize<ServerChatInboundEnvelope>(JsonSerializer.Serialize(envelope, LanConnectJson.Options), LanConnectJson.Options)!;
     }
 
@@ -376,6 +435,29 @@ public sealed class LanConnectChatChannelStateTests
             SentAt = FixedNow.AddSeconds(sequence)
         };
     }
+
+    private static ServerChatCanonicalMessage BuildRichCanonical(
+        string messageId,
+        string senderName,
+        string partialText,
+        string plainTextFallback) =>
+        new()
+        {
+            MessageId = messageId,
+            SenderId = "sender_abcdefghijklmn",
+            SenderName = senderName,
+            Content = new ServerChatContent
+            {
+                FormatVersion = 1,
+                Segments =
+                [
+                    new ServerChatTextSegment { Kind = "text", Text = partialText },
+                    new ServerChatTextSegment { Kind = "item_ref", Text = "Strike" }
+                ]
+            },
+            PlainTextFallback = plainTextFallback,
+            SentAt = FixedNow
+        };
 
     private static string BuildRichOnlyMessage(string messageId, string senderName, string plainTextFallback)
     {

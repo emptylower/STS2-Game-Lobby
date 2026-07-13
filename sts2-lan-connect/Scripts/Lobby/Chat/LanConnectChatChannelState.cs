@@ -296,6 +296,11 @@ internal sealed class LanConnectChatChannelState
         {
             return new LanConnectChatApplyResult(ReconnectRequired: true);
         }
+        string text = ResolveDisplayText(canonical);
+        if (string.IsNullOrEmpty(text))
+        {
+            return new LanConnectChatApplyResult(ReconnectRequired: false);
+        }
 
         if (_clientPendingIndex.TryGetValue(clientMessageId, out int index) &&
             index < _messages.Count)
@@ -306,7 +311,7 @@ internal sealed class LanConnectChatChannelState
                 MessageId = canonical.MessageId,
                 ClientMessageId = existing.ClientMessageId,
                 SenderName = string.IsNullOrEmpty(canonical.SenderName) ? existing.SenderName : canonical.SenderName,
-                Text = ResolveDisplayText(canonical, existing.Text),
+                Text = text,
                 Sequence = existing.Sequence,
                 IsLocal = existing.IsLocal || true,
                 Delivery = ServerChatDeliveryState.Confirmed,
@@ -333,7 +338,7 @@ internal sealed class LanConnectChatChannelState
             MessageId = canonical.MessageId,
             ClientMessageId = clientMessageId,
             SenderName = canonical.SenderName ?? string.Empty,
-            Text = ResolveDisplayText(canonical, string.Empty),
+            Text = text,
             IsLocal = true,
             Delivery = ServerChatDeliveryState.Confirmed,
             SentAt = canonical.SentAt == default ? DateTimeOffset.UtcNow : canonical.SentAt
@@ -394,7 +399,7 @@ internal sealed class LanConnectChatChannelState
             return new LanConnectChatApplyResult(ReconnectRequired: false);
         }
 
-        string text = ResolveDisplayText(canonical, string.Empty);
+        string text = ResolveDisplayText(canonical);
         if (string.IsNullOrEmpty(text))
         {
             return new LanConnectChatApplyResult(ReconnectRequired: false);
@@ -554,12 +559,17 @@ internal sealed class LanConnectChatChannelState
                 {
                     continue;
                 }
+                string text = ResolveDisplayText(message);
+                if (string.IsNullOrEmpty(text))
+                {
+                    continue;
+                }
 
                 ServerChatMessageState entry = new()
                 {
                     MessageId = message.MessageId,
                     SenderName = message.SenderName ?? string.Empty,
-                    Text = ResolveDisplayText(message, string.Empty),
+                    Text = text,
                     Sequence = sequence++,
                     IsLocal = false,
                     Delivery = ServerChatDeliveryState.Confirmed,
@@ -627,22 +637,13 @@ internal sealed class LanConnectChatChannelState
             SentAt = source.SentAt
         };
 
-    private static string ResolveDisplayText(ServerChatCanonicalMessage message, string fallback)
+    private static string ResolveDisplayText(ServerChatCanonicalMessage message)
     {
-        if (message.Content?.Segments != null)
+        if (message.Content?.FormatVersion == 1 && message.Content.Segments is { Count: 1 })
         {
-            foreach (ServerChatTextSegment segment in message.Content.Segments)
+            ServerChatTextSegment segment = message.Content.Segments[0];
+            if (segment != null && string.Equals(segment.Kind, "text", StringComparison.Ordinal))
             {
-                if (segment == null)
-                {
-                    continue;
-                }
-
-                if (!string.Equals(segment.Kind, "text", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
                 string text = segment.Text ?? string.Empty;
                 if (!string.IsNullOrEmpty(text))
                 {
@@ -656,7 +657,7 @@ internal sealed class LanConnectChatChannelState
             return message.PlainTextFallback;
         }
 
-        return fallback;
+        return string.Empty;
     }
 
     private sealed class SnapshotAssembly
