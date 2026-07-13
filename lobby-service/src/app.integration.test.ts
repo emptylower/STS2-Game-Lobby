@@ -137,6 +137,13 @@ test("close terminates active control-channel sockets and finishes promptly", as
     `&token=${encodeURIComponent(created.hostToken)}`;
 
   const socket = new WebSocket(wsUrl);
+  const connectedFrame = new Promise<Record<string, unknown>>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("connected frame timeout")), 2000);
+    socket.once("message", (data) => {
+      clearTimeout(timer);
+      resolve(JSON.parse(data.toString()) as Record<string, unknown>);
+    });
+  });
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("websocket connect timeout")), 2000);
     socket.once("open", () => {
@@ -147,6 +154,12 @@ test("close terminates active control-channel sockets and finishes promptly", as
       clearTimeout(timer);
       reject(error);
     });
+  });
+  assert.deepEqual(await connectedFrame, {
+    type: "connected",
+    roomId: created.roomId,
+    controlChannelId: created.controlChannelId,
+    role: "host",
   });
 
   try {
@@ -863,12 +876,12 @@ test("chat websocket receives a server heartbeat and remains usable after automa
   const base = testConfig({ port: 0 });
   const config = { ...base, chat: { ...base.chat, enabled: true } };
   const chatPeerRegistry = new ChatPeerRegistry({
-    pingIntervalMs: 10,
-    pongTimeoutMs: 80,
+    pingIntervalMs: 100,
+    pongTimeoutMs: 800,
   });
   const service = await createLobbyService(config, {
     createChatPeerRegistry: () => chatPeerRegistry,
-    chatGatewayOptions: { heartbeatTickMs: 5 },
+    chatGatewayOptions: { heartbeatTickMs: 50 },
   });
   const address = await service.start();
   let socket: WebSocket | undefined;
@@ -879,8 +892,8 @@ test("chat websocket receives a server heartbeat and remains usable after automa
     const issued = (await response.json()) as { ticket: string; webSocketUrl: string };
     socket = await openChatWebSocket(issued.webSocketUrl, issued.ticket);
     await waitForChatFrame(socket, (frame) => frame.type === "chat_snapshot_end");
-    // Ten 10ms heartbeat periods exceed the 80ms no-pong timeout.
-    await waitForServerPings(socket, 10, 800);
+    // Ten 100ms heartbeat periods exceed the 800ms no-pong timeout.
+    await waitForServerPings(socket, 10, 8_000);
     assert.equal(socket.listenerCount("ping"), 0, "heartbeat waiter must remove its listener");
 
     const clientMessageId = "45454545-4545-4545-8545-454545454545";
