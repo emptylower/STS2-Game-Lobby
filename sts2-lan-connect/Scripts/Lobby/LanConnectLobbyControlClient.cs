@@ -16,6 +16,8 @@ internal sealed class LobbyControlClient : IAsyncDisposable
     private readonly LanConnectWebSocketTransport _transport;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly object _lifecycleLock = new();
+    private readonly Action<string> _warningSink;
+    private readonly TimeSpan _closeTimeout;
     private string _role = "host";
     private Task? _disposeTask;
     private int _lifecycleState;
@@ -25,9 +27,20 @@ internal sealed class LobbyControlClient : IAsyncDisposable
     {
     }
 
-    internal LobbyControlClient(ILanConnectWebSocket socket)
+    internal LobbyControlClient(
+        ILanConnectWebSocket socket,
+        Action<string>? warningSink = null,
+        TimeSpan? closeTimeout = null)
     {
+        TimeSpan configuredCloseTimeout = closeTimeout ?? TimeSpan.FromSeconds(2);
+        if (configuredCloseTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(closeTimeout), "Close timeout must be positive.");
+        }
+
         _transport = new LanConnectWebSocketTransport(socket ?? throw new ArgumentNullException(nameof(socket)));
+        _warningSink = warningSink ?? SafeLogWarn;
+        _closeTimeout = configuredCloseTimeout;
         _transport.PayloadReceived += OnPayloadReceived;
         _transport.Faulted += OnTransportFaulted;
         _transport.Closed += OnTransportClosed;
@@ -89,16 +102,32 @@ internal sealed class LobbyControlClient : IAsyncDisposable
 
     private async Task ConnectAsync(Uri controlUri, LobbyControlEnvelope helloEnvelope, CancellationToken cancellationToken)
     {
-        await _transport.ConnectAsync(
-            controlUri,
-            requestHeaders: null,
-            cancellationToken,
-            _lifetimeCancellation.Token);
-        if (Interlocked.CompareExchange(ref _lifecycleState, Connected, NotConnected) != NotConnected)
+        string helloPayload = JsonSerializer.Serialize(helloEnvelope, LanConnectJson.Options);
+        try
         {
-            throw new InvalidOperationException("The lobby control channel closed before connection completed.");
+            await _transport.ConnectAsync(
+                controlUri,
+                requestHeaders: null,
+                helloPayload,
+                cancellationToken,
+                _lifetimeCancellation.Token);
+            if (Interlocked.CompareExchange(ref _lifecycleState, Connected, NotConnected) != NotConnected)
+            {
+                throw new InvalidOperationException("The lobby control channel closed before connection completed.");
+            }
         }
-        await SendAsync(helloEnvelope, cancellationToken);
+        catch
+        {
+            Interlocked.Exchange(ref _lifecycleState, Terminal);
+            try
+            {
+                await DisposeAsync();
+            }
+            catch
+            {
+            }
+            throw;
+        }
     }
 
     private async Task DisposeCoreAsync()
@@ -109,7 +138,7 @@ internal sealed class LobbyControlClient : IAsyncDisposable
             try
             {
                 using CancellationTokenSource closeCancellation =
-                    new(TimeSpan.FromSeconds(2));
+                    new(_closeTimeout);
                 await _transport.CloseAsync(
                     System.Net.WebSockets.WebSocketCloseStatus.NormalClosure,
                     "client_shutdown",
@@ -170,7 +199,7 @@ internal sealed class LobbyControlClient : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            LogParseFailure(ex);
+            TryWarn($"sts2_lan_connect failed to parse control payload: {ex.Message}");
         }
     }
 
@@ -182,7 +211,7 @@ internal sealed class LobbyControlClient : IAsyncDisposable
         }
         catch (Exception ex) when (Volatile.Read(ref _lifecycleState) != Terminal)
         {
-            LogPongSendFailure(ex);
+            TryWarn($"sts2_lan_connect failed to send lobby control pong: {ex.Message}");
         }
         catch
         {
@@ -192,7 +221,7 @@ internal sealed class LobbyControlClient : IAsyncDisposable
     private void OnTransportFaulted(Exception exception)
     {
         Interlocked.Exchange(ref _lifecycleState, Terminal);
-        LogTransportFailure(exception);
+        TryWarn($"sts2_lan_connect lobby control channel receive loop stopped: {exception.Message}");
     }
 
     private void OnTransportClosed()
@@ -200,15 +229,17 @@ internal sealed class LobbyControlClient : IAsyncDisposable
         Interlocked.Exchange(ref _lifecycleState, Terminal);
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void LogParseFailure(Exception exception) =>
-        Log.Warn($"sts2_lan_connect failed to parse control payload: {exception.Message}");
+    private void TryWarn(string message)
+    {
+        try
+        {
+            _warningSink(message);
+        }
+        catch
+        {
+        }
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void LogPongSendFailure(Exception exception) =>
-        Log.Warn($"sts2_lan_connect failed to send lobby control pong: {exception.Message}");
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void LogTransportFailure(Exception exception) =>
-        Log.Warn($"sts2_lan_connect lobby control channel receive loop stopped: {exception.Message}");
+    private static void SafeLogWarn(string message) => Log.Warn(message);
 }

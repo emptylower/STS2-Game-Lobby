@@ -64,6 +64,51 @@ public sealed class LanConnectLobbyControlClientTests
     }
 
     [Fact]
+    public async Task PrequeuedPingCannotSendPongBeforeHello()
+    {
+        FakeWebSocket socket = new();
+        socket.QueueText("{\"type\":\"ping\",\"roomId\":\"room-1\",\"controlChannelId\":\"control-1\"}");
+        await using LobbyControlClient client = new(socket);
+
+        await client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            CancellationToken.None);
+        await socket.PongSent.Task.WaitAsync(TestTimeout);
+
+        Assert.Equal("{\"type\":\"host_hello\",\"roomId\":\"room-1\",\"controlChannelId\":\"control-1\",\"role\":\"host\",\"playerName\":\"Host\"}", socket.SentPayloads[0]);
+        Assert.Equal("{\"type\":\"pong\",\"roomId\":\"room-1\",\"controlChannelId\":\"control-1\",\"role\":\"host\"}", socket.SentPayloads[1]);
+    }
+
+    [Fact]
+    public async Task PrequeuedRoomEnvelopeIsDispatchedOnlyAfterHello()
+    {
+        FakeWebSocket socket = new();
+        socket.QueueText("{\"type\":\"room_chat\",\"roomId\":\"room-1\",\"messageText\":\"hello\"}");
+        await using LobbyControlClient client = new(socket);
+        string[]? payloadsAtDispatch = null;
+        TaskCompletionSource dispatched = NewSignal();
+        client.EnvelopeReceived += _ =>
+        {
+            payloadsAtDispatch = socket.SentPayloads.ToArray();
+            dispatched.TrySetResult();
+        };
+
+        await client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            CancellationToken.None);
+        await dispatched.Task.WaitAsync(TestTimeout);
+
+        Assert.NotNull(payloadsAtDispatch);
+        Assert.Equal(["{\"type\":\"host_hello\",\"roomId\":\"room-1\",\"controlChannelId\":\"control-1\",\"role\":\"host\",\"playerName\":\"Host\"}"], payloadsAtDispatch);
+    }
+
+    [Fact]
     public async Task HostHelloPreservesExactLegacyJsonFixture()
     {
         FakeWebSocket socket = new();
@@ -136,7 +181,9 @@ public sealed class LanConnectLobbyControlClientTests
             CancellationToken.None));
 
         Assert.False(client.IsConnected);
-        Assert.Empty(socket.SentPayloads);
+        Assert.Equal(
+            "{\"type\":\"host_hello\",\"roomId\":\"room-1\",\"controlChannelId\":\"control-1\",\"role\":\"host\",\"playerName\":\"Host\"}",
+            Assert.Single(socket.SentPayloads));
     }
 
     [Fact]
@@ -161,6 +208,115 @@ public sealed class LanConnectLobbyControlClientTests
         Assert.Equal(1, socket.DisposeCount);
     }
 
+    [Fact]
+    public async Task DisposeDuringInitialHelloSendLeavesTerminalAndCleansUpOnce()
+    {
+        FakeWebSocket socket = new() { HoldFirstSend = true };
+        LobbyControlClient client = new(socket, closeTimeout: TimeSpan.FromMilliseconds(25));
+        Task connect = client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            CancellationToken.None);
+        await socket.FirstSendStarted.Task.WaitAsync(TestTimeout);
+
+        await client.DisposeAsync().AsTask().WaitAsync(TestTimeout);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
+        Assert.False(client.IsConnected);
+        Assert.Empty(socket.SentPayloads);
+        Assert.Equal(1, socket.AbortCount);
+        Assert.Equal(1, socket.DisposeCount);
+    }
+
+    [Fact]
+    public async Task InitialHelloSendFailureTerminatesAndCleansUpSocket()
+    {
+        FakeWebSocket socket = new() { FailSendCall = 1 };
+        LobbyControlClient client = new(socket);
+
+        await Assert.ThrowsAsync<WebSocketException>(() => client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            CancellationToken.None));
+
+        Assert.False(client.IsConnected);
+        Assert.Equal(1, socket.AbortCount);
+        Assert.Equal(1, socket.DisposeCount);
+    }
+
+    [Fact]
+    public async Task ThrowingWarningSinkCannotEscapePongSendObserver()
+    {
+        FakeWebSocket socket = new() { FailSendCall = 2 };
+        TaskCompletionSource warned = NewSignal();
+        TaskCompletionSource dispatched = NewSignal();
+        LobbyControlClient client = new(socket, warningSink: _ =>
+        {
+            warned.TrySetResult();
+            throw new InvalidOperationException("warning sink failed");
+        });
+        client.EnvelopeReceived += envelope =>
+        {
+            if (envelope.Type == "room_chat")
+            {
+                dispatched.TrySetResult();
+            }
+        };
+        await client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            CancellationToken.None);
+
+        socket.QueueText("{\"type\":\"ping\",\"roomId\":\"room-1\",\"controlChannelId\":\"control-1\"}");
+        await warned.Task.WaitAsync(TestTimeout);
+        socket.QueueText("{\"type\":\"room_chat\",\"roomId\":\"room-1\",\"messageText\":\"still running\"}");
+        await dispatched.Task.WaitAsync(TestTimeout);
+        await client.DisposeAsync().AsTask().WaitAsync(TestTimeout);
+
+        Assert.False(client.IsConnected);
+        Assert.Equal(1, socket.DisposeCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CloseTimeoutAbortsAndDisposesHungClose(bool ignoresCancellation)
+    {
+        FakeWebSocket socket = new()
+        {
+            CooperativeHungClose = !ignoresCancellation,
+            NonCooperativeHungClose = ignoresCancellation
+        };
+        LobbyControlClient client = new(socket, closeTimeout: TimeSpan.FromMilliseconds(25));
+        await client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            CancellationToken.None);
+
+        await client.DisposeAsync().AsTask().WaitAsync(TestTimeout);
+
+        Assert.Single(socket.CloseCalls);
+        Assert.Equal(1, socket.AbortCount);
+        Assert.Equal(1, socket.DisposeCount);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void CloseTimeoutMustBePositive(int timeoutMilliseconds)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new LobbyControlClient(new FakeWebSocket(), closeTimeout: TimeSpan.FromMilliseconds(timeoutMilliseconds)));
+    }
+
     private static TaskCompletionSource NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -169,6 +325,9 @@ public sealed class LanConnectLobbyControlClientTests
         private readonly Channel<Frame> _frames = Channel.CreateUnbounded<Frame>();
         private readonly Channel<string> _sentPayloads = Channel.CreateUnbounded<string>();
         private readonly TaskCompletionSource _connectRelease = NewSignal();
+        private readonly TaskCompletionSource _abortSignal = NewSignal();
+        private int _sendCallCount;
+        private int _abortCount;
 
         public WebSocketState State { get; private set; } = WebSocketState.None;
 
@@ -178,11 +337,25 @@ public sealed class LanConnectLobbyControlClientTests
 
         public int DisposeCount { get; private set; }
 
+        public int AbortCount => Volatile.Read(ref _abortCount);
+
         public bool CloseBeforeConnectReturns { get; init; }
 
         public bool HoldConnect { get; init; }
 
+        public bool HoldFirstSend { get; init; }
+
+        public int FailSendCall { get; init; }
+
+        public bool CooperativeHungClose { get; init; }
+
+        public bool NonCooperativeHungClose { get; init; }
+
         public TaskCompletionSource ConnectStarted { get; } = NewSignal();
+
+        public TaskCompletionSource FirstSendStarted { get; } = NewSignal();
+
+        public TaskCompletionSource PongSent { get; } = NewSignal();
 
         public void SetRequestHeader(string headerName, string headerValue)
         {
@@ -215,31 +388,53 @@ public sealed class LanConnectLobbyControlClientTests
             return new ValueWebSocketReceiveResult(frame.Payload.Length, frame.MessageType, frame.EndOfMessage);
         }
 
-        public ValueTask SendAsync(
+        public async ValueTask SendAsync(
             ReadOnlyMemory<byte> buffer,
             WebSocketMessageType messageType,
             bool endOfMessage,
             CancellationToken cancellationToken)
         {
+            int call = Interlocked.Increment(ref _sendCallCount);
+            FirstSendStarted.TrySetResult();
+            if (FailSendCall == call)
+            {
+                throw new WebSocketException(WebSocketError.Faulted);
+            }
+            if (HoldFirstSend && call == 1)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
             string payload = Encoding.UTF8.GetString(buffer.Span);
             SentPayloads.Add(payload);
             _sentPayloads.Writer.TryWrite(payload);
-            return ValueTask.CompletedTask;
+            if (payload.Contains("\"type\":\"pong\"", StringComparison.Ordinal))
+            {
+                PongSent.TrySetResult();
+            }
         }
 
-        public Task CloseAsync(
+        public async Task CloseAsync(
             WebSocketCloseStatus closeStatus,
             string statusDescription,
             CancellationToken cancellationToken)
         {
             CloseCalls.Add(new CloseCall(closeStatus, statusDescription));
+            if (CooperativeHungClose)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            if (NonCooperativeHungClose)
+            {
+                await _abortSignal.Task;
+            }
             State = WebSocketState.Closed;
-            return Task.CompletedTask;
         }
 
         public void Abort()
         {
+            Interlocked.Increment(ref _abortCount);
             State = WebSocketState.Aborted;
+            _abortSignal.TrySetResult();
             _frames.Writer.TryComplete(new WebSocketException(WebSocketError.ConnectionClosedPrematurely));
         }
 

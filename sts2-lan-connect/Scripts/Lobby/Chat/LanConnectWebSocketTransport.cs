@@ -101,12 +101,48 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         IReadOnlyDictionary<string, string>? requestHeaders = null,
         CancellationToken cancellationToken = default)
     {
-        return ConnectAsync(uri, requestHeaders, cancellationToken, cancellationToken);
+        return ConnectCoreEntryAsync(
+            uri,
+            requestHeaders,
+            initialTextPayload: null,
+            cancellationToken,
+            cancellationToken);
     }
 
     public Task ConnectAsync(
         Uri uri,
         IReadOnlyDictionary<string, string>? requestHeaders,
+        CancellationToken connectCancellationToken,
+        CancellationToken receiveLifetimeCancellationToken)
+    {
+        return ConnectCoreEntryAsync(
+            uri,
+            requestHeaders,
+            initialTextPayload: null,
+            connectCancellationToken,
+            receiveLifetimeCancellationToken);
+    }
+
+    public Task ConnectAsync(
+        Uri uri,
+        IReadOnlyDictionary<string, string>? requestHeaders,
+        string initialTextPayload,
+        CancellationToken connectCancellationToken,
+        CancellationToken receiveLifetimeCancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(initialTextPayload);
+        return ConnectCoreEntryAsync(
+            uri,
+            requestHeaders,
+            initialTextPayload,
+            connectCancellationToken,
+            receiveLifetimeCancellationToken);
+    }
+
+    private Task ConnectCoreEntryAsync(
+        Uri uri,
+        IReadOnlyDictionary<string, string>? requestHeaders,
+        string? initialTextPayload,
         CancellationToken connectCancellationToken,
         CancellationToken receiveLifetimeCancellationToken)
     {
@@ -128,7 +164,13 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
             _receiveCancellation = receiveCancellation;
 
             TaskCompletionSource start = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            _connectTask = ConnectCoreAsync(uri, requestHeaders, connectCancellation, receiveCancellation, start.Task);
+            _connectTask = ConnectCoreAsync(
+                uri,
+                requestHeaders,
+                initialTextPayload,
+                connectCancellation,
+                receiveCancellation,
+                start.Task);
             start.SetResult();
             return _connectTask;
         }
@@ -148,8 +190,13 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
                 throw new InvalidOperationException("The WebSocket transport is not connected.");
             }
 
-            _closeTask ??= CloseLocalAsync(closeStatus, statusDescription, cancellationToken);
-            return _closeTask;
+            if (_closeTask == null)
+            {
+                TaskCompletionSource start = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                _closeTask = CloseLocalAsync(closeStatus, statusDescription, start.Task);
+                start.SetResult();
+            }
+            return _closeTask.WaitAsync(cancellationToken);
         }
     }
 
@@ -168,21 +215,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
 
         using (sendCancellation)
         {
-            await _sendLock.WaitAsync(sendCancellation.Token);
-            try
-            {
-                ThrowIfDisposed();
-                if (_socket.State != WebSocketState.Open)
-                {
-                    throw new InvalidOperationException("The WebSocket transport is not connected.");
-                }
-
-                await _socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, sendCancellation.Token);
-            }
-            finally
-            {
-                _sendLock.Release();
-            }
+            await SendSerializedAsync(bytes, sendCancellation.Token);
         }
     }
 
@@ -210,6 +243,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
     private async Task ConnectCoreAsync(
         Uri uri,
         IReadOnlyDictionary<string, string>? requestHeaders,
+        string? initialTextPayload,
         CancellationTokenSource connectCancellation,
         CancellationTokenSource receiveCancellation,
         Task start)
@@ -225,6 +259,12 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
 
         await _socket.ConnectAsync(uri, connectCancellation.Token);
         receiveCancellation.Token.ThrowIfCancellationRequested();
+        if (initialTextPayload != null)
+        {
+            byte[] initialBytes = StrictUtf8.GetBytes(initialTextPayload);
+            await SendSerializedAsync(initialBytes, connectCancellation.Token);
+        }
+        receiveCancellation.Token.ThrowIfCancellationRequested();
         Task receiveLoop = ReceiveLoopAsync(receiveCancellation.Token);
         lock (_lifecycleLock)
         {
@@ -235,12 +275,30 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
     private async Task CloseLocalAsync(
         WebSocketCloseStatus closeStatus,
         string statusDescription,
-        CancellationToken cancellationToken)
+        Task start)
     {
-        using CancellationTokenSource closeCancellation =
-            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCancellation.Token);
-        await CloseSocketAsync(closeStatus, statusDescription, closeCancellation.Token);
+        await start;
+        await CloseSocketAsync(closeStatus, statusDescription, _disposeCancellation.Token);
         RaiseClosedOnce();
+    }
+
+    private async Task SendSerializedAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    {
+        await _sendLock.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            if (_socket.State != WebSocketState.Open)
+            {
+                throw new InvalidOperationException("The WebSocket transport is not connected.");
+            }
+
+            await _socket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
     }
 
     private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
