@@ -43,8 +43,7 @@ const fixtures: LegacyFixture[] = [
   { modVersion: "0.2.2" },
 ];
 
-function compatibilityConfig(): LobbyServiceConfig {
-  const tempDir = mkdtempSync(join(tmpdir(), "sts2-lobby-compat-"));
+function compatibilityConfig(tempDir: string): LobbyServiceConfig {
   const relayPortStart = 45_000 + (process.pid % 10_000);
   return loadLobbyServiceConfig({
     HOST: "127.0.0.1",
@@ -63,8 +62,36 @@ function compatibilityConfig(): LobbyServiceConfig {
   });
 }
 
-function cleanupTempDir(config: LobbyServiceConfig): void {
-  rmSync(join(config.serverAdminStateFile, ".."), { recursive: true, force: true });
+function cleanupTempDir(tempDir: string): void {
+  rmSync(tempDir, { recursive: true, force: true });
+}
+
+const NoPrimaryFailure = Symbol("no-primary-failure");
+type CleanupStep = () => void | Promise<void>;
+
+async function withCompatibilityCleanup<T>(
+  body: () => Promise<T>,
+  cleanupSteps: readonly CleanupStep[],
+): Promise<T> {
+  let primaryFailure: unknown | typeof NoPrimaryFailure = NoPrimaryFailure;
+  try {
+    return await body();
+  } catch (error) {
+    primaryFailure = error;
+    throw error;
+  } finally {
+    const cleanupErrors: unknown[] = [];
+    for (const cleanup of cleanupSteps) {
+      try {
+        await cleanup();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (primaryFailure === NoPrimaryFailure && cleanupErrors.length > 0) {
+      throw new AggregateError(cleanupErrors, "compatibility fixture cleanup failed");
+    }
+  }
 }
 
 function waitForFrame(
@@ -214,148 +241,210 @@ test("control websocket connection failure rejects once without an unhandled pro
   }
 });
 
+test("compatibility cleanup reports cleanup failures without replacing a primary failure", async (t) => {
+  await t.test("successful body rejects with every cleanup failure", async () => {
+    const first = new Error("first cleanup failed");
+    const second = new Error("second cleanup failed");
+    const visited: string[] = [];
+
+    await assert.rejects(
+      withCompatibilityCleanup(
+        async () => {
+          visited.push("body");
+        },
+        [
+          () => {
+            visited.push("first");
+            throw first;
+          },
+          async () => {
+            visited.push("second");
+            throw second;
+          },
+        ],
+      ),
+      (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.deepEqual(error.errors, [first, second]);
+        return true;
+      },
+    );
+    assert.deepEqual(visited, ["body", "first", "second"]);
+  });
+
+  await t.test("failed body keeps its primary error after every cleanup runs", async () => {
+    const primary = new Error("body failed");
+    const visited: string[] = [];
+
+    await assert.rejects(
+      withCompatibilityCleanup(
+        async () => {
+          throw primary;
+        },
+        [
+          () => {
+            visited.push("first");
+            throw new Error("cleanup failed");
+          },
+          () => {
+            visited.push("second");
+          },
+        ],
+      ),
+      (error) => error === primary,
+    );
+    assert.deepEqual(visited, ["first", "second"]);
+  });
+});
+
 test("new server preserves 0.4.0 and 0.2.2 legacy lobby/control compatibility", async (t) => {
   for (const fixture of fixtures) {
     await t.test(`mod ${fixture.modVersion}`, async () => {
-      const config = compatibilityConfig();
       let service: Awaited<ReturnType<typeof createLobbyService>> | undefined;
       const sockets: WebSocket[] = [];
+      const tempDir = mkdtempSync(join(tmpdir(), "sts2-lobby-compat-"));
 
-      try {
-        service = await createLobbyService(config);
-        const address = await service.start();
-        const createBody: Record<string, unknown> = {
-          roomName: `compat-${fixture.modVersion}`,
-          hostPlayerName: "Host",
-          gameMode: "standard",
-          version: "1.0.0",
-          modVersion: fixture.modVersion,
-          modList: ["sts2_lan_connect"],
-          maxPlayers: 4,
-          hostConnectionInfo: {
-            enetPort: 7777,
-            localAddresses: ["127.0.0.1"],
-          },
-        };
+      await withCompatibilityCleanup(
+        async () => {
+          const config = compatibilityConfig(tempDir);
+          service = await createLobbyService(config);
+          const address = await service.start();
+          const createBody: Record<string, unknown> = {
+            roomName: `compat-${fixture.modVersion}`,
+            hostPlayerName: "Host",
+            gameMode: "standard",
+            version: "1.0.0",
+            modVersion: fixture.modVersion,
+            modList: ["sts2_lan_connect"],
+            maxPlayers: 4,
+            hostConnectionInfo: {
+              enetPort: 7777,
+              localAddresses: ["127.0.0.1"],
+            },
+          };
 
-        const createResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(createBody),
-        });
-        assert.equal(createResponse.status, 201, `create status drifted for ${fixture.modVersion}`);
-        const created = (await createResponse.json()) as CreatedRoom;
-        assert.equal(created.room.modVersion, fixture.modVersion);
-        assert.equal(created.room.maxPlayers, 4);
-        assert.equal(created.room.relayState, "planned");
-        assert.equal(typeof created.roomSessionId, "string");
-        assert.ok(created.roomSessionId.length > 0);
-        assert.ok(created.relayEndpoint.port > 0, "create must retain Relay-adjacent allocation");
-
-        const joinResponse = await fetch(
-          `http://127.0.0.1:${address.port}/rooms/${encodeURIComponent(created.roomId)}/join`,
-          {
+          const createResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              playerName: "Silent",
-              version: "1.0.0",
-              modVersion: fixture.modVersion,
-              modList: ["sts2_lan_connect"],
-              playerNetId: "222",
-            }),
-          },
-        );
-        assert.equal(joinResponse.status, 200, `join status drifted for ${fixture.modVersion}`);
-        const joined = (await joinResponse.json()) as JoinedRoom;
-        assert.equal(joined.roomSessionId, created.roomSessionId, "roomSessionId must be additive and stable");
-        assert.equal(joined.room.modVersion, fixture.modVersion);
-        assert.equal(joined.room.relayState, "planned");
-        assert.equal(joined.connectionPlan.controlChannelId, created.controlChannelId);
-        assert.equal(joined.connectionPlan.relayAllowed, true);
-        assert.deepEqual(joined.connectionPlan.relayEndpoint, created.relayEndpoint);
+            body: JSON.stringify(createBody),
+          });
+          assert.equal(createResponse.status, 201, `create status drifted for ${fixture.modVersion}`);
+          const created = (await createResponse.json()) as CreatedRoom;
+          assert.equal(created.room.modVersion, fixture.modVersion);
+          assert.equal(created.room.maxPlayers, 4);
+          assert.equal(created.room.relayState, "planned");
+          assert.equal(typeof created.roomSessionId, "string");
+          assert.ok(created.roomSessionId.length > 0);
+          assert.ok(created.relayEndpoint.port > 0, "create must retain Relay-adjacent allocation");
 
-        const queryBase =
-          `roomId=${encodeURIComponent(created.roomId)}` +
-          `&controlChannelId=${encodeURIComponent(created.controlChannelId)}`;
-        const openedHost = await openControlWebSocket(
-          `ws://127.0.0.1:${address.port}${config.wsPath}?${queryBase}` +
-            `&role=host&token=${encodeURIComponent(created.hostToken)}`,
-        );
-        const host = openedHost.socket;
-        sockets.push(host);
-        const openedClient = await openControlWebSocket(
-          `ws://127.0.0.1:${address.port}${config.wsPath}?${queryBase}` +
-            `&role=client&ticketId=${encodeURIComponent(joined.ticketId)}`,
-        );
-        const client = openedClient.socket;
-        sockets.push(client);
+          const joinResponse = await fetch(
+            `http://127.0.0.1:${address.port}/rooms/${encodeURIComponent(created.roomId)}/join`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                playerName: "Silent",
+                version: "1.0.0",
+                modVersion: fixture.modVersion,
+                modList: ["sts2_lan_connect"],
+                playerNetId: "222",
+              }),
+            },
+          );
+          assert.equal(joinResponse.status, 200, `join status drifted for ${fixture.modVersion}`);
+          const joined = (await joinResponse.json()) as JoinedRoom;
+          assert.equal(joined.roomSessionId, created.roomSessionId, "roomSessionId must be additive and stable");
+          assert.equal(joined.room.modVersion, fixture.modVersion);
+          assert.equal(joined.room.relayState, "planned");
+          assert.equal(joined.connectionPlan.controlChannelId, created.controlChannelId);
+          assert.equal(joined.connectionPlan.relayAllowed, true);
+          assert.deepEqual(joined.connectionPlan.relayEndpoint, created.relayEndpoint);
 
-        assert.equal(openedHost.connected.role, "host");
-        assert.equal(openedClient.connected.role, "client");
-
-        const hostHello =
-          `{"type":"host_hello","roomId":"${created.roomId}",` +
-          `"controlChannelId":"${created.controlChannelId}","role":"host","playerName":"Host"}`;
-        const clientHello =
-          `{"type":"client_hello","roomId":"${created.roomId}",` +
-          `"controlChannelId":"${created.controlChannelId}","role":"client",` +
-          `"ticketId":"${joined.ticketId}","playerName":"Silent","playerNetId":"222"}`;
-        host.send(hostHello);
-        client.send(clientHello);
-
-        const expectedRoomChat = {
-          type: "room_chat",
-          roomId: created.roomId,
-          controlChannelId: created.controlChannelId,
-          role: "client",
-          ticketId: joined.ticketId,
-          playerName: "Silent",
-          playerNetId: "222",
-          messageId: "legacy-message-1",
-          messageText: "legacy text",
-          sentAtUnixMs: 1_783_857_600_000,
-        };
-        const relayedPromise = waitForFrame(
-          host,
-          (frame) => frame.type === "room_chat" && frame.messageId === "legacy-message-1",
-        );
-        const roomChat =
-          `{"type":"room_chat","roomId":"${created.roomId}",` +
-          `"controlChannelId":"${created.controlChannelId}","role":"client",` +
-          `"ticketId":"${joined.ticketId}","playerName":"Silent","playerNetId":"222",` +
-          `"messageId":"legacy-message-1","messageText":"legacy text",` +
-          `"sentAtUnixMs":1783857600000}`;
-        client.send(roomChat);
-        assert.deepEqual(await relayedPromise, expectedRoomChat, "legacy room_chat fields must remain exact");
-
-        assert.equal(
-          await rejectedWebSocketStatus(
-            `ws://127.0.0.1:${address.port}/chat?${queryBase}` +
+          const queryBase =
+            `roomId=${encodeURIComponent(created.roomId)}` +
+            `&controlChannelId=${encodeURIComponent(created.controlChannelId)}`;
+          const openedHost = await openControlWebSocket(
+            `ws://127.0.0.1:${address.port}${config.wsPath}?${queryBase}` +
               `&role=host&token=${encodeURIComponent(created.hostToken)}`,
-          ),
-          401,
-          "/chat must not accept /control query credentials",
-        );
-      } finally {
-        for (const socket of sockets) {
-          try {
-            socket.terminate();
-          } catch {
-            // The socket may already be terminal.
-          }
-        }
-        try {
-          await service?.close();
-        } catch {
-          // Cleanup must not hide the fixture's primary failure.
-        }
-        try {
-          cleanupTempDir(config);
-        } catch {
-          // Cleanup must not hide the fixture's primary failure.
-        }
-      }
+          );
+          const host = openedHost.socket;
+          sockets.push(host);
+          const openedClient = await openControlWebSocket(
+            `ws://127.0.0.1:${address.port}${config.wsPath}?${queryBase}` +
+              `&role=client&ticketId=${encodeURIComponent(joined.ticketId)}`,
+          );
+          const client = openedClient.socket;
+          sockets.push(client);
+
+          assert.equal(openedHost.connected.role, "host");
+          assert.equal(openedClient.connected.role, "client");
+
+          const hostHello =
+            `{"type":"host_hello","roomId":"${created.roomId}",` +
+            `"controlChannelId":"${created.controlChannelId}","role":"host","playerName":"Host"}`;
+          const clientHello =
+            `{"type":"client_hello","roomId":"${created.roomId}",` +
+            `"controlChannelId":"${created.controlChannelId}","role":"client",` +
+            `"ticketId":"${joined.ticketId}","playerName":"Silent","playerNetId":"222"}`;
+          host.send(hostHello);
+          client.send(clientHello);
+
+          const expectedRoomChat = {
+            type: "room_chat",
+            roomId: created.roomId,
+            controlChannelId: created.controlChannelId,
+            role: "client",
+            ticketId: joined.ticketId,
+            playerName: "Silent",
+            playerNetId: "222",
+            messageId: "legacy-message-1",
+            messageText: "legacy text",
+            sentAtUnixMs: 1_783_857_600_000,
+          };
+          const relayedPromise = waitForFrame(
+            host,
+            (frame) => frame.type === "room_chat" && frame.messageId === "legacy-message-1",
+          );
+          const roomChat =
+            `{"type":"room_chat","roomId":"${created.roomId}",` +
+            `"controlChannelId":"${created.controlChannelId}","role":"client",` +
+            `"ticketId":"${joined.ticketId}","playerName":"Silent","playerNetId":"222",` +
+            `"messageId":"legacy-message-1","messageText":"legacy text",` +
+            `"sentAtUnixMs":1783857600000}`;
+          client.send(roomChat);
+          assert.deepEqual(await relayedPromise, expectedRoomChat, "legacy room_chat fields must remain exact");
+
+          assert.equal(
+            await rejectedWebSocketStatus(
+              `ws://127.0.0.1:${address.port}/chat?${queryBase}` +
+                `&role=host&token=${encodeURIComponent(created.hostToken)}`,
+            ),
+            401,
+            "/chat must not accept /control query credentials",
+          );
+        },
+        [
+          () => {
+            const errors: unknown[] = [];
+            for (const socket of sockets) {
+              try {
+                socket.terminate();
+              } catch (error) {
+                errors.push(error);
+              }
+            }
+            if (errors.length > 0) {
+              throw new AggregateError(errors, "compatibility sockets failed to terminate");
+            }
+          },
+          async () => {
+            await service?.close();
+          },
+          () => {
+            cleanupTempDir(tempDir);
+          },
+        ],
+      );
     });
   }
 });
