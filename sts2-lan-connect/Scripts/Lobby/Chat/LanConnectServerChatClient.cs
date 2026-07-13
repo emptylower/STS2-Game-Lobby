@@ -38,6 +38,7 @@ internal enum LanConnectServerChatClientCheckpoint
     ReconnectBeforeDispose,
     ReconnectAfterConnectAttempt,
     ReconnectBeforeIdleHandoff,
+    PayloadAfterCurrentConnectionValidation,
     PermanentStopAfterCleanupOwnership,
     PermanentCleanupBeforeDispose
 }
@@ -419,6 +420,7 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
         {
             return;
         }
+        _checkpoint?.Invoke(LanConnectServerChatClientCheckpoint.PayloadAfterCurrentConnectionValidation);
 
         try
         {
@@ -430,19 +432,19 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
             }
             if (envelope.ProtocolVersion != ProtocolVersion)
             {
-                MarkPermanentStop();
+                MarkPermanentStop(connectionOrdinal, generation);
                 return;
             }
             if (envelope.Type == "chat_ready" &&
                 (envelope.Channel != LanConnectChatChannel.Server || envelope.ServerChatVersion != ProtocolVersion))
             {
-                MarkPermanentStop();
+                MarkPermanentStop(connectionOrdinal, generation);
                 return;
             }
             if (envelope.Type == "chat_error" &&
                 string.Equals(envelope.Code, "protocol_mismatch", StringComparison.Ordinal))
             {
-                MarkPermanentStop();
+                MarkPermanentStop(connectionOrdinal, generation);
                 return;
             }
 
@@ -482,7 +484,7 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
         }
         catch (JsonException)
         {
-            MarkPermanentStop();
+            MarkPermanentStop(connectionOrdinal, generation);
         }
     }
 
@@ -515,13 +517,13 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
 
     private void OnTransportFaulted(long connectionOrdinal, int generation, Exception exception)
     {
-        if (!TryClaimCurrentConnection(connectionOrdinal, generation))
-        {
-            return;
-        }
         if (exception is NotSupportedException)
         {
-            MarkPermanentStop();
+            MarkPermanentStop(connectionOrdinal, generation);
+            return;
+        }
+        if (!TryClaimCurrentConnection(connectionOrdinal, generation))
+        {
             return;
         }
         HandleUnexpectedDisconnect();
@@ -561,12 +563,21 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
         RaiseStateChangedIfNeeded(revision);
     }
 
-    private void MarkPermanentStop()
+    private void MarkPermanentStop() => MarkPermanentStopCore(null, 0);
+
+    private void MarkPermanentStop(long connectionOrdinal, int generation) =>
+        MarkPermanentStopCore(connectionOrdinal, generation);
+
+    private void MarkPermanentStopCore(long? connectionOrdinal, int generation)
     {
         long revision;
         lock (_lifecycleLock)
         {
-            if (Volatile.Read(ref _permanentlyStopped) != 0)
+            if (Volatile.Read(ref _permanentlyStopped) != 0 ||
+                _stopTask != null ||
+                Volatile.Read(ref _disposed) != 0 ||
+                connectionOrdinal.HasValue && !IsCurrentConnection(connectionOrdinal.Value, generation) ||
+                _lifetimeCancellation.IsCancellationRequested)
             {
                 return;
             }

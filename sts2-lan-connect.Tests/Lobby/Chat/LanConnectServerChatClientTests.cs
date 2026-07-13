@@ -702,6 +702,48 @@ public sealed class LanConnectServerChatClientTests
         await client.DisposeAsync();
     }
 
+    [Fact]
+    public async Task ValidatedPermanentPayloadDoesNothingAfterConcurrentDisposeOwnsLifecycle()
+    {
+        FakeApi api = new([]);
+        FakeTransport transport = new([]);
+        TaskCompletionSource payloadValidated = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim releasePayload = new(false);
+        int checkpointArmed = 0;
+        LanConnectServerChatClient client = CreateClient(
+            api,
+            () => transport,
+            checkpoint: checkpoint =>
+            {
+                if (checkpoint == LanConnectServerChatClientCheckpoint.PayloadAfterCurrentConnectionValidation &&
+                    Volatile.Read(ref checkpointArmed) != 0)
+                {
+                    payloadValidated.TrySetResult();
+                    releasePayload.Wait();
+                }
+            });
+        await ConnectReadyAsync(client, transport);
+        Volatile.Write(ref checkpointArmed, 1);
+        Task callback = Task.Run(() =>
+            transport.Emit("""{"type":"chat_ready","protocolVersion":2,"channel":"server"}"""));
+        await payloadValidated.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        try
+        {
+            await client.DisposeAsync();
+        }
+        finally
+        {
+            releasePayload.Set();
+        }
+        Exception? callbackException = await Record.ExceptionAsync(async () => await callback);
+
+        Assert.Null(callbackException);
+        Assert.Equal(1, transport.DisposeCalls);
+        Assert.Equal(1, api.DisposeCalls);
+        await client.DisposeAsync();
+    }
+
     private static LanConnectServerChatClient CreateClient(
         FakeApi api,
         Func<ILanConnectServerChatTransport> transportFactory,
