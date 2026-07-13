@@ -441,6 +441,144 @@ public sealed class LanConnectServerChatClientTests
         Assert.False(client.CanSend);
     }
 
+    [Theory]
+    [InlineData("close")]
+    [InlineData("fault")]
+    public async Task ReconnectHandshakeWindowDisconnectIsNotDropped(string signal)
+    {
+        FakeDelay delay = new();
+        List<FakeApi> apis = [];
+        List<FakeTransport> transports = [];
+        await using LanConnectServerChatClient client = CreateReconnectClient(
+            apis,
+            transports,
+            delay,
+            random: 0.5,
+            configureTransport: (transport, index) =>
+            {
+                if (index == 1)
+                {
+                    transport.DuringConnect = () =>
+                    {
+                        if (signal == "close")
+                        {
+                            transport.EmitClosed();
+                        }
+                        else
+                        {
+                            transport.EmitFaulted(new InvalidOperationException("handshake lost"));
+                        }
+                    };
+                }
+            });
+        await client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None);
+        ConnectReady(transports[0]);
+
+        transports[0].EmitClosed();
+        await WaitUntilAsync(() => delay.Durations.Count == 1);
+        delay.CompleteNext();
+        await WaitUntilAsync(() => transports.Count == 2);
+        await WaitUntilAsync(() => delay.Durations.Count == 2);
+        delay.CompleteNext();
+        await WaitUntilAsync(() => transports.Count == 3);
+
+        Assert.Equal(3, apis.Count);
+        Assert.All(apis, api => Assert.Equal(1, api.TicketCalls));
+    }
+
+    [Fact]
+    public async Task ConnectChatStateDynamicallyUpdatesCanSendAndPublishesRevisionChanges()
+    {
+        FakeApi api = new([]);
+        FakeTransport transport = new([]);
+        await using LanConnectServerChatClient client = CreateClient(api, () => transport);
+        await ConnectReadyAsync(client, transport);
+        List<bool> observedCanSend = [];
+        client.StateChanged += () => observedCanSend.Add(client.CanSend);
+
+        transport.Emit(Serialize(new ServerChatStateEnvelope
+        {
+            ProtocolVersion = 1,
+            ChatEnabled = false,
+            HistoryEpoch = 1,
+            EnabledFeatures = new ServerChatEnabledFeatures()
+        }));
+        transport.Emit(Serialize(new ServerChatStateEnvelope
+        {
+            ProtocolVersion = 1,
+            ChatEnabled = true,
+            HistoryEpoch = 1,
+            EnabledFeatures = new ServerChatEnabledFeatures()
+        }));
+
+        Assert.Equal([false, true], observedCanSend);
+        Assert.True(client.CanSend);
+    }
+
+    [Fact]
+    public async Task ConnectSnapshotEndStateChangedCallbackObservesReadyCanSend()
+    {
+        FakeApi api = new([]);
+        FakeTransport transport = new([]);
+        await using LanConnectServerChatClient client = CreateClient(api, () => transport);
+        await client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None);
+        transport.Emit(BuildReady());
+        transport.Emit(BuildSnapshotBegin(totalMessages: 0));
+        bool? observedCanSend = null;
+        client.StateChanged += () => observedCanSend = client.CanSend;
+
+        transport.Emit(BuildSnapshotEnd());
+
+        Assert.True(observedCanSend.HasValue && observedCanSend.Value);
+    }
+
+    [Fact]
+    public async Task ReconnectIgnoresLateCallbacksCapturedFromOldTransport()
+    {
+        FakeDelay delay = new();
+        List<FakeApi> apis = [];
+        List<FakeTransport> transports = [];
+        await using LanConnectServerChatClient client = CreateReconnectClient(apis, transports, delay, random: 0.5);
+        await client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None);
+        ConnectReady(transports[0]);
+        FakeTransport.CapturedCallbacks stale = transports[0].CaptureCallbacks();
+
+        transports[0].EmitClosed();
+        await WaitUntilAsync(() => delay.Durations.Count == 1);
+        delay.CompleteNext();
+        await WaitUntilAsync(() => transports.Count == 2);
+        ConnectReady(transports[1], instanceId: "instance-2", historyEpoch: 2);
+        int delaysBefore = delay.Durations.Count;
+
+        stale.Payload("""{"type":"chat_ready","protocolVersion":2,"channel":"server"}""");
+        stale.Closed();
+        stale.Faulted(new InvalidOperationException("late fault"));
+        await Task.Yield();
+
+        Assert.False(client.IsPermanentlyStopped);
+        Assert.True(client.CanSend);
+        Assert.Equal(delaysBefore, delay.Durations.Count);
+        Assert.Equal(2, transports.Count);
+    }
+
+    [Fact]
+    public async Task ConnectPermanentProtocolStopDisposesCurrentResourcesAndPublishesDisabledState()
+    {
+        FakeApi api = new([]);
+        FakeTransport transport = new([]);
+        await using LanConnectServerChatClient client = CreateClient(api, () => transport);
+        await ConnectReadyAsync(client, transport);
+        List<bool> observedCanSend = [];
+        client.StateChanged += () => observedCanSend.Add(client.CanSend);
+
+        transport.Emit("""{"type":"chat_ready","protocolVersion":2,"channel":"server"}""");
+        await WaitUntilAsync(() => transport.DisposeCalls == 1 && api.DisposeCalls == 1);
+
+        Assert.True(client.IsPermanentlyStopped);
+        Assert.False(client.CanSend);
+        Assert.Contains(false, observedCanSend);
+    }
+
     private static LanConnectServerChatClient CreateClient(
         FakeApi api,
         Func<ILanConnectServerChatTransport> transportFactory,
@@ -464,7 +602,8 @@ public sealed class LanConnectServerChatClientTests
         List<FakeTransport> transports,
         FakeDelay delay,
         double random,
-        Func<Guid>? uuid = null) =>
+        Func<Guid>? uuid = null,
+        Action<FakeTransport, int>? configureTransport = null) =>
         new(
             _ =>
             {
@@ -476,6 +615,7 @@ public sealed class LanConnectServerChatClientTests
             {
                 FakeTransport transport = new([]);
                 transports.Add(transport);
+                configureTransport?.Invoke(transport, transports.Count - 1);
                 return transport;
             },
             clock: () => MutableClock.Default.Now,
@@ -621,6 +761,7 @@ public sealed class LanConnectServerChatClientTests
         public IReadOnlyDictionary<string, string>? Headers { get; private set; }
         public List<string> SentPayloads { get; } = [];
         public Action<string>? BeforeSend { get; set; }
+        public Action? DuringConnect { get; set; }
         public int DisposeCalls { get; private set; }
 
         public Task ConnectAsync(Uri uri, IReadOnlyDictionary<string, string>? requestHeaders, CancellationToken connectCancellationToken, CancellationToken receiveLifetimeCancellationToken)
@@ -628,6 +769,7 @@ public sealed class LanConnectServerChatClientTests
             operations.Add("connect");
             ConnectedUri = uri;
             Headers = requestHeaders;
+            DuringConnect?.Invoke();
             return Task.CompletedTask;
         }
 
@@ -644,11 +786,21 @@ public sealed class LanConnectServerChatClientTests
 
         public void EmitClosed() => Closed?.Invoke();
 
+        public CapturedCallbacks CaptureCallbacks() => new(
+            PayloadReceived ?? (_ => { }),
+            Faulted ?? (_ => { }),
+            Closed ?? (() => { }));
+
         public ValueTask DisposeAsync()
         {
             DisposeCalls++;
             return ValueTask.CompletedTask;
         }
+
+        public readonly record struct CapturedCallbacks(
+            Action<string> Payload,
+            Action<Exception> Faulted,
+            Action Closed);
     }
 
     private sealed class MutableClock

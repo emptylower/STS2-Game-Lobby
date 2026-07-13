@@ -53,12 +53,17 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
     private readonly Dictionary<string, StoredMessage> _messagesById = new(StringComparer.Ordinal);
     private ILanConnectServerChatApi? _api;
     private ILanConnectServerChatTransport? _transport;
+    private Action<string>? _transportPayloadHandler;
+    private Action<Exception>? _transportFaultHandler;
+    private Action? _transportClosedHandler;
     private string _playerName = string.Empty;
     private string _playerNetId = string.Empty;
     private Uri? _lobbyBaseUri;
     private Task? _stopTask;
     private Task? _reconnectTask;
+    private Task? _permanentStopCleanupTask;
     private int _backoffAttempt;
+    private int _reconnectRequested;
     private int _lifecycleGeneration;
     private int _connectStarted;
     private int _readySeen;
@@ -102,6 +107,7 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
     internal bool CanSend =>
         Volatile.Read(ref _readySeen) != 0 &&
         Volatile.Read(ref _snapshotComplete) != 0 &&
+        State.ChatEnabled &&
         Volatile.Read(ref _permanentlyStopped) == 0 &&
         Volatile.Read(ref _disposed) == 0 &&
         Volatile.Read(ref _connectStarted) != 0;
@@ -153,10 +159,14 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
             _transport = transport;
             Volatile.Write(ref _readySeen, 0);
             Volatile.Write(ref _snapshotComplete, 0);
-            Interlocked.Exchange(ref _currentConnectionOrdinal, Interlocked.Increment(ref _connectionOrdinal));
-            transport.PayloadReceived += OnPayloadReceived;
-            transport.Faulted += OnTransportFaulted;
-            transport.Closed += OnTransportClosed;
+            long connectionOrdinal = Interlocked.Increment(ref _connectionOrdinal);
+            Interlocked.Exchange(ref _currentConnectionOrdinal, connectionOrdinal);
+            _transportPayloadHandler = payload => OnPayloadReceived(connectionOrdinal, generation, payload);
+            _transportFaultHandler = exception => OnTransportFaulted(connectionOrdinal, generation, exception);
+            _transportClosedHandler = () => OnTransportClosed(connectionOrdinal, generation);
+            transport.PayloadReceived += _transportPayloadHandler;
+            transport.Faulted += _transportFaultHandler;
+            transport.Closed += _transportClosedHandler;
             await transport.ConnectAsync(
                 chatUri,
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -388,9 +398,10 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
         }
     }
 
-    private void OnPayloadReceived(string payload)
+    private void OnPayloadReceived(long connectionOrdinal, int generation, string payload)
     {
-        if (string.IsNullOrWhiteSpace(payload) || IsPermanentlyStopped)
+        if (!IsCurrentConnection(connectionOrdinal, generation) ||
+            string.IsNullOrWhiteSpace(payload) || IsPermanentlyStopped)
         {
             return;
         }
@@ -432,7 +443,6 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
 
             long revision = State.Revision;
             LanConnectChatApplyResult result = State.Apply(envelope);
-            RaiseStateChangedIfNeeded(revision);
             if (result.ReconnectRequired)
             {
                 HandleUnexpectedDisconnect();
@@ -440,7 +450,7 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
             }
             if (envelope.Type == "chat_ready")
             {
-                Volatile.Write(ref _readySeen, envelope.ChatEnabled == true ? 1 : 0);
+                Volatile.Write(ref _readySeen, 1);
             }
             else if (envelope.Type == "chat_snapshot_end")
             {
@@ -451,6 +461,7 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
                     Interlocked.Exchange(ref _backoffAttempt, 0);
                 }
             }
+            RaiseStateChangedIfNeeded(revision);
         }
         catch (JsonException)
         {
@@ -485,8 +496,12 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
         }
     }
 
-    private void OnTransportFaulted(Exception exception)
+    private void OnTransportFaulted(long connectionOrdinal, int generation, Exception exception)
     {
+        if (!IsCurrentConnection(connectionOrdinal, generation))
+        {
+            return;
+        }
         if (exception is NotSupportedException)
         {
             MarkPermanentStop();
@@ -495,7 +510,18 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
         HandleUnexpectedDisconnect();
     }
 
-    private void OnTransportClosed() => HandleUnexpectedDisconnect();
+    private void OnTransportClosed(long connectionOrdinal, int generation)
+    {
+        if (IsCurrentConnection(connectionOrdinal, generation))
+        {
+            HandleUnexpectedDisconnect();
+        }
+    }
+
+    private bool IsCurrentConnection(long connectionOrdinal, int generation) =>
+        connectionOrdinal != 0 &&
+        connectionOrdinal == Interlocked.Read(ref _currentConnectionOrdinal) &&
+        generation == Volatile.Read(ref _lifecycleGeneration);
 
     private void HandleUnexpectedDisconnect()
     {
@@ -515,9 +541,32 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
 
     private void MarkPermanentStop()
     {
-        Interlocked.Exchange(ref _permanentlyStopped, 1);
+        if (Interlocked.Exchange(ref _permanentlyStopped, 1) != 0)
+        {
+            return;
+        }
+        Volatile.Write(ref _readySeen, 0);
         Volatile.Write(ref _snapshotComplete, 0);
         _lifetimeCancellation.Cancel();
+        long revision = State.Revision;
+        State.Apply(new ServerChatInboundEnvelope
+        {
+            Type = "chat_state",
+            ProtocolVersion = ProtocolVersion,
+            ChatEnabled = false,
+            EnabledFeatures = new ServerChatEnabledFeatures()
+        });
+        RaiseStateChangedIfNeeded(revision);
+        lock (_lifecycleLock)
+        {
+            _permanentStopCleanupTask ??= DisposeAfterPermanentStopAsync();
+        }
+    }
+
+    private async Task DisposeAfterPermanentStopAsync()
+    {
+        await Task.Yield();
+        await DisposeCurrentResourcesAsync();
     }
 
     private void ScheduleReconnect()
@@ -526,6 +575,7 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
         {
             return;
         }
+        Interlocked.Exchange(ref _reconnectRequested, 1);
 
         lock (_lifecycleLock)
         {
@@ -541,6 +591,7 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
     private async Task ReconnectLoopAsync(int generation, CancellationToken cancellationToken)
     {
         await Task.Yield();
+        Interlocked.Exchange(ref _reconnectRequested, 0);
         while (!cancellationToken.IsCancellationRequested &&
                generation == Volatile.Read(ref _lifecycleGeneration) &&
                !IsPermanentlyStopped)
@@ -562,7 +613,10 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
                 await _delay(reconnectDelay, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 await ConnectAttemptAsync(generation, cancellationToken);
-                return;
+                if (Interlocked.Exchange(ref _reconnectRequested, 0) == 0)
+                {
+                    return;
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -614,13 +668,29 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
     {
         ILanConnectServerChatTransport? transport = _transport;
         ILanConnectServerChatApi? api = _api;
+        Action<string>? payloadHandler = _transportPayloadHandler;
+        Action<Exception>? faultHandler = _transportFaultHandler;
+        Action? closedHandler = _transportClosedHandler;
         _transport = null;
         _api = null;
+        _transportPayloadHandler = null;
+        _transportFaultHandler = null;
+        _transportClosedHandler = null;
+        Interlocked.Exchange(ref _currentConnectionOrdinal, 0);
         if (transport != null)
         {
-            transport.PayloadReceived -= OnPayloadReceived;
-            transport.Faulted -= OnTransportFaulted;
-            transport.Closed -= OnTransportClosed;
+            if (payloadHandler != null)
+            {
+                transport.PayloadReceived -= payloadHandler;
+            }
+            if (faultHandler != null)
+            {
+                transport.Faulted -= faultHandler;
+            }
+            if (closedHandler != null)
+            {
+                transport.Closed -= closedHandler;
+            }
             await transport.DisposeAsync();
         }
         api?.Dispose();
@@ -638,15 +708,27 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
         RaiseStateChangedIfNeeded(revision);
 
         Task? reconnect;
+        Task? permanentCleanup;
         lock (_lifecycleLock)
         {
             reconnect = _reconnectTask;
+            permanentCleanup = _permanentStopCleanupTask;
         }
         if (reconnect != null)
         {
             try
             {
                 await reconnect;
+            }
+            catch
+            {
+            }
+        }
+        if (permanentCleanup != null)
+        {
+            try
+            {
+                await permanentCleanup;
             }
             catch
             {

@@ -62,6 +62,8 @@ internal sealed class LanConnectChatChannelState
     private readonly Dictionary<string, DateTimeOffset> _pendingQueueTimes = new();
     private SnapshotAssembly? _snapshotAssembly;
     private long _revision;
+    private bool _chatEnabled;
+    private ServerChatEnabledFeatures _enabledFeatures = new();
 
     internal LanConnectChatChannelState(LanConnectChatChannel channel)
     {
@@ -88,6 +90,17 @@ internal sealed class LanConnectChatChannelState
             lock (_mutationLock)
             {
                 return _revision;
+            }
+        }
+    }
+
+    internal bool ChatEnabled
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _chatEnabled;
             }
         }
     }
@@ -158,6 +171,7 @@ internal sealed class LanConnectChatChannelState
                 "chat_snapshot_chunk" => ApplySnapshotChunk(envelope),
                 "chat_snapshot_end" => ApplySnapshotEnd(envelope),
                 "chat_ready" => ApplyReady(envelope),
+                "chat_state" => ApplyState(envelope),
                 "chat_history_cleared" => ApplyHistoryCleared(envelope),
                 _ => new LanConnectChatApplyResult(ReconnectRequired: false)
             };
@@ -496,8 +510,11 @@ internal sealed class LanConnectChatChannelState
                                   !string.IsNullOrEmpty(_instanceId) &&
                                   !string.Equals(newInstance, _instanceId, StringComparison.Ordinal);
         bool greaterEpoch = newEpoch > _lastSnapshotEpoch;
+        bool newChatEnabled = envelope.ChatEnabled == true;
+        ServerChatEnabledFeatures newFeatures = envelope.EnabledFeatures ?? new ServerChatEnabledFeatures();
         bool metadataChanged = (!string.IsNullOrEmpty(newInstance) &&
-                                !string.Equals(newInstance, _instanceId, StringComparison.Ordinal)) || greaterEpoch;
+                                !string.Equals(newInstance, _instanceId, StringComparison.Ordinal)) || greaterEpoch ||
+                               _chatEnabled != newChatEnabled || !FeaturesEqual(_enabledFeatures, newFeatures);
         if (differentInstance || greaterEpoch)
         {
             ClearConfirmedKeepPendingAndUnknown();
@@ -510,7 +527,45 @@ internal sealed class LanConnectChatChannelState
         {
             _lastSnapshotEpoch = newEpoch;
         }
+        _chatEnabled = newChatEnabled;
+        _enabledFeatures = CopyFeatures(newFeatures);
         if (metadataChanged)
+        {
+            _revision++;
+        }
+        return new LanConnectChatApplyResult(ReconnectRequired: false);
+    }
+
+    private LanConnectChatApplyResult ApplyState(ServerChatInboundEnvelope envelope)
+    {
+        if (!envelope.ChatEnabled.HasValue)
+        {
+            return new LanConnectChatApplyResult(ReconnectRequired: true);
+        }
+
+        bool mutated = false;
+        int newEpoch = envelope.HistoryEpoch ?? _lastSnapshotEpoch;
+        if (newEpoch > _lastSnapshotEpoch)
+        {
+            ClearConfirmedKeepPendingAndUnknown();
+            _lastSnapshotEpoch = newEpoch;
+            mutated = true;
+        }
+
+        if (_chatEnabled != envelope.ChatEnabled.Value)
+        {
+            _chatEnabled = envelope.ChatEnabled.Value;
+            mutated = true;
+        }
+
+        ServerChatEnabledFeatures newFeatures = envelope.EnabledFeatures ?? new ServerChatEnabledFeatures();
+        if (!FeaturesEqual(_enabledFeatures, newFeatures))
+        {
+            _enabledFeatures = CopyFeatures(newFeatures);
+            mutated = true;
+        }
+
+        if (mutated)
         {
             _revision++;
         }
@@ -659,6 +714,19 @@ internal sealed class LanConnectChatChannelState
 
         return string.Empty;
     }
+
+    private static bool FeaturesEqual(ServerChatEnabledFeatures left, ServerChatEnabledFeatures right) =>
+        left.RichContentVersion == right.RichContentVersion &&
+        left.EmojiSetVersion == right.EmojiSetVersion &&
+        left.ItemRefVersion == right.ItemRefVersion;
+
+    private static ServerChatEnabledFeatures CopyFeatures(ServerChatEnabledFeatures source) =>
+        new()
+        {
+            RichContentVersion = source.RichContentVersion,
+            EmojiSetVersion = source.EmojiSetVersion,
+            ItemRefVersion = source.ItemRefVersion
+        };
 
     private sealed class SnapshotAssembly
     {
