@@ -33,6 +33,15 @@ internal interface ILanConnectServerChatTransport : IAsyncDisposable
     Task SendAsync(string payload, CancellationToken cancellationToken);
 }
 
+internal enum LanConnectServerChatClientCheckpoint
+{
+    ReconnectBeforeDispose,
+    ReconnectAfterConnectAttempt,
+    ReconnectBeforeIdleHandoff,
+    PermanentStopAfterCleanupOwnership,
+    PermanentCleanupBeforeDispose
+}
+
 internal sealed class LanConnectServerChatClient : IAsyncDisposable
 {
     private const int ProtocolVersion = 1;
@@ -44,6 +53,7 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly Func<double> _random;
     private readonly Func<Guid> _uuidFactory;
+    private readonly Action<LanConnectServerChatClientCheckpoint>? _checkpoint;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly SemaphoreSlim _resourceGate = new(1, 1);
@@ -73,6 +83,8 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
     private long _connectionOrdinal;
     private long _currentConnectionOrdinal;
     private long _activeSessionOrdinal;
+    private long _reconnectLoopOrdinal;
+    private long _activeReconnectLoopOrdinal;
 
     internal LanConnectServerChatClient()
         : this(
@@ -91,7 +103,8 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
         Func<DateTimeOffset>? clock = null,
         Func<TimeSpan, CancellationToken, Task>? delay = null,
         Func<double>? random = null,
-        Func<Guid>? uuidFactory = null)
+        Func<Guid>? uuidFactory = null,
+        Action<LanConnectServerChatClientCheckpoint>? checkpoint = null)
     {
         _apiFactory = apiFactory ?? throw new ArgumentNullException(nameof(apiFactory));
         _transportFactory = transportFactory ?? throw new ArgumentNullException(nameof(transportFactory));
@@ -99,6 +112,7 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
         _delay = delay ?? Task.Delay;
         _random = random ?? Random.Shared.NextDouble;
         _uuidFactory = uuidFactory ?? Guid.NewGuid;
+        _checkpoint = checkpoint;
         State = new LanConnectChatChannelState(LanConnectChatChannel.Server);
     }
 
@@ -445,7 +459,10 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
             LanConnectChatApplyResult result = State.Apply(envelope);
             if (result.ReconnectRequired)
             {
-                HandleUnexpectedDisconnect();
+                if (TryClaimCurrentConnection(connectionOrdinal, generation))
+                {
+                    HandleUnexpectedDisconnect();
+                }
                 return;
             }
             if (envelope.Type == "chat_ready")
@@ -498,7 +515,7 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
 
     private void OnTransportFaulted(long connectionOrdinal, int generation, Exception exception)
     {
-        if (!IsCurrentConnection(connectionOrdinal, generation))
+        if (!TryClaimCurrentConnection(connectionOrdinal, generation))
         {
             return;
         }
@@ -512,7 +529,7 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
 
     private void OnTransportClosed(long connectionOrdinal, int generation)
     {
-        if (IsCurrentConnection(connectionOrdinal, generation))
+        if (TryClaimCurrentConnection(connectionOrdinal, generation))
         {
             HandleUnexpectedDisconnect();
         }
@@ -522,6 +539,11 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
         connectionOrdinal != 0 &&
         connectionOrdinal == Interlocked.Read(ref _currentConnectionOrdinal) &&
         generation == Volatile.Read(ref _lifecycleGeneration);
+
+    private bool TryClaimCurrentConnection(long connectionOrdinal, int generation) =>
+        connectionOrdinal != 0 &&
+        generation == Volatile.Read(ref _lifecycleGeneration) &&
+        Interlocked.CompareExchange(ref _currentConnectionOrdinal, 0, connectionOrdinal) == connectionOrdinal;
 
     private void HandleUnexpectedDisconnect()
     {
@@ -541,95 +563,131 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
 
     private void MarkPermanentStop()
     {
-        if (Interlocked.Exchange(ref _permanentlyStopped, 1) != 0)
-        {
-            return;
-        }
-        Volatile.Write(ref _readySeen, 0);
-        Volatile.Write(ref _snapshotComplete, 0);
-        _lifetimeCancellation.Cancel();
-        long revision = State.Revision;
-        State.Apply(new ServerChatInboundEnvelope
-        {
-            Type = "chat_state",
-            ProtocolVersion = ProtocolVersion,
-            ChatEnabled = false,
-            EnabledFeatures = new ServerChatEnabledFeatures()
-        });
-        RaiseStateChangedIfNeeded(revision);
+        long revision;
         lock (_lifecycleLock)
         {
-            _permanentStopCleanupTask ??= DisposeAfterPermanentStopAsync();
+            if (Volatile.Read(ref _permanentlyStopped) != 0)
+            {
+                return;
+            }
+            Volatile.Write(ref _permanentlyStopped, 1);
+            Volatile.Write(ref _readySeen, 0);
+            Volatile.Write(ref _snapshotComplete, 0);
+            _lifetimeCancellation.Cancel();
+            _permanentStopCleanupTask = DisposeAfterPermanentStopAsync();
+            revision = State.Revision;
+            State.Apply(new ServerChatInboundEnvelope
+            {
+                Type = "chat_state",
+                ProtocolVersion = ProtocolVersion,
+                ChatEnabled = false,
+                EnabledFeatures = new ServerChatEnabledFeatures()
+            });
+            _checkpoint?.Invoke(LanConnectServerChatClientCheckpoint.PermanentStopAfterCleanupOwnership);
         }
+        RaiseStateChangedIfNeeded(revision);
     }
 
     private async Task DisposeAfterPermanentStopAsync()
     {
         await Task.Yield();
+        _checkpoint?.Invoke(LanConnectServerChatClientCheckpoint.PermanentCleanupBeforeDispose);
         await DisposeCurrentResourcesAsync();
     }
 
     private void ScheduleReconnect()
     {
-        if (IsPermanentlyStopped || _lifetimeCancellation.IsCancellationRequested)
-        {
-            return;
-        }
-        Interlocked.Exchange(ref _reconnectRequested, 1);
-
         lock (_lifecycleLock)
         {
-            if (_reconnectTask is { IsCompleted: false })
+            if (IsPermanentlyStopped || _lifetimeCancellation.IsCancellationRequested)
             {
+                return;
+            }
+            if (_activeReconnectLoopOrdinal != 0)
+            {
+                _reconnectRequested = 1;
                 return;
             }
             int generation = Volatile.Read(ref _lifecycleGeneration);
-            _reconnectTask = ReconnectLoopAsync(generation, _lifetimeCancellation.Token);
+            long loopOrdinal = ++_reconnectLoopOrdinal;
+            _activeReconnectLoopOrdinal = loopOrdinal;
+            _reconnectRequested = 0;
+            _reconnectTask = ReconnectLoopAsync(loopOrdinal, generation, _lifetimeCancellation.Token);
         }
     }
 
-    private async Task ReconnectLoopAsync(int generation, CancellationToken cancellationToken)
+    private async Task ReconnectLoopAsync(
+        long loopOrdinal,
+        int generation,
+        CancellationToken cancellationToken)
     {
-        await Task.Yield();
-        Interlocked.Exchange(ref _reconnectRequested, 0);
-        while (!cancellationToken.IsCancellationRequested &&
-               generation == Volatile.Read(ref _lifecycleGeneration) &&
-               !IsPermanentlyStopped)
+        try
         {
-            await DisposeCurrentResourcesAsync();
-            int attempt = Interlocked.Increment(ref _backoffAttempt) - 1;
-            double baseSeconds = attempt switch
+            await Task.Yield();
+            while (!cancellationToken.IsCancellationRequested &&
+                   generation == Volatile.Read(ref _lifecycleGeneration) &&
+                   !IsPermanentlyStopped)
             {
-                0 => 1d,
-                1 => 2d,
-                2 => 4d,
-                3 => 8d,
-                _ => 15d
-            };
-            double random = Math.Clamp(_random(), 0d, 1d);
-            TimeSpan reconnectDelay = TimeSpan.FromSeconds(baseSeconds * (0.8d + (random * 0.4d)));
-            try
-            {
-                await _delay(reconnectDelay, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                await ConnectAttemptAsync(generation, cancellationToken);
-                if (Interlocked.Exchange(ref _reconnectRequested, 0) == 0)
+                _checkpoint?.Invoke(LanConnectServerChatClientCheckpoint.ReconnectBeforeDispose);
+                await DisposeCurrentResourcesAsync();
+                int attempt = Interlocked.Increment(ref _backoffAttempt) - 1;
+                double baseSeconds = attempt switch
+                {
+                    0 => 1d,
+                    1 => 2d,
+                    2 => 4d,
+                    3 => 8d,
+                    _ => 15d
+                };
+                double random = Math.Clamp(_random(), 0d, 1d);
+                TimeSpan reconnectDelay = TimeSpan.FromSeconds(baseSeconds * (0.8d + (random * 0.4d)));
+                try
+                {
+                    await _delay(reconnectDelay, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await ConnectAttemptAsync(generation, cancellationToken);
+                    _checkpoint?.Invoke(LanConnectServerChatClientCheckpoint.ReconnectAfterConnectAttempt);
+                    lock (_lifecycleLock)
+                    {
+                        _checkpoint?.Invoke(LanConnectServerChatClientCheckpoint.ReconnectBeforeIdleHandoff);
+                        if (_reconnectRequested == 0)
+                        {
+                            _activeReconnectLoopOrdinal = 0;
+                            _reconnectTask = null;
+                            return;
+                        }
+                        _reconnectRequested = 0;
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     return;
                 }
+                catch (NotSupportedException)
+                {
+                    MarkPermanentStop();
+                    return;
+                }
+                catch
+                {
+                    lock (_lifecycleLock)
+                    {
+                        _reconnectRequested = 0;
+                    }
+                    // A failed reconnect attempt advances to the next capped delay.
+                }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        }
+        finally
+        {
+            lock (_lifecycleLock)
             {
-                return;
-            }
-            catch (NotSupportedException)
-            {
-                MarkPermanentStop();
-                return;
-            }
-            catch
-            {
-                // A failed reconnect attempt advances to the next capped delay.
+                if (_activeReconnectLoopOrdinal == loopOrdinal)
+                {
+                    _activeReconnectLoopOrdinal = 0;
+                    _reconnectRequested = 0;
+                    _reconnectTask = null;
+                }
             }
         }
     }

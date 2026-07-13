@@ -487,6 +487,87 @@ public sealed class LanConnectServerChatClientTests
     }
 
     [Fact]
+    public async Task ReconnectDisconnectAtIdleHandoffStartsAnotherAttempt()
+    {
+        FakeDelay delay = new();
+        List<FakeApi> apis = [];
+        List<FakeTransport> transports = [];
+        TaskCompletionSource secondAttemptStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int beforeDisposeCalls = 0;
+        await using LanConnectServerChatClient client = CreateReconnectClient(
+            apis,
+            transports,
+            delay,
+            random: 0.5,
+            checkpoint: checkpoint =>
+            {
+                if (checkpoint == LanConnectServerChatClientCheckpoint.ReconnectBeforeIdleHandoff)
+                {
+                    transports[1].EmitClosed();
+                }
+                else if (checkpoint == LanConnectServerChatClientCheckpoint.ReconnectBeforeDispose &&
+                         Interlocked.Increment(ref beforeDisposeCalls) == 2)
+                {
+                    secondAttemptStarted.TrySetResult();
+                }
+            });
+        await client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None);
+        ConnectReady(transports[0]);
+
+        transports[0].EmitClosed();
+        await WaitUntilAsync(() => delay.Durations.Count == 1);
+        delay.CompleteNext();
+        await secondAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(2, delay.Durations.Count);
+    }
+
+    [Fact]
+    public async Task ReconnectDuplicateOldConnectionEventsDoNotRetryHealthyReplacement()
+    {
+        FakeDelay delay = new();
+        List<FakeApi> apis = [];
+        List<FakeTransport> transports = [];
+        TaskCompletionSource idleHandoff = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource extraAttempt = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int beforeDisposeCalls = 0;
+        await using LanConnectServerChatClient client = CreateReconnectClient(
+            apis,
+            transports,
+            delay,
+            random: 0.5,
+            checkpoint: checkpoint =>
+            {
+                if (checkpoint == LanConnectServerChatClientCheckpoint.ReconnectBeforeDispose &&
+                    Interlocked.Increment(ref beforeDisposeCalls) == 1)
+                {
+                    transports[0].EmitClosed();
+                    transports[0].EmitFaulted(new InvalidOperationException("duplicate close/fault"));
+                }
+                else if (checkpoint == LanConnectServerChatClientCheckpoint.ReconnectBeforeDispose)
+                {
+                    extraAttempt.TrySetResult();
+                }
+                else if (checkpoint == LanConnectServerChatClientCheckpoint.ReconnectBeforeIdleHandoff)
+                {
+                    idleHandoff.TrySetResult();
+                }
+            });
+        await client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None);
+        ConnectReady(transports[0]);
+
+        transports[0].EmitClosed();
+        await WaitUntilAsync(() => delay.Durations.Count == 1);
+        delay.CompleteNext();
+        Task completed = await Task.WhenAny(idleHandoff.Task, extraAttempt.Task)
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Same(idleHandoff.Task, completed);
+        Assert.Single(delay.Durations);
+        Assert.Equal(2, transports.Count);
+    }
+
+    [Fact]
     public async Task ConnectChatStateDynamicallyUpdatesCanSendAndPublishesRevisionChanges()
     {
         FakeApi api = new([]);
@@ -579,12 +660,55 @@ public sealed class LanConnectServerChatClientTests
         Assert.Contains(false, observedCanSend);
     }
 
+    [Fact]
+    public async Task PermanentStopPublishesCleanupOwnershipBeforeConcurrentDispose()
+    {
+        FakeApi api = new([]);
+        FakeTransport transport = new([]);
+        Task? concurrentDispose = null;
+        bool? disposeCompletedInsideCheckpoint = null;
+        using ManualResetEventSlim cleanupMayDispose = new(false);
+        LanConnectServerChatClient? client = null;
+        client = CreateClient(
+            api,
+            () => transport,
+            checkpoint: checkpoint =>
+            {
+                if (checkpoint == LanConnectServerChatClientCheckpoint.PermanentCleanupBeforeDispose)
+                {
+                    if (!cleanupMayDispose.Wait(TimeSpan.FromSeconds(2)))
+                    {
+                        throw new TimeoutException("Permanent cleanup ownership was not published.");
+                    }
+                    return;
+                }
+                if (checkpoint != LanConnectServerChatClientCheckpoint.PermanentStopAfterCleanupOwnership)
+                {
+                    return;
+                }
+                concurrentDispose = client!.DisposeAsync().AsTask();
+                disposeCompletedInsideCheckpoint = concurrentDispose.IsCompleted;
+                cleanupMayDispose.Set();
+            });
+        await ConnectReadyAsync(client, transport);
+
+        transport.Emit("""{"type":"chat_ready","protocolVersion":2,"channel":"server"}""");
+
+        Assert.False(disposeCompletedInsideCheckpoint);
+        Assert.NotNull(concurrentDispose);
+        await concurrentDispose.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(1, transport.DisposeCalls);
+        Assert.Equal(1, api.DisposeCalls);
+        await client.DisposeAsync();
+    }
+
     private static LanConnectServerChatClient CreateClient(
         FakeApi api,
         Func<ILanConnectServerChatTransport> transportFactory,
         MutableClock? clock = null,
         FakeDelay? delay = null,
-        Func<Guid>? uuid = null) =>
+        Func<Guid>? uuid = null,
+        Action<LanConnectServerChatClientCheckpoint>? checkpoint = null) =>
         new(
             _ => api,
             () =>
@@ -595,7 +719,8 @@ public sealed class LanConnectServerChatClientTests
             clock: () => (clock ?? MutableClock.Default).Now,
             delay: (delay ?? FakeDelay.Never).DelayAsync,
             random: () => 0.5,
-            uuidFactory: uuid ?? (() => FixedGuid));
+            uuidFactory: uuid ?? (() => FixedGuid),
+            checkpoint: checkpoint);
 
     private static LanConnectServerChatClient CreateReconnectClient(
         List<FakeApi> apis,
@@ -603,7 +728,8 @@ public sealed class LanConnectServerChatClientTests
         FakeDelay delay,
         double random,
         Func<Guid>? uuid = null,
-        Action<FakeTransport, int>? configureTransport = null) =>
+        Action<FakeTransport, int>? configureTransport = null,
+        Action<LanConnectServerChatClientCheckpoint>? checkpoint = null) =>
         new(
             _ =>
             {
@@ -621,7 +747,8 @@ public sealed class LanConnectServerChatClientTests
             clock: () => MutableClock.Default.Now,
             delay: delay.DelayAsync,
             random: () => random,
-            uuidFactory: uuid ?? (() => FixedGuid));
+            uuidFactory: uuid ?? (() => FixedGuid),
+            checkpoint: checkpoint);
 
     private static async Task ConnectReadyAsync(LanConnectServerChatClient client, FakeTransport transport)
     {
