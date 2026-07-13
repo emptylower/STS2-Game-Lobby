@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -96,26 +97,80 @@ function waitForFrame(
   });
 }
 
-async function openControlWebSocket(
+function openControlWebSocket(
   url: string,
 ): Promise<{ socket: WebSocket; connected: JsonFrame }> {
-  const socket = new WebSocket(url);
-  const connectedPromise = waitForFrame(socket, (frame) => frame.type === "connected");
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      socket.terminate();
-      reject(new Error("websocket connect timeout"));
-    }, 2_000);
-    socket.once("open", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    socket.once("error", (error) => {
-      clearTimeout(timer);
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url);
+    let opened = false;
+    let connected: JsonFrame | undefined;
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      socket.off("open", onOpen);
+      socket.off("message", onMessage);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      // `terminate()` while connecting may emit one final error asynchronously.
+      socket.once("error", () => {});
+      try {
+        socket.terminate();
+      } catch {
+        // The socket may already be terminal.
+      }
       reject(error);
-    });
+    };
+    const resolveIfReady = () => {
+      if (settled || !opened || !connected) return;
+      settled = true;
+      cleanup();
+      resolve({ socket, connected });
+    };
+    const onOpen = () => {
+      opened = true;
+      resolveIfReady();
+    };
+    const onMessage = (data: WebSocket.RawData) => {
+      try {
+        const frame = JSON.parse(data.toString()) as JsonFrame;
+        if (frame.type !== "connected") return;
+        connected = frame;
+        resolveIfReady();
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error("invalid control websocket frame"));
+      }
+    };
+    const onError = (error: Error) => fail(error);
+    const onClose = (code: number) =>
+      fail(new Error(`control websocket closed before connected (${code})`));
+
+    socket.on("open", onOpen);
+    socket.on("message", onMessage);
+    socket.on("error", onError);
+    socket.on("close", onClose);
+    timer = setTimeout(() => fail(new Error("control websocket connect timeout")), 2_000);
   });
-  return { socket, connected: await connectedPromise };
+}
+
+async function reserveThenCloseLocalPort(): Promise<number> {
+  const server = createNetServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  });
+  return address.port;
 }
 
 function rejectedWebSocketStatus(url: string): Promise<number> {
@@ -142,15 +197,33 @@ function rejectedWebSocketStatus(url: string): Promise<number> {
   });
 }
 
+test("control websocket connection failure rejects once without an unhandled promise", async () => {
+  const port = await reserveThenCloseLocalPort();
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    await assert.rejects(
+      openControlWebSocket(`ws://127.0.0.1:${port}/control`),
+      /ECONNREFUSED|connect/i,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
 test("new server preserves 0.4.0 and 0.2.2 legacy lobby/control compatibility", async (t) => {
   for (const fixture of fixtures) {
     await t.test(`mod ${fixture.modVersion}`, async () => {
       const config = compatibilityConfig();
-      const service = await createLobbyService(config);
-      const address = await service.start();
+      let service: Awaited<ReturnType<typeof createLobbyService>> | undefined;
       const sockets: WebSocket[] = [];
 
       try {
+        service = await createLobbyService(config);
+        const address = await service.start();
         const createBody: Record<string, unknown> = {
           roomName: `compat-${fixture.modVersion}`,
           hostPlayerName: "Host",
@@ -265,9 +338,23 @@ test("new server preserves 0.4.0 and 0.2.2 legacy lobby/control compatibility", 
           "/chat must not accept /control query credentials",
         );
       } finally {
-        for (const socket of sockets) socket.terminate();
-        await service.close();
-        cleanupTempDir(config);
+        for (const socket of sockets) {
+          try {
+            socket.terminate();
+          } catch {
+            // The socket may already be terminal.
+          }
+        }
+        try {
+          await service?.close();
+        } catch {
+          // Cleanup must not hide the fixture's primary failure.
+        }
+        try {
+          cleanupTempDir(config);
+        } catch {
+          // Cleanup must not hide the fixture's primary failure.
+        }
       }
     });
   }
