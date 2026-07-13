@@ -219,6 +219,74 @@ public sealed class LanConnectWebSocketTransportTests
     }
 
     [Fact]
+    public async Task PublishCallbackRunsBeforePrequeuedPayloadHandler()
+    {
+        FakeWebSocket socket = new();
+        socket.QueueText("inbound");
+        await using LanConnectWebSocketTransport transport = new(socket);
+        bool published = false;
+        bool publishedAtReceive = false;
+        TaskCompletionSource received = NewSignal();
+        transport.PayloadReceived += _ =>
+        {
+            publishedAtReceive = published;
+            received.TrySetResult();
+        };
+
+        await transport.ConnectAsync(
+            new Uri("wss://lobby.example/control"),
+            requestHeaders: null,
+            initialTextPayload: "hello",
+            beforeReceiveStarts: () => published = true,
+            connectCancellationToken: TestCancellation,
+            receiveLifetimeCancellationToken: TestCancellation);
+        await received.Task.WaitAsync(TestCancellation);
+
+        Assert.True(publishedAtReceive);
+    }
+
+    [Fact]
+    public async Task PublishCallbackFailureDoesNotStartReceiveLoop()
+    {
+        FakeWebSocket socket = new();
+        LanConnectWebSocketTransport transport = new(socket);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => transport.ConnectAsync(
+            new Uri("wss://lobby.example/control"),
+            requestHeaders: null,
+            initialTextPayload: "hello",
+            beforeReceiveStarts: () => throw new InvalidOperationException("publish failed"),
+            connectCancellationToken: TestCancellation,
+            receiveLifetimeCancellationToken: TestCancellation));
+
+        Assert.Equal(0, socket.ReceiveCallCount);
+        await transport.DisposeAsync();
+        Assert.Equal(1, socket.DisposeCount);
+    }
+
+    [Fact]
+    public async Task DisposeFromPublishCallbackPreventsReceivePublication()
+    {
+        FakeWebSocket socket = new();
+        LanConnectWebSocketTransport transport = new(socket);
+        Task? dispose = null;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transport.ConnectAsync(
+            new Uri("wss://lobby.example/control"),
+            requestHeaders: null,
+            initialTextPayload: "hello",
+            beforeReceiveStarts: () => dispose = transport.DisposeAsync().AsTask(),
+            connectCancellationToken: TestCancellation,
+            receiveLifetimeCancellationToken: TestCancellation));
+
+        Assert.NotNull(dispose);
+        await dispose.WaitAsync(TestCancellation);
+        Assert.Equal(0, socket.ReceiveCallCount);
+        Assert.Equal(1, socket.AbortCount);
+        Assert.Equal(1, socket.DisposeCount);
+    }
+
+    [Fact]
     public async Task SendBeforeConnectIsRejected()
     {
         await using LanConnectWebSocketTransport transport = new(new FakeWebSocket());

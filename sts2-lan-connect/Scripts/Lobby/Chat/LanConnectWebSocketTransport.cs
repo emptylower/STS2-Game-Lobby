@@ -105,6 +105,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
             uri,
             requestHeaders,
             initialTextPayload: null,
+            beforeReceiveStarts: null,
             cancellationToken,
             cancellationToken);
     }
@@ -119,6 +120,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
             uri,
             requestHeaders,
             initialTextPayload: null,
+            beforeReceiveStarts: null,
             connectCancellationToken,
             receiveLifetimeCancellationToken);
     }
@@ -135,6 +137,26 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
             uri,
             requestHeaders,
             initialTextPayload,
+            beforeReceiveStarts: null,
+            connectCancellationToken,
+            receiveLifetimeCancellationToken);
+    }
+
+    internal Task ConnectAsync(
+        Uri uri,
+        IReadOnlyDictionary<string, string>? requestHeaders,
+        string initialTextPayload,
+        Action beforeReceiveStarts,
+        CancellationToken connectCancellationToken,
+        CancellationToken receiveLifetimeCancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(initialTextPayload);
+        ArgumentNullException.ThrowIfNull(beforeReceiveStarts);
+        return ConnectCoreEntryAsync(
+            uri,
+            requestHeaders,
+            initialTextPayload,
+            beforeReceiveStarts,
             connectCancellationToken,
             receiveLifetimeCancellationToken);
     }
@@ -143,6 +165,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         Uri uri,
         IReadOnlyDictionary<string, string>? requestHeaders,
         string? initialTextPayload,
+        Action? beforeReceiveStarts,
         CancellationToken connectCancellationToken,
         CancellationToken receiveLifetimeCancellationToken)
     {
@@ -168,6 +191,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
                 uri,
                 requestHeaders,
                 initialTextPayload,
+                beforeReceiveStarts,
                 connectCancellation,
                 receiveCancellation,
                 start.Task);
@@ -253,6 +277,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         Uri uri,
         IReadOnlyDictionary<string, string>? requestHeaders,
         string? initialTextPayload,
+        Action? beforeReceiveStarts,
         CancellationTokenSource connectCancellation,
         CancellationTokenSource receiveCancellation,
         Task start)
@@ -273,6 +298,8 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
             byte[] initialBytes = StrictUtf8.GetBytes(initialTextPayload);
             await SendSerializedAsync(initialBytes, connectCancellation.Token);
         }
+        receiveCancellation.Token.ThrowIfCancellationRequested();
+        beforeReceiveStarts?.Invoke();
         receiveCancellation.Token.ThrowIfCancellationRequested();
         Task receiveLoop = ReceiveLoopAsync(receiveCancellation.Token);
         lock (_lifecycleLock)
@@ -312,7 +339,6 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
 
     private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
     {
-        await Task.Yield();
         byte[] receiveBuffer = new byte[4096];
         ArrayBufferWriter<byte> messageBuffer = new();
 

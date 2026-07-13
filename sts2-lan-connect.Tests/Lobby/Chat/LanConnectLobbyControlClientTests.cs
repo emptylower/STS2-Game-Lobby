@@ -89,10 +89,12 @@ public sealed class LanConnectLobbyControlClientTests
         socket.QueueText("{\"type\":\"room_chat\",\"roomId\":\"room-1\",\"messageText\":\"hello\"}");
         await using LobbyControlClient client = new(socket);
         string[]? payloadsAtDispatch = null;
+        bool isConnectedAtDispatch = false;
         TaskCompletionSource dispatched = NewSignal();
         client.EnvelopeReceived += _ =>
         {
             payloadsAtDispatch = socket.SentPayloads.ToArray();
+            isConnectedAtDispatch = client.IsConnected;
             dispatched.TrySetResult();
         };
 
@@ -106,6 +108,7 @@ public sealed class LanConnectLobbyControlClientTests
 
         Assert.NotNull(payloadsAtDispatch);
         Assert.Equal(["{\"type\":\"host_hello\",\"roomId\":\"room-1\",\"controlChannelId\":\"control-1\",\"role\":\"host\",\"playerName\":\"Host\"}"], payloadsAtDispatch);
+        Assert.True(isConnectedAtDispatch);
     }
 
     [Fact]
@@ -226,6 +229,7 @@ public sealed class LanConnectLobbyControlClientTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
         Assert.False(client.IsConnected);
         Assert.Empty(socket.SentPayloads);
+        Assert.Equal(0, socket.ReceiveCallCount);
         Assert.Equal(1, socket.AbortCount);
         Assert.Equal(1, socket.DisposeCount);
     }
@@ -361,6 +365,7 @@ public sealed class LanConnectLobbyControlClientTests
         private readonly TaskCompletionSource _connectRelease = NewSignal();
         private readonly TaskCompletionSource _abortSignal = NewSignal();
         private int _sendCallCount;
+        private int _receiveCallCount;
         private int _abortCount;
 
         public WebSocketState State { get; private set; } = WebSocketState.None;
@@ -372,6 +377,8 @@ public sealed class LanConnectLobbyControlClientTests
         public int DisposeCount { get; private set; }
 
         public int AbortCount => Volatile.Read(ref _abortCount);
+
+        public int ReceiveCallCount => Volatile.Read(ref _receiveCallCount);
 
         public bool CloseBeforeConnectReturns { get; init; }
 
@@ -413,6 +420,7 @@ public sealed class LanConnectLobbyControlClientTests
             Memory<byte> buffer,
             CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref _receiveCallCount);
             Frame frame = await _frames.Reader.ReadAsync(cancellationToken);
             frame.Payload.CopyTo(buffer);
             if (frame.MessageType == WebSocketMessageType.Close)

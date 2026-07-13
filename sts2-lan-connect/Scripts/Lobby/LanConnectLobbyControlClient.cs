@@ -109,9 +109,10 @@ internal sealed class LobbyControlClient : IAsyncDisposable
                 controlUri,
                 requestHeaders: null,
                 helloPayload,
+                PublishConnected,
                 cancellationToken,
                 _lifetimeCancellation.Token);
-            if (Interlocked.CompareExchange(ref _lifecycleState, Connected, NotConnected) != NotConnected)
+            if (!IsConnected)
             {
                 throw new InvalidOperationException("The lobby control channel closed before connection completed.");
             }
@@ -127,6 +128,14 @@ internal sealed class LobbyControlClient : IAsyncDisposable
             {
             }
             throw;
+        }
+    }
+
+    private void PublishConnected()
+    {
+        if (Interlocked.CompareExchange(ref _lifecycleState, Connected, NotConnected) != NotConnected)
+        {
+            throw new InvalidOperationException("The lobby control channel closed before connection completed.");
         }
     }
 
