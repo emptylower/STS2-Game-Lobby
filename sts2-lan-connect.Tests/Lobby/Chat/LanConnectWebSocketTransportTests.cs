@@ -219,6 +219,70 @@ public sealed class LanConnectWebSocketTransportTests
     }
 
     [Fact]
+    public async Task SendBeforeConnectIsRejected()
+    {
+        await using LanConnectWebSocketTransport transport = new(new FakeWebSocket());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => transport.SendAsync("too_early", TestCancellation));
+    }
+
+    [Fact]
+    public async Task SendDuringSocketConnectWaitsForInitialPayload()
+    {
+        FakeWebSocket socket = new() { HoldConnect = true };
+        await using LanConnectWebSocketTransport transport = new(socket);
+        Task connect = transport.ConnectAsync(
+            new Uri("wss://lobby.example/control"),
+            requestHeaders: null,
+            initialTextPayload: "hello",
+            connectCancellationToken: TestCancellation,
+            receiveLifetimeCancellationToken: TestCancellation);
+        await socket.ConnectReachedGate.Task.WaitAsync(TestCancellation);
+
+        Task send = transport.SendAsync("room_chat", TestCancellation);
+        await Task.Yield();
+
+        try
+        {
+            Assert.Equal(0, socket.SendCallCount);
+        }
+        finally
+        {
+            socket.ReleaseConnect();
+        }
+        await Task.WhenAll(connect, send).WaitAsync(TestCancellation);
+        Assert.Equal(["hello", "room_chat"], socket.SentPayloads);
+    }
+
+    [Fact]
+    public async Task SendDuringInitialPayloadWaitsForHandshakeCompletion()
+    {
+        FakeWebSocket socket = new() { HoldFirstSend = true };
+        await using LanConnectWebSocketTransport transport = new(socket);
+        Task connect = transport.ConnectAsync(
+            new Uri("wss://lobby.example/control"),
+            requestHeaders: null,
+            initialTextPayload: "hello",
+            connectCancellationToken: TestCancellation,
+            receiveLifetimeCancellationToken: TestCancellation);
+        await socket.FirstSendStarted.Task.WaitAsync(TestCancellation);
+
+        Task send = transport.SendAsync("room_chat", TestCancellation);
+        await Task.Yield();
+
+        try
+        {
+            Assert.Equal(1, socket.SendCallCount);
+        }
+        finally
+        {
+            socket.ReleaseFirstSend();
+        }
+        await Task.WhenAll(connect, send).WaitAsync(TestCancellation);
+        Assert.Equal(["hello", "room_chat"], socket.SentPayloads);
+    }
+
+    [Fact]
     public async Task InitialPayloadFailureDoesNotStartReceiveLoop()
     {
         WebSocketException failure = new(WebSocketError.Faulted);
@@ -335,6 +399,28 @@ public sealed class LanConnectWebSocketTransportTests
         await Task.WhenAll(send, secondClose).WaitAsync(TestCancellation);
 
         Assert.Single(socket.CloseCalls);
+    }
+
+    [Fact]
+    public async Task DisposeObservesUnderlyingCloseFaultAfterCallerStopsWaiting()
+    {
+        FakeWebSocket socket = new() { FailCloseAfterAbort = true };
+        LanConnectWebSocketTransport transport = new(socket);
+        await transport.ConnectAsync(new Uri("wss://lobby.example/chat"), cancellationToken: TestCancellation);
+        using CancellationTokenSource waitCancellation = new();
+        Task closeWait = transport.CloseAsync(
+            WebSocketCloseStatus.NormalClosure,
+            "client_shutdown",
+            waitCancellation.Token);
+        await socket.CloseStarted.Task.WaitAsync(TestCancellation);
+        waitCancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => closeWait);
+
+        await transport.DisposeAsync().AsTask().WaitAsync(TestCancellation);
+
+        await socket.CloseFaulted.Task.WaitAsync(TestCancellation);
+        Assert.Equal(1, socket.AbortCount);
+        Assert.Equal(1, socket.DisposeCount);
     }
 
     [Fact]
@@ -551,10 +637,12 @@ public sealed class LanConnectWebSocketTransportTests
         public TaskCompletionSource ConnectReachedGate { get; } = NewSignal();
         public TaskCompletionSource FirstSendStarted { get; } = NewSignal();
         public TaskCompletionSource CloseStarted { get; } = NewSignal();
+        public TaskCompletionSource CloseFaulted { get; } = NewSignal();
         public bool HoldConnect { get; init; }
         public bool HoldFirstSend { get; init; }
         public bool HangFirstSendUntilAbort { get; init; }
         public bool HangReceiveUntilAbort { get; init; }
+        public bool FailCloseAfterAbort { get; init; }
         public Exception? ReceiveException { get; set; }
         public Exception? SendException { get; set; }
         public Exception? CloseException { get; init; }
@@ -650,18 +738,23 @@ public sealed class LanConnectWebSocketTransportTests
             }
         }
 
-        public Task CloseAsync(WebSocketCloseStatus closeStatus, string statusDescription, CancellationToken cancellationToken)
+        public async Task CloseAsync(WebSocketCloseStatus closeStatus, string statusDescription, CancellationToken cancellationToken)
         {
             CloseStarted.TrySetResult();
             if (CloseException is Exception closeException)
             {
-                return Task.FromException(closeException);
+                throw closeException;
+            }
+            if (FailCloseAfterAbort)
+            {
+                await _abortSignal.Task;
+                CloseFaulted.TrySetResult();
+                throw new WebSocketException(WebSocketError.ConnectionClosedPrematurely);
             }
             CloseCall call = new(closeStatus, statusDescription);
             CloseCalls.Add(call);
             _closes.Writer.TryWrite(call);
             State = WebSocketState.Closed;
-            return Task.CompletedTask;
         }
 
         public ValueTask DisposeAsync()

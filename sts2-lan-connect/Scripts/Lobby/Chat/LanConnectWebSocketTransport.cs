@@ -204,10 +204,17 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(payload);
         byte[] bytes = StrictUtf8.GetBytes(payload);
+        Task connectTask;
         CancellationTokenSource sendCancellation;
         lock (_lifecycleLock)
         {
             ThrowIfDisposed();
+            if (_connectStarted == 0)
+            {
+                throw new InvalidOperationException("The WebSocket transport is not connected.");
+            }
+
+            connectTask = _connectTask;
             sendCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
                 _disposeCancellation.Token);
@@ -215,6 +222,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
 
         using (sendCancellation)
         {
+            await connectTask.WaitAsync(sendCancellation.Token);
             await SendSerializedAsync(bytes, sendCancellation.Token);
         }
     }
@@ -234,7 +242,8 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
                 catch
                 {
                 }
-                _disposeTask = DisposeCoreAsync(_connectTask);
+                Task closeTask = _closeTask ?? Task.CompletedTask;
+                _disposeTask = DisposeCoreAsync(_connectTask, closeTask);
             }
             return new ValueTask(_disposeTask);
         }
@@ -303,6 +312,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
 
     private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
     {
+        await Task.Yield();
         byte[] receiveBuffer = new byte[4096];
         ArrayBufferWriter<byte> messageBuffer = new();
 
@@ -467,7 +477,7 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         }
     }
 
-    private async Task DisposeCoreAsync(Task connectTask)
+    private async Task DisposeCoreAsync(Task connectTask, Task closeTask)
     {
         try
         {
@@ -485,6 +495,14 @@ internal sealed class LanConnectWebSocketTransport : IAsyncDisposable
         try
         {
             await receiveLoop;
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            await closeTask;
         }
         catch
         {

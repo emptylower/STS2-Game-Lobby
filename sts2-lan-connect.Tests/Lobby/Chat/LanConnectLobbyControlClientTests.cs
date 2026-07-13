@@ -231,6 +231,40 @@ public sealed class LanConnectLobbyControlClientTests
     }
 
     [Fact]
+    public async Task SendDuringConnectCannotOvertakeInitialHello()
+    {
+        FakeWebSocket socket = new() { HoldConnect = true };
+        await using LobbyControlClient client = new(socket);
+        Task connect = client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            CancellationToken.None);
+        await socket.ConnectStarted.Task.WaitAsync(TestTimeout);
+
+        Task send = client.SendAsync(new LobbyControlEnvelope
+        {
+            Type = "room_chat",
+            RoomId = "room-1",
+            MessageText = "queued"
+        });
+        await Task.Yield();
+
+        try
+        {
+            Assert.Empty(socket.SentPayloads);
+        }
+        finally
+        {
+            socket.ReleaseConnect();
+        }
+        await Task.WhenAll(connect, send).WaitAsync(TestTimeout);
+        Assert.Contains("\"type\":\"host_hello\"", socket.SentPayloads[0], StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"room_chat\"", socket.SentPayloads[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task InitialHelloSendFailureTerminatesAndCleansUpSocket()
     {
         FakeWebSocket socket = new() { FailSendCall = 1 };
