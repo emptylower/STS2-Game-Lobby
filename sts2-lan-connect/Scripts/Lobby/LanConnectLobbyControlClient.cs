@@ -9,13 +9,16 @@ namespace Sts2LanConnect.Scripts;
 
 internal sealed class LobbyControlClient : IAsyncDisposable
 {
+    private const int NotConnected = 0;
+    private const int Connected = 1;
+    private const int Terminal = 2;
+
     private readonly LanConnectWebSocketTransport _transport;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly object _lifecycleLock = new();
     private string _role = "host";
     private Task? _disposeTask;
-    private int _isConnected;
-    private int _disposed;
+    private int _lifecycleState;
 
     public LobbyControlClient()
         : this(new LanConnectClientWebSocket())
@@ -30,7 +33,7 @@ internal sealed class LobbyControlClient : IAsyncDisposable
         _transport.Closed += OnTransportClosed;
     }
 
-    public bool IsConnected => Volatile.Read(ref _isConnected) != 0;
+    public bool IsConnected => Volatile.Read(ref _lifecycleState) == Connected;
 
     public event Action<LobbyControlEnvelope>? EnvelopeReceived;
 
@@ -91,14 +94,17 @@ internal sealed class LobbyControlClient : IAsyncDisposable
             requestHeaders: null,
             cancellationToken,
             _lifetimeCancellation.Token);
-        Interlocked.Exchange(ref _isConnected, 1);
+        if (Interlocked.CompareExchange(ref _lifecycleState, Connected, NotConnected) != NotConnected)
+        {
+            throw new InvalidOperationException("The lobby control channel closed before connection completed.");
+        }
         await SendAsync(helloEnvelope, cancellationToken);
     }
 
     private async Task DisposeCoreAsync()
     {
-        Interlocked.Exchange(ref _disposed, 1);
-        if (IsConnected)
+        int previousState = Interlocked.Exchange(ref _lifecycleState, Terminal);
+        if (previousState == Connected)
         {
             try
             {
@@ -114,7 +120,6 @@ internal sealed class LobbyControlClient : IAsyncDisposable
             }
         }
 
-        Interlocked.Exchange(ref _isConnected, 0);
         _lifetimeCancellation.Cancel();
         _transport.PayloadReceived -= OnPayloadReceived;
         _transport.Faulted -= OnTransportFaulted;
@@ -175,7 +180,7 @@ internal sealed class LobbyControlClient : IAsyncDisposable
         {
             await send;
         }
-        catch (Exception ex) when (Volatile.Read(ref _disposed) == 0)
+        catch (Exception ex) when (Volatile.Read(ref _lifecycleState) != Terminal)
         {
             LogPongSendFailure(ex);
         }
@@ -186,13 +191,13 @@ internal sealed class LobbyControlClient : IAsyncDisposable
 
     private void OnTransportFaulted(Exception exception)
     {
-        Interlocked.Exchange(ref _isConnected, 0);
+        Interlocked.Exchange(ref _lifecycleState, Terminal);
         LogTransportFailure(exception);
     }
 
     private void OnTransportClosed()
     {
-        Interlocked.Exchange(ref _isConnected, 0);
+        Interlocked.Exchange(ref _lifecycleState, Terminal);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

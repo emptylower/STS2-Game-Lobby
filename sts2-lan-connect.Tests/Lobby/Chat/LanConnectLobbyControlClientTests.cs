@@ -122,6 +122,45 @@ public sealed class LanConnectLobbyControlClientTests
         Assert.Equal(1, socket.DisposeCount);
     }
 
+    [Fact]
+    public async Task RemoteCloseBeforeConnectReturnsCannotLeaveClientConnected()
+    {
+        FakeWebSocket socket = new() { CloseBeforeConnectReturns = true };
+        await using LobbyControlClient client = new(socket);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            CancellationToken.None));
+
+        Assert.False(client.IsConnected);
+        Assert.Empty(socket.SentPayloads);
+    }
+
+    [Fact]
+    public async Task DisposeDuringConnectKeepsTerminalStateAndDisposesSocketOnce()
+    {
+        FakeWebSocket socket = new() { HoldConnect = true };
+        LobbyControlClient client = new(socket);
+        Task connect = client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            CancellationToken.None);
+        await socket.ConnectStarted.Task.WaitAsync(TestTimeout);
+
+        await client.DisposeAsync().AsTask().WaitAsync(TestTimeout);
+        socket.ReleaseConnect();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
+        Assert.False(client.IsConnected);
+        Assert.Empty(socket.SentPayloads);
+        Assert.Equal(1, socket.DisposeCount);
+    }
+
     private static TaskCompletionSource NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -129,6 +168,7 @@ public sealed class LanConnectLobbyControlClientTests
     {
         private readonly Channel<Frame> _frames = Channel.CreateUnbounded<Frame>();
         private readonly Channel<string> _sentPayloads = Channel.CreateUnbounded<string>();
+        private readonly TaskCompletionSource _connectRelease = NewSignal();
 
         public WebSocketState State { get; private set; } = WebSocketState.None;
 
@@ -138,14 +178,28 @@ public sealed class LanConnectLobbyControlClientTests
 
         public int DisposeCount { get; private set; }
 
+        public bool CloseBeforeConnectReturns { get; init; }
+
+        public bool HoldConnect { get; init; }
+
+        public TaskCompletionSource ConnectStarted { get; } = NewSignal();
+
         public void SetRequestHeader(string headerName, string headerValue)
         {
         }
 
-        public Task ConnectAsync(Uri uri, CancellationToken cancellationToken)
+        public async Task ConnectAsync(Uri uri, CancellationToken cancellationToken)
         {
             State = WebSocketState.Open;
-            return Task.CompletedTask;
+            ConnectStarted.TrySetResult();
+            if (HoldConnect)
+            {
+                await _connectRelease.Task.WaitAsync(cancellationToken);
+            }
+            if (CloseBeforeConnectReturns)
+            {
+                QueueClose();
+            }
         }
 
         public async ValueTask<ValueWebSocketReceiveResult> ReceiveAsync(
@@ -154,7 +208,11 @@ public sealed class LanConnectLobbyControlClientTests
         {
             Frame frame = await _frames.Reader.ReadAsync(cancellationToken);
             frame.Payload.CopyTo(buffer);
-            return new ValueWebSocketReceiveResult(frame.Payload.Length, WebSocketMessageType.Text, frame.EndOfMessage);
+            if (frame.MessageType == WebSocketMessageType.Close)
+            {
+                State = WebSocketState.CloseReceived;
+            }
+            return new ValueWebSocketReceiveResult(frame.Payload.Length, frame.MessageType, frame.EndOfMessage);
         }
 
         public ValueTask SendAsync(
@@ -193,7 +251,12 @@ public sealed class LanConnectLobbyControlClientTests
         }
 
         public void QueueText(string payload, bool endOfMessage = true) =>
-            _frames.Writer.TryWrite(new Frame(Encoding.UTF8.GetBytes(payload), endOfMessage));
+            _frames.Writer.TryWrite(new Frame(Encoding.UTF8.GetBytes(payload), WebSocketMessageType.Text, endOfMessage));
+
+        public void QueueClose() =>
+            _frames.Writer.TryWrite(new Frame([], WebSocketMessageType.Close, true));
+
+        public void ReleaseConnect() => _connectRelease.TrySetResult();
 
         public async Task<string> NextSentPayloadAsync()
         {
@@ -208,7 +271,7 @@ public sealed class LanConnectLobbyControlClientTests
         }
     }
 
-    private sealed record Frame(byte[] Payload, bool EndOfMessage);
+    private sealed record Frame(byte[] Payload, WebSocketMessageType MessageType, bool EndOfMessage);
 
     private sealed record CloseCall(WebSocketCloseStatus Status, string Description);
 }
