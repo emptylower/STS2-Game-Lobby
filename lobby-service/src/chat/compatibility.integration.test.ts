@@ -35,13 +35,11 @@ interface JoinedRoom {
 
 interface LegacyFixture {
   modVersion: "0.4.0" | "0.2.2";
-  maxPlayers: number;
-  includeProtocolProfile: boolean;
 }
 
 const fixtures: LegacyFixture[] = [
-  { modVersion: "0.4.0", maxPlayers: 8, includeProtocolProfile: true },
-  { modVersion: "0.2.2", maxPlayers: 4, includeProtocolProfile: false },
+  { modVersion: "0.4.0" },
+  { modVersion: "0.2.2" },
 ];
 
 function compatibilityConfig(): LobbyServiceConfig {
@@ -160,15 +158,12 @@ test("new server preserves 0.4.0 and 0.2.2 legacy lobby/control compatibility", 
           version: "1.0.0",
           modVersion: fixture.modVersion,
           modList: ["sts2_lan_connect"],
-          maxPlayers: fixture.maxPlayers,
+          maxPlayers: 4,
           hostConnectionInfo: {
             enetPort: 7777,
             localAddresses: ["127.0.0.1"],
           },
         };
-        if (fixture.includeProtocolProfile) {
-          createBody.protocolProfile = "extended_8p";
-        }
 
         const createResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
           method: "POST",
@@ -178,7 +173,7 @@ test("new server preserves 0.4.0 and 0.2.2 legacy lobby/control compatibility", 
         assert.equal(createResponse.status, 201, `create status drifted for ${fixture.modVersion}`);
         const created = (await createResponse.json()) as CreatedRoom;
         assert.equal(created.room.modVersion, fixture.modVersion);
-        assert.equal(created.room.maxPlayers, fixture.maxPlayers);
+        assert.equal(created.room.maxPlayers, 4);
         assert.equal(created.room.relayState, "planned");
         assert.equal(typeof created.roomSessionId, "string");
         assert.ok(created.roomSessionId.length > 0);

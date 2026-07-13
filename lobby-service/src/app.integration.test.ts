@@ -103,66 +103,69 @@ test("factory construction does not start relay cleanup interval before start", 
 test("close terminates active control-channel sockets and finishes promptly", async () => {
   const config = testConfig({ port: 0 });
   const service = await createLobbyService(config);
-  const address = await service.start();
-
-  const createResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      roomName: "close-test",
-      hostPlayerName: "Host",
-      gameMode: "standard",
-      version: "1.0.0",
-      modVersion: "1.0.0",
-      modList: [],
-      maxPlayers: 4,
-      hostConnectionInfo: {
-        enetPort: 7777,
-        localAddresses: ["127.0.0.1"],
-      },
-    }),
-  });
-  assert.equal(createResponse.status, 201);
-  const created = (await createResponse.json()) as {
-    roomId: string;
-    hostToken: string;
-    controlChannelId: string;
-  };
-
-  const wsUrl =
-    `ws://127.0.0.1:${address.port}${config.wsPath}` +
-    `?roomId=${encodeURIComponent(created.roomId)}` +
-    `&controlChannelId=${encodeURIComponent(created.controlChannelId)}` +
-    `&role=host` +
-    `&token=${encodeURIComponent(created.hostToken)}`;
-
-  const socket = new WebSocket(wsUrl);
-  const connectedFrame = new Promise<Record<string, unknown>>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("connected frame timeout")), 2000);
-    socket.once("message", (data) => {
-      clearTimeout(timer);
-      resolve(JSON.parse(data.toString()) as Record<string, unknown>);
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("websocket connect timeout")), 2000);
-    socket.once("open", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    socket.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
-  assert.deepEqual(await connectedFrame, {
-    type: "connected",
-    roomId: created.roomId,
-    controlChannelId: created.controlChannelId,
-    role: "host",
-  });
+  let socket: WebSocket | undefined;
 
   try {
+    const address = await service.start();
+    const createResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "close-test",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: {
+          enetPort: 7777,
+          localAddresses: ["127.0.0.1"],
+        },
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = (await createResponse.json()) as {
+      roomId: string;
+      hostToken: string;
+      controlChannelId: string;
+    };
+
+    const wsUrl =
+      `ws://127.0.0.1:${address.port}${config.wsPath}` +
+      `?roomId=${encodeURIComponent(created.roomId)}` +
+      `&controlChannelId=${encodeURIComponent(created.controlChannelId)}` +
+      `&role=host` +
+      `&token=${encodeURIComponent(created.hostToken)}`;
+
+    const controlSocket = new WebSocket(wsUrl);
+    socket = controlSocket;
+    const connectedFrame = new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("connected frame timeout")), 2000);
+      controlSocket.once("message", (data) => {
+        clearTimeout(timer);
+        resolve(JSON.parse(data.toString()) as Record<string, unknown>);
+      });
+    });
+    const opened = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("websocket connect timeout")), 2000);
+      controlSocket.once("open", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      controlSocket.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    const [, connected] = await Promise.all([opened, connectedFrame]);
+    assert.deepEqual(connected, {
+      type: "connected",
+      roomId: created.roomId,
+      controlChannelId: created.controlChannelId,
+      role: "host",
+    });
+
     await Promise.race([
       service.close(),
       sleep(1500).then(() => {
@@ -172,10 +175,11 @@ test("close terminates active control-channel sockets and finishes promptly", as
     assert.equal(service.httpServer.listening, false);
   } finally {
     try {
-      socket.terminate();
+      socket?.terminate();
     } catch {
       // ignore
     }
+    await service.close();
     cleanupTempDir(config);
   }
 });
