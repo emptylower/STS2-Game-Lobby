@@ -1,7 +1,7 @@
 <Project Sdk="Godot.NET.Sdk/4.5.1">
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
-    <AssemblyName>sts2_lan_connect_gdunit_tests</AssemblyName>
+    <AssemblyName>sts2_lan_connect.GdUnitTests</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>12.0</LangVersion>
@@ -10,10 +10,21 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <EnableDynamicLoading>true</EnableDynamicLoading>
+
+    <UserHome>$([System.Environment]::GetFolderPath(System.Environment+SpecialFolder.UserProfile))</UserHome>
+
+    <Sts2Root Condition="'$(Sts2Root)' == '' and '$(OS)' == 'Windows_NT'">C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2</Sts2Root>
+    <Sts2Root Condition="'$(Sts2Root)' == '' and '$(OS)' != 'Windows_NT'">$(UserHome)/Library/Application Support/Steam/steamapps/common/Slay the Spire 2</Sts2Root>
+
+    <Sts2MacApp>$(Sts2Root)/SlayTheSpire2.app</Sts2MacApp>
+
+    <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and '$(OS)' == 'Windows_NT'">$(Sts2Root)\data_sts2_windows_x86_64</Sts2DataDir>
+    <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and '$(OS)' != 'Windows_NT' and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">$(Sts2MacApp)/Contents/Resources/data_sts2_macos_arm64</Sts2DataDir>
+    <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and '$(OS)' != 'Windows_NT' and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' != 'Arm64'">$(Sts2MacApp)/Contents/Resources/data_sts2_macos_x86_64</Sts2DataDir>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="gdUnit4.api" Version="5.1.0-rc1" />
+    <PackageReference Include="gdUnit4.api" Version="5.0.0" />
     <PackageReference Include="gdUnit4.test.adapter" Version="3.0.0">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -22,5 +33,21 @@
       <PrivateAssets>none</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\sts2-lan-connect\sts2_lan_connect.csproj" />
+    <Reference Include="sts2">
+      <HintPath>$(Sts2DataDir)/sts2.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(Sts2DataDir)/0Harmony.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Steamworks.NET">
+      <HintPath>$(Sts2DataDir)/Steamworks.NET.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 </Project>

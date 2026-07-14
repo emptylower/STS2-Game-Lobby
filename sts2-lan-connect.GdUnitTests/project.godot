@@ -11,4 +11,4 @@ run/main_scene="res://TestMain.tscn"
 
 [dotnet]
 
-project/assembly_name="sts2_lan_connect_gdunit_tests"
+project/assembly_name="sts2_lan_connect.GdUnitTests"

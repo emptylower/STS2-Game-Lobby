@@ -11,11 +11,11 @@ public sealed class LanConnectFocusSmokeTests
     [TestCase]
     public void PanelContainer_can_be_configured_as_focusable_room_card_surface()
     {
-        PanelContainer card = new()
+        PanelContainer card = AutoFree(new PanelContainer
         {
             Name = "RoomCard_room_123",
             FocusMode = Control.FocusModeEnum.All
-        };
+        })!;
         Label label = new()
         {
             Name = "Label",
@@ -36,8 +36,11 @@ public sealed class LanConnectFocusSmokeTests
     [TestCase]
     public void Explicit_focus_neighbors_can_be_assigned_between_controls()
     {
-        Button first = new() { Name = "First", FocusMode = Control.FocusModeEnum.All };
-        Button second = new() { Name = "Second", FocusMode = Control.FocusModeEnum.All };
+        Button first = AutoFree(new Button { Name = "First", FocusMode = Control.FocusModeEnum.All })!;
+        Button second = AutoFree(new Button { Name = "Second", FocusMode = Control.FocusModeEnum.All })!;
+        Window root = ((SceneTree)Engine.GetMainLoop()).Root;
+        root.AddChild(first);
+        root.AddChild(second);
 
         first.FocusNext = second.GetPath();
         second.FocusPrevious = first.GetPath();
