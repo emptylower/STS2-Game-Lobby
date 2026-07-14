@@ -25,15 +25,19 @@ internal interface ILanConnectServerChatClient : IAsyncDisposable
 
 internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 {
+    private const int LegacyRoomConfirmedMessageLimit = 60;
     private readonly ILanConnectServerChatClient _client;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly object _lifecycleLock = new();
+    private readonly CancellationTokenSource _lifetimeCancellation = new();
+    private readonly CancellationToken _lifetimeToken;
     private Task? _disposeTask;
     private bool _disposed;
 
     internal LanConnectLobbyRuntimeChatCoordinator(ILanConnectServerChatClient client)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
+        _lifetimeToken = _lifetimeCancellation.Token;
         State = new LanConnectDualChatState(client.State);
         _client.StateChanged += OnClientStateChanged;
     }
@@ -42,16 +46,21 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 
     internal event Action? StateChanged;
 
-    internal void BeginRoomPending(string clientMessageId, string senderName, string text)
+    internal void BeginRoomPending(
+        string clientMessageId,
+        string senderName,
+        string? senderNetId,
+        string text,
+        DateTimeOffset sentAt)
     {
         ThrowIfDisposed();
-        MutateRoom(() => State.Room.BeginPendingText(clientMessageId, senderName, text));
+        MutateRoom(() => State.Room.BeginPendingText(clientMessageId, senderName, text, senderNetId, sentAt));
     }
 
     internal void ConfirmRoomSend(string clientMessageId)
     {
         ThrowIfDisposed();
-        MutateRoom(() => State.Room.MarkLegacySendConfirmed(clientMessageId));
+        MutateRoom(() => State.Room.MarkLegacySendConfirmed(clientMessageId, LegacyRoomConfirmedMessageLimit));
     }
 
     internal void FailRoomSend(string clientMessageId, string code, string message)
@@ -64,7 +73,9 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         string roomId,
         string messageId,
         string senderName,
+        string? senderNetId,
         string text,
+        DateTimeOffset sentAt,
         bool isLocal)
     {
         ThrowIfDisposed();
@@ -81,12 +92,14 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
             }
         }
 
-        MutateRoom(() => State.Room.AppendConfirmedForTests(
+        MutateRoom(() => State.Room.AppendLegacyConfirmed(
             messageId,
             senderName,
+            senderNetId,
             text,
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            isLocal));
+            sentAt,
+            isLocal,
+            LegacyRoomConfirmedMessageLimit));
     }
 
     internal void EnterRoom(string roomId)
@@ -129,7 +142,11 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
     {
         lock (_lifecycleLock)
         {
-            _disposed = true;
+            if (!_disposed)
+            {
+                _disposed = true;
+                _lifetimeCancellation.Cancel();
+            }
             _disposeTask ??= DisposeCoreAsync();
             return new ValueTask(_disposeTask);
         }
@@ -140,11 +157,13 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        await _operationGate.WaitAsync(cancellationToken);
+        using CancellationTokenSource operationCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeToken);
+        await _operationGate.WaitAsync(operationCancellation.Token);
         try
         {
             ThrowIfDisposed();
-            await operation(cancellationToken);
+            await operation(operationCancellation.Token);
         }
         finally
         {
@@ -162,6 +181,7 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         }
         finally
         {
+            _lifetimeCancellation.Dispose();
             _operationGate.Release();
         }
     }

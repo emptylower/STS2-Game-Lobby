@@ -83,6 +83,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
             RoomId = roomId,
             MessageId = message.MessageId ?? message.ClientMessageId ?? string.Empty,
             SenderName = message.SenderName,
+            SenderNetId = message.SenderNetId,
             MessageText = message.Text,
             SentAt = message.SentAt,
             IsLocal = message.IsLocal
@@ -435,9 +436,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         }
 
         string senderName = LanConnectConfig.GetEffectivePlayerDisplayName();
+        string? senderNetId = _activeSession?.NetService.NetId.ToString() ?? _activeClientSession?.PlayerNetId;
         DateTimeOffset sentAt = DateTimeOffset.UtcNow;
         string messageId = Guid.NewGuid().ToString("N");
-        coordinator.BeginRoomPending(messageId, senderName, normalizedMessage);
+        coordinator.BeginRoomPending(messageId, senderName, senderNetId, normalizedMessage, sentAt);
         try
         {
             await SendLegacyRoomChatEnvelopeAsync(
@@ -1085,7 +1087,14 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         DateTimeOffset sentAt = envelope.SentAtUnixMs.HasValue
             ? DateTimeOffset.FromUnixTimeMilliseconds(envelope.SentAtUnixMs.Value)
             : DateTimeOffset.UtcNow;
-        GetChatCoordinator().AppendRoomConfirmed(roomId, messageId, senderName, normalizedMessage, isLocal: false);
+        GetChatCoordinator().AppendRoomConfirmed(
+            roomId,
+            messageId,
+            senderName,
+            envelope.PlayerNetId,
+            normalizedMessage,
+            sentAt,
+            isLocal: false);
     }
 
     private void EnterChatRoom(string roomId)
@@ -1097,7 +1106,9 @@ internal sealed partial class LanConnectLobbyRuntime : Node
             roomId,
             $"system-{Guid.NewGuid():N}",
             "房间聊天",
+            null,
             "已连接房间聊天。",
+            DateTimeOffset.UtcNow,
             isLocal: false);
     }
 
@@ -1113,7 +1124,14 @@ internal sealed partial class LanConnectLobbyRuntime : Node
 
     private void AppendChatMessage(string roomId, string messageId, string senderName, string? senderNetId, string messageText, DateTimeOffset sentAt, bool isLocal)
     {
-        GetChatCoordinator().AppendRoomConfirmed(roomId, messageId, senderName, messageText, isLocal);
+        GetChatCoordinator().AppendRoomConfirmed(
+            roomId,
+            messageId,
+            senderName,
+            senderNetId,
+            messageText,
+            sentAt,
+            isLocal);
     }
 
     internal static LobbyControlEnvelope CreateHostedRoomChatEnvelope(

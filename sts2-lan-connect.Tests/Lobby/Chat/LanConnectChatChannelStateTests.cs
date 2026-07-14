@@ -8,6 +8,98 @@ namespace Sts2LanConnect.Tests.Lobby.Chat;
 
 public sealed class LanConnectChatChannelStateTests
 {
+    [Fact]
+    public void LegacyConfirmedPreservesSenderIdentityAndTimestamp()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        DateTimeOffset sentAt = DateTimeOffset.FromUnixTimeMilliseconds(123456);
+
+        state.AppendLegacyConfirmed("legacy-1", "Player", "net-1", "hello", sentAt, false, 60);
+
+        ServerChatMessageState message = Assert.Single(state.Messages);
+        Assert.Equal("net-1", message.SenderNetId);
+        Assert.Equal(sentAt, message.SentAt);
+    }
+
+    [Fact]
+    public void LegacyConfirmedLimitPrunesOldestConfirmedAndKeepsOtherDeliveryStatesAndIndices()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        state.BeginPendingText("pending", "Local", "pending");
+        state.BeginPendingText("failed", "Local", "failed");
+        state.MarkFailed("failed", "send_failed", "offline");
+
+        for (int index = 0; index < 61; index++)
+        {
+            state.AppendLegacyConfirmed(
+                $"confirmed-{index}",
+                "Remote",
+                $"net-{index}",
+                $"text-{index}",
+                DateTimeOffset.FromUnixTimeMilliseconds(index + 1),
+                false,
+                60);
+        }
+
+        Assert.Equal(62, state.Messages.Count);
+        Assert.DoesNotContain(state.Messages, message => message.MessageId == "confirmed-0");
+        Assert.Contains(state.Messages, message => message.ClientMessageId == "pending" && message.Delivery == ServerChatDeliveryState.Pending);
+        Assert.Contains(state.Messages, message => message.ClientMessageId == "failed" && message.Delivery == ServerChatDeliveryState.Failed);
+        Assert.Equal(60, state.UnreadCount);
+        Assert.Equal(state.Messages.First(message => message.MessageId == "confirmed-1").Sequence, state.FirstUnreadSequence);
+
+        state.AppendLegacyConfirmed(
+            "confirmed-0",
+            "Remote",
+            "net-0",
+            "reinserted",
+            DateTimeOffset.FromUnixTimeMilliseconds(1000),
+            false,
+            60);
+
+        Assert.Contains(state.Messages, message => message.MessageId == "confirmed-0" && message.Text == "reinserted");
+        Assert.DoesNotContain(state.Messages, message => message.MessageId == "confirmed-1");
+        Assert.Equal(60, state.UnreadCount);
+    }
+
+    [Fact]
+    public void LegacyConfirmedPruningUpdatesNewMessagesBelowDerivedState()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        state.SetVisible(true);
+        state.SetScrollState(20, atBottom: false);
+
+        for (int index = 0; index < 61; index++)
+        {
+            state.AppendLegacyConfirmed(
+                $"confirmed-{index}", "Remote", $"net-{index}", $"text-{index}",
+                DateTimeOffset.FromUnixTimeMilliseconds(index + 1), false, 60);
+        }
+
+        Assert.Equal(60, state.Messages.Count);
+        Assert.Equal(60, state.NewMessagesBelowCount);
+    }
+
+    [Fact]
+    public void LegacyLocalConfirmAlsoHonorsConfirmedHistoryLimit()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        for (int index = 0; index < 61; index++)
+        {
+            string id = $"local-{index}";
+            state.BeginPendingText(id, "Local", $"text-{index}", "net-local");
+            state.MarkLegacySendConfirmed(id, 60);
+        }
+
+        Assert.Equal(60, state.Messages.Count);
+        Assert.DoesNotContain(state.Messages, message => message.ClientMessageId == "local-0");
+
+        state.BeginPendingText("local-0", "Local", "reused", "net-local");
+
+        Assert.Contains(state.Messages, message => message.ClientMessageId == "local-0" && message.Delivery == ServerChatDeliveryState.Pending);
+    }
+
+
     private static readonly DateTimeOffset FixedNow = DateTimeOffset.Parse("2026-07-13T04:05:06.000Z");
 
     private static ServerChatPendingMessage Pending(string clientMessageId, string senderName, string text) =>

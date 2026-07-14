@@ -63,10 +63,15 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         await coordinator.RetryServerAsync("message-id", cancellation.Token);
         await coordinator.StopServerAsync(cancellation.Token);
 
-        Assert.Equal((uri, "net-id", "Player", cancellation.Token), client.ConnectCall);
-        Assert.Equal(("hello", cancellation.Token), client.SendCall);
-        Assert.Equal(("message-id", cancellation.Token), client.RetryCall);
-        Assert.Equal(cancellation.Token, client.StopToken);
+        Assert.Equal(uri, client.ConnectCall?.Uri);
+        Assert.Equal("net-id", client.ConnectCall?.PlayerNetId);
+        Assert.Equal("Player", client.ConnectCall?.PlayerName);
+        Assert.True(client.ConnectCall?.Token.CanBeCanceled);
+        Assert.Equal("hello", client.SendCall?.Text);
+        Assert.True(client.SendCall?.Token.CanBeCanceled);
+        Assert.Equal("message-id", client.RetryCall?.MessageId);
+        Assert.True(client.RetryCall?.Token.CanBeCanceled);
+        Assert.True(client.StopToken?.CanBeCanceled);
         Assert.Same(client.State, coordinator.State.Server);
     }
 
@@ -117,7 +122,7 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         List<long> revisions = new();
         coordinator.StateChanged += () => revisions.Add(coordinator.State.Room.Revision);
 
-        coordinator.BeginRoomPending("local-1", "Player", "hello");
+        coordinator.BeginRoomPending("local-1", "Player", "net-local", "hello", DateTimeOffset.UtcNow);
         coordinator.ConfirmRoomSend("local-1");
 
         ServerChatMessageState message = Assert.Single(coordinator.State.Room.Messages);
@@ -133,7 +138,7 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         LanConnectLobbyRuntimeChatCoordinator coordinator = new(client);
         coordinator.EnterRoom("room-a");
 
-        coordinator.BeginRoomPending("local-1", "Player", "hello");
+        coordinator.BeginRoomPending("local-1", "Player", "net-local", "hello", DateTimeOffset.UtcNow);
         coordinator.FailRoomSend("local-1", "send_failed", "offline");
 
         ServerChatMessageState message = Assert.Single(coordinator.State.Room.Messages);
@@ -149,12 +154,15 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         LanConnectLobbyRuntimeChatCoordinator coordinator = new(client);
         coordinator.EnterRoom("room-a");
 
-        coordinator.AppendRoomConfirmed("stale-room", "remote-1", "A", "stale", false);
-        coordinator.AppendRoomConfirmed("room-a", "remote-1", "A", "hello", false);
-        coordinator.AppendRoomConfirmed("room-a", "remote-1", "A", "duplicate", false);
+        DateTimeOffset sentAt = DateTimeOffset.FromUnixTimeMilliseconds(1234);
+        coordinator.AppendRoomConfirmed("stale-room", "remote-1", "A", "net-a", "stale", sentAt, false);
+        coordinator.AppendRoomConfirmed("room-a", "remote-1", "A", "net-a", "hello", sentAt, false);
+        coordinator.AppendRoomConfirmed("room-a", "remote-1", "A", "net-b", "duplicate", sentAt.AddSeconds(1), false);
 
         ServerChatMessageState message = Assert.Single(coordinator.State.Room.Messages);
         Assert.Equal("hello", message.Text);
+        Assert.Equal("net-a", message.SenderNetId);
+        Assert.Equal(sentAt, message.SentAt);
         Assert.False(message.IsLocal);
     }
 
@@ -164,10 +172,11 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         FakeServerChatClient client = new();
         LanConnectLobbyRuntimeChatCoordinator coordinator = new(client);
         coordinator.EnterRoom("room-a");
-        coordinator.BeginRoomPending("local-1", "Player", "hello");
+        coordinator.BeginRoomPending("local-1", "Player", "net-local", "hello", DateTimeOffset.UtcNow);
         coordinator.ConfirmRoomSend("local-1");
 
-        coordinator.AppendRoomConfirmed("room-a", "local-1", "Player", "hello", false);
+        coordinator.AppendRoomConfirmed(
+            "room-a", "local-1", "Player", "net-local", "hello", DateTimeOffset.UtcNow, false);
 
         ServerChatMessageState message = Assert.Single(coordinator.State.Room.Messages);
         Assert.Equal(ServerChatDeliveryState.Confirmed, message.Delivery);
@@ -215,6 +224,40 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
     }
 
     [Fact]
+    public async Task RuntimeRemoteEnvelopeAndLegacySnapshotPreserveSenderNetIdAndOriginalSentAt()
+    {
+        FakeServerChatClient client = new();
+        await using LanConnectLobbyRuntimeChatCoordinator coordinator = new(client);
+        coordinator.EnterRoom("room-a");
+        LanConnectLobbyRuntime runtime =
+            (LanConnectLobbyRuntime)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+                typeof(LanConnectLobbyRuntime));
+        typeof(LanConnectLobbyRuntime)
+            .GetField("_chatCoordinator", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(runtime, coordinator);
+        DateTimeOffset sentAt = DateTimeOffset.FromUnixTimeMilliseconds(987654);
+        LobbyControlEnvelope envelope = new()
+        {
+            Type = "room_chat",
+            RoomId = "room-a",
+            MessageId = "remote-1",
+            PlayerName = "Remote",
+            PlayerNetId = "net-remote",
+            MessageText = "hello",
+            SentAtUnixMs = sentAt.ToUnixTimeMilliseconds()
+        };
+
+        typeof(LanConnectLobbyRuntime)
+            .GetMethod("TryAppendRemoteChatMessage", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(runtime, new object[] { "room-a", envelope });
+
+        LobbyRoomChatEntry projected = Assert.Single(runtime.GetChatMessagesSnapshot());
+        Assert.Equal("net-remote", projected.SenderNetId);
+        Assert.Equal(sentAt, projected.SentAt);
+        Assert.Equal("remote-1", projected.MessageId);
+    }
+
+    [Fact]
     public async Task DisposeUnsubscribesAndDisposesClientExactlyOnce()
     {
         FakeServerChatClient client = new();
@@ -251,6 +294,27 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         await Task.WhenAll(stop, dispose);
 
         Assert.Equal(1, client.StopCount);
+        Assert.Equal(1, client.DisposeCount);
+    }
+
+    [Fact]
+    public async Task DisposeCancelsHungOperationBeforeWaitingForOperationGate()
+    {
+        FakeServerChatClient client = new();
+        TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.ConnectImplementation = async token =>
+        {
+            entered.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        };
+        LanConnectLobbyRuntimeChatCoordinator coordinator = new(client);
+        Task connect = coordinator.ConnectServerAsync(new Uri("https://lobby.example"), "id", "name");
+        await entered.Task;
+
+        Task dispose = coordinator.DisposeAsync().AsTask();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect.WaitAsync(TimeSpan.FromSeconds(2)));
+        await dispose.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(1, client.DisposeCount);
     }
 
@@ -294,10 +358,12 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
 
         internal Func<CancellationToken, Task>? StopImplementation { get; set; }
 
+        internal Func<CancellationToken, Task>? ConnectImplementation { get; set; }
+
         public Task ConnectAsync(Uri lobbyBaseUri, string playerNetId, string playerName, CancellationToken cancellationToken = default)
         {
             ConnectCall = (lobbyBaseUri, playerNetId, playerName, cancellationToken);
-            return Task.CompletedTask;
+            return ConnectImplementation?.Invoke(cancellationToken) ?? Task.CompletedTask;
         }
 
         public Task SendTextAsync(string text, CancellationToken cancellationToken = default)

@@ -22,6 +22,8 @@ internal sealed class ServerChatPendingMessage
 
     public string SenderName { get; set; } = string.Empty;
 
+    public string? SenderNetId { get; set; }
+
     public string Text { get; set; } = string.Empty;
 
     public DateTimeOffset QueuedAt { get; set; } = DateTimeOffset.UtcNow;
@@ -34,6 +36,8 @@ internal sealed class ServerChatMessageState
     public string? ClientMessageId { get; init; }
 
     public string SenderName { get; init; } = string.Empty;
+
+    public string? SenderNetId { get; init; }
 
     public string Text { get; init; } = string.Empty;
 
@@ -349,6 +353,7 @@ internal sealed class LanConnectChatChannelState
             {
                 ClientMessageId = message.ClientMessageId,
                 SenderName = message.SenderName ?? string.Empty,
+                SenderNetId = message.SenderNetId,
                 Text = message.Text ?? string.Empty,
                 Delivery = ServerChatDeliveryState.Pending,
                 IsLocal = true,
@@ -369,13 +374,20 @@ internal sealed class LanConnectChatChannelState
         }
     }
 
-    internal void BeginPendingText(string clientMessageId, string senderName, string text)
+    internal void BeginPendingText(
+        string clientMessageId,
+        string senderName,
+        string text,
+        string? senderNetId = null,
+        DateTimeOffset queuedAt = default)
     {
         Queue(new ServerChatPendingMessage
         {
             ClientMessageId = clientMessageId,
             SenderName = senderName,
-            Text = text
+            SenderNetId = senderNetId,
+            Text = text,
+            QueuedAt = queuedAt == default ? DateTimeOffset.UtcNow : queuedAt
         });
     }
 
@@ -400,8 +412,12 @@ internal sealed class LanConnectChatChannelState
         }
     }
 
-    internal void MarkLegacySendConfirmed(string clientMessageId)
+    internal void MarkLegacySendConfirmed(string clientMessageId, int confirmedMessageLimit = int.MaxValue)
     {
+        if (confirmedMessageLimit < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(confirmedMessageLimit));
+        }
         if (string.IsNullOrEmpty(clientMessageId))
         {
             return;
@@ -414,6 +430,8 @@ internal sealed class LanConnectChatChannelState
                 _messages[index].Delivery == ServerChatDeliveryState.Pending)
             {
                 _messages[index] = WithDelivery(_messages[index], ServerChatDeliveryState.Confirmed);
+                _pendingQueueTimes.Remove(clientMessageId);
+                PruneOldestConfirmed(confirmedMessageLimit);
                 Touch();
             }
         }
@@ -442,6 +460,7 @@ internal sealed class LanConnectChatChannelState
                     MessageId = existing.MessageId,
                     ClientMessageId = existing.ClientMessageId,
                     SenderName = existing.SenderName,
+                    SenderNetId = existing.SenderNetId,
                     Text = existing.Text,
                     Sequence = existing.Sequence,
                     IsLocal = existing.IsLocal,
@@ -483,6 +502,50 @@ internal sealed class LanConnectChatChannelState
                 _serverMessageIndex[messageId] = _messages.Count - 1;
             }
             TrackIncoming(messageId, sequence, isLocal);
+            Touch();
+        }
+    }
+
+    internal void AppendLegacyConfirmed(
+        string messageId,
+        string senderName,
+        string? senderNetId,
+        string text,
+        DateTimeOffset sentAt,
+        bool isLocal,
+        int confirmedMessageLimit)
+    {
+        if (confirmedMessageLimit < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(confirmedMessageLimit));
+        }
+
+        lock (_mutationLock)
+        {
+            if (!string.IsNullOrEmpty(messageId) && _serverMessageIndex.ContainsKey(messageId))
+            {
+                return;
+            }
+
+            long sequence = _arrivalClock.Next();
+            ServerChatMessageState entry = new()
+            {
+                MessageId = messageId,
+                SenderName = senderName ?? string.Empty,
+                SenderNetId = senderNetId,
+                Text = text ?? string.Empty,
+                Sequence = sequence,
+                IsLocal = isLocal,
+                Delivery = ServerChatDeliveryState.Confirmed,
+                SentAt = sentAt
+            };
+            _messages.Add(entry);
+            if (!string.IsNullOrEmpty(messageId))
+            {
+                _serverMessageIndex[messageId] = _messages.Count - 1;
+            }
+            TrackIncoming(messageId, sequence, isLocal);
+            PruneOldestConfirmed(confirmedMessageLimit);
             Touch();
         }
     }
@@ -609,6 +672,7 @@ internal sealed class LanConnectChatChannelState
             MessageId = canonical.MessageId,
             ClientMessageId = clientMessageId,
             SenderName = canonical.SenderName ?? string.Empty,
+            SenderNetId = canonical.SenderId,
             Text = text,
             IsLocal = true,
             Delivery = ServerChatDeliveryState.Confirmed,
@@ -644,6 +708,7 @@ internal sealed class LanConnectChatChannelState
                 MessageId = existing.MessageId,
                 ClientMessageId = existing.ClientMessageId,
                 SenderName = existing.SenderName,
+                SenderNetId = existing.SenderNetId,
                 Text = existing.Text,
                 Sequence = existing.Sequence,
                 IsLocal = existing.IsLocal,
@@ -682,6 +747,7 @@ internal sealed class LanConnectChatChannelState
         {
             MessageId = canonical.MessageId,
             SenderName = canonical.SenderName ?? string.Empty,
+            SenderNetId = canonical.SenderId,
             Text = text,
             Sequence = _arrivalClock.Next(),
             IsLocal = false,
@@ -886,6 +952,7 @@ internal sealed class LanConnectChatChannelState
                 {
                     MessageId = message.MessageId,
                     SenderName = message.SenderName ?? string.Empty,
+                    SenderNetId = message.SenderId,
                     Text = text,
                     Sequence = sequence++,
                     IsLocal = false,
@@ -925,6 +992,42 @@ internal sealed class LanConnectChatChannelState
             }
         }
         RebuildPendingQueueTimes();
+    }
+
+    private void PruneOldestConfirmed(int confirmedMessageLimit)
+    {
+        int confirmedCount = 0;
+        foreach (ServerChatMessageState message in _messages)
+        {
+            if (message.Delivery == ServerChatDeliveryState.Confirmed)
+            {
+                confirmedCount++;
+            }
+        }
+
+        bool removed = false;
+        while (confirmedCount > confirmedMessageLimit)
+        {
+            int index = _messages.FindIndex(message => message.Delivery == ServerChatDeliveryState.Confirmed);
+            if (index < 0)
+            {
+                break;
+            }
+
+            string? messageId = _messages[index].MessageId;
+            if (!string.IsNullOrEmpty(messageId))
+            {
+                RollBackIncoming(messageId);
+            }
+            _messages.RemoveAt(index);
+            confirmedCount--;
+            removed = true;
+        }
+
+        if (removed)
+        {
+            RebuildIndices();
+        }
     }
 
     private void RebuildPendingQueueTimes()
@@ -1028,6 +1131,7 @@ internal sealed class LanConnectChatChannelState
             MessageId = canonical.MessageId,
             ClientMessageId = clientMessageId,
             SenderName = string.IsNullOrEmpty(canonical.SenderName) ? existing.SenderName : canonical.SenderName,
+            SenderNetId = string.IsNullOrEmpty(canonical.SenderId) ? existing.SenderNetId : canonical.SenderId,
             Text = text,
             Sequence = existing.Sequence,
             IsLocal = true,
@@ -1044,6 +1148,7 @@ internal sealed class LanConnectChatChannelState
         string.Equals(left.MessageId, right.MessageId, StringComparison.Ordinal) &&
         string.Equals(left.ClientMessageId, right.ClientMessageId, StringComparison.Ordinal) &&
         string.Equals(left.SenderName, right.SenderName, StringComparison.Ordinal) &&
+        string.Equals(left.SenderNetId, right.SenderNetId, StringComparison.Ordinal) &&
         string.Equals(left.Text, right.Text, StringComparison.Ordinal) &&
         left.Sequence == right.Sequence &&
         left.IsLocal == right.IsLocal &&
@@ -1058,6 +1163,7 @@ internal sealed class LanConnectChatChannelState
             MessageId = source.MessageId,
             ClientMessageId = source.ClientMessageId,
             SenderName = source.SenderName,
+            SenderNetId = source.SenderNetId,
             Text = source.Text,
             Sequence = source.Sequence,
             IsLocal = source.IsLocal,

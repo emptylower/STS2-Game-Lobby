@@ -118,6 +118,7 @@ public sealed class LanConnectServerChatClientTests
         {
             ServerChatMessageState pending = Assert.Single(client.State.Messages);
             Assert.Equal(ServerChatDeliveryState.Pending, pending.Delivery);
+            Assert.Equal("net-1", pending.SenderNetId);
             ServerChatSendEnvelope observed =
                 JsonSerializer.Deserialize<ServerChatSendEnvelope>(payload, LanConnectJson.Options)!;
             Assert.Equal("café\nworld", Assert.Single(observed.Content.Segments).Text);

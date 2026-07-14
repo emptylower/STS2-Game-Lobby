@@ -350,6 +350,7 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
         {
             ClientMessageId = clientMessageId,
             SenderName = _playerName,
+            SenderNetId = _playerNetId,
             Text = text,
             QueuedAt = _clock()
         });
