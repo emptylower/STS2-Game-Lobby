@@ -101,25 +101,22 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         RefreshFromSource();
     }
 
-    public override void _Input(InputEvent inputEvent)
+    public override void _UnhandledInput(InputEvent inputEvent)
     {
-        if (inputEvent is InputEventKey { Pressed: true, Echo: false, Keycode: Key.F8 })
+        if (inputEvent is not InputEventKey { Pressed: true, Echo: false } keyEvent)
         {
-            LanConnectAccessibilityHotkeyRoute route = LanConnectAccessibilityHotkeyRouter.Route(
-                LanConnectAccessibilityHotkey.F8Chat,
-                new LanConnectAccessibilityHotkeyContext(
-                    TextInputHasFocus: GetViewport().GuiGetFocusOwner() is LineEdit,
-                    InviteDialogVisible: false,
-                    ClipboardHasInvite: false,
-                    ChatAvailable: _toggleButton?.Visible == true));
-            if (route.Action == LanConnectAccessibilityHotkeyAction.ToggleChat)
-            {
-                TogglePanel();
-                GetViewport().SetInputAsHandled();
-                return;
-            }
+            return;
         }
 
+        HandleUnhandledKey(
+            keyEvent.Keycode,
+            keyEvent.ShiftPressed,
+            HasBlockingModalOutsideOverlay(),
+            markHandled: true);
+    }
+
+    public override void _Input(InputEvent inputEvent)
+    {
         if (!_dragPointerDown)
         {
             return;
@@ -224,6 +221,15 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
     }
 
+    internal void RouteKeyForTests(Key key, bool shiftPressed = false, bool blockingModalVisible = false)
+    {
+        HandleUnhandledKey(key, shiftPressed, blockingModalVisible, markHandled: false);
+    }
+
+    internal void FocusDraftForTests() => _chatPanel?.FocusDraft();
+
+    internal void FocusFirstForTests() => _roomTab?.GrabFocus();
+
     private static void InstallDeferred()
     {
         if (Engine.GetMainLoop() is not SceneTree tree || tree.Root == null)
@@ -291,9 +297,10 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         title.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         header.AddChild(title);
 
-        _pinButton = CreateButton("固定", accent: false, TogglePinned);
+        _pinButton = CreateButton("📌 固定", accent: false, TogglePinned);
         _pinButton.Name = "ChatPinButton";
-        _pinButton.CustomMinimumSize = new Vector2(68, 36);
+        _pinButton.CustomMinimumSize = new Vector2(104, 36);
+        _pinButton.TooltipText = "固定聊天浮层";
         header.AddChild(_pinButton);
 
         Button closeButton = CreateButton("收起", accent: false, ClosePanel);
@@ -335,6 +342,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
         if (!hasRoom || chat == null)
         {
+            _chatPanel?.ReleaseDraftFocus();
             if (_panelFrame != null)
             {
                 _panelFrame.Visible = false;
@@ -359,9 +367,14 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         {
             _panelFrame.Visible = chat.RoomOverlayOpen;
         }
+        if (!chat.RoomOverlayOpen)
+        {
+            _chatPanel?.ReleaseDraftFocus();
+        }
         BindSelectedChannel(chat);
         RefreshTabStyles(chat);
         RefreshBadges(chat);
+        ConfigureFocusChain();
     }
 
     private LanConnectDualChatState? ResolveChat()
@@ -406,6 +419,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             clientMessageId => RetryAsync(channel, clientMessageId));
         _boundChat = chat;
         _boundChannelState = state;
+        ConfigureFocusChain();
     }
 
     private void TogglePanel()
@@ -449,6 +463,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
 
         CaptureCurrentViewState(chat);
+        _chatPanel?.ReleaseDraftFocus();
         chat.CloseRoomOverlay();
         RefreshFromSource();
     }
@@ -500,10 +515,15 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     private void TogglePinned()
     {
-        _pinned = !_pinned;
+        SetPinned(!_pinned);
+    }
+
+    private void SetPinned(bool value)
+    {
+        _pinned = value;
         if (_pinButton != null)
         {
-            _pinButton.Text = _pinned ? "取消固定" : "固定";
+            _pinButton.Text = _pinned ? "📌 取消固定" : "📌 固定";
         }
     }
 
@@ -515,7 +535,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         if (_chatPanel?.FindChild(
                 LanConnectConstants.ChatDraftInputName,
                 recursive: true,
-                owned: false) is LineEdit input)
+                owned: false) is TextEdit input)
         {
             state.SetDraft(input.Text);
         }
@@ -561,6 +581,155 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             return null;
         }
         return chat.SelectedChannel == LanConnectChatChannel.Room ? chat.Room : chat.Server;
+    }
+
+    private void HandleUnhandledKey(
+        Key key,
+        bool shiftPressed,
+        bool blockingModalVisible,
+        bool markHandled)
+    {
+        LanConnectDualChatState? chat = ResolveChat();
+        bool overlayOpen = chat?.RoomOverlayOpen == true;
+        bool modalVisible = blockingModalVisible || _chatPanel?.PopupVisible == true;
+        LanConnectChatInputAction action;
+
+        if (key is Key.Enter or Key.KpEnter)
+        {
+            Control? focusOwner = GetViewport().GuiGetFocusOwner();
+            if (_chatPanel?.DraftHasFocus != true && LanConnectAccessibilityKeyboard.IsTextInput(focusOwner))
+            {
+                return;
+            }
+            action = LanConnectChatInputRouter.RouteEnter(
+                _chatPanel?.DraftHasFocus == true,
+                shiftPressed,
+                modalVisible);
+        }
+        else if (key == Key.Escape)
+        {
+            if (blockingModalVisible)
+            {
+                return;
+            }
+            action = LanConnectChatInputRouter.RouteEscape(
+                popupVisible: _chatPanel?.PopupVisible == true,
+                previewVisible: false,
+                inputFocused: _chatPanel?.DraftHasFocus == true,
+                overlayOpen);
+        }
+        else if (key == Key.F8)
+        {
+            LanConnectAccessibilityHotkeyRoute hotkeyRoute = LanConnectAccessibilityHotkeyRouter.Route(
+                LanConnectAccessibilityHotkey.F8Chat,
+                new LanConnectAccessibilityHotkeyContext(
+                    TextInputHasFocus: LanConnectAccessibilityKeyboard.IsTextInput(GetViewport().GuiGetFocusOwner()),
+                    InviteDialogVisible: false,
+                    ClipboardHasInvite: false,
+                    ChatAvailable: _toggleButton?.Visible == true,
+                    BlockingModalVisible: modalVisible));
+            if (hotkeyRoute.Action != LanConnectAccessibilityHotkeyAction.ToggleChat)
+            {
+                return;
+            }
+            action = LanConnectChatInputRouter.RouteF8(overlayOpen, _pinned, modalVisible);
+        }
+        else
+        {
+            return;
+        }
+
+        if (ApplyInputAction(action, overlayOpen) && markHandled)
+        {
+            GetViewport().SetInputAsHandled();
+        }
+    }
+
+    private bool ApplyInputAction(LanConnectChatInputAction action, bool overlayOpen)
+    {
+        switch (action)
+        {
+            case LanConnectChatInputAction.OpenAndFocus:
+                if (!overlayOpen)
+                {
+                    OpenPanel();
+                }
+                if (ResolveChat()?.RoomOverlayOpen == true)
+                {
+                    _chatPanel?.FocusDraft();
+                    return true;
+                }
+                return false;
+            case LanConnectChatInputAction.Send:
+                _chatPanel?.HandleDraftEnter(shiftPressed: false);
+                return true;
+            case LanConnectChatInputAction.InsertNewline:
+                _chatPanel?.HandleDraftEnter(shiftPressed: true);
+                return true;
+            case LanConnectChatInputAction.ClosePopup:
+                _chatPanel?.ClosePopup();
+                return true;
+            case LanConnectChatInputAction.ReleaseInputFocus:
+                _chatPanel?.ReleaseDraftFocus();
+                return true;
+            case LanConnectChatInputAction.CloseOverlay:
+                ClosePanel();
+                return true;
+            case LanConnectChatInputAction.ShowOverlay:
+                OpenPanel();
+                return ResolveChat()?.RoomOverlayOpen == true;
+            case LanConnectChatInputAction.PinOverlay:
+                SetPinned(true);
+                return true;
+            case LanConnectChatInputAction.HideOverlay:
+                SetPinned(false);
+                ClosePanel();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private bool HasBlockingModalOutsideOverlay()
+    {
+        if (!IsInsideTree())
+        {
+            return false;
+        }
+
+        foreach (Node node in GetTree().Root.FindChildren("*", "Window", recursive: true, owned: false))
+        {
+            if (node is Window { Visible: true, Exclusive: true } window && !IsAncestorOf(window))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void ConfigureFocusChain()
+    {
+        if (_roomTab == null || _pinButton == null || _chatPanel == null)
+        {
+            return;
+        }
+
+        List<Control> chain = new() { _roomTab };
+        if (_serverTab?.Visible == true)
+        {
+            chain.Add(_serverTab);
+        }
+        chain.AddRange(_chatPanel.GetFocusChainControls());
+        chain.Add(_pinButton);
+
+        for (int index = 0; index < chain.Count; index++)
+        {
+            Control current = chain[index];
+            Control previous = chain[(index - 1 + chain.Count) % chain.Count];
+            Control next = chain[(index + 1) % chain.Count];
+            current.FocusPrevious = current.GetPathTo(previous);
+            current.FocusNext = current.GetPathTo(next);
+        }
     }
 
     private static void SetBadge(Label? badge, int count)

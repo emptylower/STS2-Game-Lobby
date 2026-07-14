@@ -54,7 +54,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private ScrollContainer? _messagesScroll;
     private VBoxContainer? _messagesList;
     private Button? _newMessagesButton;
-    private LineEdit? _draftInput;
+    private TextEdit? _draftInput;
     private Button? _sendButton;
     private Label? _statusLabel;
     private ConfirmationDialog? _unknownConfirmation;
@@ -69,6 +69,17 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private string _operationStatus = string.Empty;
 
     internal LanConnectChatChannelState? State => _state;
+
+    internal bool DraftHasFocus =>
+        _draftInput != null &&
+        GodotObject.IsInstanceValid(_draftInput) &&
+        IsInsideTree() &&
+        ReferenceEquals(GetViewport().GuiGetFocusOwner(), _draftInput);
+
+    internal bool PopupVisible =>
+        _unknownConfirmation != null &&
+        GodotObject.IsInstanceValid(_unknownConfirmation) &&
+        _unknownConfirmation.Visible;
 
     internal LanConnectBasicChatPanelTestState TestState
     {
@@ -210,6 +221,72 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         return Task.CompletedTask;
     }
 
+    internal void FocusDraft()
+    {
+        if (_draftInput != null && GodotObject.IsInstanceValid(_draftInput) && _draftInput.Editable)
+        {
+            _draftInput.GrabFocus();
+        }
+    }
+
+    internal void ReleaseDraftFocus()
+    {
+        if (DraftHasFocus)
+        {
+            _draftInput!.ReleaseFocus();
+        }
+    }
+
+    internal void ClosePopup()
+    {
+        if (PopupVisible)
+        {
+            _unknownConfirmation!.Hide();
+            _pendingUnknownConfirmation = null;
+        }
+    }
+
+    internal void HandleDraftEnter(bool shiftPressed)
+    {
+        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput) || !_draftInput.Editable)
+        {
+            return;
+        }
+
+        if (shiftPressed)
+        {
+            _draftInput.InsertTextAtCaret("\n");
+            UpdateDraftHeight();
+            return;
+        }
+
+        _ = SendDraftAsync();
+    }
+
+    internal IReadOnlyList<Control> GetFocusChainControls()
+    {
+        List<Control> controls = new();
+        AddFocusable(controls, _messagesScroll);
+        if (_newMessagesButton?.Visible == true)
+        {
+            AddFocusable(controls, _newMessagesButton);
+        }
+        AddFocusable(controls, _draftInput);
+        AddFocusable(controls, _sendButton);
+        if (_messagesList != null && GodotObject.IsInstanceValid(_messagesList))
+        {
+            foreach (Node node in _messagesList.FindChildren(
+                         LanConnectConstants.ChatRetryButtonPrefix + "*",
+                         "Button",
+                         recursive: true,
+                         owned: false))
+            {
+                AddFocusable(controls, node as Button);
+            }
+        }
+        return controls;
+    }
+
     private void BuildControls()
     {
         AddThemeConstantOverride("separation", 8);
@@ -262,19 +339,22 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         inputRow.AddThemeConstantOverride("separation", 8);
         AddChild(inputRow);
 
-        _draftInput = new LineEdit
+        _draftInput = new TextEdit
         {
             Name = LanConnectConstants.ChatDraftInputName,
             PlaceholderText = "输入消息",
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            MaxLength = 500,
-            FocusMode = FocusModeEnum.All
+            CustomMinimumSize = new Vector2(0, 38),
+            FocusMode = FocusModeEnum.All,
+            WrapMode = TextEdit.LineWrappingMode.Boundary,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            ScrollFitContentHeight = false,
+            TabInputMode = false
         };
         ApplyInputStyle(_draftInput);
-        _draftInput.Connect(LineEdit.SignalName.TextChanged, Callable.From<string>(OnDraftChanged));
-        _draftInput.Connect(
-            LineEdit.SignalName.TextSubmitted,
-            Callable.From<string>(_submittedText => _ = SendDraftAsync()));
+        _draftInput.Connect(TextEdit.SignalName.TextChanged, Callable.From(OnDraftChanged));
+        _draftInput.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnDraftGuiInput));
+        _draftInput.Connect(Control.SignalName.Resized, Callable.From(UpdateDraftHeight));
         inputRow.AddChild(_draftInput);
 
         _sendButton = CreateButton("发送", accent: true);
@@ -309,6 +389,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
 
         _draftInput.Text = _state.Draft;
+        MoveDraftCaretToEnd();
+        UpdateDraftHeight();
         _state.SetVisible(IsInsideTree() && IsVisibleInTree());
         Refresh();
     }
@@ -407,6 +489,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         if (_draftInput.Text != state.Draft)
         {
             _draftInput.Text = state.Draft;
+            MoveDraftCaretToEnd();
+            UpdateDraftHeight();
         }
         UpdateAvailability();
         UpdateNewMessagesButton();
@@ -535,6 +619,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             }
 
             _draftInput.Text = binding.State.Draft;
+            MoveDraftCaretToEnd();
+            UpdateDraftHeight();
             _operationStatus = "已提交";
             _draftInput.GrabFocus();
         }
@@ -681,9 +767,74 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
     }
 
-    private void OnDraftChanged(string text)
+    private void OnDraftChanged()
     {
-        _state?.SetDraft(text);
+        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
+        {
+            return;
+        }
+
+        if (_draftInput.Text.Length > 500)
+        {
+            _draftInput.Text = _draftInput.Text[..500];
+            _draftInput.SetCaretLine(_draftInput.GetLineCount() - 1);
+            _draftInput.SetCaretColumn(_draftInput.GetLine(_draftInput.GetLineCount() - 1).Length);
+        }
+        _state?.SetDraft(_draftInput.Text);
+        UpdateDraftHeight();
+    }
+
+    private void OnDraftGuiInput(InputEvent inputEvent)
+    {
+        if (inputEvent is not InputEventKey
+            {
+                Pressed: true,
+                Echo: false,
+                Keycode: Key.Enter or Key.KpEnter
+            } keyEvent)
+        {
+            return;
+        }
+
+        LanConnectChatInputAction action = LanConnectChatInputRouter.RouteEnter(
+            inputFocused: true,
+            shiftPressed: keyEvent.ShiftPressed,
+            blockingModalVisible: PopupVisible);
+        switch (action)
+        {
+            case LanConnectChatInputAction.Send:
+                HandleDraftEnter(shiftPressed: false);
+                _draftInput?.AcceptEvent();
+                break;
+            case LanConnectChatInputAction.InsertNewline:
+                HandleDraftEnter(shiftPressed: true);
+                _draftInput?.AcceptEvent();
+                break;
+        }
+    }
+
+    private void UpdateDraftHeight()
+    {
+        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
+        {
+            return;
+        }
+
+        int visibleLines = Math.Clamp(_draftInput.GetTotalVisibleLineCount(), 1, 3);
+        float lineHeight = Math.Max(18, _draftInput.GetLineHeight());
+        _draftInput.CustomMinimumSize = new Vector2(0, 20 + visibleLines * lineHeight);
+    }
+
+    private void MoveDraftCaretToEnd()
+    {
+        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
+        {
+            return;
+        }
+
+        int lastLine = Math.Max(0, _draftInput.GetLineCount() - 1);
+        _draftInput.SetCaretLine(lastLine);
+        _draftInput.SetCaretColumn(_draftInput.GetLine(lastLine).Length);
     }
 
     private void OnScrollChanged(double value)
@@ -944,13 +1095,25 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         return button;
     }
 
-    private static void ApplyInputStyle(LineEdit input)
+    private static void ApplyInputStyle(TextEdit input)
     {
         input.AddThemeColorOverride("font_color", TextStrongColor);
         input.AddThemeColorOverride("font_placeholder_color", TextMutedColor);
         input.AddThemeStyleboxOverride("normal", CreateButtonStyle(new Color(0.11f, 0.11f, 0.13f, 0.98f), new Color(0.34f, 0.32f, 0.29f, 1f)));
         input.AddThemeStyleboxOverride("focus", CreateButtonStyle(new Color(0.13f, 0.13f, 0.15f, 1f), AccentColor));
         input.AddThemeStyleboxOverride("read_only", CreateButtonStyle(new Color(0.09f, 0.09f, 0.1f, 0.9f), new Color(0.28f, 0.27f, 0.25f, 1f)));
+    }
+
+    private static void AddFocusable(List<Control> controls, Control? control)
+    {
+        if (control != null &&
+            GodotObject.IsInstanceValid(control) &&
+            control.Visible &&
+            control.FocusMode != FocusModeEnum.None &&
+            (control is not BaseButton button || !button.Disabled))
+        {
+            controls.Add(control);
+        }
     }
 
     private static StyleBoxFlat CreateButtonStyle(Color background, Color border)

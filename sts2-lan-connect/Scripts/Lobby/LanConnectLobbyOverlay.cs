@@ -393,7 +393,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         LanConnectAccessibilityHotkeyRoute route = LanConnectAccessibilityHotkeyRouter.Route(
             LanConnectAccessibilityHotkey.F7Invite,
             new LanConnectAccessibilityHotkeyContext(
-                TextInputHasFocus: GetViewport().GuiGetFocusOwner() is LineEdit,
+                TextInputHasFocus: LanConnectAccessibilityKeyboard.IsTextInput(GetViewport().GuiGetFocusOwner()),
                 InviteDialogVisible: inviteDialogVisible && _pendingInvitePayload != null,
                 ClipboardHasInvite: inviteDecision.Action == LanConnectInviteEntryAction.ShowInvite,
                 ChatAvailable: false));

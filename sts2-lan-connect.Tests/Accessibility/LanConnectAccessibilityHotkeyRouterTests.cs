@@ -73,4 +73,19 @@ public sealed class LanConnectAccessibilityHotkeyRouterTests
 
         Assert.Equal(LanConnectAccessibilityHotkeyAction.ToggleChat, route.Action);
     }
+
+    [Fact]
+    public void Route_f8_chat_shortcut_is_ignored_while_blocking_modal_is_visible()
+    {
+        LanConnectAccessibilityHotkeyRoute route = LanConnectAccessibilityHotkeyRouter.Route(
+            LanConnectAccessibilityHotkey.F8Chat,
+            new LanConnectAccessibilityHotkeyContext(
+                TextInputHasFocus: false,
+                InviteDialogVisible: false,
+                ClipboardHasInvite: false,
+                ChatAvailable: true,
+                BlockingModalVisible: true));
+
+        Assert.Equal(LanConnectAccessibilityHotkeyAction.None, route.Action);
+    }
 }

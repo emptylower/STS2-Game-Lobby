@@ -35,7 +35,7 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(sentTexts.Count).IsEqual(1);
         AssertThat(sentTexts[0]).IsEqual("room hello");
         AssertThat(state.Draft).IsEqual(string.Empty);
-        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual(string.Empty);
+        AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual(string.Empty);
         AssertThat(panel.TestState.FocusOwnerName).IsEqual(LanConnectConstants.ChatDraftInputName);
     }
 
@@ -86,7 +86,7 @@ public sealed class LanConnectBasicChatPanelTests
         AssertPresentation(panel, state, LanConnectServerChatPresentation.Ready, "频道可用", editable: true);
 
         AssertThat(state.Draft).IsEqual("keep this draft");
-        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("keep this draft");
+        AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("keep this draft");
     }
 
     [TestCase]
@@ -101,7 +101,7 @@ public sealed class LanConnectBasicChatPanelTests
 
         AssertThat(FindNode<ScrollContainer>(panel, LanConnectConstants.ChatMessagesScrollName)).IsNotNull();
         AssertThat(FindNode<VBoxContainer>(panel, LanConnectConstants.ChatMessagesListName)).IsNotNull();
-        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName)).IsNotNull();
+        AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName)).IsNotNull();
         AssertThat(FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName)).IsNotNull();
         AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName)).IsNotNull();
         AssertThat(FindNode<Button>(panel, LanConnectConstants.ChatNewMessagesButtonName)).IsNotNull();
@@ -213,9 +213,9 @@ public sealed class LanConnectBasicChatPanelTests
             _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
 
-        LineEdit input = FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName);
+        TextEdit input = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName);
         input.Text = "new draft";
-        input.EmitSignal(LineEdit.SignalName.TextChanged, input.Text);
+        input.EmitSignal(TextEdit.SignalName.TextChanged);
         AssertThat(state.Draft).IsEqual("new draft");
         FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
         await runner.AwaitIdleFrame();
@@ -269,13 +269,13 @@ public sealed class LanConnectBasicChatPanelTests
         panel.Bind(stateB, _ => Task.CompletedTask, _ => Task.CompletedTask);
 
         AssertThat(panel.TestState.InputEditable).IsTrue();
-        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("draft B");
+        AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("draft B");
         releaseA.SetResult();
         await runner.AwaitIdleFrame();
 
         AssertThat(stateA.Draft).IsEqual(string.Empty);
         AssertThat(stateB.Draft).IsEqual("draft B");
-        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("draft B");
+        AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("draft B");
         AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text).IsEqual("频道可用");
         AssertThat(panel.TestState.InputEditable).IsTrue();
     }
@@ -300,7 +300,7 @@ public sealed class LanConnectBasicChatPanelTests
 
         AssertThat(stateA.Draft).IsEqual("draft A");
         AssertThat(stateB.Draft).IsEqual("draft B");
-        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("draft B");
+        AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("draft B");
         AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text).IsEqual("频道可用");
     }
 
@@ -325,7 +325,7 @@ public sealed class LanConnectBasicChatPanelTests
         await runner.AwaitIdleFrame();
 
         AssertThat(stateA.Draft).IsEqual("hello");
-        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("hello");
+        AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("hello");
         AssertThat(panel.TestState.InputEditable).IsTrue();
     }
 
@@ -423,7 +423,7 @@ public sealed class LanConnectBasicChatPanelTests
         chat.EnterRoom("room-b");
         chat.Room.SetDraft("same draft");
         await runner.AwaitIdleFrame();
-        FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).GrabFocus();
+        FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).GrabFocus();
         AssertThat(panel.TestState.FocusOwnerName).IsEqual(LanConnectConstants.ChatDraftInputName);
         if (succeeds)
         {
@@ -436,7 +436,7 @@ public sealed class LanConnectBasicChatPanelTests
         await runner.AwaitIdleFrame();
 
         AssertThat(chat.Room.Draft).IsEqual("same draft");
-        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("same draft");
+        AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("same draft");
         AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
             .IsEqual("房间聊天可用");
         AssertThat(panel.TestState.FocusOwnerName).IsEqual(LanConnectConstants.ChatDraftInputName);
@@ -673,6 +673,95 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(bar.Value).IsEqual(savedOffset);
     }
 
+    [TestCase(Key.Enter)]
+    [TestCase(Key.KpEnter)]
+    public async Task Draft_gui_input_enter_submits_without_inserting_newline(Key key)
+    {
+        LanConnectChatChannelState state = EnabledState();
+        int sendCount = 0;
+        string sentText = string.Empty;
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(
+            state,
+            text =>
+            {
+                sendCount++;
+                sentText = text;
+                return Task.CompletedTask;
+            },
+            _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        SetDraft(panel, "send from text edit");
+
+        TextEdit input = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName);
+        input.GrabFocus();
+        PushKey(panel.GetViewport(), key, shiftPressed: false);
+        await runner.AwaitIdleFrame();
+
+        AssertThat(sendCount).IsEqual(1);
+        AssertThat(sentText).IsEqual("send from text edit");
+        AssertThat(input.Text).IsEqual(string.Empty);
+    }
+
+    [TestCase]
+    public async Task Draft_gui_input_shift_enter_inserts_newline_without_sending()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        int sendCount = 0;
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(
+            state,
+            _ =>
+            {
+                sendCount++;
+                return Task.CompletedTask;
+            },
+            _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        SetDraft(panel, "first line");
+
+        TextEdit input = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName);
+        input.SetCaretLine(0);
+        input.SetCaretColumn(input.Text.Length);
+        input.GrabFocus();
+        PushKey(panel.GetViewport(), Key.Enter, shiftPressed: true);
+        await runner.AwaitIdleFrame();
+
+        AssertThat(sendCount).IsEqual(0);
+        AssertThat(input.Text).IsEqual("first line\n");
+        AssertThat(state.Draft).IsEqual("first line\n");
+    }
+
+    [TestCase]
+    public async Task Draft_height_grows_from_one_to_three_lines_and_stays_capped()
+    {
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel
+        {
+            CustomMinimumSize = new Vector2(360, 300)
+        })!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(EnabledState(), _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        TextEdit input = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName);
+        SetDraft(panel, "one");
+        await runner.AwaitIdleFrame();
+        float oneLineHeight = input.CustomMinimumSize.Y;
+
+        SetDraft(panel, "one\ntwo\nthree");
+        await runner.AwaitIdleFrame();
+        float threeLineHeight = input.CustomMinimumSize.Y;
+
+        SetDraft(panel, "one\ntwo\nthree\nfour\nfive");
+        await runner.AwaitIdleFrame();
+        float fiveLineHeight = input.CustomMinimumSize.Y;
+
+        AssertThat(threeLineHeight).IsGreater(oneLineHeight);
+        AssertThat(fiveLineHeight).IsEqual(threeLineHeight);
+    }
+
     private static LanConnectChatChannelState WithDeliveryStates()
     {
         LanConnectChatChannelState state = EnabledState();
@@ -739,9 +828,27 @@ public sealed class LanConnectBasicChatPanelTests
 
     private static void SetDraft(Node panel, string text)
     {
-        LineEdit input = FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName);
+        TextEdit input = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName);
         input.Text = text;
-        input.EmitSignal(LineEdit.SignalName.TextChanged, text);
+        input.EmitSignal(TextEdit.SignalName.TextChanged);
+    }
+
+    private static void PushKey(Viewport viewport, Key key, bool shiftPressed)
+    {
+        viewport.PushInput(new InputEventKey
+        {
+            Keycode = key,
+            Pressed = true,
+            Echo = false,
+            ShiftPressed = shiftPressed
+        });
+        viewport.PushInput(new InputEventKey
+        {
+            Keycode = key,
+            Pressed = false,
+            Echo = false,
+            ShiftPressed = shiftPressed
+        });
     }
 
     private static void AssertPresentation(

@@ -10,7 +10,7 @@ public sealed class LanConnectAccessibilityRegressionProbeTests
     [InlineData(Key.F)]
     public void CurrentChatCaptureDoesNotConsumePrintableGameKeys(Key key)
     {
-        LineEdit chatInput = Uninitialized<LineEdit>();
+        TextEdit chatInput = Uninitialized<TextEdit>();
 
         bool captured = LanConnectAccessibilityKeyboard.ShouldCaptureChatTextSubmitKey(
             key,
@@ -28,7 +28,7 @@ public sealed class LanConnectAccessibilityRegressionProbeTests
     [InlineData(Key.KpEnter)]
     public void CurrentChatCaptureOnlyConsumesEnterForSubmission(Key key)
     {
-        LineEdit chatInput = Uninitialized<LineEdit>();
+        TextEdit chatInput = Uninitialized<TextEdit>();
 
         bool captured = LanConnectAccessibilityKeyboard.ShouldCaptureChatTextSubmitKey(
             key,

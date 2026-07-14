@@ -19,7 +19,8 @@ internal readonly record struct LanConnectAccessibilityHotkeyContext(
     bool TextInputHasFocus,
     bool InviteDialogVisible,
     bool ClipboardHasInvite,
-    bool ChatAvailable);
+    bool ChatAvailable,
+    bool BlockingModalVisible = false);
 
 internal readonly record struct LanConnectAccessibilityHotkeyRoute(
     LanConnectAccessibilityHotkeyAction Action);
@@ -30,6 +31,11 @@ internal static class LanConnectAccessibilityHotkeyRouter
         LanConnectAccessibilityHotkey hotkey,
         LanConnectAccessibilityHotkeyContext context)
     {
+        if (context.BlockingModalVisible && hotkey == LanConnectAccessibilityHotkey.F8Chat)
+        {
+            return new LanConnectAccessibilityHotkeyRoute(LanConnectAccessibilityHotkeyAction.None);
+        }
+
         if (context.TextInputHasFocus && hotkey == LanConnectAccessibilityHotkey.TChat)
         {
             return new LanConnectAccessibilityHotkeyRoute(LanConnectAccessibilityHotkeyAction.None);

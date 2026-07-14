@@ -9,7 +9,7 @@ internal static class LanConnectAccessibilityKeyboard
         bool pressed,
         bool echo,
         Control? focusOwner,
-        LineEdit? chatInput,
+        Control? chatInput,
         bool panelOpen)
     {
         if (!panelOpen || !pressed || echo || chatInput == null)
@@ -24,4 +24,6 @@ internal static class LanConnectAccessibilityKeyboard
 
         return key is Key.Enter or Key.KpEnter;
     }
+
+    internal static bool IsTextInput(Control? control) => control is LineEdit or TextEdit;
 }
