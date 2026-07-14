@@ -535,7 +535,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             cancellationToken);
     }
 
-    internal Task<CancellationToken> SwitchLobbyServerWithContextAsync(
+    internal Task<LanConnectServerContextLease> SwitchLobbyServerWithContextAsync(
         string baseUrl,
         CancellationToken cancellationToken = default)
     {
@@ -548,10 +548,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             cancellationToken);
     }
 
-    internal CancellationToken CurrentServerContextToken =>
+    internal LanConnectServerContextLease AcquireCurrentServerContext() =>
         (_serverSwitchCoordinator ??
             throw new InvalidOperationException("Server switching is unavailable before the lobby runtime is ready."))
-        .CurrentServerContextToken;
+        .AcquireCurrentServerContext();
 
     internal bool IsLobbyServerSwitchInProgress => _serverSwitchCoordinator?.IsSwitchInProgress == true;
 

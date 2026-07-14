@@ -98,17 +98,16 @@ public sealed class LanConnectInviteServerJoinCoordinatorTests
         Assert.Equal("join failed", error.Message);
         Assert.Equal("https://new.example", ports.CurrentServer);
         Assert.Equal(1, ports.JoinCalls);
+        Assert.Equal(1, ports.CurrentContextReferenceCount);
         Assert.DoesNotContain(ports.Calls, call => call == "switch:https://old.example");
     }
 
     [Fact]
     public async Task SupersededSwitchContextStopsBeforeRoomLookup()
     {
-        using CancellationTokenSource superseded = new();
-        superseded.Cancel();
         FakeInvitePorts ports = new("https://old.example")
         {
-            SwitchContextToken = superseded.Token,
+            CancelSwitchContext = true,
             RoomExists = true
         };
         LanConnectInviteServerJoinCoordinator sut = new(ports);
@@ -123,17 +122,15 @@ public sealed class LanConnectInviteServerJoinCoordinatorTests
     [Fact]
     public async Task ContextCanceledDuringLookupDoesNotStartJoin()
     {
-        using CancellationTokenSource context = new();
         FakeInvitePorts ports = new("https://one.example")
         {
-            CurrentServerContextToken = context.Token,
-            RoomExists = true,
-            GetRoomsImplementation = _ =>
-            {
-                context.Cancel();
-                return Task.FromResult<IReadOnlyList<LobbyRoomSummary>>(
-                    [new LobbyRoomSummary { RoomId = "room-a" }]);
-            }
+            RoomExists = true
+        };
+        ports.GetRoomsImplementation = _ =>
+        {
+            ports.CancelCurrentContext();
+            return Task.FromResult<IReadOnlyList<LobbyRoomSummary>>(
+                [new LobbyRoomSummary { RoomId = "room-a" }]);
         };
         LanConnectInviteServerJoinCoordinator sut = new(ports);
 
@@ -141,6 +138,52 @@ public sealed class LanConnectInviteServerJoinCoordinatorTests
             sut.JoinAsync(Invite("https://one.example", "room-a"), CancellationToken.None));
 
         Assert.Equal(0, ports.JoinCalls);
+    }
+
+    [Fact]
+    public async Task CanceledSameServerContextForcesFreshSwitchBeforeLookup()
+    {
+        FakeInvitePorts ports = new("https://new.example") { RoomExists = true };
+        ports.CancelCurrentContext();
+        LanConnectInviteServerJoinCoordinator sut = new(ports);
+
+        LanConnectInviteJoinResult result = await sut.JoinAsync(
+            Invite("https://new.example/path?ignored=1", "room-a"),
+            CancellationToken.None);
+
+        Assert.Equal(LanConnectInviteJoinResult.JoinStarted, result);
+        Assert.Equal(new[]
+        {
+            "switch:https://new.example",
+            "rooms:https://new.example",
+            "join:room-a:"
+        }, ports.Calls);
+    }
+
+    [Theory]
+    [InlineData("https://one.example/path?ignored=1")]
+    [InlineData("https://ONE.example:443/another/path")]
+    public async Task AuthorityCanonicalizationSkipsEquivalentServerSwitch(string inviteServer)
+    {
+        FakeInvitePorts ports = new("https://one.example/") { RoomExists = false };
+        LanConnectInviteServerJoinCoordinator sut = new(ports);
+
+        await sut.JoinAsync(Invite(inviteServer, "missing"), CancellationToken.None);
+
+        Assert.DoesNotContain(ports.Calls, call => call.StartsWith("switch:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AuthorityCanonicalizationPreservesNonDefaultPortForSwitch()
+    {
+        FakeInvitePorts ports = new("https://one.example") { RoomExists = false };
+        LanConnectInviteServerJoinCoordinator sut = new(ports);
+
+        await sut.JoinAsync(
+            Invite("https://one.example:8443/path?ignored=1", "missing"),
+            CancellationToken.None);
+
+        Assert.Equal("switch:https://one.example:8443", ports.Calls[0]);
     }
 
     [Fact]
@@ -178,17 +221,22 @@ public sealed class LanConnectInviteServerJoinCoordinatorTests
     private static LanConnectInvitePayload Invite(string server, string roomId, string? password = null) =>
         new() { S = server, R = roomId, P = password, V = 1 };
 
-    private sealed class FakeInvitePorts(string currentServer) : ILanConnectInviteServerJoinPorts
+    private sealed class FakeInvitePorts : ILanConnectInviteServerJoinPorts
     {
+        private LanConnectServerContextHolder _currentContext = new();
+
+        internal FakeInvitePorts(string currentServer)
+        {
+            CurrentServer = currentServer;
+        }
+
         public List<string> Calls { get; } = new();
 
-        public string CurrentServer { get; private set; } = currentServer;
-
-        public CancellationToken CurrentServerContextToken { get; set; }
+        public string CurrentServer { get; private set; }
 
         public bool IsSwitchInProgress { get; set; }
 
-        public CancellationToken SwitchContextToken { get; set; }
+        public bool CancelSwitchContext { get; set; }
 
         public bool RoomExists { get; set; }
 
@@ -200,13 +248,26 @@ public sealed class LanConnectInviteServerJoinCoordinatorTests
 
         public int JoinCalls { get; private set; }
 
-        public Task<CancellationToken> SwitchServerAsync(string server, CancellationToken token)
+        public int CurrentContextReferenceCount => _currentContext.ReferenceCount;
+
+        public LanConnectServerContextLease AcquireCurrentServerContext() =>
+            _currentContext.AcquireLease();
+
+        public Task<LanConnectServerContextLease> SwitchServerAsync(
+            string server,
+            CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             Calls.Add($"switch:{server}");
+            _currentContext.Cancel();
+            _currentContext.ReleaseOwner();
+            _currentContext = new LanConnectServerContextHolder();
+            if (CancelSwitchContext)
+            {
+                _currentContext.Cancel();
+            }
             CurrentServer = server;
-            CurrentServerContextToken = SwitchContextToken;
-            return Task.FromResult(SwitchContextToken);
+            return Task.FromResult(_currentContext.AcquireLease());
         }
 
         public Task<IReadOnlyList<LobbyRoomSummary>> GetRoomsAsync(CancellationToken token)
@@ -223,12 +284,29 @@ public sealed class LanConnectInviteServerJoinCoordinatorTests
             return Task.FromResult(rooms);
         }
 
-        public Task BeginJoinAsync(LobbyRoomSummary room, string? password, CancellationToken token)
+        public async Task BeginJoinAsync(
+            LobbyRoomSummary room,
+            string? password,
+            LanConnectServerContextLease contextLease,
+            CancellationToken token)
         {
-            token.ThrowIfCancellationRequested();
-            JoinCalls++;
-            Calls.Add($"join:{room.RoomId}:{password}");
-            return JoinException == null ? Task.CompletedTask : Task.FromException(JoinException);
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                contextLease.Token.ThrowIfCancellationRequested();
+                JoinCalls++;
+                Calls.Add($"join:{room.RoomId}:{password}");
+                if (JoinException != null)
+                {
+                    await Task.FromException(JoinException);
+                }
+            }
+            finally
+            {
+                contextLease.Dispose();
+            }
         }
+
+        internal void CancelCurrentContext() => _currentContext.Cancel();
     }
 }

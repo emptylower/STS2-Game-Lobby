@@ -522,6 +522,128 @@ internal enum LanConnectServerSwitchCoordinatorCheckpoint
     AfterGenerationRegistration
 }
 
+internal static class LanConnectLobbyServerAddress
+{
+    internal static Uri NormalizeUri(string value, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            !Uri.TryCreate(value.Trim(), UriKind.Absolute, out Uri? parsed) ||
+            !string.Equals(parsed.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                "Lobby server must be an absolute HTTP or HTTPS URL.",
+                parameterName);
+        }
+
+        return new Uri(parsed.GetLeftPart(UriPartial.Authority) + "/", UriKind.Absolute);
+    }
+
+    internal static string NormalizeAuthority(string value, string parameterName) =>
+        NormalizeUri(value, parameterName).GetLeftPart(UriPartial.Authority);
+}
+
+internal sealed class LanConnectServerContextLease : IDisposable
+{
+    private LanConnectServerContextHolder? _owner;
+
+    internal LanConnectServerContextLease(LanConnectServerContextHolder owner, CancellationToken token)
+    {
+        _owner = owner;
+        Token = token;
+    }
+
+    internal CancellationToken Token { get; }
+
+    public void Dispose() => Interlocked.Exchange(ref _owner, null)?.ReleaseLease();
+}
+
+internal sealed class LanConnectServerContextHolder
+{
+    private readonly object _lifecycleLock = new();
+    private readonly CancellationTokenSource _cancellation = new();
+    private readonly CancellationToken _token;
+    private int _referenceCount = 1;
+    private bool _acceptingLeases = true;
+    private bool _disposed;
+
+    internal LanConnectServerContextHolder()
+    {
+        _token = _cancellation.Token;
+    }
+
+    internal int ReferenceCount
+    {
+        get
+        {
+            lock (_lifecycleLock)
+            {
+                return _referenceCount;
+            }
+        }
+    }
+
+    internal bool IsDisposed
+    {
+        get
+        {
+            lock (_lifecycleLock)
+            {
+                return _disposed;
+            }
+        }
+    }
+
+    internal LanConnectServerContextLease AcquireLease()
+    {
+        lock (_lifecycleLock)
+        {
+            ObjectDisposedException.ThrowIf(!_acceptingLeases || _disposed, this);
+            _referenceCount++;
+            return new LanConnectServerContextLease(this, _token);
+        }
+    }
+
+    internal void Cancel() => _cancellation.Cancel();
+
+    internal void ReleaseOwner()
+    {
+        lock (_lifecycleLock)
+        {
+            if (!_acceptingLeases)
+            {
+                throw new InvalidOperationException("Server context owner was already released.");
+            }
+            _acceptingLeases = false;
+        }
+        ReleaseReference();
+    }
+
+    internal void ReleaseLease() => ReleaseReference();
+
+    private void ReleaseReference()
+    {
+        bool dispose = false;
+        lock (_lifecycleLock)
+        {
+            if (_referenceCount <= 0)
+            {
+                throw new InvalidOperationException("Server context reference count underflowed.");
+            }
+            _referenceCount--;
+            if (_referenceCount == 0)
+            {
+                _disposed = true;
+                dispose = true;
+            }
+        }
+        if (dispose)
+        {
+            _cancellation.Dispose();
+        }
+    }
+}
+
 internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
 {
     private readonly ILanConnectRoomLifecycle _room;
@@ -533,11 +655,9 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
     private readonly CancellationToken _lifetimeToken;
     private readonly TaskCompletionSource _lifetimeCancellationCompleted =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly List<CancellationTokenSource> _serverContexts = new();
     private readonly Action<LanConnectServerSwitchCoordinatorCheckpoint>? _checkpoint;
     private SwitchGeneration? _activeSwitch;
-    private CancellationTokenSource _currentServerContext;
-    private CancellationToken _currentServerContextToken;
+    private LanConnectServerContextHolder _currentServerContext;
     private Task? _disposeTask;
     private TaskCompletionSource? _switchLeasesDrained;
     private Exception? _lifetimeCancellationError;
@@ -556,19 +676,15 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         _addressStore = addressStore ?? throw new ArgumentNullException(nameof(addressStore));
         _checkpoint = checkpoint;
         _lifetimeToken = _lifetimeCancellation.Token;
-        _currentServerContext = new CancellationTokenSource();
-        _currentServerContextToken = _currentServerContext.Token;
-        _serverContexts.Add(_currentServerContext);
+        _currentServerContext = new LanConnectServerContextHolder();
     }
 
-    internal CancellationToken CurrentServerContextToken
+    internal LanConnectServerContextLease AcquireCurrentServerContext()
     {
-        get
+        lock (_generationLock)
         {
-            lock (_generationLock)
-            {
-                return _currentServerContextToken;
-            }
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _currentServerContext.AcquireLease();
         }
     }
 
@@ -589,21 +705,21 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         string playerName,
         CancellationToken cancellationToken = default)
     {
-        _ = await SwitchWithContextAsync(
+        using LanConnectServerContextLease context = await SwitchWithContextAsync(
             baseUrl,
             playerNetId,
             playerName,
             cancellationToken);
     }
 
-    internal Task<CancellationToken> SwitchWithContextAsync(
+    internal Task<LanConnectServerContextLease> SwitchWithContextAsync(
         string baseUrl,
         string playerNetId,
         string playerName,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Uri normalized = NormalizeServerUri(baseUrl);
+        Uri normalized = LanConnectLobbyServerAddress.NormalizeUri(baseUrl, nameof(baseUrl));
         return SwitchCoreAsync(normalized, playerNetId, playerName, cancellationToken);
     }
 
@@ -611,6 +727,7 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
     {
         bool beginCancellation = false;
         Task disposeTask;
+        LanConnectServerContextHolder? contextToRetire = null;
         lock (_generationLock)
         {
             if (_disposeTask == null)
@@ -618,6 +735,7 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
                 _disposed = true;
                 Task switchDrain = GetSwitchLeaseDrainTaskLocked();
                 _disposeTask = DisposeCoreAsync(_lifetimeCancellationCompleted.Task, switchDrain);
+                contextToRetire = _currentServerContext;
                 beginCancellation = true;
             }
             disposeTask = _disposeTask;
@@ -625,7 +743,7 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
 
         if (beginCancellation)
         {
-            CancelServerContextsForDispose();
+            RetireServerContext(contextToRetire!);
             try
             {
                 _lifetimeCancellation.Cancel();
@@ -643,7 +761,7 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         return new ValueTask(disposeTask);
     }
 
-    private async Task<CancellationToken> SwitchCoreAsync(
+    private async Task<LanConnectServerContextLease> SwitchCoreAsync(
         Uri normalized,
         string playerNetId,
         string playerName,
@@ -652,12 +770,12 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         SwitchGeneration ownGeneration;
         SwitchGeneration? superseded;
         IDisposable? supersededCancellationLease;
-        CancellationTokenSource previousServerContext;
+        LanConnectServerContextHolder previousServerContext;
         _checkpoint?.Invoke(LanConnectServerSwitchCoordinatorCheckpoint.BeforeGenerationRegistration);
         lock (_generationLock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            CancellationTokenSource ownServerContext = new();
+            LanConnectServerContextHolder ownServerContext = new();
             ownGeneration = new SwitchGeneration(
                 callerCancellation,
                 _lifetimeToken,
@@ -666,8 +784,6 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
             supersededCancellationLease = superseded?.AcquireCancellationLease();
             previousServerContext = _currentServerContext;
             _currentServerContext = ownServerContext;
-            _currentServerContextToken = ownGeneration.ServerContextToken;
-            _serverContexts.Add(ownServerContext);
             _activeSwitch = ownGeneration;
             _switchLeaseCount++;
         }
@@ -676,7 +792,7 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         bool gateAcquired = false;
         try
         {
-            CancelServerContext(previousServerContext);
+            RetireServerContext(previousServerContext);
             _checkpoint?.Invoke(LanConnectServerSwitchCoordinatorCheckpoint.AfterGenerationRegistration);
             CancelSuperseded(superseded, supersededCancellationLease);
             supersededCancellationLease = null;
@@ -711,7 +827,8 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         }
         catch
         {
-            CancelServerContext(ownGeneration.ServerContextCancellation);
+            CancelServerContext(ownGeneration.ServerContext);
+            ownGeneration.ResultContextLease.Dispose();
             throw;
         }
         finally
@@ -733,18 +850,13 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
             ReleaseSwitchLease();
         }
 
-        return ownGeneration.ServerContextToken;
+        return ownGeneration.ResultContextLease;
     }
 
     private async Task DisposeCoreAsync(Task cancellationCompleted, Task switchDrain)
     {
         await cancellationCompleted;
         await switchDrain;
-        foreach (CancellationTokenSource context in _serverContexts)
-        {
-            context.Dispose();
-        }
-        _serverContexts.Clear();
         _lifetimeCancellation.Dispose();
         _switchGate.Dispose();
         if (_lifetimeCancellationError != null && _contextCancellationError != null)
@@ -761,20 +873,23 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         }
     }
 
-    private void CancelServerContextsForDispose()
+    private void RetireServerContext(LanConnectServerContextHolder context)
     {
-        List<CancellationTokenSource> contexts;
-        lock (_generationLock)
+        try
         {
-            contexts = new List<CancellationTokenSource>(_serverContexts);
+            context.Cancel();
         }
-        foreach (CancellationTokenSource context in contexts)
+        catch (Exception ex)
         {
-            CancelServerContext(context);
+            Interlocked.CompareExchange(ref _contextCancellationError, ex, null);
+        }
+        finally
+        {
+            context.ReleaseOwner();
         }
     }
 
-    private void CancelServerContext(CancellationTokenSource context)
+    private void CancelServerContext(LanConnectServerContextHolder context)
     {
         try
         {
@@ -811,19 +926,6 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         }
 
         drained?.TrySetResult();
-    }
-
-    private static Uri NormalizeServerUri(string baseUrl)
-    {
-        if (string.IsNullOrWhiteSpace(baseUrl) ||
-            !Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out Uri? parsed) ||
-            !string.Equals(parsed.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException("Lobby server must be an absolute HTTP or HTTPS URL.", nameof(baseUrl));
-        }
-
-        return new Uri(parsed.GetLeftPart(UriPartial.Authority) + "/", UriKind.Absolute);
     }
 
     private void ThrowIfSupersededLocked(SwitchGeneration generation)
@@ -863,21 +965,21 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         internal SwitchGeneration(
             CancellationToken callerCancellation,
             CancellationToken ownerCancellation,
-            CancellationTokenSource serverContextCancellation)
+            LanConnectServerContextHolder serverContext)
         {
             _cancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 callerCancellation,
                 ownerCancellation);
             Token = _cancellation.Token;
-            ServerContextCancellation = serverContextCancellation;
-            ServerContextToken = serverContextCancellation.Token;
+            ServerContext = serverContext;
+            ResultContextLease = serverContext.AcquireLease();
         }
 
         internal CancellationToken Token { get; }
 
-        internal CancellationTokenSource ServerContextCancellation { get; }
+        internal LanConnectServerContextHolder ServerContext { get; }
 
-        internal CancellationToken ServerContextToken { get; }
+        internal LanConnectServerContextLease ResultContextLease { get; }
 
         internal IDisposable AcquireCancellationLease()
         {

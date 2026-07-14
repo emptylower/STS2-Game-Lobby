@@ -90,21 +90,25 @@ public sealed class LanConnectServerSwitchTests
             chat,
             new FakeAddressStore(calls));
 
-        Task<CancellationToken> first = sut.SwitchWithContextAsync(
+        Task<LanConnectServerContextLease> first = sut.SwitchWithContextAsync(
             "https://one.example", "p1", "Silent");
         await firstStopEntered.Task;
-        Task<CancellationToken> second = sut.SwitchWithContextAsync(
+        Task<LanConnectServerContextLease> second = sut.SwitchWithContextAsync(
             "https://two.example", "p1", "Silent");
         releaseFirstStop.SetResult();
 
-        CancellationToken[] contexts = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(3));
+        LanConnectServerContextLease[] contexts =
+            await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(3));
 
-        Assert.True(contexts[0].IsCancellationRequested);
-        Assert.False(contexts[1].IsCancellationRequested);
-        Assert.Equal(contexts[1], sut.CurrentServerContextToken);
+        Assert.True(contexts[0].Token.IsCancellationRequested);
+        Assert.False(contexts[1].Token.IsCancellationRequested);
+        using LanConnectServerContextLease current = sut.AcquireCurrentServerContext();
+        Assert.Equal(contexts[1].Token, current.Token);
         Assert.False(sut.IsSwitchInProgress);
         await sut.DisposeAsync();
-        Assert.True(contexts[1].IsCancellationRequested);
+        Assert.True(contexts[1].Token.IsCancellationRequested);
+        contexts[0].Dispose();
+        contexts[1].Dispose();
     }
 
     [Fact]
@@ -123,19 +127,64 @@ public sealed class LanConnectServerSwitchTests
             new FakeRoomLifecycle(calls),
             chat,
             new FakeAddressStore(calls));
-        CancellationToken previousContext = sut.CurrentServerContextToken;
+        using LanConnectServerContextLease previousContext = sut.AcquireCurrentServerContext();
 
-        Task<CancellationToken> switching = sut.SwitchWithContextAsync(
+        Task<LanConnectServerContextLease> switching = sut.SwitchWithContextAsync(
             "https://new.example", "p1", "Silent");
         await stopEntered.Task;
 
-        Assert.True(previousContext.IsCancellationRequested);
+        Assert.True(previousContext.Token.IsCancellationRequested);
         Assert.True(sut.IsSwitchInProgress);
         releaseStop.SetResult();
-        CancellationToken currentContext = await switching.WaitAsync(TimeSpan.FromSeconds(3));
-        Assert.False(currentContext.IsCancellationRequested);
+        using LanConnectServerContextLease currentContext =
+            await switching.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.False(currentContext.Token.IsCancellationRequested);
         Assert.False(sut.IsSwitchInProgress);
         await sut.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task FailedSwitchCanBeRetriedWithFreshStableContext()
+    {
+        List<string> calls = new();
+        FakeSwitchChat chat = new(calls)
+        {
+            ConnectImplementation = _ => Task.FromException(new InvalidOperationException("connect failed"))
+        };
+        LanConnectServerSwitchCoordinator sut = new(
+            new FakeRoomLifecycle(calls),
+            chat,
+            new FakeAddressStore(calls));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.SwitchWithContextAsync("https://new.example", "p1", "Silent"));
+        using LanConnectServerContextLease failedContext = sut.AcquireCurrentServerContext();
+        Assert.True(failedContext.Token.IsCancellationRequested);
+
+        chat.ConnectImplementation = null;
+        using LanConnectServerContextLease retryContext = await sut.SwitchWithContextAsync(
+            "https://new.example", "p1", "Silent");
+
+        Assert.False(retryContext.Token.IsCancellationRequested);
+        Assert.Equal(2, calls.Count(call => call == "persist:https://new.example"));
+        await sut.DisposeAsync();
+    }
+
+    [Fact]
+    public void RetiredContextDisposesOnlyAfterLastConsumerLeaseReleases()
+    {
+        LanConnectServerContextHolder holder = new();
+        LanConnectServerContextLease lease = holder.AcquireLease();
+
+        holder.Cancel();
+        holder.ReleaseOwner();
+
+        Assert.True(lease.Token.IsCancellationRequested);
+        Assert.False(holder.IsDisposed);
+        Assert.Equal(1, holder.ReferenceCount);
+        lease.Dispose();
+        Assert.True(holder.IsDisposed);
+        Assert.Equal(0, holder.ReferenceCount);
     }
 
     [Fact]
@@ -509,6 +558,8 @@ public sealed class LanConnectServerSwitchTests
     {
         public Func<CancellationToken, Task>? StopImplementation { get; set; }
 
+        public Func<CancellationToken, Task>? ConnectImplementation { get; set; }
+
         public Task StopAsync(CancellationToken cancellationToken)
         {
             calls.Add("stop-chat");
@@ -528,7 +579,7 @@ public sealed class LanConnectServerSwitchTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             calls.Add($"connect:{lobbyBaseUri}:{playerNetId}:{playerName}");
-            return Task.CompletedTask;
+            return ConnectImplementation?.Invoke(cancellationToken) ?? Task.CompletedTask;
         }
     }
 
