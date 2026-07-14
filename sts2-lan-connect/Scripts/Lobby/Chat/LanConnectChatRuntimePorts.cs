@@ -133,6 +133,11 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         RunRoomMutation(State.LeaveRoom);
     }
 
+    internal void SetRoomChatEnabled(bool enabled)
+    {
+        RunRoomMutation(() => State.Room.SetChatEnabled(enabled));
+    }
+
     internal Task ConnectServerAsync(
         Uri lobbyBaseUri,
         string playerNetId,

@@ -345,6 +345,20 @@ internal sealed class LanConnectChatChannelState
         }
     }
 
+    internal void SetChatEnabled(bool value)
+    {
+        lock (_mutationLock)
+        {
+            if (_chatEnabled == value)
+            {
+                return;
+            }
+
+            _chatEnabled = value;
+            Touch();
+        }
+    }
+
     internal void SetVisible(bool value)
     {
         lock (_mutationLock)

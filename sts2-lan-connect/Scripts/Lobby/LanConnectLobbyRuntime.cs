@@ -467,7 +467,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
     internal Task SendRoomChatMessageAsync(string messageText) =>
         SendChatTextAsync(LanConnectChatChannel.Room, messageText);
 
-    internal async Task SendChatTextAsync(
+    internal Task SendChatTextAsync(
         LanConnectChatChannel channel,
         string messageText,
         CancellationToken cancellationToken = default)
@@ -475,10 +475,22 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         LanConnectLobbyRuntimeChatCoordinator coordinator = GetChatCoordinator();
         if (channel == LanConnectChatChannel.Server)
         {
-            await coordinator.SendServerAsync(messageText, cancellationToken);
-            return;
+            return coordinator.SendServerAsync(messageText, cancellationToken);
         }
 
+        if (!_chatEnabled || !coordinator.State.Room.ChatEnabled)
+        {
+            throw new InvalidOperationException("Room chat is disabled.");
+        }
+
+        return SendRoomChatTextCoreAsync(coordinator, messageText, cancellationToken);
+    }
+
+    private async Task SendRoomChatTextCoreAsync(
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        string messageText,
+        CancellationToken cancellationToken)
+    {
         string normalizedMessage = NormalizeChatMessage(messageText);
         if (string.IsNullOrWhiteSpace(normalizedMessage))
         {
@@ -617,8 +629,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             return;
         }
 
-        _chatEnabled = chatEnabled;
-        _chatEnabledRevision++;
+        ApplyRoomChatEnabled(chatEnabled);
         await _activeSession.ControlClient.SendAsync(new LobbyControlEnvelope
         {
             Type = "room_settings",
@@ -790,8 +801,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             case "room_settings":
                 if (envelope.ChatEnabled.HasValue)
                 {
-                    _chatEnabled = envelope.ChatEnabled.Value;
-                    _chatEnabledRevision++;
+                    ApplyRoomChatEnabled(envelope.ChatEnabled.Value);
                 }
 
                 break;
@@ -839,8 +849,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             case "room_settings":
                 if (envelope.ChatEnabled.HasValue)
                 {
-                    _chatEnabled = envelope.ChatEnabled.Value;
-                    _chatEnabledRevision++;
+                    ApplyRoomChatEnabled(envelope.ChatEnabled.Value);
                 }
 
                 break;
@@ -1183,8 +1192,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
     private void EnterChatRoom(string roomId)
     {
         GetChatCoordinator().EnterRoom(roomId);
-        _chatEnabled = true;
-        _chatEnabledRevision++;
+        ApplyRoomChatEnabled(true);
         GetChatCoordinator().AppendRoomConfirmed(
             roomId,
             $"system-{Guid.NewGuid():N}",
@@ -1193,6 +1201,13 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             "已连接房间聊天。",
             DateTimeOffset.UtcNow,
             isLocal: false);
+    }
+
+    private void ApplyRoomChatEnabled(bool enabled)
+    {
+        _chatEnabled = enabled;
+        _chatEnabledRevision++;
+        _chatOwner?.Current.SetRoomChatEnabled(enabled);
     }
 
     private void LeaveChatRoomIfIdle()

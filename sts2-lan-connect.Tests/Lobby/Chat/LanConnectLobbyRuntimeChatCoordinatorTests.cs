@@ -114,6 +114,46 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
     }
 
     [Fact]
+    public void RoomChatEnabledMutationUpdatesStateAndOnlyNotifiesOnChange()
+    {
+        FakeServerChatClient client = new();
+        LanConnectLobbyRuntimeChatCoordinator coordinator = new(client);
+        coordinator.EnterRoom("room-a");
+        int notifications = 0;
+        coordinator.StateChanged += () => notifications++;
+
+        coordinator.SetRoomChatEnabled(false);
+        coordinator.SetRoomChatEnabled(false);
+
+        Assert.False(coordinator.State.Room.ChatEnabled);
+        Assert.Equal(1, notifications);
+    }
+
+    [Fact]
+    public async Task RuntimeRejectsDisabledRoomSendBeforeCreatingPendingMessage()
+    {
+        FakeServerChatClient client = new();
+        await using LanConnectRotatingServerChatPort owner = new(client, () => new FakeServerChatClient());
+        owner.Current.EnterRoom("room-a");
+        owner.Current.SetRoomChatEnabled(false);
+        LanConnectLobbyRuntime runtime =
+            (LanConnectLobbyRuntime)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+                typeof(LanConnectLobbyRuntime));
+        typeof(LanConnectLobbyRuntime)
+            .GetField("_chatOwner", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(runtime, owner);
+        typeof(LanConnectLobbyRuntime)
+            .GetField("_chatEnabled", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(runtime, false);
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => runtime.SendChatTextAsync(LanConnectChatChannel.Room, "blocked"));
+
+        Assert.Contains("disabled", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(owner.Current.State.Room.Messages);
+    }
+
+    [Fact]
     public void RoomSendMovesPendingToConfirmedAndRaisesExactRevisions()
     {
         FakeServerChatClient client = new();
@@ -491,6 +531,7 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         await Assert.ThrowsAsync<ObjectDisposedException>(() => coordinator.StopServerAsync());
         Assert.Throws<ObjectDisposedException>(() => coordinator.EnterRoom("room"));
         Assert.Throws<ObjectDisposedException>(() => coordinator.LeaveRoom());
+        Assert.Throws<ObjectDisposedException>(() => coordinator.SetRoomChatEnabled(false));
     }
 
     private sealed class FakeServerChatClient : ILanConnectServerChatClient
