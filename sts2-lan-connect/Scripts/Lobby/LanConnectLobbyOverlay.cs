@@ -226,7 +226,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Func<string, Task>? _testServerChatSend;
     private Func<string, Task>? _testServerChatRetry;
     private Func<string, Task<CancellationToken>>? _testServerSwitch;
-    private Action<Func<string, Task>, Action>? _testServerPickerLauncher;
+    private Action<Func<string, Task>, Action, Action>? _testServerPickerLauncher;
     private Func<CancellationToken, Task<bool>>? _testServerRefresh;
     private string? _testDefaultServer;
     private string? _testAppliedServerOverride;
@@ -275,7 +275,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         float? uiScale = null,
         Func<string, Task<CancellationToken>>? switchServer = null,
         string? defaultServer = null,
-        Action<Func<string, Task>, Action>? launchServerPicker = null,
+        Action<Func<string, Task>, Action, Action>? launchServerPicker = null,
         Func<CancellationToken, Task<bool>>? refreshServer = null)
     {
         ArgumentNullException.ThrowIfNull(serverState);
@@ -4253,11 +4253,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
             if (_testServerPickerLauncher != null)
             {
-                _testServerPickerLauncher(onPicked, onCancelled);
+                _testServerPickerLauncher(onPicked, onCancelled, CloseServerPickerState);
             }
             else
             {
-                LanConnectServerSelectionStartup.Show(GetTree(), onPicked, onCancelled);
+                LanConnectServerSelectionStartup.Show(
+                    GetTree(),
+                    onPicked,
+                    onCancelled,
+                    onSettled: CloseServerPickerState);
             }
         }
         catch

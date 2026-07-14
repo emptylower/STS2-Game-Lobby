@@ -14,7 +14,11 @@ internal static class LanConnectServerSelectionStartup
     public static event Action<string>? ServerChosen;
     public static event Action? Cancelled;
 
-    public static void Show(SceneTree tree, Action<string> onPicked, Action? onCancelled = null) =>
+    public static void Show(
+        SceneTree tree,
+        Action<string> onPicked,
+        Action? onCancelled = null,
+        Action? onSettled = null) =>
         Show(
             tree,
             address =>
@@ -22,7 +26,8 @@ internal static class LanConnectServerSelectionStartup
                 onPicked(address);
                 return Task.CompletedTask;
             },
-            onCancelled);
+            onCancelled,
+            onSettled);
 
     /// <summary>
     /// Show the picker as a top-level overlay over the current scene. Built
@@ -33,33 +38,63 @@ internal static class LanConnectServerSelectionStartup
     ///   switched servers and the global ServerChosen event has fired.</param>
     /// <param name="onCancelled">Optional callback fired AFTER the global
     ///   Cancelled event when the picker is dismissed without a selection.</param>
-    public static void Show(SceneTree tree, Func<string, Task>? onPicked = null, Action? onCancelled = null)
+    /// <param name="onSettled">Optional callback fired exactly once after the
+    ///   selection attempt succeeds, fails, is superseded, or is cancelled.</param>
+    public static void Show(
+        SceneTree tree,
+        Func<string, Task>? onPicked = null,
+        Action? onCancelled = null,
+        Action? onSettled = null)
     {
+        int settled = 0;
+        void SettleOnce()
+        {
+            if (Interlocked.Exchange(ref settled, 1) == 0)
+            {
+                onSettled?.Invoke();
+            }
+        }
+
         try
         {
             var dlg = new LanConnectServerSelectionDialog();
             dlg.ServerChosen += addr =>
             {
                 int generation = Interlocked.Increment(ref _switchGeneration);
-                TaskHelper.RunSafely(HandleServerPickedAsync(addr, onPicked, generation));
+                TaskHelper.RunSafely(HandleServerPickedAsync(addr, onPicked, SettleOnce, generation));
             };
             dlg.Cancelled += () =>
             {
-                Cancelled?.Invoke();
-                onCancelled?.Invoke();
+                try
+                {
+                    Cancelled?.Invoke();
+                    onCancelled?.Invoke();
+                }
+                finally
+                {
+                    SettleOnce();
+                }
             };
             tree.Root.AddChild(dlg);
         }
         catch (Exception ex)
         {
             Log.Warn($"sts2_lan_connect server selection failed: {ex.Message}");
-            onCancelled?.Invoke();
+            try
+            {
+                onCancelled?.Invoke();
+            }
+            finally
+            {
+                SettleOnce();
+            }
         }
     }
 
     private static async Task HandleServerPickedAsync(
         string address,
         Func<string, Task>? onPicked,
+        Action onSettled,
         int generation)
     {
         try
@@ -85,6 +120,10 @@ internal static class LanConnectServerSelectionStartup
             }
             Log.Warn($"sts2_lan_connect server switch failed: {ex.Message}");
             LanConnectPopupUtil.ShowInfo($"切换大厅服务器失败：{ex.Message}");
+        }
+        finally
+        {
+            onSettled();
         }
     }
 }

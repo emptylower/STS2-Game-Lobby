@@ -288,7 +288,7 @@ public sealed class LanConnectLobbyServerPanelTests
             LanConnectServerChatPresentation.Ready,
             switchServer: _ => Task.FromResult(CancellationToken.None),
             defaultServer: BundledDefaultServer,
-            launchServerPicker: (_, onCancelled) =>
+            launchServerPicker: (_, onCancelled, _) =>
             {
                 launches++;
                 cancelPicker = onCancelled;
@@ -316,6 +316,31 @@ public sealed class LanConnectLobbyServerPanelTests
 
         AssertThat(fixture.Overlay.ServerPickerOpenForTests).IsFalse();
         AssertThat(fixture.Overlay.RefreshButtonEnabledForTests).IsTrue();
+        AssertThat(fixture.Overlay.DirectoryServerButtonEnabledForTests).IsTrue();
+        AssertThat(fixture.Overlay.CreateRoomButtonEnabledForTests).IsTrue();
+        AssertThat(fixture.Overlay.JoinRoomButtonEnabledForTests).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Failed_picker_switch_settles_without_picked_or_cancelled_callbacks()
+    {
+        Action? settlePicker = null;
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready,
+            switchServer: _ => Task.FromResult(CancellationToken.None),
+            defaultServer: BundledDefaultServer,
+            launchServerPicker: (_, _, onSettled) => settlePicker = onSettled);
+        fixture.Overlay.SetServerOverrideDraftForTests("https://picker-failure.example");
+
+        fixture.Overlay.OpenServerPickerForTests();
+        AssertThat(fixture.Overlay.ServerPickerOpenForTests).IsTrue();
+
+        settlePicker!();
+
+        AssertThat(fixture.Overlay.ServerPickerOpenForTests).IsFalse();
+        AssertThat(fixture.Overlay.RefreshButtonEnabledForTests).IsTrue();
+        AssertThat(fixture.Overlay.ServerOverrideApplyEnabledForTests).IsTrue();
         AssertThat(fixture.Overlay.DirectoryServerButtonEnabledForTests).IsTrue();
         AssertThat(fixture.Overlay.CreateRoomButtonEnabledForTests).IsTrue();
         AssertThat(fixture.Overlay.JoinRoomButtonEnabledForTests).IsTrue();
@@ -391,7 +416,7 @@ internal sealed class LobbyOverlayFixture : IDisposable
         LanConnectServerChatPresentation presentation,
         Func<string, Task<CancellationToken>>? switchServer = null,
         string? defaultServer = null,
-        Action<Func<string, Task>, Action>? launchServerPicker = null,
+        Action<Func<string, Task>, Action, Action>? launchServerPicker = null,
         Func<CancellationToken, Task<bool>>? refreshServer = null)
     {
         LanConnectChatChannelState serverState = new(LanConnectChatChannel.Server);
