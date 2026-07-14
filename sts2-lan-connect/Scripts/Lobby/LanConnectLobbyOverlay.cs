@@ -4199,7 +4199,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                 return;
             }
 
-            if (LanConnectLobbyRuntime.Instance?.ActiveRoomId == payload.R)
+            if (LanConnectInviteServerJoinCoordinator.TargetsActiveRoom(
+                    payload,
+                    LanConnectLobbyRuntime.Instance?.ActiveRoomId,
+                    LanConnectConfig.LobbyServerBaseUrl))
             {
                 GD.Print("sts2_lan_connect overlay: invite code targets own hosted room, ignoring");
                 return;

@@ -41,6 +41,23 @@ internal sealed class LanConnectInviteServerJoinCoordinator
         _ports = ports ?? throw new ArgumentNullException(nameof(ports));
     }
 
+    internal static bool TargetsActiveRoom(
+        LanConnectInvitePayload payload,
+        string? activeRoomId,
+        string currentServer)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        if (!string.Equals(activeRoomId, payload.R, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            LanConnectLobbyServerAddress.NormalizeAuthority(currentServer, nameof(currentServer)),
+            LanConnectLobbyServerAddress.NormalizeAuthority(payload.S, nameof(payload)),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     internal async Task<LanConnectInviteJoinResult> JoinAsync(
         LanConnectInvitePayload payload,
         CancellationToken cancellationToken = default)

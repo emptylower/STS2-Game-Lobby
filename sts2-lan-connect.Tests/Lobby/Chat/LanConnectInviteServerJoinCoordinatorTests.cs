@@ -5,6 +5,39 @@ namespace Sts2LanConnect.Tests.Lobby.Chat;
 public sealed class LanConnectInviteServerJoinCoordinatorTests
 {
     [Fact]
+    public void ActiveRoomOnDifferentServerDoesNotSuppressInvite()
+    {
+        bool targetsActiveRoom = LanConnectInviteServerJoinCoordinator.TargetsActiveRoom(
+            Invite("https://other.example/path", "room-a"),
+            "room-a",
+            "https://current.example");
+
+        Assert.False(targetsActiveRoom);
+    }
+
+    [Fact]
+    public void ActiveRoomOnEquivalentServerSuppressesInvite()
+    {
+        bool targetsActiveRoom = LanConnectInviteServerJoinCoordinator.TargetsActiveRoom(
+            Invite("https://ONE.example:443/path?ignored=1", "room-a"),
+            "room-a",
+            "https://one.example/");
+
+        Assert.True(targetsActiveRoom);
+    }
+
+    [Fact]
+    public void ActiveRoomComparisonKeepsRoomIdCaseSensitive()
+    {
+        bool targetsActiveRoom = LanConnectInviteServerJoinCoordinator.TargetsActiveRoom(
+            Invite("https://one.example", "ROOM-A"),
+            "room-a",
+            "https://one.example");
+
+        Assert.False(targetsActiveRoom);
+    }
+
+    [Fact]
     public async Task CrossServerInviteSwitchesBeforeLookupAndDoesNotRestoreOldNode()
     {
         FakeInvitePorts ports = new("https://old.example") { RoomExists = false };
