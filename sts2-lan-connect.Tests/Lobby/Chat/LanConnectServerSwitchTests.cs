@@ -69,6 +69,72 @@ public sealed class LanConnectServerSwitchTests
         Assert.Contains("connect:https://two.example/:p1:Silent", calls);
     }
 
+    [Fact]
+    public async Task SupersededSwitchDoesNotPersistAfterEnteringCancelableStore()
+    {
+        List<string> calls = new();
+        FakeAddressStore store = new(calls);
+        TaskCompletionSource firstPersistEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseFirstPersist = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int persistCalls = 0;
+        store.PersistImplementation = async token =>
+        {
+            if (Interlocked.Increment(ref persistCalls) == 1)
+            {
+                firstPersistEntered.SetResult();
+                await releaseFirstPersist.Task;
+                token.ThrowIfCancellationRequested();
+            }
+        };
+        LanConnectServerSwitchCoordinator sut = new(
+            new FakeRoomLifecycle(calls),
+            new FakeSwitchChat(calls),
+            store);
+
+        Task first = Task.Run(() => sut.SwitchAsync("https://one.example", "p1", "Silent"));
+        await firstPersistEntered.Task;
+        Task second = sut.SwitchAsync("https://two.example", "p1", "Silent");
+        releaseFirstPersist.SetResult();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.DoesNotContain("persist:https://one.example", calls);
+        Assert.Contains("persist:https://two.example", calls);
+        Assert.DoesNotContain(calls, call => call.StartsWith("connect:https://one.example", StringComparison.Ordinal));
+        Assert.Contains("connect:https://two.example/:p1:Silent", calls);
+    }
+
+    [Fact]
+    public async Task SupersededSwitchCanFinishNonCooperativeStopWithoutDisposedTokenFailure()
+    {
+        List<string> calls = new();
+        FakeSwitchChat chat = new(calls);
+        TaskCompletionSource firstStopEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseFirstStop = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int stopCalls = 0;
+        chat.StopImplementation = async _ =>
+        {
+            if (Interlocked.Increment(ref stopCalls) == 1)
+            {
+                firstStopEntered.SetResult();
+                await releaseFirstStop.Task;
+            }
+        };
+        LanConnectServerSwitchCoordinator sut = new(
+            new FakeRoomLifecycle(calls),
+            chat,
+            new FakeAddressStore(calls));
+
+        Task first = sut.SwitchAsync("https://one.example", "p1", "Silent");
+        await firstStopEntered.Task;
+        Task second = sut.SwitchAsync("https://two.example", "p1", "Silent");
+        releaseFirstStop.SetResult();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.DoesNotContain("persist:https://one.example", calls);
+        Assert.Contains("persist:https://two.example", calls);
+        Assert.Contains("connect:https://two.example/:p1:Silent", calls);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("relative/path")]
@@ -171,8 +237,12 @@ public sealed class LanConnectServerSwitchTests
 
     private sealed class FakeAddressStore(List<string> calls) : ILanConnectServerAddressStore
     {
-        public void Persist(string baseUrl)
+        public Func<CancellationToken, Task>? PersistImplementation { get; set; }
+
+        public void Persist(string baseUrl, CancellationToken cancellationToken)
         {
+            PersistImplementation?.Invoke(cancellationToken).GetAwaiter().GetResult();
+            cancellationToken.ThrowIfCancellationRequested();
             calls.Add($"persist:{baseUrl}");
         }
     }

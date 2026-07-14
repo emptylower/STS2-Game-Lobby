@@ -373,7 +373,7 @@ internal interface ILanConnectRoomLifecycle
 
 internal interface ILanConnectServerAddressStore
 {
-    void Persist(string baseUrl);
+    void Persist(string baseUrl, CancellationToken cancellationToken);
 }
 
 internal interface ILanConnectServerSwitchChat
@@ -396,7 +396,7 @@ internal sealed class LanConnectServerSwitchCoordinator
     private readonly ILanConnectServerAddressStore _addressStore;
     private readonly SemaphoreSlim _switchGate = new(1, 1);
     private readonly object _generationLock = new();
-    private CancellationTokenSource? _activeSwitchCancellation;
+    private SwitchGeneration? _activeSwitch;
 
     internal LanConnectServerSwitchCoordinator(
         ILanConnectRoomLifecycle room,
@@ -424,40 +424,47 @@ internal sealed class LanConnectServerSwitchCoordinator
         string playerName,
         CancellationToken callerCancellation)
     {
-        CancellationTokenSource ownCancellation =
-            CancellationTokenSource.CreateLinkedTokenSource(callerCancellation);
-        CancellationTokenSource? superseded;
+        SwitchGeneration ownGeneration = new(callerCancellation);
+        SwitchGeneration? superseded;
+        IDisposable? supersededCancellationLease;
         lock (_generationLock)
         {
-            superseded = _activeSwitchCancellation;
-            _activeSwitchCancellation = ownCancellation;
+            superseded = _activeSwitch;
+            supersededCancellationLease = superseded?.AcquireCancellationLease();
+            _activeSwitch = ownGeneration;
         }
 
-        CancelAndDisposeSuperseded(superseded);
+        CancelSuperseded(superseded, supersededCancellationLease);
+        CancellationToken ownToken = ownGeneration.Token;
         bool gateAcquired = false;
         try
         {
-            await _switchGate.WaitAsync(ownCancellation.Token);
+            await _switchGate.WaitAsync(ownToken);
             gateAcquired = true;
-            ownCancellation.Token.ThrowIfCancellationRequested();
+            ownToken.ThrowIfCancellationRequested();
 
             if (_room.HasActiveRoom)
             {
-                await _room.LeaveActiveRoomAsync(ownCancellation.Token);
+                await _room.LeaveActiveRoomAsync(ownToken);
             }
 
-            ownCancellation.Token.ThrowIfCancellationRequested();
-            await _chat.StopAsync(ownCancellation.Token);
-            ownCancellation.Token.ThrowIfCancellationRequested();
+            ownToken.ThrowIfCancellationRequested();
+            await _chat.StopAsync(ownToken);
+            ownToken.ThrowIfCancellationRequested();
             _chat.ClearForContextChange();
-            ownCancellation.Token.ThrowIfCancellationRequested();
+            ownToken.ThrowIfCancellationRequested();
 
-            _addressStore.Persist(normalized.GetLeftPart(UriPartial.Authority));
-            ownCancellation.Token.ThrowIfCancellationRequested();
-            await _chat.ConnectAsync(normalized, playerNetId, playerName, ownCancellation.Token);
+            lock (_generationLock)
+            {
+                ThrowIfSupersededLocked(ownGeneration);
+            }
+            _addressStore.Persist(normalized.GetLeftPart(UriPartial.Authority), ownToken);
+
+            ownToken.ThrowIfCancellationRequested();
+            await _chat.ConnectAsync(normalized, playerNetId, playerName, ownToken);
         }
         catch (OperationCanceledException) when (
-            !callerCancellation.IsCancellationRequested && ownCancellation.IsCancellationRequested)
+            !callerCancellation.IsCancellationRequested && ownToken.IsCancellationRequested)
         {
             // A newer switch owns the user-visible result.
         }
@@ -468,20 +475,14 @@ internal sealed class LanConnectServerSwitchCoordinator
                 _switchGate.Release();
             }
 
-            bool disposeOwn = false;
             lock (_generationLock)
             {
-                if (ReferenceEquals(_activeSwitchCancellation, ownCancellation))
+                if (ReferenceEquals(_activeSwitch, ownGeneration))
                 {
-                    _activeSwitchCancellation = null;
-                    disposeOwn = true;
+                    _activeSwitch = null;
                 }
             }
-
-            if (disposeOwn)
-            {
-                ownCancellation.Dispose();
-            }
+            ownGeneration.Complete();
         }
     }
 
@@ -498,16 +499,22 @@ internal sealed class LanConnectServerSwitchCoordinator
         return new Uri(parsed.GetLeftPart(UriPartial.Authority) + "/", UriKind.Absolute);
     }
 
-    private static void CancelAndDisposeSuperseded(CancellationTokenSource? superseded)
+    private void ThrowIfSupersededLocked(SwitchGeneration generation)
     {
-        if (superseded == null)
+        if (!ReferenceEquals(_activeSwitch, generation))
         {
-            return;
+            throw new OperationCanceledException(generation.Token);
         }
+        generation.Token.ThrowIfCancellationRequested();
+    }
 
+    private static void CancelSuperseded(
+        SwitchGeneration? superseded,
+        IDisposable? cancellationLease)
+    {
         try
         {
-            superseded.Cancel();
+            superseded?.Cancel();
         }
         catch (AggregateException)
         {
@@ -515,7 +522,76 @@ internal sealed class LanConnectServerSwitchCoordinator
         }
         finally
         {
-            superseded.Dispose();
+            cancellationLease?.Dispose();
+        }
+    }
+
+    private sealed class SwitchGeneration
+    {
+        private readonly object _lifecycleLock = new();
+        private readonly CancellationTokenSource _cancellation;
+        private int _cancellationLeaseCount;
+        private bool _completed;
+
+        internal SwitchGeneration(CancellationToken callerCancellation)
+        {
+            _cancellation = CancellationTokenSource.CreateLinkedTokenSource(callerCancellation);
+            Token = _cancellation.Token;
+        }
+
+        internal CancellationToken Token { get; }
+
+        internal IDisposable AcquireCancellationLease()
+        {
+            lock (_lifecycleLock)
+            {
+                if (_completed)
+                {
+                    throw new InvalidOperationException("Cannot cancel a completed server switch generation.");
+                }
+                _cancellationLeaseCount++;
+            }
+            return new CancellationLease(this);
+        }
+
+        internal void Cancel() => _cancellation.Cancel();
+
+        internal void Complete()
+        {
+            bool dispose;
+            lock (_lifecycleLock)
+            {
+                _completed = true;
+                dispose = _cancellationLeaseCount == 0;
+            }
+            if (dispose)
+            {
+                _cancellation.Dispose();
+            }
+        }
+
+        private void ReleaseCancellationLease()
+        {
+            bool dispose;
+            lock (_lifecycleLock)
+            {
+                _cancellationLeaseCount--;
+                dispose = _completed && _cancellationLeaseCount == 0;
+            }
+            if (dispose)
+            {
+                _cancellation.Dispose();
+            }
+        }
+
+        private sealed class CancellationLease(SwitchGeneration owner) : IDisposable
+        {
+            private SwitchGeneration? _owner = owner;
+
+            public void Dispose()
+            {
+                Interlocked.Exchange(ref _owner, null)?.ReleaseCancellationLease();
+            }
         }
     }
 }

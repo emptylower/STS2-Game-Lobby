@@ -1260,9 +1260,11 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
 
     private sealed class ConfigServerAddressStore : ILanConnectServerAddressStore
     {
-        public void Persist(string baseUrl)
+        public void Persist(string baseUrl, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             LanConnectConfig.LobbyServerBaseUrl = baseUrl;
+            cancellationToken.ThrowIfCancellationRequested();
             LanConnectConfig.LastUsedServerAddress = baseUrl;
         }
     }
