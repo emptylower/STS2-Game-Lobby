@@ -178,7 +178,7 @@ public sealed class LanConnectChatChannelStateTests
     }
 
     [Fact]
-    public void DisconnectPreservesPendingFailedAndUnknownWithoutMutation()
+    public void DisconnectMarksUnknownAsCrossSessionAndPreservesOtherDeliveryStates()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
 
@@ -191,11 +191,25 @@ public sealed class LanConnectChatChannelStateTests
         long revisionBefore = state.Revision;
         state.MarkDisconnected();
 
-        Assert.Equal(revisionBefore, state.Revision);
+        Assert.Equal(revisionBefore + 1, state.Revision);
         Assert.Equal(3, state.Messages.Count);
-        Assert.Contains(state.Messages, m => m.ClientMessageId == "client-pend" && m.Delivery == ServerChatDeliveryState.Pending);
-        Assert.Contains(state.Messages, m => m.ClientMessageId == "client-fail" && m.Delivery == ServerChatDeliveryState.Failed);
-        Assert.Contains(state.Messages, m => m.ClientMessageId == "client-unknown" && m.Delivery == ServerChatDeliveryState.DeliveryUnknown);
+        Assert.Contains(state.Messages, m =>
+            m.ClientMessageId == "client-pend" &&
+            m.Delivery == ServerChatDeliveryState.Pending &&
+            !m.DisconnectedAfterUnknown);
+        Assert.Contains(state.Messages, m =>
+            m.ClientMessageId == "client-fail" &&
+            m.Delivery == ServerChatDeliveryState.Failed &&
+            !m.DisconnectedAfterUnknown);
+        Assert.Contains(state.Messages, m =>
+            m.ClientMessageId == "client-unknown" &&
+            m.Delivery == ServerChatDeliveryState.DeliveryUnknown &&
+            m.DisconnectedAfterUnknown);
+
+        long markedRevision = state.Revision;
+        state.MarkDisconnected();
+
+        Assert.Equal(markedRevision, state.Revision);
     }
 
     [Fact]

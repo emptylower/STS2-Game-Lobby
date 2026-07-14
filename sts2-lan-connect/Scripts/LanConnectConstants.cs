@@ -64,4 +64,18 @@ internal static class LanConnectConstants
     public const string RoomManagementButtonName = "LanConnectRoomManagementButton";
 
     public const string RoomManagementPanelName = "LanConnectRoomManagementPanel";
+
+    public const string ChatMessagesScrollName = "ChatMessagesScroll";
+
+    public const string ChatMessagesListName = "ChatMessagesList";
+
+    public const string ChatDraftInputName = "ChatDraftInput";
+
+    public const string ChatSendButtonName = "ChatSendButton";
+
+    public const string ChatStatusLabelName = "ChatStatusLabel";
+
+    public const string ChatNewMessagesButtonName = "ChatNewMessagesButton";
+
+    public const string ChatRetryButtonPrefix = "ChatRetry_";
 }

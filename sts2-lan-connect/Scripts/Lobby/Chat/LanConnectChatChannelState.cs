@@ -47,6 +47,8 @@ internal sealed class ServerChatMessageState
 
     public ServerChatDeliveryState Delivery { get; init; }
 
+    public bool DisconnectedAfterUnknown { get; init; }
+
     public string? ErrorCode { get; init; }
 
     public string? ErrorMessage { get; init; }
@@ -465,6 +467,7 @@ internal sealed class LanConnectChatChannelState
                     Sequence = existing.Sequence,
                     IsLocal = existing.IsLocal,
                     Delivery = ServerChatDeliveryState.Failed,
+                    DisconnectedAfterUnknown = existing.DisconnectedAfterUnknown,
                     ErrorCode = code,
                     ErrorMessage = message,
                     SentAt = existing.SentAt
@@ -583,6 +586,23 @@ internal sealed class LanConnectChatChannelState
         {
             // The next connection starts a new snapshot stream; visible message state is retained.
             _snapshotAssembly = null;
+            bool mutated = false;
+            for (int index = 0; index < _messages.Count; index++)
+            {
+                ServerChatMessageState message = _messages[index];
+                if (message.Delivery != ServerChatDeliveryState.DeliveryUnknown || message.DisconnectedAfterUnknown)
+                {
+                    continue;
+                }
+
+                _messages[index] = WithDisconnectedAfterUnknown(message);
+                mutated = true;
+            }
+
+            if (mutated)
+            {
+                Touch();
+            }
         }
     }
 
@@ -713,6 +733,7 @@ internal sealed class LanConnectChatChannelState
                 Sequence = existing.Sequence,
                 IsLocal = existing.IsLocal,
                 Delivery = ServerChatDeliveryState.Failed,
+                DisconnectedAfterUnknown = existing.DisconnectedAfterUnknown,
                 ErrorCode = code,
                 ErrorMessage = message,
                 SentAt = existing.SentAt
@@ -1136,6 +1157,7 @@ internal sealed class LanConnectChatChannelState
             Sequence = existing.Sequence,
             IsLocal = true,
             Delivery = ServerChatDeliveryState.Confirmed,
+            DisconnectedAfterUnknown = existing.DisconnectedAfterUnknown,
             SentAt = canonical.SentAt == default ? existing.SentAt : canonical.SentAt
         };
 
@@ -1153,6 +1175,7 @@ internal sealed class LanConnectChatChannelState
         left.Sequence == right.Sequence &&
         left.IsLocal == right.IsLocal &&
         left.Delivery == right.Delivery &&
+        left.DisconnectedAfterUnknown == right.DisconnectedAfterUnknown &&
         string.Equals(left.ErrorCode, right.ErrorCode, StringComparison.Ordinal) &&
         string.Equals(left.ErrorMessage, right.ErrorMessage, StringComparison.Ordinal) &&
         left.SentAt == right.SentAt;
@@ -1168,6 +1191,24 @@ internal sealed class LanConnectChatChannelState
             Sequence = source.Sequence,
             IsLocal = source.IsLocal,
             Delivery = delivery,
+            DisconnectedAfterUnknown = source.DisconnectedAfterUnknown,
+            ErrorCode = source.ErrorCode,
+            ErrorMessage = source.ErrorMessage,
+            SentAt = source.SentAt
+        };
+
+    private static ServerChatMessageState WithDisconnectedAfterUnknown(ServerChatMessageState source) =>
+        new()
+        {
+            MessageId = source.MessageId,
+            ClientMessageId = source.ClientMessageId,
+            SenderName = source.SenderName,
+            SenderNetId = source.SenderNetId,
+            Text = source.Text,
+            Sequence = source.Sequence,
+            IsLocal = source.IsLocal,
+            Delivery = source.Delivery,
+            DisconnectedAfterUnknown = true,
             ErrorCode = source.ErrorCode,
             ErrorMessage = source.ErrorMessage,
             SentAt = source.SentAt
