@@ -881,6 +881,60 @@ test("control host and client hello establish room v2 rich and legacy routing", 
   }
 });
 
+test("control websocket closes frames over the configured payload before routing", async () => {
+  const config = testConfig({ port: 0 });
+  assert.equal(config.chat.maxPayloadBytes, 8_192);
+  const service = await createLobbyService(config);
+  let socket: WebSocket | undefined;
+  try {
+    const address = await service.start();
+    const response = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "control-payload-bound",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(response.status, 201);
+    const created = await response.json() as {
+      roomId: string;
+      controlChannelId: string;
+      hostToken: string;
+    };
+    socket = await openControlWebSocket(
+      `ws://127.0.0.1:${address.port}${config.wsPath}`
+      + `?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=host&token=${created.hostToken}`,
+    );
+    await waitForChatFrame(socket, (frame) => frame.type === "connected");
+    const oversized = JSON.stringify({
+      type: "ping",
+      padding: "x".repeat(config.chat.maxPayloadBytes),
+    });
+    assert.ok(Buffer.byteLength(oversized, "utf8") > config.chat.maxPayloadBytes);
+    const closed = waitForChatClose(socket);
+    socket.send(oversized);
+    assert.deepEqual(await closed, { code: 1009, reason: "" });
+    assert.equal(
+      chatSocketState(socket).frames.some(
+        (frame) => frame.type === "pong" || frame.type === "room_chat_error",
+      ),
+      false,
+    );
+  } finally {
+    socket?.terminate();
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
 test("chat websocket redeems a ticket once and delivers ready, snapshot, ack, and self-broadcast", async () => {
   const base = testConfig({ port: 0 });
   const config = { ...base, chat: { ...base.chat, enabled: true } };

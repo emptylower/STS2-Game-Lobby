@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatFeatureVersions } from "./feature-resolver.js";
-import { RoomChatGateway, type RoomChatPeerRegistration } from "./room-gateway.js";
+import {
+  RoomChatGateway,
+  type RoomChatGatewayOptions,
+  type RoomChatPeerRegistration,
+} from "./room-gateway.js";
 
 const allVersions: ChatFeatureVersions = {
   richContentVersion: 1,
@@ -23,16 +27,19 @@ interface TestPeer {
 function peer(
   connectionSessionId: string,
   role: "host" | "client" = "client",
+  overrides: Partial<RoomChatPeerRegistration> = {},
 ): TestPeer {
   const frames: Array<Record<string, unknown>> = [];
   return {
     registration: {
       connectionSessionId,
+      clientIp: `198.51.100.${connectionSessionId.length}`,
       roomId: "room-1",
       roomSessionId: "session-1",
       controlChannelId: "control-1",
       role,
       send: (frame) => frames.push(frame),
+      ...overrides,
     },
     frames,
   };
@@ -86,19 +93,29 @@ function textContent(text: string) {
   return { formatVersion: 1, segments: [{ kind: "text", text }] };
 }
 
-function createGateway(options: {
-  now?: () => number;
+function createGateway(options: RoomChatGatewayOptions & {
   chatEnabled?: () => boolean;
 } = {}) {
   let nextId = 0;
+  const { chatEnabled, ...gatewayOptions } = options;
   return new RoomChatGateway({
     compiledFeatures: allVersions,
     configuredFeatures: allVersions,
     roomV2Enabled: true,
-    getChatEnabled: options.chatEnabled ?? (() => true),
+    getChatEnabled: chatEnabled ?? (() => true),
     now: options.now ?? (() => Date.parse("2026-07-15T00:00:00.000Z")),
     randomUuid: () => `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`,
+    connectionBurst: 1_000,
+    ipMessagesPerMinute: 1_000,
+    ...gatewayOptions,
   });
+}
+
+function hasCode(code: string) {
+  return (error: unknown) => {
+    assert.equal((error as { code?: unknown }).code, code);
+    return true;
+  };
 }
 
 test("room v2 rejects sends before hello then locks normalized client and host identity", () => {
@@ -302,6 +319,161 @@ test("room v2 replays cached errors and conflicts on changed content", () => {
   gateway.handleControlEnvelope("error-dedupe", roomSend(id, textContent("changed")));
   assert.equal(sender.frames.at(-1)?.code, "duplicate_message");
   assert.equal(sender.frames.some((frame) => frame.type === "room_chat_message"), false);
+});
+
+test("room peer registration enforces global and per-room bounds and releases capacity", () => {
+  const gateway = createGateway({ maxPeersTotal: 2, maxPeersPerRoom: 1 });
+  const roomOne = peer("room-one");
+  const roomOneOverflow = peer("room-one-overflow");
+  const roomTwo = peer("room-two", "client", { roomId: "room-2" });
+  const globalOverflow = peer("global-overflow", "client", { roomId: "room-3" });
+
+  gateway.registerPeer(roomOne.registration);
+  assert.throws(() => gateway.registerPeer(roomOneOverflow.registration), hasCode("server_busy"));
+  gateway.registerPeer(roomTwo.registration);
+  assert.throws(() => gateway.registerPeer(globalOverflow.registration), hasCode("server_busy"));
+
+  gateway.unregisterPeer("room-one");
+  assert.doesNotThrow(() => gateway.registerPeer(globalOverflow.registration));
+  gateway.close();
+  assert.doesNotThrow(() => gateway.registerPeer(roomOne.registration));
+});
+
+test("room rate limits replay dedupe before consuming and cache connection denials", () => {
+  let now = 0;
+  const gateway = createGateway({
+    now: () => now,
+    connectionBurst: 1,
+    connectionRefillMs: 2_000,
+    ipMessagesPerMinute: 30,
+  });
+  const sender = peer("rate-sender");
+  gateway.registerPeer(sender.registration);
+  gateway.handleControlEnvelope("rate-sender", hello("Alice", "net:alice"));
+  sender.frames.length = 0;
+  const firstId = "30303030-3030-4030-8030-303030303030";
+  const secondId = "31313131-3131-4131-8131-313131313132";
+  const thirdId = "32323232-3232-4232-8232-323232323233";
+
+  gateway.handleControlEnvelope("rate-sender", roomSend(firstId, textContent("first")));
+  const firstAck = sender.frames.find((frame) => frame.type === "room_chat_ack");
+  gateway.handleControlEnvelope("rate-sender", roomSend(firstId, textContent("first")));
+  assert.deepEqual(sender.frames.at(-1), firstAck);
+
+  gateway.handleControlEnvelope("rate-sender", roomSend(secondId, textContent("second")));
+  const limited = sender.frames.at(-1);
+  assert.equal(limited?.code, "rate_limited");
+  assert.equal(limited?.retryAfterMs, 2_000);
+  now = 2_000;
+  gateway.handleControlEnvelope("rate-sender", roomSend(secondId, textContent("second")));
+  assert.deepEqual(sender.frames.at(-1), limited);
+  gateway.handleControlEnvelope("rate-sender", roomSend(thirdId, textContent("third")));
+  assert.equal(sender.frames.at(-2)?.type, "room_chat_ack");
+});
+
+test("room gateway close clears peer indexes and limiter state", () => {
+  const gateway = createGateway({
+    connectionBurst: 1,
+    ipMessagesPerMinute: 1,
+    connectionLimiterMaxKeys: 1,
+    ipLimiterMaxKeys: 1,
+  });
+  const first = peer("reset-connection", "client", { clientIp: "203.0.113.40" });
+  gateway.registerPeer(first.registration);
+  gateway.handleControlEnvelope("reset-connection", hello("First", "net:first"));
+  first.frames.length = 0;
+  gateway.handleControlEnvelope("reset-connection", roomSend(
+    "40404040-4040-4040-8040-404040404040",
+    textContent("before close"),
+  ));
+  assert.equal(first.frames.at(-2)?.type, "room_chat_ack");
+
+  gateway.close();
+  const replacement = peer("reset-connection", "client", { clientIp: "203.0.113.40" });
+  gateway.registerPeer(replacement.registration);
+  gateway.handleControlEnvelope("reset-connection", hello("Second", "net:second"));
+  replacement.frames.length = 0;
+  gateway.handleControlEnvelope("reset-connection", roomSend(
+    "41414141-4141-4141-8141-414141414141",
+    textContent("after close"),
+  ));
+  assert.equal(replacement.frames.at(-2)?.type, "room_chat_ack");
+});
+
+test("room IP rate limits span connections and bounded limiter keys return server_busy", () => {
+  const sharedIp = "203.0.113.10";
+  const gateway = createGateway({ connectionBurst: 10, ipMessagesPerMinute: 1 });
+  const first = peer("ip-first", "client", { clientIp: sharedIp });
+  const second = peer("ip-second", "client", { clientIp: sharedIp });
+  for (const candidate of [first, second]) {
+    gateway.registerPeer(candidate.registration);
+    gateway.handleControlEnvelope(
+      candidate.registration.connectionSessionId,
+      hello(candidate.registration.connectionSessionId, `net:${candidate.registration.connectionSessionId}`),
+    );
+    candidate.frames.length = 0;
+  }
+  gateway.handleControlEnvelope("ip-first", roomSend(
+    "33333333-3333-4333-8333-333333333334",
+    textContent("first IP message"),
+  ));
+  second.frames.length = 0;
+  gateway.handleControlEnvelope("ip-second", roomSend(
+    "34343434-3434-4434-8434-343434343434",
+    textContent("second IP message"),
+  ));
+  assert.equal(second.frames.at(-1)?.code, "rate_limited");
+  assert.ok(Number(second.frames.at(-1)?.retryAfterMs) > 0);
+
+  const connectionCapacity = createGateway({
+    connectionBurst: 10,
+    connectionLimiterMaxKeys: 1,
+    ipLimiterMaxKeys: 10,
+  });
+  const connA = peer("conn-a", "client", { clientIp: "203.0.113.20" });
+  const connB = peer("conn-b", "client", { clientIp: "203.0.113.21" });
+  for (const candidate of [connA, connB]) {
+    connectionCapacity.registerPeer(candidate.registration);
+    connectionCapacity.handleControlEnvelope(
+      candidate.registration.connectionSessionId,
+      hello(candidate.registration.connectionSessionId, `net:${candidate.registration.connectionSessionId}`),
+    );
+    candidate.frames.length = 0;
+  }
+  connectionCapacity.handleControlEnvelope("conn-a", roomSend(
+    "35353535-3535-4535-8535-353535353535",
+    textContent("fills connection key"),
+  ));
+  connectionCapacity.handleControlEnvelope("conn-b", roomSend(
+    "36363636-3636-4636-8636-363636363636",
+    textContent("connection busy"),
+  ));
+  assert.equal(connB.frames.at(-1)?.code, "server_busy");
+
+  const ipCapacity = createGateway({
+    connectionBurst: 10,
+    connectionLimiterMaxKeys: 10,
+    ipLimiterMaxKeys: 1,
+  });
+  const ipA = peer("ip-a", "client", { clientIp: "203.0.113.30" });
+  const ipB = peer("ip-b", "client", { clientIp: "203.0.113.31" });
+  for (const candidate of [ipA, ipB]) {
+    ipCapacity.registerPeer(candidate.registration);
+    ipCapacity.handleControlEnvelope(
+      candidate.registration.connectionSessionId,
+      hello(candidate.registration.connectionSessionId, `net:${candidate.registration.connectionSessionId}`),
+    );
+    candidate.frames.length = 0;
+  }
+  ipCapacity.handleControlEnvelope("ip-a", roomSend(
+    "37373737-3737-4737-8737-373737373737",
+    textContent("fills IP key"),
+  ));
+  ipCapacity.handleControlEnvelope("ip-b", roomSend(
+    "38383838-3838-4838-8838-383838383838",
+    textContent("IP busy"),
+  ));
+  assert.equal(ipB.frames.at(-1)?.code, "server_busy");
 });
 
 test("deep invalid content falls back to the raw envelope for dedupe conflicts", () => {
@@ -577,6 +749,7 @@ test("room envelopes require own context fields and ignore inherited feature ver
     gateway.handleControlEnvelope("own-fields", { type: "room_chat_v2" });
   });
   assert.equal(client.frames.at(-1)?.code, "invalid_message");
+  assert.equal(client.frames.at(-1)?.clientMessageId, "");
 
   const hostile = new Proxy({}, {
     getPrototypeOf: () => {

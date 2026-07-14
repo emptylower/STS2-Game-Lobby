@@ -337,6 +337,14 @@ test("disabled chat, rich content, and connection rate limits reject without bro
   await settle(socket);
   assert.equal(frames(socket).at(-1)?.code, "chat_disabled");
 
+  const disabledRichId = "34343434-3434-4434-8434-343434343434";
+  socket.emit("message", chatSendContent(disabledRichId, {
+    formatVersion: 1,
+    segments: [{ kind: "emoji", emojiId: "heart" }],
+  }), false);
+  await settle(socket);
+  assert.equal(frames(socket).at(-1)?.code, "feature_disabled");
+
   gateway.setState({ chatEnabled: true });
   socket.emit("message", JSON.stringify({
     type: "chat_send",
@@ -356,6 +364,23 @@ test("disabled chat, rich content, and connection rate limits reject without bro
   const limited = frames(socket).at(-1)!;
   assert.equal(limited.code, "rate_limited");
   assert.ok(Number(limited.retryAfterMs) > 0);
+});
+
+test("valid rich content returns chat_disabled when runtime chat is off", async () => {
+  const gateway = new ServerChatGateway({
+    chatEnabled: false,
+    configuredFeatures: richFeatures,
+  });
+  const socket = new FakeSocket();
+  gateway.accept(socket as unknown as WebSocket, ticket);
+  await settle(socket);
+  socket.emit("message", chatSendContent(
+    "39393939-3939-4939-8939-393939393939",
+    { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "heart" }] },
+  ), false);
+  await settle(socket);
+  assert.equal(frames(socket).at(-1)?.code, "chat_disabled");
+  await gateway.close();
 });
 
 test("requires chat_send channel to be exactly server", async () => {

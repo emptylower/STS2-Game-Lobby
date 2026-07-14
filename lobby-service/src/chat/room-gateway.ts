@@ -15,9 +15,11 @@ import {
   supportsContent,
   type ChatFeatureVersions,
 } from "./feature-resolver.js";
+import { RateLimitError, SlidingWindowLimiter, TokenBucketLimiter } from "./rate-limiter.js";
 
 export interface RoomChatPeerRegistration {
   connectionSessionId: string;
+  clientIp: string;
   roomId: string;
   roomSessionId: string;
   controlChannelId: string;
@@ -33,6 +35,23 @@ export interface RoomChatGatewayOptions {
   getChatEnabled?(roomId: string): boolean;
   now?: () => number;
   randomUuid?: () => string;
+  maxPeersTotal?: number;
+  maxPeersPerRoom?: number;
+  connectionBurst?: number;
+  connectionRefillMs?: number;
+  ipMessagesPerMinute?: number;
+  connectionLimiterMaxKeys?: number;
+  ipLimiterMaxKeys?: number;
+}
+
+export class RoomChatGatewayError extends Error {
+  constructor(
+    readonly code: "server_busy",
+    message: string,
+  ) {
+    super(message);
+    this.name = "RoomChatGatewayError";
+  }
 }
 
 export interface LockedRoomChatIdentity {
@@ -72,6 +91,8 @@ const CLIENT_MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a
 const MAX_DEDUPE_ENTRIES = 256;
 const DEDUPE_TTL_MS = 10 * 60_000;
 const MAX_LEGACY_UTF16_UNITS = 60;
+const DEFAULT_MAX_PEERS_TOTAL = 500;
+const DEFAULT_MAX_PEERS_PER_ROOM = 32;
 
 export class RoomChatGateway {
   private readonly compiledFeatures: ChatFeatureVersions;
@@ -81,7 +102,12 @@ export class RoomChatGateway {
   private readonly getChatEnabled: (roomId: string) => boolean;
   private readonly now: () => number;
   private readonly randomUuid: () => string;
+  private readonly maxPeersTotal: number;
+  private readonly maxPeersPerRoom: number;
+  private readonly connectionLimiter: TokenBucketLimiter;
+  private readonly ipLimiter: SlidingWindowLimiter;
   private readonly peers = new Map<string, PeerState>();
+  private readonly peersByRoom = new Map<string, Set<string>>();
 
   constructor(options: RoomChatGatewayOptions = {}) {
     this.compiledFeatures = { ...(options.compiledFeatures ?? PHASE_3_CHAT_FEATURES) };
@@ -93,11 +119,40 @@ export class RoomChatGateway {
     this.getChatEnabled = options.getChatEnabled ?? (() => true);
     this.now = options.now ?? Date.now;
     this.randomUuid = options.randomUuid ?? randomUUID;
+    this.maxPeersTotal = options.maxPeersTotal ?? DEFAULT_MAX_PEERS_TOTAL;
+    this.maxPeersPerRoom = options.maxPeersPerRoom ?? DEFAULT_MAX_PEERS_PER_ROOM;
+    this.connectionLimiter = new TokenBucketLimiter({
+      now: this.now,
+      ...(options.connectionBurst === undefined ? {} : { burst: options.connectionBurst }),
+      ...(options.connectionRefillMs === undefined ? {} : { refillMs: options.connectionRefillMs }),
+      ...(options.connectionLimiterMaxKeys === undefined
+        ? {}
+        : { maxKeys: options.connectionLimiterMaxKeys }),
+    });
+    this.ipLimiter = new SlidingWindowLimiter({
+      now: this.now,
+      purpose: "ip_message",
+      ...(options.ipMessagesPerMinute === undefined
+        ? {}
+        : { maxRequests: options.ipMessagesPerMinute }),
+      ...(options.ipLimiterMaxKeys === undefined ? {} : { maxKeys: options.ipLimiterMaxKeys }),
+    });
   }
 
   registerPeer(registration: RoomChatPeerRegistration): void {
     if (this.peers.has(registration.connectionSessionId)) {
       throw new Error("room chat connection session is already registered");
+    }
+    if (this.peers.size >= this.maxPeersTotal) {
+      throw new RoomChatGatewayError("server_busy", "room chat peer capacity exceeded");
+    }
+    let roomPeers = this.peersByRoom.get(registration.roomId);
+    if (roomPeers && roomPeers.size >= this.maxPeersPerRoom) {
+      throw new RoomChatGatewayError("server_busy", "room chat room capacity exceeded");
+    }
+    if (!roomPeers) {
+      roomPeers = new Set();
+      this.peersByRoom.set(registration.roomId, roomPeers);
     }
     this.peers.set(registration.connectionSessionId, {
       ...registration,
@@ -108,10 +163,25 @@ export class RoomChatGateway {
       dedupe: new Map(),
       dedupeLastSeenAt: this.now(),
     });
+    roomPeers.add(registration.connectionSessionId);
   }
 
   unregisterPeer(connectionSessionId: string): void {
+    const peer = this.peers.get(connectionSessionId);
+    if (!peer) return;
     this.peers.delete(connectionSessionId);
+    this.connectionLimiter.remove(connectionSessionId);
+    const roomPeers = this.peersByRoom.get(peer.roomId);
+    roomPeers?.delete(connectionSessionId);
+    if (roomPeers?.size === 0) this.peersByRoom.delete(peer.roomId);
+  }
+
+  close(): void {
+    for (const connectionSessionId of [...this.peers.keys()]) {
+      this.unregisterPeer(connectionSessionId);
+    }
+    this.peersByRoom.clear();
+    this.ipLimiter.cleanup(Number.MAX_SAFE_INTEGER);
   }
 
   getLockedIdentity(connectionSessionId: string): LockedRoomChatIdentity | null {
@@ -257,7 +327,8 @@ export class RoomChatGateway {
     input: Record<string, unknown>,
     rawEnvelope?: string,
   ): void {
-    const fallbackClientMessageId = typeof input.clientMessageId === "string"
+    const fallbackClientMessageId = Object.hasOwn(input, "clientMessageId")
+      && typeof input.clientMessageId === "string"
       ? input.clientMessageId
       : "";
     if (!peer.identity) {
@@ -330,6 +401,42 @@ export class RoomChatGateway {
       return;
     }
 
+    try {
+      const connectionRate = this.connectionLimiter.consume(peer.connectionSessionId);
+      if (!connectionRate.allowed) {
+        this.cacheAndSendError(
+          peer,
+          envelope.clientMessageId,
+          canonicalJson,
+          "rate_limited",
+          connectionRate.retryAfterMs,
+        );
+        return;
+      }
+      const ipRate = this.ipLimiter.consume(peer.clientIp);
+      if (!ipRate.allowed) {
+        this.cacheAndSendError(
+          peer,
+          envelope.clientMessageId,
+          canonicalJson,
+          "rate_limited",
+          ipRate.retryAfterMs,
+        );
+        return;
+      }
+    } catch (error) {
+      if (error instanceof RateLimitError) {
+        this.cacheAndSendError(
+          peer,
+          envelope.clientMessageId,
+          canonicalJson,
+          "server_busy",
+        );
+        return;
+      }
+      throw error;
+    }
+
     const now = this.now();
     const message: RoomChatMessage = {
       roomId: peer.roomId,
@@ -350,9 +457,11 @@ export class RoomChatGateway {
     this.storeDedupe(peer, envelope.clientMessageId, canonicalJson, ack);
     peer.send(ack);
 
-    for (const recipient of this.peers.values()) {
+    const roomPeerIds = this.peersByRoom.get(peer.roomId) ?? [];
+    for (const recipientId of roomPeerIds) {
+      const recipient = this.peers.get(recipientId);
       if (
-        recipient.roomId !== peer.roomId
+        !recipient
         || recipient.roomSessionId !== peer.roomSessionId
         || !recipient.helloComplete
       ) {
@@ -441,8 +550,9 @@ export class RoomChatGateway {
     clientMessageId: string,
     canonicalJson: string,
     code: ChatProtocolErrorCode,
+    retryAfterMs?: number,
   ): void {
-    const frame = createErrorFrame(code, clientMessageId);
+    const frame = createErrorFrame(code, clientMessageId, retryAfterMs);
     this.storeDedupe(peer, clientMessageId, canonicalJson, frame);
     peer.send(frame);
   }
@@ -666,6 +776,8 @@ function safeErrorMessage(code: ChatProtocolErrorCode): string {
     case "chat_disabled": return "Room chat is disabled.";
     case "duplicate_message": return "The client message ID was already used.";
     case "protocol_mismatch": return "The room chat protocol or context does not match.";
+    case "rate_limited": return "Room chat is temporarily rate limited.";
+    case "server_busy": return "Room chat is temporarily busy.";
     default: return "The room chat message was rejected.";
   }
 }
@@ -673,6 +785,7 @@ function safeErrorMessage(code: ChatProtocolErrorCode): string {
 function createErrorFrame(
   code: ChatProtocolErrorCode,
   clientMessageId: string,
+  retryAfterMs?: number,
 ): Record<string, unknown> {
   return {
     type: "room_chat_error",
@@ -680,6 +793,7 @@ function createErrorFrame(
     clientMessageId,
     code,
     message: safeErrorMessage(code),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
   };
 }
 

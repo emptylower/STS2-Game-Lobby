@@ -367,7 +367,7 @@ export class ServerChatGateway {
     let content;
     let canonicalJson: string;
     try {
-      const enabledFeatures = this.resolveFeatures(this.chatEnabled);
+      const enabledFeatures = this.resolveFeatures(true);
       content = canonicalizeChatContent(envelope.content, {
         richContentVersion: enabledFeatures.richContentVersion,
         emojiSetVersion: enabledFeatures.emojiSetVersion,

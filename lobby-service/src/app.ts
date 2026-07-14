@@ -723,8 +723,8 @@ export async function createLobbyService(
 
   const server = createServer(app);
   // Both WebSocket servers are noServer; the single upgrade router owns path dispatch.
-  const wss = new WebSocketServer({ noServer: true });
-  const chatWss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: env.chat.maxPayloadBytes });
+  const chatWss = new WebSocketServer({ noServer: true, maxPayload: env.chat.maxPayloadBytes });
   const uninstallUpgradeRouter = installUpgradeRouter({
     server,
     controlPath: env.wsPath,
@@ -735,6 +735,9 @@ export async function createLobbyService(
   const roomPeers = new Map<string, Set<ControlPeer>>();
 
   chatWss.on("connection", (socket, req) => {
+    socket.on("error", () => {
+      // ws emits transport errors (including maxPayload) before the close event.
+    });
     const reserved = reservedChatTicketsByUpgrade.get(req);
     reservedChatTicketsByUpgrade.delete(req);
     if (!reserved) {
@@ -749,6 +752,9 @@ export async function createLobbyService(
   });
 
   wss.on("connection", (socket, req) => {
+    socket.on("error", () => {
+      // The close handler owns cleanup after transport-level failures.
+    });
     try {
       const requestUrl = new URL(req.url ?? env.wsPath, `http://${req.headers.host ?? "127.0.0.1"}`);
       const roomId = requiredQuery(requestUrl, "roomId");
@@ -790,6 +796,7 @@ export async function createLobbyService(
 
       roomChatGateway.registerPeer({
         connectionSessionId: peer.connectionSessionId,
+        clientIp: resolveChatClientIp(req),
         roomId: peer.roomId,
         roomSessionId: peer.roomSessionId,
         controlChannelId: peer.controlChannelId,
@@ -1230,6 +1237,7 @@ export async function createLobbyService(
       }
     }
     roomPeers.clear();
+    roomChatGateway.close();
 
     uninstallUpgradeRouter();
 
