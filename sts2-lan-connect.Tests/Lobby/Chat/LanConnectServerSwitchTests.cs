@@ -70,6 +70,75 @@ public sealed class LanConnectServerSwitchTests
     }
 
     [Fact]
+    public async Task SupersededSwitchReturnsCanceledContextWhileLatestContextStaysCurrent()
+    {
+        List<string> calls = new();
+        FakeSwitchChat chat = new(calls);
+        TaskCompletionSource firstStopEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseFirstStop = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int stopCalls = 0;
+        chat.StopImplementation = async _ =>
+        {
+            if (Interlocked.Increment(ref stopCalls) == 1)
+            {
+                firstStopEntered.SetResult();
+                await releaseFirstStop.Task;
+            }
+        };
+        LanConnectServerSwitchCoordinator sut = new(
+            new FakeRoomLifecycle(calls),
+            chat,
+            new FakeAddressStore(calls));
+
+        Task<CancellationToken> first = sut.SwitchWithContextAsync(
+            "https://one.example", "p1", "Silent");
+        await firstStopEntered.Task;
+        Task<CancellationToken> second = sut.SwitchWithContextAsync(
+            "https://two.example", "p1", "Silent");
+        releaseFirstStop.SetResult();
+
+        CancellationToken[] contexts = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.True(contexts[0].IsCancellationRequested);
+        Assert.False(contexts[1].IsCancellationRequested);
+        Assert.Equal(contexts[1], sut.CurrentServerContextToken);
+        Assert.False(sut.IsSwitchInProgress);
+        await sut.DisposeAsync();
+        Assert.True(contexts[1].IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task SwitchRegistrationCancelsPreviousServerContextAndReportsInProgress()
+    {
+        List<string> calls = new();
+        FakeSwitchChat chat = new(calls);
+        TaskCompletionSource stopEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseStop = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        chat.StopImplementation = async _ =>
+        {
+            stopEntered.SetResult();
+            await releaseStop.Task;
+        };
+        LanConnectServerSwitchCoordinator sut = new(
+            new FakeRoomLifecycle(calls),
+            chat,
+            new FakeAddressStore(calls));
+        CancellationToken previousContext = sut.CurrentServerContextToken;
+
+        Task<CancellationToken> switching = sut.SwitchWithContextAsync(
+            "https://new.example", "p1", "Silent");
+        await stopEntered.Task;
+
+        Assert.True(previousContext.IsCancellationRequested);
+        Assert.True(sut.IsSwitchInProgress);
+        releaseStop.SetResult();
+        CancellationToken currentContext = await switching.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.False(currentContext.IsCancellationRequested);
+        Assert.False(sut.IsSwitchInProgress);
+        await sut.DisposeAsync();
+    }
+
+    [Fact]
     public async Task PersistCommitIsAtomicWithGenerationRegistration()
     {
         List<string> calls = new();

@@ -9,7 +9,11 @@ internal interface ILanConnectInviteServerJoinPorts
 {
     string CurrentServer { get; }
 
-    Task SwitchServerAsync(string server, CancellationToken cancellationToken);
+    CancellationToken CurrentServerContextToken { get; }
+
+    bool IsSwitchInProgress { get; }
+
+    Task<CancellationToken> SwitchServerAsync(string server, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<LobbyRoomSummary>> GetRoomsAsync(CancellationToken cancellationToken);
 
@@ -43,12 +47,35 @@ internal sealed class LanConnectInviteServerJoinCoordinator
 
         string currentServer = NormalizeServer(_ports.CurrentServer, nameof(_ports.CurrentServer));
         string inviteServer = NormalizeServer(payload.S, nameof(payload));
+        CancellationToken serverContext;
         if (!string.Equals(currentServer, inviteServer, StringComparison.OrdinalIgnoreCase))
         {
-            await _ports.SwitchServerAsync(inviteServer, cancellationToken);
+            serverContext = await _ports.SwitchServerAsync(inviteServer, cancellationToken);
+        }
+        else
+        {
+            serverContext = _ports.CurrentServerContextToken;
+            if (_ports.IsSwitchInProgress)
+            {
+                throw ServerContextChanged(serverContext);
+            }
         }
 
-        IReadOnlyList<LobbyRoomSummary> rooms = await _ports.GetRoomsAsync(cancellationToken);
+        serverContext.ThrowIfCancellationRequested();
+        if (!string.Equals(
+                NormalizeServer(_ports.CurrentServer, nameof(_ports.CurrentServer)),
+                inviteServer,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw ServerContextChanged(serverContext);
+        }
+        serverContext.ThrowIfCancellationRequested();
+
+        using CancellationTokenSource operationCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, serverContext);
+        CancellationToken operationToken = operationCancellation.Token;
+        IReadOnlyList<LobbyRoomSummary> rooms = await _ports.GetRoomsAsync(operationToken);
+        operationToken.ThrowIfCancellationRequested();
         LobbyRoomSummary? targetRoom = null;
         foreach (LobbyRoomSummary room in rooms)
         {
@@ -61,12 +88,18 @@ internal sealed class LanConnectInviteServerJoinCoordinator
 
         if (targetRoom == null)
         {
+            operationToken.ThrowIfCancellationRequested();
             return LanConnectInviteJoinResult.RoomNotFound;
         }
 
-        await _ports.BeginJoinAsync(targetRoom, payload.P, cancellationToken);
+        operationToken.ThrowIfCancellationRequested();
+        await _ports.BeginJoinAsync(targetRoom, payload.P, operationToken);
+        operationToken.ThrowIfCancellationRequested();
         return LanConnectInviteJoinResult.JoinStarted;
     }
+
+    private static OperationCanceledException ServerContextChanged(CancellationToken contextToken) =>
+        new("Lobby server context changed while joining an invite.", contextToken);
 
     private static string NormalizeServer(string server, string parameterName)
     {

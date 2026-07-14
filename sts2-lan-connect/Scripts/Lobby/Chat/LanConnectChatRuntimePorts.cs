@@ -533,11 +533,15 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
     private readonly CancellationToken _lifetimeToken;
     private readonly TaskCompletionSource _lifetimeCancellationCompleted =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly List<CancellationTokenSource> _serverContexts = new();
     private readonly Action<LanConnectServerSwitchCoordinatorCheckpoint>? _checkpoint;
     private SwitchGeneration? _activeSwitch;
+    private CancellationTokenSource _currentServerContext;
+    private CancellationToken _currentServerContextToken;
     private Task? _disposeTask;
     private TaskCompletionSource? _switchLeasesDrained;
     private Exception? _lifetimeCancellationError;
+    private Exception? _contextCancellationError;
     private int _switchLeaseCount;
     private bool _disposed;
 
@@ -552,9 +556,47 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         _addressStore = addressStore ?? throw new ArgumentNullException(nameof(addressStore));
         _checkpoint = checkpoint;
         _lifetimeToken = _lifetimeCancellation.Token;
+        _currentServerContext = new CancellationTokenSource();
+        _currentServerContextToken = _currentServerContext.Token;
+        _serverContexts.Add(_currentServerContext);
     }
 
-    internal Task SwitchAsync(
+    internal CancellationToken CurrentServerContextToken
+    {
+        get
+        {
+            lock (_generationLock)
+            {
+                return _currentServerContextToken;
+            }
+        }
+    }
+
+    internal bool IsSwitchInProgress
+    {
+        get
+        {
+            lock (_generationLock)
+            {
+                return _activeSwitch != null;
+            }
+        }
+    }
+
+    internal async Task SwitchAsync(
+        string baseUrl,
+        string playerNetId,
+        string playerName,
+        CancellationToken cancellationToken = default)
+    {
+        _ = await SwitchWithContextAsync(
+            baseUrl,
+            playerNetId,
+            playerName,
+            cancellationToken);
+    }
+
+    internal Task<CancellationToken> SwitchWithContextAsync(
         string baseUrl,
         string playerNetId,
         string playerName,
@@ -583,6 +625,7 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
 
         if (beginCancellation)
         {
+            CancelServerContextsForDispose();
             try
             {
                 _lifetimeCancellation.Cancel();
@@ -600,7 +643,7 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         return new ValueTask(disposeTask);
     }
 
-    private async Task SwitchCoreAsync(
+    private async Task<CancellationToken> SwitchCoreAsync(
         Uri normalized,
         string playerNetId,
         string playerName,
@@ -609,13 +652,22 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         SwitchGeneration ownGeneration;
         SwitchGeneration? superseded;
         IDisposable? supersededCancellationLease;
+        CancellationTokenSource previousServerContext;
         _checkpoint?.Invoke(LanConnectServerSwitchCoordinatorCheckpoint.BeforeGenerationRegistration);
         lock (_generationLock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            ownGeneration = new SwitchGeneration(callerCancellation, _lifetimeToken);
+            CancellationTokenSource ownServerContext = new();
+            ownGeneration = new SwitchGeneration(
+                callerCancellation,
+                _lifetimeToken,
+                ownServerContext);
             superseded = _activeSwitch;
             supersededCancellationLease = superseded?.AcquireCancellationLease();
+            previousServerContext = _currentServerContext;
+            _currentServerContext = ownServerContext;
+            _currentServerContextToken = ownGeneration.ServerContextToken;
+            _serverContexts.Add(ownServerContext);
             _activeSwitch = ownGeneration;
             _switchLeaseCount++;
         }
@@ -624,6 +676,7 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         bool gateAcquired = false;
         try
         {
+            CancelServerContext(previousServerContext);
             _checkpoint?.Invoke(LanConnectServerSwitchCoordinatorCheckpoint.AfterGenerationRegistration);
             CancelSuperseded(superseded, supersededCancellationLease);
             supersededCancellationLease = null;
@@ -656,6 +709,11 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         {
             // A newer switch owns the user-visible result.
         }
+        catch
+        {
+            CancelServerContext(ownGeneration.ServerContextCancellation);
+            throw;
+        }
         finally
         {
             supersededCancellationLease?.Dispose();
@@ -674,17 +732,57 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
             ownGeneration.Complete();
             ReleaseSwitchLease();
         }
+
+        return ownGeneration.ServerContextToken;
     }
 
     private async Task DisposeCoreAsync(Task cancellationCompleted, Task switchDrain)
     {
         await cancellationCompleted;
         await switchDrain;
+        foreach (CancellationTokenSource context in _serverContexts)
+        {
+            context.Dispose();
+        }
+        _serverContexts.Clear();
         _lifetimeCancellation.Dispose();
         _switchGate.Dispose();
+        if (_lifetimeCancellationError != null && _contextCancellationError != null)
+        {
+            throw new AggregateException(_contextCancellationError, _lifetimeCancellationError);
+        }
+        if (_contextCancellationError != null)
+        {
+            throw _contextCancellationError;
+        }
         if (_lifetimeCancellationError != null)
         {
             throw _lifetimeCancellationError;
+        }
+    }
+
+    private void CancelServerContextsForDispose()
+    {
+        List<CancellationTokenSource> contexts;
+        lock (_generationLock)
+        {
+            contexts = new List<CancellationTokenSource>(_serverContexts);
+        }
+        foreach (CancellationTokenSource context in contexts)
+        {
+            CancelServerContext(context);
+        }
+    }
+
+    private void CancelServerContext(CancellationTokenSource context)
+    {
+        try
+        {
+            context.Cancel();
+        }
+        catch (Exception ex)
+        {
+            Interlocked.CompareExchange(ref _contextCancellationError, ex, null);
         }
     }
 
@@ -764,15 +862,22 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
 
         internal SwitchGeneration(
             CancellationToken callerCancellation,
-            CancellationToken ownerCancellation)
+            CancellationToken ownerCancellation,
+            CancellationTokenSource serverContextCancellation)
         {
             _cancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 callerCancellation,
                 ownerCancellation);
             Token = _cancellation.Token;
+            ServerContextCancellation = serverContextCancellation;
+            ServerContextToken = serverContextCancellation.Token;
         }
 
         internal CancellationToken Token { get; }
+
+        internal CancellationTokenSource ServerContextCancellation { get; }
+
+        internal CancellationToken ServerContextToken { get; }
 
         internal IDisposable AcquireCancellationLease()
         {

@@ -535,6 +535,26 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             cancellationToken);
     }
 
+    internal Task<CancellationToken> SwitchLobbyServerWithContextAsync(
+        string baseUrl,
+        CancellationToken cancellationToken = default)
+    {
+        LanConnectServerSwitchCoordinator coordinator = _serverSwitchCoordinator ??
+            throw new InvalidOperationException("Server switching is unavailable before the lobby runtime is ready.");
+        return coordinator.SwitchWithContextAsync(
+            baseUrl,
+            ResolveCurrentPlayerNetId(),
+            LanConnectConfig.GetEffectivePlayerDisplayName(),
+            cancellationToken);
+    }
+
+    internal CancellationToken CurrentServerContextToken =>
+        (_serverSwitchCoordinator ??
+            throw new InvalidOperationException("Server switching is unavailable before the lobby runtime is ready."))
+        .CurrentServerContextToken;
+
+    internal bool IsLobbyServerSwitchInProgress => _serverSwitchCoordinator?.IsSwitchInProgress == true;
+
     private async Task SendLegacyRoomChatEnvelopeAsync(
         string messageId,
         string senderName,

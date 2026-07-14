@@ -159,6 +159,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private LanConnectInvitePayload? _pendingInvitePayload;
     private LobbyRoomSummary? _pendingResumeJoinRoom;
     private string? _pendingResumeJoinPassword;
+    private CancellationToken _pendingResumeJoinCancellationToken;
+    private string? _pendingResumeJoinServer;
     private bool _networkFieldsRevealed;
     private bool _refreshInFlight;
     private bool _actionInFlight;
@@ -3017,7 +3019,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
     }
 
-    private async Task<bool> JoinRoomAsync(LobbyRoomSummary room, string? password, string? desiredSavePlayerNetId = null)
+    private async Task<bool> JoinRoomAsync(
+        LobbyRoomSummary room,
+        string? password,
+        string? desiredSavePlayerNetId = null,
+        CancellationToken externalCancellationToken = default)
     {
         if (_actionInFlight || _stack == null || _loadingOverlay == null)
         {
@@ -3031,7 +3037,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _actionInFlight = true;
         UpdateActionButtons();
         SetStatus($"正在请求加入 {FormatRoomName(room.RoomName, 24)}...");
-        CancellationTokenSource joinCancellationSource = new();
+        CancellationTokenSource joinCancellationSource =
+            CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken);
         ReplaceJoinCancellationSource(joinCancellationSource);
         ShowProgressDialog(
             "正在加入房间",
@@ -3091,6 +3098,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             LanConnectProtocolProfiles.ResetActiveProfile("join_canceled_request");
             SetStatus($"已取消加入 {FormatRoomName(room.RoomName, 24)}。");
+            externalCancellationToken.ThrowIfCancellationRequested();
             return false;
         }
         catch (LobbyServiceException ex)
@@ -3127,7 +3135,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
     }
 
-    private async Task BeginJoinRoomAsync(LobbyRoomSummary room, string? password)
+    private async Task BeginJoinRoomAsync(
+        LobbyRoomSummary room,
+        string? password,
+        CancellationToken externalCancellationToken = default,
+        CancellationToken deferredServerContextToken = default,
+        string? expectedServer = null)
     {
         List<LobbySavedRunSlot> availableSlots = GetAvailableSavedRunSlots(room);
         if (room.SavedRun != null && room.SavedRun.Slots.Count > 0)
@@ -3140,11 +3153,22 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
             if (availableSlots.Count > 1)
             {
-                OpenResumeSlotDialog(room, password, availableSlots);
+                OpenResumeSlotDialog(
+                    room,
+                    password,
+                    availableSlots,
+                    deferredServerContextToken.CanBeCanceled
+                        ? deferredServerContextToken
+                        : externalCancellationToken,
+                    expectedServer);
                 return;
             }
 
-            bool joinedSavedRun = await JoinRoomAsync(room, password, availableSlots[0].NetId);
+            bool joinedSavedRun = await JoinRoomAsync(
+                room,
+                password,
+                availableSlots[0].NetId,
+                externalCancellationToken);
             if (joinedSavedRun)
             {
                 CloseJoinPasswordDialog();
@@ -3153,7 +3177,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
-        bool joined = await JoinRoomAsync(room, password);
+        bool joined = await JoinRoomAsync(
+            room,
+            password,
+            externalCancellationToken: externalCancellationToken);
         if (joined)
         {
             CloseJoinPasswordDialog();
@@ -3486,7 +3513,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         RestoreDialogReturnFocus();
     }
 
-    private void OpenResumeSlotDialog(LobbyRoomSummary room, string? password, IReadOnlyList<LobbySavedRunSlot> availableSlots)
+    private void OpenResumeSlotDialog(
+        LobbyRoomSummary room,
+        string? password,
+        IReadOnlyList<LobbySavedRunSlot> availableSlots,
+        CancellationToken externalCancellationToken = default,
+        string? expectedServer = null)
     {
         if (_resumeSlotDialogContainer == null || _resumeSlotDialogOptions == null)
         {
@@ -3496,6 +3528,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _pendingResumeJoinRoom = room;
         _pendingResumeJoinPassword = password;
+        _pendingResumeJoinCancellationToken = externalCancellationToken;
+        _pendingResumeJoinServer = expectedServer;
         SetLabelText(_resumeSlotDialogTitle, $"选择 {FormatRoomName(room.RoomName, 24)} 的可接管角色");
 
         foreach (Node child in _resumeSlotDialogOptions.GetChildren())
@@ -3541,7 +3575,25 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
-        bool joined = await JoinRoomAsync(_pendingResumeJoinRoom, _pendingResumeJoinPassword, desiredSavePlayerNetId);
+        _pendingResumeJoinCancellationToken.ThrowIfCancellationRequested();
+        if (_pendingResumeJoinServer != null &&
+            (LanConnectLobbyRuntime.Instance?.IsLobbyServerSwitchInProgress == true ||
+             !string.Equals(
+                 _pendingResumeJoinServer.TrimEnd('/'),
+                 LanConnectConfig.LobbyServerBaseUrl.TrimEnd('/'),
+                 StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new OperationCanceledException(
+                "Lobby server context changed before the saved-run slot was selected.",
+                _pendingResumeJoinCancellationToken);
+        }
+        _pendingResumeJoinCancellationToken.ThrowIfCancellationRequested();
+
+        bool joined = await JoinRoomAsync(
+            _pendingResumeJoinRoom,
+            _pendingResumeJoinPassword,
+            desiredSavePlayerNetId,
+            _pendingResumeJoinCancellationToken);
         if (joined)
         {
             CloseResumeSlotDialog();
@@ -3557,6 +3609,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _pendingResumeJoinRoom = null;
         _pendingResumeJoinPassword = null;
+        _pendingResumeJoinCancellationToken = default;
+        _pendingResumeJoinServer = null;
         RestoreDialogReturnFocus();
     }
 
@@ -4171,6 +4225,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (payload == null) return;
 
+        if (_actionInFlight)
+        {
+            return;
+        }
+
+        _actionInFlight = true;
+        UpdateActionButtons();
         try
         {
             LanConnectInviteServerJoinCoordinator coordinator = new(new InviteServerJoinPorts(this));
@@ -4181,10 +4242,19 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                 LanConnectPopupUtil.ShowInfo("邀请码对应的房间不存在或已关闭，可能房主已经关闭了房间。");
             }
         }
+        catch (OperationCanceledException)
+        {
+            SetStatus("服务器已切换，已取消旧邀请码加入。");
+        }
         catch (Exception ex)
         {
             GD.Print($"sts2_lan_connect overlay: invite join failed -> {ex}");
             SetStatus($"通过邀请码加入失败：{ex.Message}");
+        }
+        finally
+        {
+            _actionInFlight = false;
+            UpdateActionButtons();
         }
     }
 
@@ -4192,11 +4262,23 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         public string CurrentServer => LanConnectConfig.LobbyServerBaseUrl;
 
-        public async Task SwitchServerAsync(string server, CancellationToken cancellationToken)
+        public CancellationToken CurrentServerContextToken =>
+            (LanConnectLobbyRuntime.Instance ??
+                throw new InvalidOperationException("Lobby runtime is unavailable."))
+            .CurrentServerContextToken;
+
+        public bool IsSwitchInProgress =>
+            LanConnectLobbyRuntime.Instance?.IsLobbyServerSwitchInProgress == true;
+
+        public async Task<CancellationToken> SwitchServerAsync(
+            string server,
+            CancellationToken cancellationToken)
         {
             LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance ??
                 throw new InvalidOperationException("Lobby runtime is unavailable.");
-            await runtime.SwitchLobbyServerAsync(server, cancellationToken);
+            CancellationToken serverContext = await runtime.SwitchLobbyServerWithContextAsync(
+                server,
+                cancellationToken);
 
             string currentServer = LanConnectConfig.LobbyServerBaseUrl;
             if (overlay._serverBaseUrlInput != null)
@@ -4206,6 +4288,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             overlay.UpdateNetworkSummary();
             overlay.UpdateActionButtons();
             overlay.SetStatus($"已切换到大厅服务：{currentServer}");
+            return serverContext;
         }
 
         public async Task<IReadOnlyList<LobbyRoomSummary>> GetRoomsAsync(CancellationToken cancellationToken)
@@ -4219,8 +4302,20 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             string? password,
             CancellationToken cancellationToken)
         {
+            LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance ??
+                throw new InvalidOperationException("Lobby runtime is unavailable.");
+            CancellationToken serverContext = runtime.CurrentServerContextToken;
             cancellationToken.ThrowIfCancellationRequested();
-            return overlay.BeginJoinRoomAsync(room, password);
+            string expectedServer = LanConnectConfig.LobbyServerBaseUrl;
+            cancellationToken.ThrowIfCancellationRequested();
+            overlay._actionInFlight = false;
+            overlay.UpdateActionButtons();
+            return overlay.BeginJoinRoomAsync(
+                room,
+                password,
+                cancellationToken,
+                serverContext,
+                expectedServer);
         }
     }
 

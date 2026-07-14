@@ -101,6 +101,65 @@ public sealed class LanConnectInviteServerJoinCoordinatorTests
         Assert.DoesNotContain(ports.Calls, call => call == "switch:https://old.example");
     }
 
+    [Fact]
+    public async Task SupersededSwitchContextStopsBeforeRoomLookup()
+    {
+        using CancellationTokenSource superseded = new();
+        superseded.Cancel();
+        FakeInvitePorts ports = new("https://old.example")
+        {
+            SwitchContextToken = superseded.Token,
+            RoomExists = true
+        };
+        LanConnectInviteServerJoinCoordinator sut = new(ports);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.JoinAsync(Invite("https://new.example", "room-a"), CancellationToken.None));
+
+        Assert.Equal(new[] { "switch:https://new.example" }, ports.Calls);
+        Assert.Equal(0, ports.JoinCalls);
+    }
+
+    [Fact]
+    public async Task ContextCanceledDuringLookupDoesNotStartJoin()
+    {
+        using CancellationTokenSource context = new();
+        FakeInvitePorts ports = new("https://one.example")
+        {
+            CurrentServerContextToken = context.Token,
+            RoomExists = true,
+            GetRoomsImplementation = _ =>
+            {
+                context.Cancel();
+                return Task.FromResult<IReadOnlyList<LobbyRoomSummary>>(
+                    [new LobbyRoomSummary { RoomId = "room-a" }]);
+            }
+        };
+        LanConnectInviteServerJoinCoordinator sut = new(ports);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.JoinAsync(Invite("https://one.example", "room-a"), CancellationToken.None));
+
+        Assert.Equal(0, ports.JoinCalls);
+    }
+
+    [Fact]
+    public async Task SameServerInviteDoesNotLookupDuringConcurrentSwitch()
+    {
+        FakeInvitePorts ports = new("https://one.example")
+        {
+            IsSwitchInProgress = true,
+            RoomExists = true
+        };
+        LanConnectInviteServerJoinCoordinator sut = new(ports);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            sut.JoinAsync(Invite("https://one.example", "room-a"), CancellationToken.None));
+
+        Assert.Empty(ports.Calls);
+        Assert.Equal(0, ports.JoinCalls);
+    }
+
     [Theory]
     [InlineData("ftp://one.example")]
     [InlineData("one.example")]
@@ -125,26 +184,39 @@ public sealed class LanConnectInviteServerJoinCoordinatorTests
 
         public string CurrentServer { get; private set; } = currentServer;
 
+        public CancellationToken CurrentServerContextToken { get; set; }
+
+        public bool IsSwitchInProgress { get; set; }
+
+        public CancellationToken SwitchContextToken { get; set; }
+
         public bool RoomExists { get; set; }
 
         public IReadOnlyList<LobbyRoomSummary>? Rooms { get; set; }
 
         public Exception? JoinException { get; set; }
 
+        public Func<CancellationToken, Task<IReadOnlyList<LobbyRoomSummary>>>? GetRoomsImplementation { get; set; }
+
         public int JoinCalls { get; private set; }
 
-        public Task SwitchServerAsync(string server, CancellationToken token)
+        public Task<CancellationToken> SwitchServerAsync(string server, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             Calls.Add($"switch:{server}");
             CurrentServer = server;
-            return Task.CompletedTask;
+            CurrentServerContextToken = SwitchContextToken;
+            return Task.FromResult(SwitchContextToken);
         }
 
         public Task<IReadOnlyList<LobbyRoomSummary>> GetRoomsAsync(CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             Calls.Add($"rooms:{CurrentServer}");
+            if (GetRoomsImplementation != null)
+            {
+                return GetRoomsImplementation(token);
+            }
             IReadOnlyList<LobbyRoomSummary> rooms = Rooms ?? (RoomExists
                 ? [new LobbyRoomSummary { RoomId = "room-a" }]
                 : []);
