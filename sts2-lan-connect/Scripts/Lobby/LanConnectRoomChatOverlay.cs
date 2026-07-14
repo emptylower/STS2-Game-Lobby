@@ -425,7 +425,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         _chatPanel.Bind(
             state,
             text => SendAsync(channel, text),
-            clientMessageId => RetryAsync(channel, clientMessageId));
+            clientMessageId => RetryAsync(channel, clientMessageId),
+            HasBlockingModalOutsideOverlay);
         _boundChat = chat;
         _boundChannelState = state;
         ConfigureFocusChain();

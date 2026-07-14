@@ -158,6 +158,8 @@ public sealed class LanConnectRoomChatFocusTests
         modal.AddToGroup(LanConnectConstants.BlockingModalGroupName);
         fixture.Overlay.GetViewport().AddChild(modal);
         await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.FocusOwnerName)
+            .IsNotEqual(LanConnectConstants.ChatDraftInputName);
 
         PushKey(fixture.Overlay.GetViewport(), Key.F8);
         await fixture.Runner.AwaitIdleFrame();
@@ -167,6 +169,32 @@ public sealed class LanConnectRoomChatFocusTests
         PushKey(fixture.Overlay.GetViewport(), Key.F8);
         await fixture.Runner.AwaitIdleFrame();
         AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
+    }
+
+    [TestCase(Key.Enter)]
+    [TestCase(Key.KpEnter)]
+    public async Task Visible_registered_modal_blocks_focused_draft_submit(Key key)
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        fixture.Overlay.SetDraftForTests("blocked");
+        fixture.Overlay.FocusDraftForTests();
+        Control modal = new() { Visible = true };
+        modal.AddToGroup(LanConnectConstants.BlockingModalGroupName);
+        fixture.Overlay.GetViewport().AddChild(modal);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.FocusOwnerName)
+            .IsNotEqual(LanConnectConstants.ChatDraftInputName);
+
+        PushKey(fixture.Overlay.GetViewport(), key);
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.Draft).IsEqual("blocked");
+
+        modal.Visible = false;
+        fixture.Overlay.FocusDraftForTests();
+        PushKey(fixture.Overlay.GetViewport(), key);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.Draft).IsEqual(string.Empty);
     }
 
     [TestCase]

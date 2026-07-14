@@ -1557,7 +1557,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
-        _serverChatPanel.Bind(state, send, retry);
+        _serverChatPanel.Bind(state, send, retry, IsAnyDialogVisible);
         _serverChatPresentationRevision = -1;
     }
 

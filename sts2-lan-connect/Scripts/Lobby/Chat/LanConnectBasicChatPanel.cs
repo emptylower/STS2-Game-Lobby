@@ -53,6 +53,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private LanConnectChatChannelState? _state;
     private Func<string, Task>? _send;
     private Func<string, Task>? _retry;
+    private Func<bool> _blockingModalVisible = NeverBlocking;
     private Label? _titleLabel;
     private ScrollContainer? _messagesScroll;
     private VBoxContainer? _messagesList;
@@ -85,6 +86,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _unknownConfirmation != null &&
         GodotObject.IsInstanceValid(_unknownConfirmation) &&
         _unknownConfirmation.Visible;
+
+    private bool InteractionBlocked => PopupVisible || _blockingModalVisible();
 
     internal LanConnectBasicChatPanelTestState TestState
     {
@@ -150,6 +153,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     public override void _Process(double delta)
     {
         _ = delta;
+        if (InteractionBlocked)
+        {
+            ReleaseDraftFocus();
+        }
         if (_state != null && _state.ContextGeneration != _boundContextGeneration)
         {
             ResetForContextChange();
@@ -172,7 +179,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     internal void Bind(
         LanConnectChatChannelState state,
         Func<string, Task> send,
-        Func<string, Task> retry)
+        Func<string, Task> retry,
+        Func<bool>? blockingModalVisible = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(send);
@@ -189,6 +197,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _boundContextGeneration = state.ContextGeneration;
         _send = send;
         _retry = retry;
+        _blockingModalVisible = blockingModalVisible ?? NeverBlocking;
         _renderedRevision = -1;
         _operationStatus = string.Empty;
         _pendingUnknownConfirmation = null;
@@ -228,7 +237,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     internal void FocusDraft()
     {
-        if (_draftInput != null && GodotObject.IsInstanceValid(_draftInput) && _draftInput.Editable)
+        if (!InteractionBlocked &&
+            _draftInput != null &&
+            GodotObject.IsInstanceValid(_draftInput) &&
+            _draftInput.Editable)
         {
             _draftInput.GrabFocus();
         }
@@ -253,7 +265,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     internal void HandleDraftEnter(bool shiftPressed)
     {
-        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput) || !_draftInput.Editable)
+        if (InteractionBlocked ||
+            _draftInput == null ||
+            !GodotObject.IsInstanceValid(_draftInput) ||
+            !_draftInput.Editable)
         {
             return;
         }
@@ -581,7 +596,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private async Task SendDraftAsync()
     {
-        if (!TryCaptureBinding(out ChatBinding binding) ||
+        if (InteractionBlocked ||
+            !TryCaptureBinding(out ChatBinding binding) ||
             !CanTouchControls(binding) ||
             _draftInput == null || !GodotObject.IsInstanceValid(_draftInput) ||
             _sendButton == null || !GodotObject.IsInstanceValid(_sendButton))
@@ -809,10 +825,11 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
 
+        bool blocked = InteractionBlocked;
         LanConnectChatInputAction action = LanConnectChatInputRouter.RouteEnter(
             inputFocused: true,
             shiftPressed: keyEvent.ShiftPressed,
-            blockingModalVisible: PopupVisible);
+            blockingModalVisible: blocked);
         switch (action)
         {
             case LanConnectChatInputAction.Send:
@@ -821,6 +838,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 break;
             case LanConnectChatInputAction.InsertNewline:
                 HandleDraftEnter(shiftPressed: true);
+                _draftInput?.AcceptEvent();
+                break;
+            case LanConnectChatInputAction.None when blocked:
                 _draftInput?.AcceptEvent();
                 break;
         }
@@ -963,6 +983,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         return offset;
     }
+
+    private static bool NeverBlocking() => false;
 
     private void OnScrollChanged(double value)
     {
