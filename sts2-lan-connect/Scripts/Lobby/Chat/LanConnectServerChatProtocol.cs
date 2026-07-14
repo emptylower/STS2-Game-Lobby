@@ -25,9 +25,9 @@ internal static class LanConnectServerChatProtocol
     ];
     private static readonly HashSet<string> EmojiIdSet = new(EmojiIds, StringComparer.Ordinal);
     private static readonly Regex ModelIdPattern = new(
-        "^[A-Za-z0-9._-]{1,160}$",
+        "^[A-Za-z0-9._-]{1,160}\\z",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
-    private static readonly JsonSerializerOptions WireJson = new(LanConnectJson.Options)
+    private static readonly JsonSerializerOptions WireJson = new(LanConnectChatJson.Options)
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };

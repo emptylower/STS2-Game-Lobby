@@ -76,6 +76,37 @@ public sealed class LanConnectRichProtocolFixtureTests
         Assert.Equal(new LanConnectChatFeatureVersions(0, 0, 0, 0), features);
     }
 
+    [Fact]
+    public void CanonicalRichRootsRejectAlternateCasingAndCaseCollisions()
+    {
+        AssertStrictRoot<LanConnectChatFeatureVersions>(Features, "richContentVersion");
+        AssertStrictRoot<LanConnectChatContent>(Content, "formatVersion");
+        AssertStrictRoot<LanConnectServerChatReadyEnvelope>(
+            "{\"type\":\"chat_ready\",\"protocolVersion\":1,\"channel\":\"server\",\"sessionId\":\"session-1\",\"senderId\":\"ABCDEFGHIJKLMNOPQRSTUV\",\"instanceId\":\"instance-1\",\"historyEpoch\":3,\"chatEnabled\":true,\"serverChatVersion\":1,\"enabledFeatures\":" + Features + "}", "type");
+        AssertStrictRoot<LanConnectServerChatStateEnvelope>(
+            "{\"type\":\"chat_state\",\"protocolVersion\":1,\"chatEnabled\":true,\"enabledFeatures\":" + Features + ",\"historyEpoch\":3,\"changedAt\":\"2026-07-12T12:00:00.123Z\"}", "type");
+        AssertStrictRoot<LanConnectServerChatSendEnvelope>(
+            "{\"type\":\"chat_send\",\"protocolVersion\":1,\"channel\":\"server\",\"clientMessageId\":\"00000000-0000-4000-8000-000000000002\",\"content\":" + Content + "}", "type");
+        AssertStrictRoot<LanConnectServerChatAckEnvelope>(
+            "{\"type\":\"chat_ack\",\"protocolVersion\":1,\"clientMessageId\":\"00000000-0000-4000-8000-000000000002\",\"message\":" + ServerMessage + "}", "type");
+        AssertStrictRoot<LanConnectServerChatMessageEnvelope>(
+            "{\"type\":\"chat_message\",\"protocolVersion\":1,\"message\":" + ServerMessage + "}", "type");
+        AssertStrictRoot<LanConnectServerChatErrorEnvelope>(
+            "{\"type\":\"chat_error\",\"protocolVersion\":1,\"clientMessageId\":\"00000000-0000-4000-8000-000000000002\",\"code\":\"invalid_content\",\"message\":\"Rejected.\"}", "type");
+        AssertStrictRoot<LanConnectServerChatMessagePayload>(ServerMessage, "messageId");
+        AssertStrictRoot<LanConnectRoomChatReadyEnvelope>(
+            "{\"type\":\"room_chat_ready\",\"protocolVersion\":1,\"roomId\":\"room-1\",\"roomSessionId\":\"room-session-1\",\"enabledFeatures\":" + Features + "}", "type");
+        AssertStrictRoot<LanConnectRoomChatV2Envelope>(
+            "{\"type\":\"room_chat_v2\",\"protocolVersion\":1,\"clientMessageId\":\"00000000-0000-4000-8000-000000000002\",\"roomId\":\"room-1\",\"roomSessionId\":\"room-session-1\",\"content\":" + Content + "}", "type");
+        AssertStrictRoot<LanConnectRoomChatAckEnvelope>(
+            "{\"type\":\"room_chat_ack\",\"protocolVersion\":1,\"clientMessageId\":\"00000000-0000-4000-8000-000000000002\",\"message\":" + RoomMessage + "}", "type");
+        AssertStrictRoot<LanConnectRoomChatMessageEnvelope>(
+            "{\"type\":\"room_chat_message\",\"protocolVersion\":1,\"message\":" + RoomMessage + "}", "type");
+        AssertStrictRoot<LanConnectRoomChatErrorEnvelope>(
+            "{\"type\":\"room_chat_error\",\"protocolVersion\":1,\"clientMessageId\":\"00000000-0000-4000-8000-000000000002\",\"code\":\"invalid_content\",\"message\":\"Rejected.\"}", "type");
+        AssertStrictRoot<LanConnectRoomChatMessagePayload>(RoomMessage, "roomId");
+    }
+
     [Theory]
     [InlineData("{\"formatVersion\":1,\"segments\":[{\"kind\":\"unknown\"}]}")]
     [InlineData("{\"formatVersion\":1,\"segments\":[{\"kind\":\"text\",\"text\":\"x\",\"senderName\":\"spoof\"}]}")]
@@ -120,9 +151,20 @@ public sealed class LanConnectRichProtocolFixtureTests
 
     private static void AssertRoundTrip<T>(string json) => Assert.Equal(json, Serialize(Deserialize<T>(json)));
 
+    private static void AssertStrictRoot<T>(string json, string field)
+    {
+        string alternate = char.ToUpperInvariant(field[0]) + field[1..];
+        string token = $"\"{field}\":";
+        string alternateToken = $"\"{alternate}\":";
+        Assert.Throws<JsonException>(() => Deserialize<T>(
+            json.Replace(token, alternateToken, StringComparison.Ordinal)));
+        Assert.Throws<JsonException>(() => Deserialize<T>(
+            json.Replace(token, $"{alternateToken}null,{token}", StringComparison.Ordinal)));
+    }
+
     private static T Deserialize<T>(string json) =>
-        JsonSerializer.Deserialize<T>(json, LanConnectJson.Options) ??
+        JsonSerializer.Deserialize<T>(json, LanConnectChatJson.Options) ??
         throw new InvalidOperationException("Fixture returned null.");
 
-    private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, LanConnectJson.Options);
+    private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, LanConnectChatJson.Options);
 }

@@ -41,6 +41,17 @@ internal sealed class LanConnectChatChannelJsonConverter : JsonConverter<LanConn
     }
 }
 
+internal static class LanConnectChatJson
+{
+    internal static readonly JsonSerializerOptions Options = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = false,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false
+    };
+}
+
 internal sealed class ServerChatTicketRequest
 {
     public int ProtocolVersion { get; set; } = 1;

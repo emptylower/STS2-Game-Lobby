@@ -118,6 +118,18 @@ public sealed class LanConnectChatFeatureResolverTests
         Assert.Throws<InvalidOperationException>(() => LanConnectServerChatProtocol.Canonicalize(
             new(1, [new LanConnectItemRefSegment("card", "bad/model")]), None));
         Assert.Throws<InvalidOperationException>(() => LanConnectServerChatProtocol.Canonicalize(
+            new(1, [new LanConnectItemRefSegment("card", "MegaCrit.Strike\n")]),
+            new(1, 0, 1, 0)));
+        Assert.Throws<InvalidOperationException>(() => LanConnectServerChatProtocol.Canonicalize(
+            new(1, [new LanConnectItemRefSegment("card", new string('M', 160) + "\n")]),
+            new(1, 0, 1, 0)));
+        Assert.Throws<InvalidOperationException>(() => LanConnectServerChatProtocol.Canonicalize(
+            new(1, [new LanConnectItemRefSegment("card", "MegaCrit.Strike\r\n")]),
+            new(1, 0, 1, 0)));
+        Assert.Throws<InvalidOperationException>(() => LanConnectServerChatProtocol.Canonicalize(
+            new(1, [new LanConnectItemRefSegment("card", new string('M', 161))]),
+            new(1, 0, 1, 0)));
+        Assert.Throws<InvalidOperationException>(() => LanConnectServerChatProtocol.Canonicalize(
             new(1, [new LanConnectItemRefSegment("card", "MegaCrit.Strike", 10)]), new(1, 0, 1, 0)));
         Assert.Throws<InvalidOperationException>(() => LanConnectServerChatProtocol.Canonicalize(
             new(1, [new LanConnectItemRefSegment("relic", "MegaCrit.Anchor", 1)]), new(1, 0, 1, 0)));
@@ -246,5 +258,5 @@ public sealed class LanConnectChatFeatureResolverTests
     }
 
     private static int Utf8Bytes<T>(T value) =>
-        System.Text.Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(value, LanConnectJson.Options));
+        System.Text.Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(value, LanConnectChatJson.Options));
 }
