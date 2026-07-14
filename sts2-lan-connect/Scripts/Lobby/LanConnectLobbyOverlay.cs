@@ -24,7 +24,8 @@ internal readonly record struct LanConnectLobbyOverlayTestState(
     bool CompactSidebarScrollVisible,
     float RoomDetailMinimumHeight,
     float ServerChatMinimumHeight,
-    IReadOnlyList<Rect2> FocusTargetRects,
+    IReadOnlyList<LanConnectNamedControlRect> FocusTargetRects,
+    IReadOnlyList<Rect2> VisibleFocusTargetRects,
     LanConnectBasicChatPanelTestState ServerChatPanelState);
 
 internal sealed partial class LanConnectLobbyOverlay : Control
@@ -239,7 +240,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _compactSidebarScroll?.Visible == true && _compactSidebarScroll.IsInsideTree(),
         _roomDetailPanel?.CustomMinimumSize.Y ?? 0f,
         _serverChatFrame?.CustomMinimumSize.Y ?? 0f,
-        GetLobbyFocusTargets().Select(RectForTests).Where(rect => rect.Size.X > 0f && rect.Size.Y > 0f).ToArray(),
+        LobbyFocusTargetRectsForTests(),
+        VisibleLobbyFocusTargetRectsForTests(),
         _serverChatPanel?.TestState ?? default);
 
     internal LanConnectBasicChatPanel ServerChatPanelForTests =>
@@ -261,7 +263,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         IReadOnlyList<LobbyRoomSummary> rooms,
         Func<string, Task> send,
         Func<string, Task> retry,
-        float uiScale = 1f)
+        float? uiScale = null)
     {
         ArgumentNullException.ThrowIfNull(serverState);
         ArgumentNullException.ThrowIfNull(rooms);
@@ -270,14 +272,14 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _testServerChatState = serverState;
         _testServerChatSend = send;
         _testServerChatRetry = retry;
-        _uiScaleOverride = Math.Max(1f, uiScale);
+        _uiScaleOverride = uiScale.HasValue ? Math.Max(1f, uiScale.Value) : null;
         _testMode = true;
         _rooms.Clear();
         _rooms.AddRange(rooms);
         _selectedRoomId = _rooms.FirstOrDefault()?.RoomId;
         BuildUi();
         Visible = true;
-        Size = viewportSize;
+        SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         RebuildRoomStage();
         RefreshSelectedRoomDetails();
         RefreshServerChatPresentation(force: true);
@@ -301,6 +303,19 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
         bar.Value = Math.Max(bar.MinValue, bar.MaxValue - bar.Page);
     }
+
+    internal void FocusLobbyTargetForTests(int index)
+    {
+        IReadOnlyList<Control> targets = AllLobbyFocusTargetsForTests();
+        if (index < 0 || index >= targets.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index));
+        }
+        targets[index].GrabFocus();
+    }
+
+    internal Rect2 FocusedControlRectForTests() =>
+        RectForTests(GetViewport()?.GuiGetFocusOwner());
 
     internal void SelectRoomForTests(string roomId)
     {
@@ -1336,6 +1351,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
+        Control? focusToRestore = CaptureMainContentFocusTarget();
         foreach (Node child in _mainContentHost.GetChildren())
         {
             _mainContentHost.RemoveChild(child);
@@ -1369,7 +1385,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _compactSidebarScroll = new ScrollContainer
             {
                 Name = "LobbyCompactSidebarScroll",
-                HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled
+                HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
+                FollowFocus = true
             };
             _compactSidebarScroll.AnchorLeft = 1f - sidebarFraction;
             _compactSidebarScroll.AnchorRight = 1f;
@@ -1425,6 +1442,45 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _sidebarContainer.OffsetBottom = 0f;
         }
         ApplySidebarPanelSizing();
+        RestoreMainContentFocusDeferred(focusToRestore);
+    }
+
+    private Control? CaptureMainContentFocusTarget()
+    {
+        Control? focus = GetViewport()?.GuiGetFocusOwner();
+        if (focus == null || !GodotObject.IsInstanceValid(focus))
+        {
+            return null;
+        }
+        return (_roomStagePanel != null && IsDescendantOf(focus, _roomStagePanel) ||
+                _sidebarContainer != null && IsDescendantOf(focus, _sidebarContainer))
+            ? focus
+            : null;
+    }
+
+    private void RestoreMainContentFocusDeferred(Control? focusTarget)
+    {
+        if (focusTarget == null)
+        {
+            return;
+        }
+        Callable.From(() =>
+        {
+            if (!GodotObject.IsInstanceValid(focusTarget) ||
+                !focusTarget.IsInsideTree() ||
+                !focusTarget.IsVisibleInTree() ||
+                focusTarget.FocusMode == FocusModeEnum.None)
+            {
+                return;
+            }
+
+            Control? current = GetViewport()?.GuiGetFocusOwner();
+            if (current != null && !ReferenceEquals(current, focusTarget))
+            {
+                return;
+            }
+            focusTarget.GrabFocus();
+        }).CallDeferred();
     }
 
     private void RebuildHeaderLayout()
@@ -1685,6 +1741,59 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         control != null && GodotObject.IsInstanceValid(control) && control.IsInsideTree()
             ? control.GetGlobalRect()
             : default;
+
+    private IReadOnlyList<Control> AllLobbyFocusTargetsForTests()
+    {
+        List<Control> targets = new(GetLobbyFocusTargets());
+        if (_serverChatPanel != null && GodotObject.IsInstanceValid(_serverChatPanel))
+        {
+            targets.AddRange(_serverChatPanel.GetFocusChainControls());
+        }
+        return targets;
+    }
+
+    private IReadOnlyList<LanConnectNamedControlRect> LobbyFocusTargetRectsForTests()
+    {
+        List<LanConnectNamedControlRect> rects = new();
+        foreach (Control target in AllLobbyFocusTargetsForTests())
+        {
+            Rect2 rect = RectForTests(target);
+            if (rect.Size.X > 0f && rect.Size.Y > 0f)
+            {
+                rects.Add(new LanConnectNamedControlRect(target.Name.ToString(), rect));
+            }
+        }
+        return rects;
+    }
+
+    private IReadOnlyList<Rect2> VisibleLobbyFocusTargetRectsForTests()
+    {
+        Rect2 viewport = GetViewport()?.GetVisibleRect() ?? default;
+        List<Rect2> rects = new();
+        foreach (Control target in AllLobbyFocusTargetsForTests())
+        {
+            Rect2 rect = RectForTests(target);
+            if (rect.Size.X <= 0f || rect.Size.Y <= 0f || !viewport.Encloses(rect))
+            {
+                continue;
+            }
+
+            bool clipped = false;
+            for (Node? parent = target.GetParent(); parent != null && !ReferenceEquals(parent, this); parent = parent.GetParent())
+            {
+                if (parent is ScrollContainer scroll && !RectForTests(scroll).Encloses(rect))
+                {
+                    clipped = true;
+                    break;
+                }
+            }
+            if (!clipped)
+            {
+                rects.Add(rect);
+            }
+        }
+        return rects;
+    }
 
     private Label CreateMetricRow(VBoxContainer parent, string labelText, string valueText)
     {

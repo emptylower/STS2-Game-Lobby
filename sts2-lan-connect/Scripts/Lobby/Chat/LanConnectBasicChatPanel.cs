@@ -16,10 +16,12 @@ internal readonly record struct LanConnectBasicChatPanelTestState(
     int RetryButtonCount,
     double ScrollOffset,
     bool IsAtBottom,
+    double RenderedScrollOffset,
     int NewMessagesBelowCount,
     bool InputEditable,
     string FocusOwnerName,
     Rect2 PanelRect,
+    Rect2 MessagesRect,
     Rect2 DraftRect,
     Rect2 SendRect,
     IReadOnlyList<Rect2> RetryRects,
@@ -143,10 +145,12 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 retries,
                 _state?.ScrollOffset ?? 0,
                 _state?.IsAtBottom ?? true,
+                RenderedScrollOffsetForTests(),
                 _state?.NewMessagesBelowCount ?? 0,
                 inputEditable,
                 focusOwnerName,
                 RectForTests(this),
+                RectForTests(_messagesScroll),
                 RectForTests(_draftInput),
                 RectForTests(_sendButton),
                 RetryRectsForTests(),
@@ -362,6 +366,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
             HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
+            FollowFocus = true,
             CustomMinimumSize = new Vector2(0, 140),
             FocusMode = FocusModeEnum.All
         };
@@ -1315,11 +1320,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             if (node is Control { Visible: true } control)
             {
-                Rect2 rect = RectForTests(control);
-                if (IsVisibleInMessagesViewport(rect))
-                {
-                    rects.Add(rect);
-                }
+                rects.Add(RectForTests(control));
             }
         }
         return rects;
@@ -1331,13 +1332,6 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         foreach (Control control in GetFocusChainControls())
         {
             Rect2 rect = RectForTests(control);
-            if (control.Name.ToString().StartsWith(
-                    LanConnectConstants.ChatRetryButtonPrefix,
-                    StringComparison.Ordinal) &&
-                !IsVisibleInMessagesViewport(rect))
-            {
-                continue;
-            }
             if (rect.Size.X > 0f && rect.Size.Y > 0f)
             {
                 rects.Add(new LanConnectNamedControlRect(control.Name.ToString(), rect));
@@ -1346,15 +1340,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         return rects;
     }
 
-    private bool IsVisibleInMessagesViewport(Rect2 rect)
-    {
-        Rect2 viewport = RectForTests(_messagesScroll);
-        return rect.Size.X > 0f && rect.Size.Y > 0f &&
-               rect.Position.X >= viewport.Position.X &&
-               rect.Position.Y >= viewport.Position.Y &&
-               rect.End.X <= viewport.End.X &&
-               rect.End.Y <= viewport.End.Y;
-    }
+    private double RenderedScrollOffsetForTests() =>
+        _messagesScroll?.GetVScrollBar() is ScrollBar bar ? bar.Value : 0d;
 
     private static Rect2 RectForTests(Control? control) =>
         control != null && GodotObject.IsInstanceValid(control) && control.IsInsideTree() && control.Visible
