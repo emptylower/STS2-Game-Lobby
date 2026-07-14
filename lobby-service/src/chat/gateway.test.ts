@@ -9,6 +9,7 @@ import { WebSocket as RealWebSocket } from "ws";
 import { createLobbyService } from "../app.js";
 import { loadLobbyServiceConfig } from "../config.js";
 import { ServerChatGateway } from "./gateway.js";
+import type { ChatFeatureVersions } from "./feature-resolver.js";
 import { ChatPeerRegistry, type ChatSocket } from "./peer-registry.js";
 import type { ReservedChatTicket } from "./ticket-store.js";
 
@@ -66,6 +67,13 @@ const ticket: ReservedChatTicket = {
   playerName: "Alice",
   clientIp: "203.0.113.10",
   expiresAt: "2026-07-13T00:01:00.000Z",
+};
+
+const richFeatures: ChatFeatureVersions = {
+  richContentVersion: 1,
+  emojiSetVersion: 1,
+  itemRefVersion: 1,
+  combatRefVersion: 0,
 };
 
 function frames(socket: FakeSocket): Array<Record<string, unknown>> {
@@ -139,9 +147,10 @@ test("accept sends ready before snapshot and rejects input until the snapshot ba
   assert.equal(ready.channel, "server");
   assert.equal(ready.serverChatVersion, 1);
   assert.deepEqual(ready.enabledFeatures, {
-    richContentVersion: 0,
-    emojiSetVersion: 0,
-    itemRefVersion: 0,
+    richContentVersion: 1,
+    emojiSetVersion: 1,
+    itemRefVersion: 1,
+    combatRefVersion: 0,
   });
   assert.equal(ready.combatRefVersion, undefined);
 });
@@ -188,12 +197,137 @@ test("valid text is acknowledged and broadcast with authoritative identity, then
   assert.equal(conflict.code, "duplicate_message");
 });
 
+test("rich server content is canonicalized into ACK history and self-broadcast", async () => {
+  const gateway = new ServerChatGateway({
+    chatEnabled: true,
+    compiledFeatures: richFeatures,
+    configuredFeatures: richFeatures,
+  });
+  const alice = new FakeSocket();
+  gateway.accept(alice as unknown as WebSocket, ticket);
+  await settle(alice);
+  const start = alice.sent.length;
+  const id = "23232323-2323-4323-8323-232323232323";
+  alice.emit("message", chatSendContent(id, {
+    formatVersion: 1,
+    segments: [
+      { kind: "text", text: "  look " },
+      { kind: "emoji", emojiId: "heart" },
+      { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike", upgradeLevel: 1 },
+    ],
+  }), false);
+  await settle(alice);
+
+  const sent = frames(alice).slice(start);
+  assert.deepEqual(sent.map((frame) => frame.type), ["chat_ack", "chat_message"]);
+  assert.deepEqual(sent[0]?.message, sent[1]?.message);
+  const message = sent[0]?.message as Record<string, unknown>;
+  assert.deepEqual(message.content, {
+    formatVersion: 1,
+    segments: [
+      { kind: "text", text: "look " },
+      { kind: "emoji", emojiId: "heart" },
+      { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike", upgradeLevel: 1 },
+    ],
+  });
+  assert.equal(message.plainTextFallback, "look [Emoji][Card]");
+
+  const newcomer = new FakeSocket();
+  gateway.accept(newcomer as unknown as WebSocket, { ...ticket, id: "rich-history" });
+  await settle(newcomer);
+  const snapshotMessage = frames(newcomer)
+    .filter((frame) => frame.type === "chat_snapshot_chunk")
+    .flatMap((frame) => frame.messages as Array<Record<string, unknown>>)
+    .find((candidate) => candidate.messageId === message.messageId);
+  assert.deepEqual(snapshotMessage, message);
+  await gateway.close();
+});
+
+test("server rich feature gates and combat rejection use exact error codes", async () => {
+  const gateway = new ServerChatGateway({
+    chatEnabled: true,
+    compiledFeatures: richFeatures,
+    configuredFeatures: { ...richFeatures, emojiSetVersion: 0 },
+  });
+  const socket = new FakeSocket();
+  gateway.accept(socket as unknown as WebSocket, ticket);
+  await settle(socket);
+
+  socket.emit("message", chatSendContent(
+    "24242424-2424-4424-8424-242424242424",
+    { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "heart" }] },
+  ), false);
+  await settle(socket);
+  assert.equal(frames(socket).at(-1)?.code, "feature_disabled");
+
+  socket.emit("message", chatSendContent(
+    "25252525-2525-4525-8525-252525252525",
+    {
+      formatVersion: 1,
+      segments: [{ kind: "power_state", modelId: "MegaCrit.Strength", amount: 1, roomSessionId: "s" }],
+    },
+  ), false);
+  await settle(socket);
+  assert.equal(frames(socket).at(-1)?.code, "invalid_content");
+  await gateway.close();
+});
+
+test("mixed canonical content dedupes without losing rich segments", async () => {
+  const gateway = new ServerChatGateway({
+    chatEnabled: true,
+    compiledFeatures: richFeatures,
+    configuredFeatures: richFeatures,
+  });
+  const socket = new FakeSocket();
+  gateway.accept(socket as unknown as WebSocket, ticket);
+  await settle(socket);
+  const id = "26262626-2626-4626-8626-262626262626";
+  const first = {
+    segments: [
+      { text: "  look", kind: "text" },
+      { kind: "text", text: " " },
+      { emojiId: "heart", kind: "emoji" },
+      { modelId: "MegaCrit.Strike", itemType: "card", kind: "item_ref" },
+    ],
+    formatVersion: 1,
+  };
+  const equivalent = {
+    formatVersion: 1,
+    segments: [
+      { kind: "text", text: "look " },
+      { kind: "emoji", emojiId: "heart" },
+      { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike" },
+    ],
+  };
+
+  socket.emit("message", chatSendContent(id, first), false);
+  await settle(socket);
+  const firstAck = frames(socket).filter((frame) => frame.type === "chat_ack").at(-1)!;
+  const broadcasts = frames(socket).filter((frame) => frame.type === "chat_message").length;
+  socket.emit("message", chatSendContent(id, equivalent), false);
+  await settle(socket);
+  assert.deepEqual(frames(socket).at(-1), firstAck);
+  assert.equal(frames(socket).filter((frame) => frame.type === "chat_message").length, broadcasts);
+
+  socket.emit("message", chatSendContent(id, {
+    ...equivalent,
+    segments: [
+      ...equivalent.segments.slice(0, 2),
+      { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Defend" },
+    ],
+  }), false);
+  await settle(socket);
+  assert.equal(frames(socket).at(-1)?.code, "duplicate_message");
+  await gateway.close();
+});
+
 test("disabled chat, rich content, and connection rate limits reject without broadcasting", async () => {
   const gateway = new ServerChatGateway({
     chatEnabled: false,
     maxPayloadBytes: 8192,
     connectionBurst: 1,
     connectionRefillMs: 60_000,
+    configuredFeatures: { ...richFeatures, emojiSetVersion: 0 },
   });
   const socket = new FakeSocket();
   gateway.accept(socket as unknown as WebSocket, ticket);
@@ -209,7 +343,7 @@ test("disabled chat, rich content, and connection rate limits reject without bro
     protocolVersion: 1,
     channel: "server",
     clientMessageId: "44444444-4444-4444-8444-444444444444",
-    content: { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "wave" }] },
+    content: { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "heart" }] },
   }), false);
   await settle(socket);
   assert.equal(frames(socket).at(-1)?.code, "feature_disabled");
@@ -288,14 +422,19 @@ test("replays invalid and feature-disabled errors using a stable content fingerp
     {
       id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       code: "feature_disabled",
-      content: { segments: [{ emojiId: "wave", kind: "emoji" }], formatVersion: 1 },
-      reordered: { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "wave" }] },
-      changed: { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "point" }] },
+      content: { segments: [{ emojiId: "heart", kind: "emoji" }], formatVersion: 1 },
+      reordered: { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "heart" }] },
+      changed: { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "check" }] },
     },
   ] as const;
 
   for (const entry of cases) {
-    const gateway = new ServerChatGateway({ chatEnabled: true });
+    const gateway = new ServerChatGateway({
+      chatEnabled: true,
+      ...(entry.code === "feature_disabled"
+        ? { configuredFeatures: { ...richFeatures, emojiSetVersion: 0 as const } }
+        : {}),
+    });
     const socket = new FakeSocket();
     gateway.accept(socket as unknown as WebSocket, ticket);
     await settle(socket);
@@ -543,6 +682,7 @@ test("state changes and history clears remain ordered after an accepting peer sn
     richContentVersion: 0,
     emojiSetVersion: 0,
     itemRefVersion: 0,
+    combatRefVersion: 0,
   });
   assert.equal(all[4]?.historyEpoch, 1);
   assert.equal(all[4]?.changedAt, "2026-07-13T04:05:06.000Z");
@@ -568,6 +708,7 @@ test("chat_state includes current history epoch and fake-clock event time", asyn
     richContentVersion: 0,
     emojiSetVersion: 0,
     itemRefVersion: 0,
+    combatRefVersion: 0,
   });
 });
 

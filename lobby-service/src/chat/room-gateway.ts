@@ -1,0 +1,706 @@
+import { createHash, randomUUID } from "node:crypto";
+import {
+  canonicalizeChatContent,
+  ChatProtocolError,
+  deterministicContentJson,
+  renderPlainTextFallback,
+  type CanonicalChatMessage,
+  type ChatContent,
+  type ChatProtocolErrorCode,
+} from "./protocol.js";
+import {
+  NO_CHAT_FEATURES,
+  PHASE_3_CHAT_FEATURES,
+  resolveEnabledFeatures,
+  supportsContent,
+  type ChatFeatureVersions,
+} from "./feature-resolver.js";
+
+export interface RoomChatPeerRegistration {
+  connectionSessionId: string;
+  roomId: string;
+  roomSessionId: string;
+  controlChannelId: string;
+  role: "host" | "client";
+  send(frame: Record<string, unknown>): void;
+}
+
+export interface RoomChatGatewayOptions {
+  compiledFeatures?: ChatFeatureVersions;
+  configuredFeatures?: ChatFeatureVersions;
+  adminFeatures?: Partial<ChatFeatureVersions>;
+  roomV2Enabled?: boolean;
+  getChatEnabled?(roomId: string): boolean;
+  now?: () => number;
+  randomUuid?: () => string;
+}
+
+export interface LockedRoomChatIdentity {
+  playerName: string;
+  playerNetId: string;
+}
+
+interface RoomChatMessage extends CanonicalChatMessage {
+  roomId: string;
+  roomSessionId: string;
+}
+
+type RoomResult = Record<string, unknown>;
+
+interface DedupeEntry {
+  canonicalJson: string;
+  result: RoomResult;
+}
+
+interface PeerState extends RoomChatPeerRegistration {
+  helloComplete: boolean;
+  identity: LockedRoomChatIdentity | null;
+  declaredFeatures: ChatFeatureVersions;
+  roomV2Capable: boolean;
+  dedupe: Map<string, DedupeEntry>;
+  dedupeLastSeenAt: number;
+}
+
+interface RoomChatV2Envelope {
+  clientMessageId: string;
+  roomId: string;
+  roomSessionId: string;
+  content: unknown;
+}
+
+const CLIENT_MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const MAX_DEDUPE_ENTRIES = 256;
+const DEDUPE_TTL_MS = 10 * 60_000;
+const MAX_LEGACY_UTF16_UNITS = 60;
+
+export class RoomChatGateway {
+  private readonly compiledFeatures: ChatFeatureVersions;
+  private readonly configuredFeatures: ChatFeatureVersions;
+  private readonly adminFeatures?: Partial<ChatFeatureVersions>;
+  private readonly roomV2Enabled: boolean;
+  private readonly getChatEnabled: (roomId: string) => boolean;
+  private readonly now: () => number;
+  private readonly randomUuid: () => string;
+  private readonly peers = new Map<string, PeerState>();
+
+  constructor(options: RoomChatGatewayOptions = {}) {
+    this.compiledFeatures = { ...(options.compiledFeatures ?? PHASE_3_CHAT_FEATURES) };
+    this.configuredFeatures = { ...(options.configuredFeatures ?? PHASE_3_CHAT_FEATURES) };
+    if (options.adminFeatures !== undefined) {
+      this.adminFeatures = { ...options.adminFeatures };
+    }
+    this.roomV2Enabled = options.roomV2Enabled ?? true;
+    this.getChatEnabled = options.getChatEnabled ?? (() => true);
+    this.now = options.now ?? Date.now;
+    this.randomUuid = options.randomUuid ?? randomUUID;
+  }
+
+  registerPeer(registration: RoomChatPeerRegistration): void {
+    if (this.peers.has(registration.connectionSessionId)) {
+      throw new Error("room chat connection session is already registered");
+    }
+    this.peers.set(registration.connectionSessionId, {
+      ...registration,
+      helloComplete: false,
+      identity: null,
+      declaredFeatures: { ...NO_CHAT_FEATURES },
+      roomV2Capable: false,
+      dedupe: new Map(),
+      dedupeLastSeenAt: this.now(),
+    });
+  }
+
+  unregisterPeer(connectionSessionId: string): void {
+    this.peers.delete(connectionSessionId);
+  }
+
+  getLockedIdentity(connectionSessionId: string): LockedRoomChatIdentity | null {
+    const identity = this.peers.get(connectionSessionId)?.identity;
+    return identity ? { ...identity } : null;
+  }
+
+  handleControlEnvelope(
+    connectionSessionId: string,
+    envelope: unknown,
+    rawEnvelope?: string,
+  ): boolean {
+    const peer = this.peers.get(connectionSessionId);
+    if (!peer || !isRecord(envelope) || typeof envelope.type !== "string") {
+      return false;
+    }
+    if (envelope.type === "host_hello" || envelope.type === "client_hello") {
+      this.handleHello(peer, envelope);
+      return true;
+    }
+    if (envelope.type === "room_chat_v2") {
+      this.handleRoomChatV2(peer, envelope, rawEnvelope);
+      return true;
+    }
+    return false;
+  }
+
+  private handleHello(peer: PeerState, envelope: Record<string, unknown>): void {
+    if (!Object.hasOwn(envelope, "roomChatVersions")) {
+      this.handleLegacyHello(peer, envelope);
+      return;
+    }
+
+    let identity: LockedRoomChatIdentity;
+    let declaredFeatures: ChatFeatureVersions;
+    try {
+      assertOwnKeys(envelope, [
+        "type",
+        "roomId",
+        "controlChannelId",
+        "role",
+        "playerName",
+        "playerNetId",
+      ]);
+      const expectedType = peer.role === "host" ? "host_hello" : "client_hello";
+      if (envelope.type !== expectedType) {
+        throw new RoomEnvelopeError("protocol_mismatch", "hello role does not match connection");
+      }
+      if (envelope.roomId !== peer.roomId) {
+        throw new RoomEnvelopeError("protocol_mismatch", "hello room does not match connection");
+      }
+      if (envelope.controlChannelId !== peer.controlChannelId) {
+        throw new RoomEnvelopeError("protocol_mismatch", "hello control channel does not match connection");
+      }
+      if (envelope.role !== peer.role) {
+        throw new RoomEnvelopeError("protocol_mismatch", "hello role does not match connection");
+      }
+      identity = {
+        playerName: normalizePlayerName(envelope.playerName),
+        playerNetId: normalizePlayerNetId(envelope.playerNetId),
+      };
+      declaredFeatures = parseDeclaredFeatures(envelope.roomChatVersions);
+    } catch {
+      this.sendError(peer, "protocol_mismatch", "");
+      return;
+    }
+
+    if (peer.helloComplete && !peer.roomV2Capable) {
+      this.sendError(peer, "protocol_mismatch", "");
+      return;
+    }
+    if (peer.identity) {
+      if (
+        peer.identity.playerName !== identity.playerName
+        || peer.identity.playerNetId !== identity.playerNetId
+        || !sameFeatures(peer.declaredFeatures, declaredFeatures)
+      ) {
+        this.sendError(peer, "protocol_mismatch", "");
+        return;
+      }
+    } else {
+      peer.helloComplete = true;
+      peer.identity = identity;
+      peer.declaredFeatures = declaredFeatures;
+      peer.roomV2Capable = true;
+    }
+
+    peer.send({
+      type: "room_chat_ready",
+      protocolVersion: 1,
+      roomId: peer.roomId,
+      roomSessionId: peer.roomSessionId,
+      enabledFeatures: this.resolveFeatures(peer, peer),
+    });
+  }
+
+  private handleLegacyHello(peer: PeerState, envelope: Record<string, unknown>): void {
+    if (peer.helloComplete) {
+      if (peer.roomV2Capable) {
+        this.sendError(peer, "protocol_mismatch", "");
+      }
+      return;
+    }
+
+    try {
+      assertOwnKeys(envelope, [
+        "type",
+        "roomId",
+        "controlChannelId",
+        "role",
+        "playerName",
+      ]);
+      const expectedType = peer.role === "host" ? "host_hello" : "client_hello";
+      if (
+        envelope.type !== expectedType
+        || envelope.roomId !== peer.roomId
+        || envelope.controlChannelId !== peer.controlChannelId
+        || envelope.role !== peer.role
+      ) {
+        return;
+      }
+      normalizePlayerName(envelope.playerName);
+      if (Object.hasOwn(envelope, "playerNetId")) {
+        normalizePlayerNetId(envelope.playerNetId);
+      }
+    } catch {
+      return;
+    }
+
+    peer.helloComplete = true;
+  }
+
+  private handleRoomChatV2(
+    peer: PeerState,
+    input: Record<string, unknown>,
+    rawEnvelope?: string,
+  ): void {
+    const fallbackClientMessageId = typeof input.clientMessageId === "string"
+      ? input.clientMessageId
+      : "";
+    if (!peer.identity) {
+      this.sendError(peer, "protocol_mismatch", fallbackClientMessageId);
+      return;
+    }
+    if (!peer.roomV2Capable) {
+      this.sendError(peer, "protocol_mismatch", fallbackClientMessageId);
+      return;
+    }
+
+    let envelope: RoomChatV2Envelope;
+    try {
+      envelope = parseRoomChatV2(input);
+    } catch (error) {
+      this.sendError(
+        peer,
+        error instanceof RoomEnvelopeError ? error.code : "invalid_message",
+        fallbackClientMessageId,
+      );
+      return;
+    }
+    if (envelope.roomId !== peer.roomId || envelope.roomSessionId !== peer.roomSessionId) {
+      this.sendError(peer, "protocol_mismatch", envelope.clientMessageId);
+      return;
+    }
+    if (!this.roomV2Enabled) {
+      const dedupeKey = fingerprintUnknown(envelope.content, rawEnvelope);
+      if (!this.replayOrRejectConflict(peer, envelope.clientMessageId, dedupeKey)) {
+        this.cacheAndSendError(peer, envelope.clientMessageId, dedupeKey, "chat_disabled");
+      }
+      return;
+    }
+
+    let content: ChatContent;
+    let canonicalJson: string;
+    try {
+      const senderFeatures = this.resolveFeatures(peer, peer, true);
+      content = canonicalizeChatContent(envelope.content, {
+        richContentVersion: senderFeatures.richContentVersion,
+        emojiSetVersion: senderFeatures.emojiSetVersion,
+        itemRefVersion: senderFeatures.itemRefVersion,
+        combatRefVersion: 0,
+      });
+      canonicalJson = deterministicContentJson(content);
+    } catch (error) {
+      const dedupeKey = fingerprintUnknown(envelope.content, rawEnvelope);
+      if (!this.replayOrRejectConflict(peer, envelope.clientMessageId, dedupeKey)) {
+        this.cacheAndSendError(
+          peer,
+          envelope.clientMessageId,
+          dedupeKey,
+          error instanceof ChatProtocolError ? error.code : "invalid_content",
+        );
+      }
+      return;
+    }
+
+    this.expireDedupe(peer);
+    if (this.replayOrRejectConflict(peer, envelope.clientMessageId, canonicalJson)) {
+      return;
+    }
+    if (!this.getChatEnabled(peer.roomId)) {
+      this.cacheAndSendError(
+        peer,
+        envelope.clientMessageId,
+        canonicalJson,
+        "chat_disabled",
+      );
+      return;
+    }
+
+    const now = this.now();
+    const message: RoomChatMessage = {
+      roomId: peer.roomId,
+      roomSessionId: peer.roomSessionId,
+      messageId: this.randomUuid(),
+      senderId: peer.identity.playerNetId,
+      senderName: peer.identity.playerName,
+      content,
+      plainTextFallback: renderPlainTextFallback(content),
+      sentAt: new Date(now).toISOString(),
+    };
+    const ack = {
+      type: "room_chat_ack",
+      protocolVersion: 1,
+      clientMessageId: envelope.clientMessageId,
+      message,
+    };
+    this.storeDedupe(peer, envelope.clientMessageId, canonicalJson, ack);
+    peer.send(ack);
+
+    for (const recipient of this.peers.values()) {
+      if (
+        recipient.roomId !== peer.roomId
+        || recipient.roomSessionId !== peer.roomSessionId
+        || !recipient.helloComplete
+      ) {
+        continue;
+      }
+      const recipientFeatures = this.resolveFeatures(peer, recipient);
+      if (recipient.roomV2Capable && supportsContent(content, recipientFeatures)) {
+        recipient.send({
+          type: "room_chat_message",
+          protocolVersion: 1,
+          message,
+        });
+      } else {
+        recipient.send({
+          type: "room_chat",
+          roomId: peer.roomId,
+          playerName: peer.identity.playerName,
+          playerNetId: peer.identity.playerNetId,
+          messageId: message.messageId,
+          messageText: renderLegacyFallback(content),
+          sentAtUnixMs: now,
+        });
+      }
+    }
+  }
+
+  private resolveFeatures(
+    sender: PeerState,
+    receiver: PeerState,
+    channelEnabled = this.getChatEnabled(sender.roomId),
+  ): ChatFeatureVersions {
+    return resolveEnabledFeatures({
+      channel: "room",
+      compiled: this.compiledFeatures,
+      configured: this.configuredFeatures,
+      ...(this.adminFeatures === undefined ? {} : { admin: this.adminFeatures }),
+      channelEnabled,
+      roomV2Enabled: this.roomV2Enabled,
+      sender: sender.declaredFeatures,
+      receiver: receiver.declaredFeatures,
+    });
+  }
+
+  private expireDedupe(peer: PeerState): void {
+    const now = this.now();
+    if (now - peer.dedupeLastSeenAt >= DEDUPE_TTL_MS) {
+      peer.dedupe.clear();
+    }
+    peer.dedupeLastSeenAt = now;
+  }
+
+  private storeDedupe(
+    peer: PeerState,
+    clientMessageId: string,
+    canonicalJson: string,
+    result: RoomResult,
+  ): void {
+    peer.dedupeLastSeenAt = this.now();
+    peer.dedupe.set(clientMessageId, { canonicalJson, result });
+    while (peer.dedupe.size > MAX_DEDUPE_ENTRIES) {
+      const oldest = peer.dedupe.keys().next().value;
+      if (oldest === undefined) break;
+      peer.dedupe.delete(oldest);
+    }
+  }
+
+  private replayOrRejectConflict(
+    peer: PeerState,
+    clientMessageId: string,
+    canonicalJson: string,
+  ): boolean {
+    this.expireDedupe(peer);
+    const existing = peer.dedupe.get(clientMessageId);
+    if (!existing) return false;
+    peer.dedupeLastSeenAt = this.now();
+    if (existing.canonicalJson === canonicalJson) {
+      peer.send(existing.result);
+    } else {
+      this.sendError(peer, "duplicate_message", clientMessageId);
+    }
+    return true;
+  }
+
+  private cacheAndSendError(
+    peer: PeerState,
+    clientMessageId: string,
+    canonicalJson: string,
+    code: ChatProtocolErrorCode,
+  ): void {
+    const frame = createErrorFrame(code, clientMessageId);
+    this.storeDedupe(peer, clientMessageId, canonicalJson, frame);
+    peer.send(frame);
+  }
+
+  private sendError(
+    peer: PeerState,
+    code: ChatProtocolErrorCode,
+    clientMessageId: string,
+  ): void {
+    peer.send(createErrorFrame(code, clientMessageId));
+  }
+}
+
+class RoomEnvelopeError extends Error {
+  constructor(
+    readonly code: ChatProtocolErrorCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function parseRoomChatV2(input: Record<string, unknown>): RoomChatV2Envelope {
+  const allowed = new Set([
+    "type",
+    "protocolVersion",
+    "clientMessageId",
+    "roomId",
+    "roomSessionId",
+    "content",
+  ]);
+  if (Object.keys(input).some((key) => !allowed.has(key))) {
+    throw new RoomEnvelopeError("invalid_message", "room chat message has unknown fields");
+  }
+  assertOwnKeys(input, [
+    "type",
+    "protocolVersion",
+    "clientMessageId",
+    "roomId",
+    "roomSessionId",
+    "content",
+  ]);
+  if (input.type !== "room_chat_v2") {
+    throw new RoomEnvelopeError("protocol_mismatch", "room chat type is invalid");
+  }
+  if (input.protocolVersion !== 1) {
+    throw new RoomEnvelopeError("protocol_mismatch", "room chat protocol must be 1");
+  }
+  if (
+    typeof input.clientMessageId !== "string"
+    || !CLIENT_MESSAGE_ID.test(input.clientMessageId)
+    || typeof input.roomId !== "string"
+    || typeof input.roomSessionId !== "string"
+  ) {
+    throw new RoomEnvelopeError("invalid_message", "room chat message fields are invalid");
+  }
+  return {
+    clientMessageId: input.clientMessageId,
+    roomId: input.roomId,
+    roomSessionId: input.roomSessionId,
+    content: input.content,
+  };
+}
+
+function parseDeclaredFeatures(input: unknown): ChatFeatureVersions {
+  if (!isRecord(input)) {
+    throw new Error("roomChatVersions must be an object");
+  }
+  const allowed = new Set([
+    "richContentVersion",
+    "emojiSetVersion",
+    "itemRefVersion",
+    "combatRefVersion",
+  ]);
+  if (Object.keys(input).some((key) => !allowed.has(key))) {
+    throw new Error("roomChatVersions has unknown fields");
+  }
+  return {
+    richContentVersion: parseVersion(Object.hasOwn(input, "richContentVersion")
+      ? input.richContentVersion : undefined),
+    emojiSetVersion: parseVersion(Object.hasOwn(input, "emojiSetVersion")
+      ? input.emojiSetVersion : undefined),
+    itemRefVersion: parseVersion(Object.hasOwn(input, "itemRefVersion")
+      ? input.itemRefVersion : undefined),
+    combatRefVersion: parseVersion(Object.hasOwn(input, "combatRefVersion")
+      ? input.combatRefVersion : undefined),
+  };
+}
+
+function parseVersion(value: unknown): 0 | 1 {
+  if (value === undefined) return 0;
+  if (value === 0 || value === 1) return value;
+  throw new Error("feature version must be 0 or 1");
+}
+
+function normalizePlayerName(input: unknown): string {
+  if (typeof input !== "string") throw new Error("playerName must be a string");
+  assertWellFormedUnicode(input);
+  const value = input.normalize("NFC").trim();
+  if (Array.from(value).length < 1 || Array.from(value).length > 32) {
+    throw new Error("playerName length is invalid");
+  }
+  for (const ch of value) {
+    if (isDisallowedNameChar(ch.codePointAt(0) ?? 0)) {
+      throw new Error("playerName contains a disallowed character");
+    }
+  }
+  return value;
+}
+
+function normalizePlayerNetId(input: unknown): string {
+  if (typeof input !== "string") throw new Error("playerNetId must be a string");
+  const value = input.trim();
+  if (value.length < 1 || value.length > 128) throw new Error("playerNetId length is invalid");
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x20 || code > 0x7e) throw new Error("playerNetId must be printable ASCII");
+  }
+  return value;
+}
+
+function isDisallowedNameChar(code: number): boolean {
+  if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) return true;
+  if ((code >= 0x202a && code <= 0x202e) || (code >= 0x2066 && code <= 0x206f)) return true;
+  if ((code >= 0xfe00 && code <= 0xfe0f) || (code >= 0xe0100 && code <= 0xe01ef)) return true;
+  if (code >= 0xe0000 && code <= 0xe007f) return true;
+  return [
+    0x00ad, 0x061c, 0x180e, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f,
+    0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xfeff, 0xfff9, 0xfffa, 0xfffb,
+  ].includes(code);
+}
+
+function renderLegacyFallback(content: ChatContent): string {
+  const selectedText = new Map<number, string>();
+  let remaining = MAX_LEGACY_UTF16_UNITS;
+  for (const [index, segment] of content.segments.entries()) {
+    if (segment.kind !== "text") continue;
+    if (segment.text.length <= remaining) {
+      selectedText.set(index, segment.text);
+      remaining -= segment.text.length;
+      continue;
+    }
+    let end = remaining;
+    if (end > 0 && isHighSurrogate(segment.text.charCodeAt(end - 1))) {
+      end -= 1;
+    }
+    if (end > 0) selectedText.set(index, segment.text.slice(0, end));
+    remaining -= end;
+    if (remaining === 0) break;
+  }
+
+  const selectedEntities = new Map<number, string>();
+  for (const [index, segment] of content.segments.entries()) {
+    if (segment.kind === "text") continue;
+    const token = segment.kind === "emoji"
+      ? "[Emoji]"
+      : segment.itemType === "card"
+        ? "[Card]"
+        : segment.itemType === "relic"
+          ? "[Relic]"
+          : "[Potion]";
+    if (token.length <= remaining) {
+      selectedEntities.set(index, token);
+      remaining -= token.length;
+    }
+  }
+
+  return content.segments.map((_segment, index) => (
+    selectedText.get(index) ?? selectedEntities.get(index) ?? ""
+  )).join("");
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function sameFeatures(left: ChatFeatureVersions, right: ChatFeatureVersions): boolean {
+  return left.richContentVersion === right.richContentVersion
+    && left.emojiSetVersion === right.emojiSetVersion
+    && left.itemRefVersion === right.itemRefVersion
+    && left.combatRefVersion === right.combatRefVersion;
+}
+
+function isRecord(input: unknown): input is Record<string, unknown> {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return false;
+  try {
+    const prototype = Object.getPrototypeOf(input);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
+}
+
+function assertOwnKeys(input: Record<string, unknown>, keys: readonly string[]): void {
+  for (const key of keys) {
+    if (!Object.hasOwn(input, key)) {
+      throw new RoomEnvelopeError("invalid_message", `missing required field: ${key}`);
+    }
+  }
+}
+
+function assertWellFormedUnicode(input: string): void {
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = input.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        throw new Error("string contains an unpaired surrogate");
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new Error("string contains an unpaired surrogate");
+    }
+  }
+}
+
+function safeErrorMessage(code: ChatProtocolErrorCode): string {
+  switch (code) {
+    case "invalid_content": return "Chat content is invalid.";
+    case "feature_disabled": return "A required chat feature is disabled.";
+    case "chat_disabled": return "Room chat is disabled.";
+    case "duplicate_message": return "The client message ID was already used.";
+    case "protocol_mismatch": return "The room chat protocol or context does not match.";
+    default: return "The room chat message was rejected.";
+  }
+}
+
+function createErrorFrame(
+  code: ChatProtocolErrorCode,
+  clientMessageId: string,
+): Record<string, unknown> {
+  return {
+    type: "room_chat_error",
+    protocolVersion: 1,
+    clientMessageId,
+    code,
+    message: safeErrorMessage(code),
+  };
+}
+
+function fingerprintUnknown(value: unknown, rawEnvelope?: string): string {
+  try {
+    const stable = stableJsonValue(value, 0, { nodes: 0 });
+    return `uncanonical:${createHash("sha256").update(stable).digest("hex")}`;
+  } catch {
+    if (rawEnvelope !== undefined) {
+      return `raw:${createHash("sha256").update(rawEnvelope).digest("hex")}`;
+    }
+    return "uncanonical:too_complex";
+  }
+}
+
+function stableJsonValue(value: unknown, depth: number, budget: { nodes: number }): string {
+  budget.nodes += 1;
+  if (depth > 64 || budget.nodes > 4_096) {
+    throw new RangeError("content fingerprint complexity exceeded");
+  }
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "undefined";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJsonValue(entry, depth + 1, budget)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJsonValue(record[key], depth + 1, budget)}`)
+    .join(",")}}`;
+}

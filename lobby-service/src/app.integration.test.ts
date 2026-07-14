@@ -292,20 +292,20 @@ test("close finishes promptly while an HTTP keep-alive connection is open", asyn
   }
 });
 
-const PHASE1_PROBE_CAPABILITIES = {
+const PHASE3_PROBE_CAPABILITIES = {
   serverChatVersion: 1,
-  roomChatProtocolVersion: 0,
-  richContentVersion: 0,
-  emojiSetVersion: 0,
-  itemRefVersion: 0,
+  roomChatProtocolVersion: 1,
+  richContentVersion: 1,
+  emojiSetVersion: 1,
+  itemRefVersion: 1,
   combatRefVersion: 0,
   maxMessageChars: 300,
   maxSegments: 32,
-  maxEntities: 0,
+  maxEntities: 12,
   historyLimit: 50,
 } as const;
 
-test("GET /probe returns exact phase-1 chat capabilities", async () => {
+test("GET /probe returns exact phase-3 chat capabilities", async () => {
   const config = testConfig({ port: 0 });
   const service = await createLobbyService(config);
   const address = await service.start();
@@ -315,7 +315,7 @@ test("GET /probe returns exact phase-1 chat capabilities", async () => {
     assert.equal(probe.status, 200);
     assert.deepEqual(await probe.json(), {
       ok: true,
-      capabilities: PHASE1_PROBE_CAPABILITIES,
+      capabilities: PHASE3_PROBE_CAPABILITIES,
     });
 
     const health = await fetch(`http://127.0.0.1:${address.port}/health`);
@@ -329,7 +329,7 @@ test("GET /probe returns exact phase-1 chat capabilities", async () => {
   }
 });
 
-test("GET /probe keeps phase-1 historyLimit fixed when snapshot config changes", async () => {
+test("GET /probe keeps phase-3 historyLimit fixed when snapshot config changes", async () => {
   const base = testConfig({ port: 0 });
   const config: LobbyServiceConfig = {
     ...base,
@@ -644,6 +644,227 @@ function attemptChatWebSocketUpgrade(
     });
   });
 }
+
+function openControlWebSocket(url: string): Promise<WebSocket> {
+  const socket = new WebSocket(url);
+  chatSocketState(socket);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.terminate();
+      reject(new Error("control websocket connect timeout"));
+    }, 2_000);
+    socket.once("open", () => {
+      clearTimeout(timer);
+      resolve(socket);
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+test("control host and client hello establish room v2 rich and legacy routing", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const sockets: WebSocket[] = [];
+  try {
+    const address = await service.start();
+    const createResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "rich-control",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as {
+      roomId: string;
+      roomSessionId: string;
+      controlChannelId: string;
+      hostToken: string;
+    };
+    const join = async (playerName: string, playerNetId: string) => {
+      const response = await fetch(`http://127.0.0.1:${address.port}/rooms/${created.roomId}/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          playerName,
+          playerNetId,
+          version: "1.0.0",
+          modVersion: "1.0.0",
+          modList: [],
+        }),
+      });
+      assert.equal(response.status, 200);
+      return response.json() as Promise<{ ticketId: string }>;
+    };
+    const richJoin = await join("Rich", "net:rich");
+    const oldJoin = await join("Old", "net:old");
+    const baseUrl = `ws://127.0.0.1:${address.port}${config.wsPath}`;
+    const host = await openControlWebSocket(
+      `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=host&token=${created.hostToken}`,
+    );
+    sockets.push(host);
+    const legacyHost = await openControlWebSocket(
+      `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=host&token=${created.hostToken}`,
+    );
+    sockets.push(legacyHost);
+    const rich = await openControlWebSocket(
+      `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=client&ticketId=${richJoin.ticketId}`,
+    );
+    sockets.push(rich);
+    const old = await openControlWebSocket(
+      `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=client&ticketId=${oldJoin.ticketId}`,
+    );
+    sockets.push(old);
+    await Promise.all([
+      waitForChatFrame(host, (frame) => frame.type === "connected"),
+      waitForChatFrame(legacyHost, (frame) => frame.type === "connected"),
+      waitForChatFrame(rich, (frame) => frame.type === "connected"),
+      waitForChatFrame(old, (frame) => frame.type === "connected"),
+    ]);
+
+    const earlyId = "31313131-3131-4131-8131-313131313131";
+    host.send(JSON.stringify({
+      type: "room_chat_v2",
+      protocolVersion: 1,
+      clientMessageId: earlyId,
+      roomId: created.roomId,
+      roomSessionId: created.roomSessionId,
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "early" }] },
+    }));
+    const early = await waitForChatFrame(host, (frame) => frame.type === "room_chat_error");
+    assert.equal(early.code, "protocol_mismatch");
+
+    const versions = {
+      richContentVersion: 1,
+      emojiSetVersion: 1,
+      itemRefVersion: 1,
+      combatRefVersion: 1,
+    };
+    host.send(JSON.stringify({
+      type: "host_hello",
+      roomId: created.roomId,
+      controlChannelId: created.controlChannelId,
+      role: "host",
+      playerName: " Host ",
+      playerNetId: " net:host ",
+      roomChatVersions: versions,
+    }));
+    rich.send(JSON.stringify({
+      type: "client_hello",
+      roomId: created.roomId,
+      controlChannelId: created.controlChannelId,
+      role: "client",
+      ticketId: richJoin.ticketId,
+      playerName: "Rich",
+      playerNetId: "net:rich",
+      roomChatVersions: versions,
+    }));
+    legacyHost.send(JSON.stringify({
+      type: "host_hello",
+      roomId: created.roomId,
+      controlChannelId: created.controlChannelId,
+      role: "host",
+      playerName: "Legacy Host",
+    }));
+    legacyHost.send(JSON.stringify({ type: "ping" }));
+    old.send(JSON.stringify({
+      type: "client_hello",
+      roomId: created.roomId,
+      controlChannelId: created.controlChannelId,
+      role: "client",
+      ticketId: oldJoin.ticketId,
+      playerName: "Old",
+      playerNetId: "net:old",
+    }));
+    old.send(JSON.stringify({ type: "ping" }));
+    const [hostReady, richReady] = await Promise.all([
+      waitForChatFrame(host, (frame) => frame.type === "room_chat_ready"),
+      waitForChatFrame(rich, (frame) => frame.type === "room_chat_ready"),
+      waitForChatFrame(legacyHost, (frame) => frame.type === "pong"),
+      waitForChatFrame(old, (frame) => frame.type === "pong"),
+    ]);
+    assert.equal(hostReady.roomSessionId, created.roomSessionId);
+    assert.deepEqual(hostReady.enabledFeatures, {
+      richContentVersion: 1,
+      emojiSetVersion: 1,
+      itemRefVersion: 1,
+      combatRefVersion: 0,
+    });
+    assert.deepEqual(richReady.enabledFeatures, hostReady.enabledFeatures);
+
+    host.send(JSON.stringify({
+      type: "host_hello",
+      roomId: created.roomId,
+      controlChannelId: created.controlChannelId,
+      role: "host",
+      playerName: "Mallory",
+      playerNetId: "net:mallory",
+      roomChatVersions: versions,
+    }));
+    const rewrite = await waitForChatFrame(host, (frame) => frame.type === "room_chat_error");
+    assert.equal(rewrite.code, "protocol_mismatch");
+
+    const sendId = "32323232-3232-4232-8232-323232323232";
+    host.send(JSON.stringify({
+      type: "room_chat_v2",
+      protocolVersion: 1,
+      clientMessageId: sendId,
+      roomId: created.roomId,
+      roomSessionId: created.roomSessionId,
+      content: {
+        formatVersion: 1,
+        segments: [
+          { kind: "text", text: "look " },
+          { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike" },
+          { kind: "emoji", emojiId: "heart" },
+        ],
+      },
+    }));
+    const [ack, selfBroadcast, richBroadcast, legacy, legacyHostFallback] = await Promise.all([
+      waitForChatFrame(host, (frame) => frame.type === "room_chat_ack"),
+      waitForChatFrame(host, (frame) => frame.type === "room_chat_message"),
+      waitForChatFrame(rich, (frame) => frame.type === "room_chat_message"),
+      waitForChatFrame(old, (frame) => frame.type === "room_chat"),
+      waitForChatFrame(legacyHost, (frame) => frame.type === "room_chat"),
+    ]);
+    const message = ack.message as Record<string, unknown>;
+    assert.deepEqual(selfBroadcast.message, message);
+    assert.deepEqual(richBroadcast.message, message);
+    assert.equal(message.senderName, "Host");
+    assert.equal(message.senderId, "net:host");
+    assert.equal(legacy.messageText, "look [Card][Emoji]");
+    assert.equal(legacy.playerName, "Host");
+    assert.equal("modelId" in legacy, false);
+    assert.equal(JSON.stringify(legacy).includes("MegaCrit.Strike"), false);
+    assert.deepEqual(legacyHostFallback, legacy);
+    for (const socket of [legacyHost, old]) {
+      assert.equal(
+        chatSocketState(socket).frames.some(
+          (frame) => frame.type === "room_chat_ready" || frame.type === "room_chat_error",
+        ),
+        false,
+      );
+    }
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
 
 test("chat websocket redeems a ticket once and delivers ready, snapshot, ack, and self-broadcast", async () => {
   const base = testConfig({ port: 0 });

@@ -40,8 +40,10 @@ import { bootstrapPeers } from "./peer/bootstrap.js";
 import { announceToBootstrappedPeers } from "./peer/auto-announce.js";
 import { mountMetrics } from "./peer/handlers/metrics.js";
 import { ChatPeerError, ChatPeerRegistry } from "./chat/peer-registry.js";
+import { PHASE_3_CHAT_FEATURES } from "./chat/feature-resolver.js";
 import { ServerChatGateway, type ServerChatGatewayOptions } from "./chat/gateway.js";
 import { RateLimitError, SlidingWindowLimiter } from "./chat/rate-limiter.js";
+import { RoomChatGateway } from "./chat/room-gateway.js";
 import {
   ChatTicketError,
   ChatTicketStore,
@@ -68,8 +70,8 @@ const MaxCharacterIdLength = 64;
 const MaxCharacterNameLength = 64;
 const ChatMaxMessageChars = 300;
 const ChatMaxSegments = 32;
-const ChatMaxEntitiesPhase1 = 0;
-const ChatHistoryLimitPhase1 = 50;
+const ChatMaxEntitiesPhase3 = 12;
+const ChatHistoryLimitPhase3 = 50;
 const ChatProtocolVersion = 1;
 
 
@@ -117,7 +119,9 @@ function isJsonParseError(error: unknown): boolean {
 
 interface ControlPeer {
   socket: WebSocket;
+  connectionSessionId: string;
   roomId: string;
+  roomSessionId: string;
   controlChannelId: string;
   role: "host" | "client";
   lastSeenAt: number;
@@ -213,6 +217,13 @@ export async function createLobbyService(
     ipMessagesPerMinute: env.chat.ipMessagesPerMinute,
     ...dependencies.chatGatewayOptions,
   });
+  const roomChatGateway = new RoomChatGateway({
+    compiledFeatures: { ...PHASE_3_CHAT_FEATURES },
+    configuredFeatures: { ...PHASE_3_CHAT_FEATURES },
+    roomV2Enabled: true,
+    getChatEnabled: (roomId) => store.getRoomSettings(roomId).chatEnabled,
+  });
+  const roomSessionIds = new Map<string, string>();
   const reservedChatTicketsByUpgrade = new WeakMap<IncomingMessage, ReservedChatTicket>();
   let peerStore: PeerStore | null = null;
   let gossipScheduler: GossipScheduler | null = null;
@@ -282,15 +293,15 @@ export async function createLobbyService(
       ok: true,
       capabilities: {
         serverChatVersion: 1,
-        roomChatProtocolVersion: 0,
-        richContentVersion: 0,
-        emojiSetVersion: 0,
-        itemRefVersion: 0,
+        roomChatProtocolVersion: 1,
+        richContentVersion: PHASE_3_CHAT_FEATURES.richContentVersion,
+        emojiSetVersion: PHASE_3_CHAT_FEATURES.emojiSetVersion,
+        itemRefVersion: PHASE_3_CHAT_FEATURES.itemRefVersion,
         combatRefVersion: 0,
         maxMessageChars: ChatMaxMessageChars,
         maxSegments: ChatMaxSegments,
-        maxEntities: ChatMaxEntitiesPhase1,
-        historyLimit: ChatHistoryLimitPhase1,
+        maxEntities: ChatMaxEntitiesPhase3,
+        historyLimit: ChatHistoryLimitPhase3,
       },
     });
   });
@@ -472,6 +483,7 @@ export async function createLobbyService(
       }
 
       const room = store.createRoom(roomInput, requestIp(req));
+      roomSessionIds.set(room.roomId, room.roomSessionId);
       createdRoom = {
         roomId: room.roomId,
         hostToken: room.hostToken,
@@ -495,6 +507,7 @@ export async function createLobbyService(
         }
         relayManager.removeRoom(createdRoom.roomId);
         closeRoomSockets(createdRoom.roomId, 4000, "room_create_failed");
+        roomSessionIds.delete(createdRoom.roomId);
       }
       next(error);
     }
@@ -514,6 +527,7 @@ export async function createLobbyService(
         desiredSavePlayerNetId: optionalBoundedString(body?.desiredSavePlayerNetId, "desiredSavePlayerNetId", MaxNetIdLength),
         playerNetId: optionalBoundedString(body?.playerNetId, "playerNetId", MaxNetIdLength),
       });
+      roomSessionIds.set(response.roomId, response.roomSessionId);
       const relayEndpoint = relayManager.getRoomEndpoint(req.params.id, resolveAdvertisedRelayHost(req));
       if (relayEndpoint) {
         response.connectionPlan.relayAllowed = true;
@@ -555,6 +569,7 @@ export async function createLobbyService(
       store.deleteRoom(req.params.id, hostToken);
       relayManager.removeRoom(req.params.id);
       closeRoomSockets(req.params.id, 4000, "room_deleted");
+      roomSessionIds.delete(req.params.id);
       console.log(`[lobby] room deleted roomId=${req.params.id}`);
       res.status(204).send();
     } catch (error) {
@@ -744,21 +759,43 @@ export async function createLobbyService(
         throw new InputError("role 必须为 host 或 client。");
       }
 
+      let roomSessionId: string;
       if (role === "host") {
-        store.validateHostControl(roomId, controlChannelId, requiredQuery(requestUrl, "token"));
+        const hostSession = store.validateHostControl(
+          roomId,
+          controlChannelId,
+          requiredQuery(requestUrl, "token"),
+        );
+        roomSessionId = hostSession.roomSessionId;
+        roomSessionIds.set(roomId, roomSessionId);
       } else {
         store.validateClientControl(roomId, controlChannelId, requiredQuery(requestUrl, "ticketId"));
+        const activeRoomSessionId = roomSessionIds.get(roomId);
+        if (!activeRoomSessionId) {
+          throw new InputError("房间会话不存在或已过期。");
+        }
+        roomSessionId = activeRoomSessionId;
       }
 
       const peer: ControlPeer = {
         socket,
+        connectionSessionId: randomUUID(),
         roomId,
+        roomSessionId,
         controlChannelId,
         role,
         lastSeenAt: Date.now(),
         ...(role === "client" ? { ticketId: requiredQuery(requestUrl, "ticketId") } : {}),
       };
 
+      roomChatGateway.registerPeer({
+        connectionSessionId: peer.connectionSessionId,
+        roomId: peer.roomId,
+        roomSessionId: peer.roomSessionId,
+        controlChannelId: peer.controlChannelId,
+        role: peer.role,
+        send: (frame) => sendJson(peer.socket, frame),
+      });
       addPeer(peer);
       sendJson(socket, {
         type: "connected",
@@ -797,13 +834,20 @@ export async function createLobbyService(
             return;
           }
 
-          if (parsed.type === "pong" || parsed.type === "host_hello") {
+          if (parsed.type === "pong") {
             return;
           }
 
-          if (parsed.type === "client_hello") {
-            peer.playerNetId = String(parsed.playerNetId ?? "");
-            peer.playerName = String(parsed.playerName ?? "");
+          if (roomChatGateway.handleControlEnvelope(
+            peer.connectionSessionId,
+            parsed,
+            payload.toString(),
+          )) {
+            const identity = roomChatGateway.getLockedIdentity(peer.connectionSessionId);
+            if (identity) {
+              peer.playerNetId = identity.playerNetId;
+              peer.playerName = identity.playerName;
+            }
             return;
           }
 
@@ -1229,6 +1273,7 @@ export async function createLobbyService(
   }
 
   function removePeer(peer: ControlPeer) {
+    roomChatGateway.unregisterPeer(peer.connectionSessionId);
     const peers = roomPeers.get(peer.roomId);
     if (!peers) {
       return;
@@ -1247,6 +1292,7 @@ export async function createLobbyService(
     }
 
     for (const peer of peers) {
+      roomChatGateway.unregisterPeer(peer.connectionSessionId);
       peer.socket.close(code, reason);
     }
 
@@ -1263,12 +1309,16 @@ export async function createLobbyService(
   }
 
   function cleanupExpiredRoomsNow(now = new Date()) {
-    return cleanupExpiredRooms({
+    const deletedRoomIds = cleanupExpiredRooms({
       cleanupExpired: (cleanupNow) => store.cleanupExpired(cleanupNow),
       removeRelayRoom: (roomId) => relayManager.removeRoom(roomId),
       closeRoomSockets,
       log: (message) => console.log(message),
     }, now);
+    for (const roomId of deletedRoomIds) {
+      roomSessionIds.delete(roomId);
+    }
+    return deletedRoomIds;
   }
 
   function broadcastToRoom(sender: ControlPeer, envelope: Record<string, unknown>) {

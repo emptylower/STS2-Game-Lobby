@@ -5,13 +5,18 @@ import { ChatHistoryBuffer } from "./history-buffer.js";
 import { ChatPeerRegistry } from "./peer-registry.js";
 import {
   assertWireBudget,
-  canonicalizeServerContent,
+  canonicalizeChatContent,
   ChatProtocolError,
   deterministicContentJson,
   renderPlainTextFallback,
   type CanonicalChatMessage,
   type ChatProtocolErrorCode,
 } from "./protocol.js";
+import {
+  PHASE_3_CHAT_FEATURES,
+  resolveEnabledFeatures,
+  type ChatFeatureVersions,
+} from "./feature-resolver.js";
 import { RateLimitError, SlidingWindowLimiter, TokenBucketLimiter } from "./rate-limiter.js";
 import type { ReservedChatTicket } from "./ticket-store.js";
 
@@ -32,6 +37,9 @@ export interface ServerChatGatewayOptions {
   heartbeatTickMs?: number;
   setInterval?: typeof setInterval;
   clearInterval?: typeof clearInterval;
+  compiledFeatures?: ChatFeatureVersions;
+  configuredFeatures?: ChatFeatureVersions;
+  adminFeatures?: Partial<ChatFeatureVersions>;
 }
 
 interface ConnectionState {
@@ -46,12 +54,6 @@ interface ConnectionState {
   cleanup(): void;
 }
 
-const PHASE_ONE_FEATURES = Object.freeze({
-  richContentVersion: 0,
-  emojiSetVersion: 0,
-  itemRefVersion: 0,
-});
-
 export class ServerChatGateway {
   private readonly peerRegistry: ChatPeerRegistry;
   private readonly history: ChatHistoryBuffer;
@@ -63,6 +65,9 @@ export class ServerChatGateway {
   private readonly heartbeatTickMs: number;
   private readonly setIntervalFn: typeof setInterval;
   private readonly clearIntervalFn: typeof clearInterval;
+  private readonly compiledFeatures: ChatFeatureVersions;
+  private readonly configuredFeatures: ChatFeatureVersions;
+  private readonly adminFeatures?: Partial<ChatFeatureVersions>;
   private readonly dedupe: ChatDedupeCache;
   private readonly connectionLimiter: TokenBucketLimiter;
   private readonly ipLimiter: SlidingWindowLimiter;
@@ -92,6 +97,11 @@ export class ServerChatGateway {
     this.heartbeatTickMs = heartbeatTickMs;
     this.setIntervalFn = options.setInterval ?? setInterval;
     this.clearIntervalFn = options.clearInterval ?? clearInterval;
+    this.compiledFeatures = { ...(options.compiledFeatures ?? PHASE_3_CHAT_FEATURES) };
+    this.configuredFeatures = { ...(options.configuredFeatures ?? PHASE_3_CHAT_FEATURES) };
+    if (options.adminFeatures !== undefined) {
+      this.adminFeatures = { ...options.adminFeatures };
+    }
     this.history = new ChatHistoryBuffer({
       now: this.now,
       ...(options.historyLimit === undefined ? {} : { historyLimit: options.historyLimit }),
@@ -214,7 +224,7 @@ export class ServerChatGateway {
         historyEpoch: this.history.historyEpoch,
         chatEnabled: this.desiredChatEnabled,
         serverChatVersion: 1,
-        enabledFeatures: PHASE_ONE_FEATURES,
+        enabledFeatures: this.resolveFeatures(this.desiredChatEnabled),
       });
 
       const snapshotId = this.randomUuid();
@@ -242,7 +252,7 @@ export class ServerChatGateway {
         type: "chat_state",
         protocolVersion: 1,
         chatEnabled: this.chatEnabled,
-        enabledFeatures: PHASE_ONE_FEATURES,
+        enabledFeatures: this.resolveFeatures(this.chatEnabled),
         historyEpoch: this.history.historyEpoch,
         changedAt: new Date(this.now()).toISOString(),
       });
@@ -304,6 +314,16 @@ export class ServerChatGateway {
     this.heartbeatTimer = null;
   }
 
+  private resolveFeatures(channelEnabled: boolean): ChatFeatureVersions {
+    return resolveEnabledFeatures({
+      channel: "server",
+      compiled: this.compiledFeatures,
+      configured: this.configuredFeatures,
+      ...(this.adminFeatures === undefined ? {} : { admin: this.adminFeatures }),
+      channelEnabled,
+    });
+  }
+
   private async handleMessage(
     state: ConnectionState,
     data: RawData,
@@ -347,7 +367,13 @@ export class ServerChatGateway {
     let content;
     let canonicalJson: string;
     try {
-      content = canonicalizeServerContent(envelope.content);
+      const enabledFeatures = this.resolveFeatures(this.chatEnabled);
+      content = canonicalizeChatContent(envelope.content, {
+        richContentVersion: enabledFeatures.richContentVersion,
+        emojiSetVersion: enabledFeatures.emojiSetVersion,
+        itemRefVersion: enabledFeatures.itemRefVersion,
+        combatRefVersion: 0,
+      });
       canonicalJson = deterministicContentJson(content);
     } catch (error) {
       if (error instanceof ChatProtocolError) {
