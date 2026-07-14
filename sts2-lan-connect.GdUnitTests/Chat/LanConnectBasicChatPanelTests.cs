@@ -456,6 +456,38 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(bar.Value).IsEqual(BottomValue(bar));
     }
 
+    [TestCase]
+    public async Task Rebinding_from_empty_channel_restores_saved_non_bottom_offset_after_layout()
+    {
+        LanConnectChatChannelState room = new(LanConnectChatChannel.Room);
+        for (int index = 0; index < 30; index++)
+        {
+            room.AppendConfirmedForTests($"room-{index}", "A", $"room message {index}", index + 1, false);
+        }
+        LanConnectChatChannelState server = EnabledState();
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel
+        {
+            CustomMinimumSize = new Vector2(480, 300)
+        })!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(room, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+        ScrollBar bar = FindNode<ScrollContainer>(panel, LanConnectConstants.ChatMessagesScrollName).GetVScrollBar();
+        double savedOffset = Math.Max(1, Math.Min(96, BottomValue(bar) / 2));
+        panel.SetScrollForTests(savedOffset, atBottom: false);
+
+        panel.Bind(server, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+        panel.Bind(room, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(room.ScrollOffset).IsEqual(savedOffset);
+        AssertThat(bar.Value).IsEqual(savedOffset);
+    }
+
     private static LanConnectChatChannelState WithDeliveryStates()
     {
         LanConnectChatChannelState state = EnabledState();

@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Godot;
+using MegaCrit.Sts2.Core.Helpers;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -51,6 +52,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private readonly HashSet<RetryOperationKey> _retryInFlight = new();
     private long _renderedRevision = -1;
     private long _bindingGeneration;
+    private long _scrollInteractionGeneration;
     private bool _suppressScrollChange;
     private bool _busy;
     private string _operationStatus = string.Empty;
@@ -374,6 +376,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             Callable.From(() => ScrollToBottomWithoutConsumingState(binding.Generation)).CallDeferred();
         }
+        else if (scrollOffset > 0)
+        {
+            long interactionGeneration = _scrollInteractionGeneration;
+            TaskHelper.RunSafely(RestoreSavedScrollOffsetAfterLayoutAsync(
+                binding,
+                scrollOffset,
+                interactionGeneration));
+        }
     }
 
     private Control BuildMessageRow(ServerChatMessageState message, int index)
@@ -632,6 +642,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
 
+        _scrollInteractionGeneration++;
         ScrollBar bar = _messagesScroll.GetVScrollBar();
         _state.SetScrollState(value, IsNearBottom(bar));
     }
@@ -675,6 +686,26 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
 
         ScrollToBottomWithoutConsumingState();
+    }
+
+    private async Task RestoreSavedScrollOffsetAfterLayoutAsync(
+        ChatBinding binding,
+        double offset,
+        long interactionGeneration)
+    {
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        if (!CanTouchControls(binding) ||
+            _scrollInteractionGeneration != interactionGeneration ||
+            binding.State.IsAtBottom ||
+            binding.State.ScrollOffset != offset ||
+            _messagesScroll?.GetVScrollBar() is not ScrollBar bar)
+        {
+            return;
+        }
+
+        _suppressScrollChange = true;
+        bar.Value = offset;
+        _suppressScrollChange = false;
     }
 
     private void UpdateAvailability()
