@@ -169,6 +169,152 @@ public sealed class LanConnectRichDraftEditorTests
     }
 
     [TestCase]
+    public async Task Entity_keys_preserve_document_anchor_collapse_direction_and_delete_semantics()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromRuns(
+        [
+            new LanConnectTextRun("a"),
+            new LanConnectEmojiRun("heart"),
+            new LanConnectItemRun("card", "MegaCrit.Strike"),
+            new LanConnectTextRun("b")
+        ]);
+        LanConnectRichDraftEditor editor = AutoFree(new LanConnectRichDraftEditor())!;
+        editor.Bind(draft, new(1, 1, 1, 0), "Ironclad", AccessibleLabel);
+        using ISceneRunner runner = ISceneRunner.Load(editor, autoFree: true);
+        await runner.AwaitIdleFrame();
+        Button chip = FindChip(editor, 1);
+        ClickChip(chip);
+
+        PushGuiKey(chip, Key.Right, shiftPressed: true);
+        AssertThat(draft.Selection.Anchor).IsEqual(new LanConnectDraftPosition(1, 0));
+        AssertThat(draft.Selection.Active).IsEqual(new LanConnectDraftPosition(2, 1));
+        PushGuiKey(AssertFocusedControl(editor), Key.Left, shiftPressed: true);
+        AssertThat(draft.Selection.Anchor).IsEqual(new LanConnectDraftPosition(1, 0));
+        AssertThat(draft.Selection.Active).IsEqual(new LanConnectDraftPosition(2, 0));
+
+        PushGuiKey(AssertFocusedControl(editor), Key.Left);
+        AssertThat(draft.Selection).IsEqual(new LanConnectDraftSelection(
+            new LanConnectDraftPosition(1, 0),
+            new LanConnectDraftPosition(1, 0)));
+        PushGuiKey(AssertFocusedControl(editor), Key.Backspace);
+        await runner.AwaitIdleFrame();
+        AssertThat(draft.Runs).ContainsExactly(
+            new LanConnectEmojiRun("heart"),
+            new LanConnectItemRun("card", "MegaCrit.Strike"),
+            new LanConnectTextRun("b"));
+
+        draft = LanConnectRichDraft.FromRuns(
+        [
+            new LanConnectTextRun("a"),
+            new LanConnectEmojiRun("heart"),
+            new LanConnectTextRun("b")
+        ]);
+        editor.Bind(draft, new(1, 1, 1, 0), "Ironclad", AccessibleLabel);
+        await runner.AwaitIdleFrame();
+        chip = FindChip(editor, 1);
+        ClickChip(chip);
+        PushGuiKey(chip, Key.Right);
+        PushGuiKey(AssertFocusedControl(editor), Key.Delete);
+        await runner.AwaitIdleFrame();
+        AssertThat(draft.Runs).ContainsExactly(
+            new LanConnectTextRun("a"),
+            new LanConnectEmojiRun("heart"));
+
+        draft = LanConnectRichDraft.FromRuns(
+        [
+            new LanConnectTextRun("a"),
+            new LanConnectEmojiRun("heart"),
+            new LanConnectTextRun("b")
+        ]);
+        editor.Bind(draft, new(1, 1, 1, 0), "Ironclad", AccessibleLabel);
+        await runner.AwaitIdleFrame();
+        chip = FindChip(editor, 1);
+        ClickChip(chip);
+        PushGuiKey(chip, Key.Delete);
+        await runner.AwaitIdleFrame();
+        AssertThat(draft.Runs).ContainsExactly(new LanConnectTextRun("ab"));
+    }
+
+    [TestCase]
+    public async Task Focused_entity_space_and_unicode_replace_the_selection_as_literal_text()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromRuns(
+        [
+            new LanConnectTextRun("a"),
+            new LanConnectEmojiRun("heart"),
+            new LanConnectTextRun("b")
+        ]);
+        LanConnectRichDraftEditor editor = AutoFree(new LanConnectRichDraftEditor())!;
+        editor.Bind(draft, new(1, 1, 1, 0), "Ironclad", AccessibleLabel);
+        using ISceneRunner runner = ISceneRunner.Load(editor, autoFree: true);
+        await runner.AwaitIdleFrame();
+        Button chip = FindChip(editor, 1);
+        ClickChip(chip);
+
+        PushGuiKey(chip, Key.Space, unicode: ' ');
+        await runner.AwaitIdleFrame();
+        AssertThat(draft.Runs).ContainsExactly(new LanConnectTextRun("a b"));
+
+        draft.InsertEntity(new LanConnectEmojiRun("heart"));
+        await runner.AwaitIdleFrame();
+        chip = FindChip(editor, 1);
+        ClickChip(chip);
+        PushGuiKey(chip, Key.X, unicode: '界');
+        await runner.AwaitIdleFrame();
+        AssertThat(draft.Runs).ContainsExactly(new LanConnectTextRun("a 界b"));
+    }
+
+    [TestCase]
+    public async Task Pointer_selection_keeps_one_document_anchor_across_text_and_chips()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromRuns(
+        [
+            new LanConnectTextRun("ab"),
+            new LanConnectEmojiRun("heart"),
+            new LanConnectTextRun("cd")
+        ]);
+        LanConnectRichDraftEditor editor = AutoFree(new LanConnectRichDraftEditor())!;
+        editor.Bind(draft, new(1, 1, 1, 0), "Ironclad", AccessibleLabel);
+        using ISceneRunner runner = ISceneRunner.Load(editor, autoFree: true);
+        await runner.AwaitIdleFrame();
+        TextEdit leading = AssertTextRun(editor, "ab");
+        TextEdit trailing = AssertTextRun(editor, "cd");
+        Button chip = FindChip(editor, 1);
+
+        PressTextAt(leading, column: 1);
+        DragTextAt(trailing, column: 1);
+        trailing.EmitSignal(TextEdit.SignalName.CaretChanged);
+        AssertThat(draft.Selection).IsEqual(new LanConnectDraftSelection(
+            new LanConnectDraftPosition(0, 1),
+            new LanConnectDraftPosition(2, 1)));
+
+        ReleaseTextAt(trailing, column: 1);
+        PressTextAt(leading, column: 1);
+        DragChip(chip);
+        AssertThat(draft.Selection).IsEqual(new LanConnectDraftSelection(
+            new LanConnectDraftPosition(0, 1),
+            new LanConnectDraftPosition(1, 1)));
+
+        ReleaseChip(chip);
+        PressChip(chip);
+        DragTextAt(trailing, column: 1);
+        trailing.EmitSignal(TextEdit.SignalName.CaretChanged);
+        AssertThat(draft.Selection).IsEqual(new LanConnectDraftSelection(
+            new LanConnectDraftPosition(1, 0),
+            new LanConnectDraftPosition(2, 1)));
+
+        ReleaseTextAt(trailing, column: 1);
+        draft.SetSelection(new LanConnectDraftSelection(
+            new LanConnectDraftPosition(0, 1),
+            new LanConnectDraftPosition(1, 1)));
+        PressTextAt(trailing, column: 1, shiftPressed: true);
+        trailing.EmitSignal(TextEdit.SignalName.CaretChanged);
+        AssertThat(draft.Selection).IsEqual(new LanConnectDraftSelection(
+            new LanConnectDraftPosition(0, 1),
+            new LanConnectDraftPosition(2, 1)));
+    }
+
+    [TestCase]
     public async Task Shift_click_and_drag_extend_selection_without_duplicate_content_signals()
     {
         LanConnectRichDraft draft = LanConnectRichDraft.FromRuns(
@@ -355,6 +501,103 @@ public sealed class LanConnectRichDraftEditorTests
     }
 
     [TestCase]
+    public async Task Removing_and_readding_editor_resubscribes_once_and_rebuilds_background_change()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText("before");
+        LanConnectRichDraftEditor editor = new();
+        editor.Bind(draft, new(1, 1, 1, 0), "Ironclad", AccessibleLabel);
+        Control host = AutoFree(new Control())!;
+        host.AddChild(editor);
+        using ISceneRunner runner = ISceneRunner.Load(host, autoFree: true);
+        int changes = 0;
+        editor.DraftChanged += () => changes++;
+        await runner.AwaitIdleFrame();
+
+        host.RemoveChild(editor);
+        await Task.Run(() => draft.ReplaceAllWithText("changed while removed"));
+        host.AddChild(editor);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+        AssertThat(changes).IsEqual(1);
+        AssertThat(AssertTextRun(editor, "changed while removed").Text).IsEqual("changed while removed");
+
+        await Task.Run(() => draft.ReplaceAllWithText("after reenter"));
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(changes).IsEqual(2);
+        AssertThat(AssertTextRun(editor, "after reenter").Text).IsEqual("after reenter");
+    }
+
+    [TestCase]
+    public async Task Deferred_editor_restore_never_steals_explicit_external_focus_or_survives_release()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText("focus");
+        LanConnectRichDraftEditor editor = new();
+        Button outside = new() { Name = "Outside", FocusMode = Control.FocusModeEnum.All };
+        VBoxContainer host = AutoFree(new VBoxContainer())!;
+        host.AddChild(editor);
+        host.AddChild(outside);
+        editor.Bind(draft, new(1, 1, 1, 0), "Ironclad", AccessibleLabel);
+        using ISceneRunner runner = ISceneRunner.Load(host, autoFree: true);
+        await runner.AwaitIdleFrame();
+        editor.FocusEditor();
+
+        editor.RefreshFromDraft(preserveFocus: true);
+        outside.GrabFocus();
+        await runner.AwaitIdleFrame();
+        AssertThat(editor.GetViewport().GuiGetFocusOwner()).IsSame(outside);
+
+        editor.FocusEditor();
+        editor.RefreshFromDraft(preserveFocus: true);
+        editor.ReleaseEditorFocus();
+        await runner.AwaitIdleFrame();
+        AssertThat(editor.HasEditorFocus).IsFalse();
+    }
+
+    [TestCase]
+    public async Task Budget_snapshot_measures_once_per_revision_features_and_sender_context()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText("hello");
+        LanConnectRichDraftEditor editor = AutoFree(new LanConnectRichDraftEditor())!;
+        editor.Bind(draft, new(1, 1, 1, 0), "Ironclad", AccessibleLabel);
+        using ISceneRunner runner = ISceneRunner.Load(editor, autoFree: true);
+        await runner.AwaitIdleFrame();
+        int initial = editor.TestState.BudgetComputationCount;
+
+        _ = editor.Budget;
+        _ = editor.BlockingReason;
+        _ = editor.BudgetText;
+        _ = editor.CanSubmit;
+        _ = editor.IsBlank;
+        LanConnectRichDraftEditorTestState repeated = editor.TestState;
+        AssertThat(repeated.BudgetComputationCount).IsEqual(initial);
+        AssertThat(repeated.Budget.CanSubmit).IsTrue();
+        AssertThat(editor.BlockingReason).IsEqual(string.Empty);
+
+        editor.PastePlainText("!");
+        AssertThat(editor.TestState.BudgetComputationCount).IsEqual(initial + 1);
+        await runner.AwaitIdleFrame();
+        AssertThat(editor.TestState.BudgetComputationCount).IsEqual(initial + 1);
+
+        await Task.Run(() => draft.ReplaceAllWithText(new string('x', 301)));
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+        LanConnectRichDraftEditorTestState edited = editor.TestState;
+        AssertThat(edited.BudgetComputationCount).IsEqual(initial + 2);
+        AssertThat(edited.Budget.CanSubmit).IsFalse();
+        AssertThat(editor.BlockingReason).IsEqual("消息文字超过 300 字符");
+
+        editor.UpdateBudgetContext(new(1, 1, 1, 0), "Silent");
+        AssertThat(editor.TestState.BudgetComputationCount).IsEqual(initial + 3);
+        editor.UpdateBudgetContext(new(), "Silent");
+        AssertThat(editor.TestState.BudgetComputationCount).IsEqual(initial + 4);
+        _ = editor.BudgetText;
+        _ = editor.BlockingReason;
+        AssertThat(editor.TestState.BudgetComputationCount).IsEqual(initial + 4);
+    }
+
+    [TestCase]
     public void Budget_reasons_prioritize_actionable_limits_schema_and_features()
     {
         AssertBlocked(LanConnectRichDraft.FromText(string.Empty), new(1, 1, 1, 0), "Ironclad", "请输入消息");
@@ -429,14 +672,90 @@ public sealed class LanConnectRichDraftEditorTests
         .OfType<Button>()
         .Single();
 
-    private static void PushGuiKey(Control control, Key key, bool shiftPressed = false)
+    private static Control AssertFocusedControl(Control editor) =>
+        (Control)editor.GetViewport().GuiGetFocusOwner()!;
+
+    private static void ClickChip(Button chip)
+    {
+        PressChip(chip);
+        ReleaseChip(chip);
+    }
+
+    private static void PressChip(Button chip) => chip.EmitSignal(
+        Control.SignalName.GuiInput,
+        new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Pressed = true
+        });
+
+    private static void DragChip(Button chip) => chip.EmitSignal(
+        Control.SignalName.GuiInput,
+        new InputEventMouseMotion { ButtonMask = MouseButtonMask.Left });
+
+    private static void ReleaseChip(Button chip) => chip.EmitSignal(
+        Control.SignalName.GuiInput,
+        new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Pressed = false
+        });
+
+    private static void PressTextAt(TextEdit text, int column, bool shiftPressed = false) => text.EmitSignal(
+        Control.SignalName.GuiInput,
+        new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Pressed = true,
+            ShiftPressed = shiftPressed,
+            Position = TextPosition(text, column)
+        });
+
+    private static void DragTextAt(TextEdit text, int column) => text.EmitSignal(
+        Control.SignalName.GuiInput,
+        new InputEventMouseMotion
+        {
+            ButtonMask = MouseButtonMask.Left,
+            Position = TextPosition(text, column)
+        });
+
+    private static void ReleaseTextAt(TextEdit text, int column) => text.EmitSignal(
+        Control.SignalName.GuiInput,
+        new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Pressed = false,
+            Position = TextPosition(text, column)
+        });
+
+    private static Vector2 TextPosition(TextEdit text, int column)
+    {
+        Vector2I bottom = text.GetPosAtLineColumn(0, column);
+        int y = Math.Max(1, bottom.Y - text.GetLineHeight() / 2);
+        for (int x = 0; x <= Math.Ceiling(text.Size.X); x++)
+        {
+            Vector2I hit = text.GetLineColumnAtPos(new Vector2I(x, y), allowOutOfBounds: true);
+            if (hit.X == column && hit.Y == 0)
+            {
+                return new Vector2(x, y);
+            }
+        }
+        throw new InvalidOperationException($"No visible hit point for text column {column}.");
+    }
+
+    private static void PushGuiKey(
+        Control control,
+        Key key,
+        bool shiftPressed = false,
+        uint unicode = 0)
     {
         control.EmitSignal(Control.SignalName.GuiInput, new InputEventKey
         {
             Keycode = key,
             Pressed = true,
             Echo = false,
-            ShiftPressed = shiftPressed
+            ShiftPressed = shiftPressed,
+            Unicode = unicode
         });
     }
 

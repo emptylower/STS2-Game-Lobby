@@ -13,10 +13,20 @@ internal readonly record struct LanConnectRichDraftEditorTestState(
     LanConnectDraftMeasure Budget,
     bool ChildControlsMutable,
     bool Editable,
-    string FocusOwnerName);
+    string FocusOwnerName,
+    int BudgetComputationCount);
 
 internal sealed partial class LanConnectRichDraftEditor : Control
 {
+    private readonly record struct BudgetSnapshot(
+        long DraftRevision,
+        LanConnectChatFeatureVersions Enabled,
+        string SenderName,
+        LanConnectDraftMeasure Measure,
+        bool IsBlank,
+        string BlockingReason,
+        string BudgetText);
+
     private const float MinimumEditorWidth = 220f;
     private const float MinimumTextRunWidth = 72f;
     private const float MaximumTextRunWidth = 260f;
@@ -30,6 +40,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     private readonly object _bindingSync = new();
     private LanConnectRichDraft? _draft;
     private Action<long>? _draftContentChangedHandler;
+    private bool _draftContentChangedSubscribed;
     private long _bindingGeneration;
     private LanConnectChatFeatureVersions _enabled = new();
     private string _senderName = string.Empty;
@@ -44,10 +55,16 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     private long _retiredControlGeneration;
     private bool _editable = true;
     private bool _restoreFocus;
+    private LanConnectDraftPosition? _pointerAnchor;
+    private bool _pointerDragging;
+    private long _focusRestoreGeneration;
     private long _renderedDraftRevision = -1;
     private long _pendingDraftRevision = -1;
     private long _lastNotifiedDraftRevision = -1;
     private int _pendingDraftChange;
+    private BudgetSnapshot _budgetSnapshot;
+    private bool _budgetSnapshotValid;
+    private int _budgetComputationCount;
 
     internal event Action? SubmitRequested;
 
@@ -86,67 +103,21 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             : FindRunControl(_draft.Selection.Active.RunIndex) ??
               _flow?.GetChildren().OfType<Control>().FirstOrDefault(control => !control.IsQueuedForDeletion());
 
-    internal LanConnectDraftMeasure Budget =>
-        _draft?.Measure(_enabled, _senderName) ?? default;
+    internal LanConnectDraftMeasure Budget => GetBudgetSnapshot().Measure;
 
-    internal bool CanSubmit => Editable && Budget.CanSubmit;
+    internal bool CanSubmit => Editable && GetBudgetSnapshot().Measure.CanSubmit;
 
-    internal bool IsBlank =>
-        Budget.EntityCount == 0 &&
-        string.IsNullOrWhiteSpace(_draft?.ToCompatibilityText());
+    internal bool IsBlank => GetBudgetSnapshot().IsBlank;
 
-    internal string BlockingReason
-    {
-        get
-        {
-            LanConnectDraftMeasure measure = Budget;
-            if (IsBlank)
-            {
-                return "请输入消息";
-            }
-            if (measure.TextScalars > LanConnectServerChatProtocol.MaxTextScalars)
-            {
-                return "消息文字超过 300 字符";
-            }
-            if (measure.SegmentCount > LanConnectServerChatProtocol.MaxSegments)
-            {
-                return "消息分段超过 32 段";
-            }
-            if (measure.EntityCount > LanConnectServerChatProtocol.MaxEntities)
-            {
-                return "消息实体超过 12 个";
-            }
-            if (measure.ContentValid &&
-                measure.WorstCaseInboundBytes > LanConnectServerChatProtocol.MaxPayloadBytes)
-            {
-                return "消息传输大小超过 8192 字节";
-            }
-            if (!measure.ContentValid)
-            {
-                return "消息内容无效";
-            }
-            if (!measure.FeaturesSupported)
-            {
-                return "当前频道不支持草稿中的富内容";
-            }
-            return string.Empty;
-        }
-    }
+    internal string BlockingReason => GetBudgetSnapshot().BlockingReason;
 
-    internal string BudgetText
-    {
-        get
-        {
-            LanConnectDraftMeasure measure = Budget;
-            return $"字符 {measure.TextScalars}/300 · 分段 {measure.SegmentCount}/32 · " +
-                   $"实体 {measure.EntityCount}/12 · 字节 {measure.WorstCaseInboundBytes}/8192";
-        }
-    }
+    internal string BudgetText => GetBudgetSnapshot().BudgetText;
 
     internal LanConnectRichDraftEditorTestState TestState
     {
         get
         {
+            BudgetSnapshot budget = GetBudgetSnapshot();
             IReadOnlyList<LanConnectDraftRun> runs = _draft?.Runs ?? Array.Empty<LanConnectDraftRun>();
             string[] kinds = runs.Select(RunKind).ToArray();
             string focusOwnerName = IsInsideTree()
@@ -156,12 +127,13 @@ internal sealed partial class LanConnectRichDraftEditor : Control
                 kinds,
                 runs.Count(run => run is LanConnectTextRun),
                 runs.Count(run => run is not LanConnectTextRun),
-                Budget.SegmentCount,
+                budget.Measure.SegmentCount,
                 _draft?.Selection ?? default,
-                Budget,
+                budget.Measure,
                 ChildControlsMutable: false,
                 Editable,
-                focusOwnerName);
+                focusOwnerName,
+                _budgetComputationCount);
         }
     }
 
@@ -177,15 +149,12 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         ArgumentNullException.ThrowIfNull(accessibleLabel);
         lock (_bindingSync)
         {
-            _bindingGeneration++;
-            if (_draft != null && _draftContentChangedHandler != null)
-            {
-                _draft.ContentChanged -= _draftContentChangedHandler;
-            }
+            UnsubscribeFromDraftLocked();
             _draft = draft;
-            long generation = _bindingGeneration;
-            _draftContentChangedHandler = revision => OnDraftContentChanged(generation, revision);
-            _draft.ContentChanged += _draftContentChangedHandler;
+            if (IsInsideTree())
+            {
+                SubscribeToDraftLocked();
+            }
             long baselineRevision = _draft.ContentRevision;
             Interlocked.Exchange(ref _pendingDraftRevision, baselineRevision);
             Interlocked.Exchange(ref _lastNotifiedDraftRevision, baselineRevision);
@@ -194,6 +163,10 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         _enabled = enabled;
         _senderName = senderName;
         _accessibleLabel = accessibleLabel;
+        _pointerAnchor = null;
+        _pointerDragging = false;
+        _budgetSnapshotValid = false;
+        CancelDeferredFocusRestore();
         ReconcileControls(preserveFocus: HasEditorFocus);
     }
 
@@ -210,6 +183,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         }
         _enabled = enabled;
         _senderName = senderName;
+        _budgetSnapshotValid = false;
         if (_budgetLabel != null && GodotObject.IsInstanceValid(_budgetLabel))
         {
             _budgetLabel.Text = BudgetText;
@@ -233,11 +207,13 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         {
             return;
         }
+        CancelDeferredFocusRestore();
         FocusSelection(_draft.Selection);
     }
 
     internal void ReleaseEditorFocus()
     {
+        CancelDeferredFocusRestore();
         if (HasEditorFocus)
         {
             GetViewport().GuiGetFocusOwner()?.ReleaseFocus();
@@ -278,6 +254,19 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         SetProcess(true);
     }
 
+    public override void _EnterTree()
+    {
+        lock (_bindingSync)
+        {
+            SubscribeToDraftLocked();
+            if (_stack != null && _draft != null && _draft.ContentRevision > _renderedDraftRevision)
+            {
+                Interlocked.Exchange(ref _pendingDraftRevision, _draft.ContentRevision);
+                Interlocked.Exchange(ref _pendingDraftChange, 1);
+            }
+        }
+    }
+
     public override void _Process(double delta)
     {
         _ = delta;
@@ -293,6 +282,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             return;
         }
         Interlocked.Exchange(ref _lastNotifiedDraftRevision, pendingRevision);
+        _ = GetBudgetSnapshot();
         DraftChanged?.Invoke();
         if (_draft != null && pendingRevision > _renderedDraftRevision)
         {
@@ -302,14 +292,10 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     public override void _ExitTree()
     {
+        CancelDeferredFocusRestore();
         lock (_bindingSync)
         {
-            _bindingGeneration++;
-            if (_draft != null && _draftContentChangedHandler != null)
-            {
-                _draft.ContentChanged -= _draftContentChangedHandler;
-            }
-            _draftContentChangedHandler = null;
+            UnsubscribeFromDraftLocked();
         }
     }
 
@@ -400,7 +386,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             ApplyEditableState();
             if (shouldRestoreFocus)
             {
-                Callable.From(() => FocusSelection(_draft.Selection)).CallDeferred();
+                ScheduleFocusRestore(_draft.Selection);
             }
             _renderedDraftRevision = _draft.ContentRevision;
         }
@@ -515,7 +501,31 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     private void OnTextGuiInput(TextEdit editor, int runIndex, InputEvent inputEvent)
     {
-        if (inputEvent is not InputEventKey { Pressed: true, Echo: false } key || _draft == null)
+        if (_draft == null)
+        {
+            return;
+        }
+        if (inputEvent is InputEventMouseButton { ButtonIndex: MouseButton.Left } mouseButton)
+        {
+            if (mouseButton.Pressed)
+            {
+                BeginPointerSelection(
+                    DocumentPositionAt(editor, runIndex, mouseButton.Position),
+                    mouseButton.ShiftPressed);
+            }
+            else
+            {
+                _pointerDragging = false;
+            }
+            return;
+        }
+        if (inputEvent is InputEventMouseMotion motion &&
+            motion.ButtonMask.HasFlag(MouseButtonMask.Left))
+        {
+            ExtendPointerSelection(DocumentPositionAt(editor, runIndex, motion.Position));
+            return;
+        }
+        if (inputEvent is not InputEventKey { Pressed: true, Echo: false } key)
         {
             return;
         }
@@ -600,18 +610,21 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         switch (inputEvent)
         {
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } mouse:
-                SelectEntity(runIndex, mouse.ShiftPressed);
+                BeginPointerEntitySelection(runIndex, mouse.ShiftPressed);
+                break;
+            case InputEventMouseButton { Pressed: false, ButtonIndex: MouseButton.Left }:
+                _pointerDragging = false;
                 break;
             case InputEventMouseMotion motion when motion.ButtonMask.HasFlag(MouseButtonMask.Left):
-                SelectEntity(runIndex, extend: true);
+                ExtendPointerSelection(new LanConnectDraftPosition(runIndex, 1));
                 break;
             case InputEventKey { Pressed: true, Echo: false } key:
-                HandleEntityKey(runIndex, key);
+                HandleEntityKey(key);
                 break;
         }
     }
 
-    private void HandleEntityKey(int runIndex, InputEventKey key)
+    private void HandleEntityKey(InputEventKey key)
     {
         if (_draft == null)
         {
@@ -644,46 +657,98 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         }
         if (!_editable)
         {
-            AcceptEvent();
             return;
         }
-        _draft.SetSelection(new LanConnectDraftSelection(
-            new LanConnectDraftPosition(runIndex, 0),
-            new LanConnectDraftPosition(runIndex, 1)));
-        MutateDocument(() =>
+        bool handled = true;
+        switch (key.Keycode)
         {
-            switch (key.Keycode)
-            {
-                case Key.Left:
-                    _draft.SetCaret(new LanConnectDraftPosition(runIndex, 0));
-                    _draft.MoveLeft(key.ShiftPressed);
-                    break;
-                case Key.Right:
-                    _draft.SetCaret(new LanConnectDraftPosition(runIndex, 1));
-                    _draft.MoveRight(key.ShiftPressed);
-                    break;
-                case Key.Backspace:
-                case Key.Delete:
-                    _draft.Delete();
-                    break;
-            }
-        });
-        AcceptEvent();
+            case Key.Left:
+                MutateDocument(() => _draft.MoveLeft(key.ShiftPressed));
+                break;
+            case Key.Right:
+                MutateDocument(() => _draft.MoveRight(key.ShiftPressed));
+                break;
+            case Key.Backspace:
+                MutateDocument(_draft.Backspace);
+                break;
+            case Key.Delete:
+                MutateDocument(_draft.Delete);
+                break;
+            default:
+                handled = TryGetLiteralText(key, out string literal);
+                if (handled)
+                {
+                    MutateDocument(() => _draft.InsertText(literal));
+                }
+                break;
+        }
+        if (handled)
+        {
+            AcceptEvent();
+        }
     }
 
-    private void SelectEntity(int runIndex, bool extend)
+    private void BeginPointerEntitySelection(int runIndex, bool extend)
     {
         if (_draft == null)
         {
             return;
         }
-        LanConnectDraftSelection current = _draft.Selection;
         LanConnectDraftPosition before = new(runIndex, 0);
         LanConnectDraftPosition after = new(runIndex, 1);
-        _draft.SetSelection(extend
-            ? new LanConnectDraftSelection(current.Anchor, after)
-            : new LanConnectDraftSelection(before, after));
-        FocusSelection(_draft.Selection);
+        _pointerAnchor = extend ? _draft.Selection.Anchor : before;
+        _pointerDragging = true;
+        SuppressSelectionSignalsThroughIdle();
+        _draft.SetSelection(new LanConnectDraftSelection(_pointerAnchor.Value, after));
+        FindRunControl(runIndex)?.GrabFocus();
+    }
+
+    private void BeginPointerSelection(LanConnectDraftPosition position, bool extend)
+    {
+        if (_draft == null)
+        {
+            return;
+        }
+        _pointerAnchor = extend ? _draft.Selection.Anchor : position;
+        _pointerDragging = true;
+        SuppressSelectionSignalsThroughIdle();
+        _draft.SetSelection(new LanConnectDraftSelection(_pointerAnchor.Value, position));
+    }
+
+    private void ExtendPointerSelection(LanConnectDraftPosition position)
+    {
+        if (_draft == null || !_pointerDragging || _pointerAnchor == null)
+        {
+            return;
+        }
+        SuppressSelectionSignalsThroughIdle();
+        _draft.SetSelection(new LanConnectDraftSelection(_pointerAnchor.Value, position));
+    }
+
+    private static LanConnectDraftPosition DocumentPositionAt(
+        TextEdit editor,
+        int runIndex,
+        Vector2 localPosition)
+    {
+        Vector2I lineColumn = editor.GetLineColumnAtPos(
+            new Vector2I((int)localPosition.X, (int)localPosition.Y),
+            allowOutOfBounds: true);
+        int offset = Utf16OffsetFromLineColumn(editor, lineColumn.Y, lineColumn.X);
+        return new LanConnectDraftPosition(runIndex, offset);
+    }
+
+    private static bool TryGetLiteralText(InputEventKey key, out string literal)
+    {
+        literal = string.Empty;
+        if (key.CtrlPressed || key.MetaPressed || key.AltPressed ||
+            key.Keycode is Key.Tab or Key.Escape or Key.Enter or Key.KpEnter ||
+            !System.Text.Rune.IsValid((int)key.Unicode) ||
+            key.Unicode < 0x20 || key.Unicode == 0x7f)
+        {
+            return false;
+        }
+        literal = new System.Text.Rune((int)key.Unicode).ToString();
+        return true;
     }
 
     private void MutateDocument(Action mutation)
@@ -737,6 +802,29 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         }
     }
 
+    private void SubscribeToDraftLocked()
+    {
+        if (_draft == null || _draftContentChangedSubscribed)
+        {
+            return;
+        }
+        long generation = ++_bindingGeneration;
+        _draftContentChangedHandler = revision => OnDraftContentChanged(generation, revision);
+        _draft.ContentChanged += _draftContentChangedHandler;
+        _draftContentChangedSubscribed = true;
+    }
+
+    private void UnsubscribeFromDraftLocked()
+    {
+        _bindingGeneration++;
+        if (_draft != null && _draftContentChangedHandler != null && _draftContentChangedSubscribed)
+        {
+            _draft.ContentChanged -= _draftContentChangedHandler;
+        }
+        _draftContentChangedHandler = null;
+        _draftContentChangedSubscribed = false;
+    }
+
     private void ApplyEditableState()
     {
         if (_flow == null || !GodotObject.IsInstanceValid(_flow))
@@ -765,6 +853,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         {
             return;
         }
+        CancelDeferredFocusRestore();
         _syncingSelection = true;
         long syncGeneration = ++_selectionSyncGeneration;
         try
@@ -810,6 +899,39 @@ internal sealed partial class LanConnectRichDraftEditor : Control
                 _syncingSelection = false;
             }
         }
+    }
+
+    private void ScheduleFocusRestore(LanConnectDraftSelection selection)
+    {
+        long focusGeneration = ++_focusRestoreGeneration;
+        long bindingGeneration;
+        lock (_bindingSync)
+        {
+            bindingGeneration = _bindingGeneration;
+        }
+        Callable.From(() =>
+        {
+            if (focusGeneration != _focusRestoreGeneration ||
+                bindingGeneration != _bindingGeneration ||
+                !_editable || _draft == null || !IsInsideTree())
+            {
+                return;
+            }
+            Control? focusOwner = GetViewport().GuiGetFocusOwner();
+            if (focusOwner != null &&
+                GodotObject.IsInstanceValid(focusOwner) &&
+                !ReferenceEquals(focusOwner, this) &&
+                !IsAncestorOf(focusOwner))
+            {
+                return;
+            }
+            FocusSelection(selection);
+        }).CallDeferred();
+    }
+
+    private void CancelDeferredFocusRestore()
+    {
+        _focusRestoreGeneration++;
     }
 
     private void SuppressSelectionSignalsThroughIdle()
@@ -935,6 +1057,92 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         editor.SetCaretLine(line);
         editor.SetCaretColumn(column);
     }
+
+    private BudgetSnapshot GetBudgetSnapshot()
+    {
+        if (_draft == null)
+        {
+            return new BudgetSnapshot(
+                -1,
+                _enabled,
+                _senderName,
+                default,
+                IsBlank: true,
+                "请输入消息",
+                FormatBudget(default));
+        }
+
+        long revision = _draft.ContentRevision;
+        if (_budgetSnapshotValid &&
+            _budgetSnapshot.DraftRevision == revision &&
+            Equals(_budgetSnapshot.Enabled, _enabled) &&
+            string.Equals(_budgetSnapshot.SenderName, _senderName, StringComparison.Ordinal))
+        {
+            return _budgetSnapshot;
+        }
+
+        LanConnectDraftMeasure measure;
+        string compatibilityText;
+        long measuredRevision;
+        do
+        {
+            measuredRevision = _draft.ContentRevision;
+            measure = _draft.Measure(_enabled, _senderName);
+            compatibilityText = _draft.ToCompatibilityText();
+        }
+        while (measuredRevision != _draft.ContentRevision);
+
+        bool isBlank = measure.EntityCount == 0 && string.IsNullOrWhiteSpace(compatibilityText);
+        _budgetSnapshot = new BudgetSnapshot(
+            measuredRevision,
+            _enabled,
+            _senderName,
+            measure,
+            isBlank,
+            BlockingReasonFor(measure, isBlank),
+            FormatBudget(measure));
+        _budgetSnapshotValid = true;
+        _budgetComputationCount++;
+        return _budgetSnapshot;
+    }
+
+    private static string BlockingReasonFor(LanConnectDraftMeasure measure, bool isBlank)
+    {
+        if (isBlank)
+        {
+            return "请输入消息";
+        }
+        if (measure.TextScalars > LanConnectServerChatProtocol.MaxTextScalars)
+        {
+            return "消息文字超过 300 字符";
+        }
+        if (measure.SegmentCount > LanConnectServerChatProtocol.MaxSegments)
+        {
+            return "消息分段超过 32 段";
+        }
+        if (measure.EntityCount > LanConnectServerChatProtocol.MaxEntities)
+        {
+            return "消息实体超过 12 个";
+        }
+        if (measure.ContentValid &&
+            measure.WorstCaseInboundBytes > LanConnectServerChatProtocol.MaxPayloadBytes)
+        {
+            return "消息传输大小超过 8192 字节";
+        }
+        if (!measure.ContentValid)
+        {
+            return "消息内容无效";
+        }
+        if (!measure.FeaturesSupported)
+        {
+            return "当前频道不支持草稿中的富内容";
+        }
+        return string.Empty;
+    }
+
+    private static string FormatBudget(LanConnectDraftMeasure measure) =>
+        $"字符 {measure.TextScalars}/300 · 分段 {measure.SegmentCount}/32 · " +
+        $"实体 {measure.EntityCount}/12 · 字节 {measure.WorstCaseInboundBytes}/8192";
 
     private static string RunKind(LanConnectDraftRun run) => run switch
     {

@@ -115,6 +115,49 @@ public sealed class LanConnectRoomChatFocusTests
     }
 
     [TestCase]
+    public async Task Focused_entity_chip_passes_global_keys_and_replaces_selection_with_viewport_unicode()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        LanConnectRichDraft draft = fixture.State.Room.RichDraft;
+        draft.ReplaceAllWithText("a");
+        draft.InsertEntity(new LanConnectEmojiRun("heart"));
+        draft.InsertText("b");
+        await fixture.Overlay.RefreshForTests();
+        await fixture.Runner.AwaitIdleFrame();
+        Button chip = FindEntityChip(fixture.Overlay);
+        SelectChip(chip);
+
+        PushUnicode(fixture.Overlay.GetViewport(), Key.X, '界');
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(draft.Runs).ContainsExactly(new LanConnectTextRun("a界b"));
+
+        draft.InsertEntity(new LanConnectEmojiRun("heart"));
+        await fixture.Runner.AwaitIdleFrame();
+        chip = FindEntityChip(fixture.Overlay);
+        SelectChip(chip);
+        PushKey(fixture.Overlay.GetViewport(), Key.Escape);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
+        AssertThat(fixture.Overlay.TestState.FocusOwnerName)
+            .IsNotEqual(chip.Name.ToString());
+
+        chip = FindEntityChip(fixture.Overlay);
+        SelectChip(chip);
+        PushKey(fixture.Overlay.GetViewport(), Key.Tab);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.FocusOwnerName)
+            .IsNotEqual(chip.Name.ToString());
+
+        chip = FindEntityChip(fixture.Overlay);
+        SelectChip(chip);
+        PushKey(fixture.Overlay.GetViewport(), Key.F8);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.Pinned).IsTrue();
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
+    }
+
+    [TestCase]
     public async Task F8_shows_pins_hides_and_modal_blocks_without_changing_channel_or_draft()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
@@ -271,6 +314,47 @@ public sealed class LanConnectRoomChatFocusTests
     {
         viewport.PushInput(new InputEventKey { Keycode = key, Pressed = true, Echo = false });
         viewport.PushInput(new InputEventKey { Keycode = key, Pressed = false, Echo = false });
+    }
+
+    private static void PushUnicode(Viewport viewport, Key key, char value)
+    {
+        viewport.PushInput(new InputEventKey
+        {
+            Keycode = key,
+            Unicode = value,
+            Pressed = true,
+            Echo = false
+        });
+        viewport.PushInput(new InputEventKey
+        {
+            Keycode = key,
+            Unicode = value,
+            Pressed = false,
+            Echo = false
+        });
+    }
+
+    private static Button FindEntityChip(Node root) => root.FindChildren(
+            LanConnectConstants.ChatEntityChipPrefix + "*",
+            "Button",
+            recursive: true,
+            owned: false)
+        .OfType<Button>()
+        .Single();
+
+    private static void SelectChip(Button chip)
+    {
+        chip.EmitSignal(Control.SignalName.GuiInput, new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Pressed = true
+        });
+        chip.EmitSignal(Control.SignalName.GuiInput, new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Pressed = false
+        });
+        chip.GrabFocus();
     }
 
     private static void AssertChannelAndDraftPreserved(

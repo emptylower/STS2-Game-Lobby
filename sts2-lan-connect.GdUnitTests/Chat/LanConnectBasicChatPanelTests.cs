@@ -654,6 +654,28 @@ public sealed class LanConnectBasicChatPanelTests
     }
 
     [TestCase]
+    public async Task Deferred_message_focus_restore_never_steals_a_new_external_focus_target()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.BeginPendingText("focus-retry", "Me", "failed");
+        state.MarkFailed("focus-retry", "offline", "offline");
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        Button retry = FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "focus-retry");
+        retry.GrabFocus();
+
+        state.AppendConfirmedForTests("new-row", "A", "new row", 2, false);
+        await panel.RefreshForTests();
+        Button send = FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName);
+        send.GrabFocus();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(panel.TestState.FocusOwnerName).IsEqual(LanConnectConstants.ChatSendButtonName);
+    }
+
+    [TestCase]
     public async Task Scrolled_up_panel_preserves_offset_and_exposes_new_message_action()
     {
         LanConnectChatChannelState state = EnabledState();

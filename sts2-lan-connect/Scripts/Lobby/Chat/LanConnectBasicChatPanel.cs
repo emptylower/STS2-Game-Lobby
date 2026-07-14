@@ -78,6 +78,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private long _bindingGeneration;
     private long _boundContextGeneration;
     private long _scrollInteractionGeneration;
+    private long _messageFocusRestoreGeneration;
     private bool _suppressScrollChange;
     private bool _compactLayout;
     private string _operationStatus = string.Empty;
@@ -185,6 +186,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     public override void _ExitTree()
     {
         _bindingGeneration++;
+        _messageFocusRestoreGeneration++;
         _pendingUnknownConfirmation = null;
         _sendInFlight.Clear();
         _retryInFlight.Clear();
@@ -208,6 +210,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
 
         _bindingGeneration++;
+        _messageFocusRestoreGeneration++;
         _state = state;
         _boundContextGeneration = state.ContextGeneration;
         _send = send;
@@ -448,6 +451,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
 
         _bindingGeneration++;
+        _messageFocusRestoreGeneration++;
         long currentContext = _state.ContextGeneration;
         _sendInFlight.RemoveWhere(key =>
             ReferenceEquals(key.State, _state) && key.ContextGeneration != currentContext);
@@ -540,7 +544,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _draftEditor.UpdateBudgetContext(
             state.EnabledRichFeatures,
             LanConnectConfig.GetEffectivePlayerDisplayName());
-        RestoreMessageFocus(focusedMessageControlName);
+        RestoreMessageFocus(binding, focusedMessageControlName);
         UpdateAvailability();
         UpdateNewMessagesButton();
         _renderedRevision = renderedRevision;
@@ -966,8 +970,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         return root.IsAncestorOf(focusOwner) ? focusOwner.Name.ToString() : string.Empty;
     }
 
-    private void RestoreMessageFocus(string controlName)
+    private void RestoreMessageFocus(ChatBinding binding, string controlName)
     {
+        long restoreGeneration = ++_messageFocusRestoreGeneration;
         if (string.IsNullOrEmpty(controlName) || _messagesList == null)
         {
             return;
@@ -981,10 +986,23 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         Callable.From(() =>
         {
-            if (GodotObject.IsInstanceValid(replacement) && replacement.IsInsideTree())
+            if (restoreGeneration != _messageFocusRestoreGeneration ||
+                !IsBindingCurrent(binding) ||
+                !GodotObject.IsInstanceValid(replacement) ||
+                !replacement.IsInsideTree() ||
+                _messagesList == null ||
+                !GodotObject.IsInstanceValid(_messagesList))
             {
-                replacement.GrabFocus();
+                return;
             }
+            Control? focusOwner = GetViewport().GuiGetFocusOwner();
+            if (focusOwner != null &&
+                GodotObject.IsInstanceValid(focusOwner) &&
+                !_messagesList.IsAncestorOf(focusOwner))
+            {
+                return;
+            }
+            replacement.GrabFocus();
         }).CallDeferred();
     }
 
