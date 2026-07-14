@@ -221,6 +221,47 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(panel.TestState.InputEditable).IsTrue();
     }
 
+    [TestCase("failed")]
+    [TestCase("unknown")]
+    public async Task Retry_remains_disabled_across_rebuild_and_suppresses_duplicate_press(string delivery)
+    {
+        LanConnectChatChannelState state = WithDeliveryStates();
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int retryCount = 0;
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(
+            state,
+            text =>
+            {
+                retryCount++;
+                state.BeginPendingText("new-pending-from-retry", "Me", text);
+                return release.Task;
+            },
+            _ =>
+            {
+                retryCount++;
+                state.AppendConfirmedForTests("refresh-unknown-retry", "A", "refresh", 80, false);
+                return release.Task;
+            });
+        await runner.AwaitIdleFrame();
+
+        string clientMessageId = delivery == "failed" ? "client-failed" : "client-unknown";
+        string retryName = LanConnectConstants.ChatRetryButtonPrefix + clientMessageId;
+        FindNode<Button>(panel, retryName).EmitSignal(Button.SignalName.Pressed);
+        await runner.AwaitIdleFrame();
+
+        Button rebuiltRetry = FindNode<Button>(panel, retryName);
+        AssertThat(rebuiltRetry.Disabled).IsTrue();
+        rebuiltRetry.EmitSignal(Button.SignalName.Pressed);
+        AssertThat(retryCount).IsEqual(1);
+
+        release.SetResult();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(FindNode<Button>(panel, retryName).Disabled).IsFalse();
+    }
+
     [TestCase]
     public async Task Completing_send_after_panel_is_freed_does_not_touch_invalid_controls()
     {

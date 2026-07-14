@@ -29,6 +29,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         string ClientMessageId,
         string Text);
 
+    private readonly record struct RetryOperationKey(long Generation, string StableKey);
+
     private static readonly Color TextStrongColor = new(0.94f, 0.91f, 0.84f, 1f);
     private static readonly Color TextMutedColor = new(0.68f, 0.65f, 0.6f, 1f);
     private static readonly Color AccentColor = new(0.88f, 0.58f, 0.17f, 1f);
@@ -46,6 +48,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private Label? _statusLabel;
     private ConfirmationDialog? _unknownConfirmation;
     private PendingUnknownConfirmation? _pendingUnknownConfirmation;
+    private readonly HashSet<RetryOperationKey> _retryInFlight = new();
     private long _renderedRevision = -1;
     private long _bindingGeneration;
     private bool _suppressScrollChange;
@@ -129,6 +132,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _bindingGeneration++;
         _busy = false;
         _pendingUnknownConfirmation = null;
+        _retryInFlight.Clear();
         _state?.SetVisible(false);
     }
 
@@ -155,6 +159,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _renderedRevision = -1;
         _operationStatus = string.Empty;
         _pendingUnknownConfirmation = null;
+        _retryInFlight.Clear();
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
         {
             _unknownConfirmation.Hide();
@@ -419,12 +424,15 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
             if (message.Delivery is ServerChatDeliveryState.Failed or ServerChatDeliveryState.DeliveryUnknown)
             {
+                string stableKey = RetryStableKey(message, index);
                 Button retryButton = CreateButton("重试", accent: false);
                 retryButton.Name = LanConnectConstants.ChatRetryButtonPrefix + RetryNodeSuffix(message, index);
                 retryButton.FocusMode = FocusModeEnum.All;
+                retryButton.Disabled = _retryInFlight.Contains(
+                    new RetryOperationKey(_bindingGeneration, stableKey));
                 retryButton.Connect(
                     Button.SignalName.Pressed,
-                    Callable.From(() => _ = RetryMessageAsync(message, retryButton)));
+                    Callable.From(() => _ = RetryMessageAsync(message, stableKey, retryButton)));
                 deliveryRow.AddChild(retryButton);
             }
         }
@@ -489,7 +497,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
     }
 
-    private async Task RetryMessageAsync(ServerChatMessageState message, Button button)
+    private async Task RetryMessageAsync(
+        ServerChatMessageState message,
+        string stableKey,
+        Button button)
     {
         if (!TryCaptureBinding(out ChatBinding binding) ||
             !CanTouchControls(binding) ||
@@ -517,6 +528,13 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
 
+        RetryOperationKey operationKey = new(binding.Generation, stableKey);
+        if (!_retryInFlight.Add(operationKey))
+        {
+            return;
+        }
+
+        string buttonName = button.Name.ToString();
         button.Disabled = true;
         try
         {
@@ -544,9 +562,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         finally
         {
-            if (GodotObject.IsInstanceValid(button))
+            _retryInFlight.Remove(operationKey);
+            if (IsBindingCurrent(binding))
             {
-                button.Disabled = false;
+                Button? currentButton = FindCurrentRetryButton(buttonName);
+                if (currentButton != null)
+                {
+                    currentButton.Disabled = false;
+                }
             }
             if (CanTouchControls(binding))
             {
@@ -750,6 +773,22 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             ? index.ToString()
             : message.ClientMessageId;
         return value.Replace("/", "_").Replace(":", "_").Replace("@", "_");
+    }
+
+    private static string RetryStableKey(ServerChatMessageState message, int index) =>
+        string.IsNullOrEmpty(message.ClientMessageId)
+            ? $"index:{index}"
+            : $"client:{message.ClientMessageId}";
+
+    private Button? FindCurrentRetryButton(string buttonName)
+    {
+        if (_messagesList == null || !GodotObject.IsInstanceValid(_messagesList))
+        {
+            return null;
+        }
+
+        Button? button = _messagesList.FindChild(buttonName, recursive: true, owned: false) as Button;
+        return button != null && GodotObject.IsInstanceValid(button) ? button : null;
     }
 
     private static bool IsNearBottom(ScrollBar bar) =>
