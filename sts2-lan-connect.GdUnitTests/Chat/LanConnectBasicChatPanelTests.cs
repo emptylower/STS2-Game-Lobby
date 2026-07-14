@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Godot;
 using GdUnit4;
 using Sts2LanConnect.Scripts;
@@ -149,6 +150,172 @@ public sealed class LanConnectBasicChatPanelTests
     }
 
     [TestCase]
+    public async Task Synchronous_send_queue_is_rendered_on_the_next_idle_frame()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(
+            state,
+            text =>
+            {
+                state.BeginPendingText("sync-pending", "Me", text);
+                return Task.CompletedTask;
+            },
+            _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        SetDraft(panel, "queued immediately");
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
+        await runner.AwaitIdleFrame();
+
+        AssertThat(panel.TestState.PendingCount).IsEqual(1);
+        AssertThat(HasLabel(panel, "发送中")).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Rebinding_while_send_is_in_flight_isolates_new_draft_status_and_editability()
+    {
+        LanConnectChatChannelState stateA = EnabledState();
+        LanConnectChatChannelState stateB = EnabledState();
+        stateB.SetDraft("draft B");
+        TaskCompletionSource releaseA = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(stateA, _ => releaseA.Task, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        SetDraft(panel, "draft A");
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
+        panel.Bind(stateB, _ => Task.CompletedTask, _ => Task.CompletedTask);
+
+        AssertThat(panel.TestState.InputEditable).IsTrue();
+        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("draft B");
+        releaseA.SetResult();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(stateB.Draft).IsEqual("draft B");
+        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("draft B");
+        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text).IsEqual("频道可用");
+        AssertThat(panel.TestState.InputEditable).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Rebinding_while_retry_is_in_flight_ignores_old_completion_status()
+    {
+        LanConnectChatChannelState stateA = WithDeliveryStates();
+        LanConnectChatChannelState stateB = EnabledState();
+        TaskCompletionSource releaseA = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(stateA, _ => releaseA.Task, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "client-failed")
+            .EmitSignal(Button.SignalName.Pressed);
+        panel.Bind(stateB, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        releaseA.SetResult();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text).IsEqual("频道可用");
+        AssertThat(panel.TestState.InputEditable).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Completing_send_after_panel_is_freed_does_not_touch_invalid_controls()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Control root = AutoFree(new Control())!;
+        LanConnectBasicChatPanel panel = new();
+        root.AddChild(panel);
+        using ISceneRunner runner = ISceneRunner.Load(root, autoFree: true);
+        panel.Bind(state, _ => release.Task, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        SetDraft(panel, "in flight");
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
+        panel.QueueFree();
+        await runner.AwaitIdleFrame();
+        release.SetResult();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(GodotObject.IsInstanceValid(panel)).IsFalse();
+    }
+
+    [TestCase("ack")]
+    [TestCase("clear")]
+    [TestCase("rebind")]
+    public async Task Invalidated_disconnected_unknown_confirmation_does_not_send(string invalidation)
+    {
+        LanConnectChatChannelState state = DisconnectedUnknownState("confirm-invalidated", "possibly sent");
+        int sendCount = 0;
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(
+            state,
+            _ =>
+            {
+                sendCount++;
+                return Task.CompletedTask;
+            },
+            _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "confirm-invalidated")
+            .EmitSignal(Button.SignalName.Pressed);
+        await runner.AwaitIdleFrame();
+        ConfirmationDialog dialog = FindNode<ConfirmationDialog>(panel, "DisconnectedUnknownConfirmation");
+        switch (invalidation)
+        {
+            case "ack":
+                state.Apply(BuildAck("confirm-invalidated", "confirmed-after-dialog", "possibly sent"));
+                break;
+            case "clear":
+                state.ClearForContextChange();
+                break;
+            case "rebind":
+                panel.Bind(EnabledState(), _ => Task.CompletedTask, _ => Task.CompletedTask);
+                break;
+        }
+
+        dialog.EmitSignal(ConfirmationDialog.SignalName.Confirmed);
+        await runner.AwaitIdleFrame();
+
+        AssertThat(sendCount).IsEqual(0);
+    }
+
+    [TestCase]
+    public async Task Revision_added_during_refresh_is_rendered_on_the_next_frame()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.AppendConfirmedForTests("before-refresh", "A", "before refresh", 1, false);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        VBoxContainer list = FindNode<VBoxContainer>(panel, LanConnectConstants.ChatMessagesListName);
+        bool mutated = false;
+        list.Connect(Node.SignalName.ChildEnteredTree, Callable.From<Node>(_ =>
+        {
+            if (mutated)
+            {
+                return;
+            }
+
+            mutated = true;
+            state.AppendConfirmedForTests("during-refresh", "B", "during refresh", 2, false);
+        }));
+
+        state.AppendConfirmedForTests("refresh-trigger", "A", "trigger", 3, false);
+        await panel.RefreshForTests();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(mutated).IsTrue();
+        AssertThat(HasLabel(panel, "during refresh")).IsTrue();
+    }
+
+    [TestCase]
     public async Task Scrolled_up_panel_preserves_offset_and_exposes_new_message_action()
     {
         LanConnectChatChannelState state = EnabledState();
@@ -164,12 +331,18 @@ public sealed class LanConnectBasicChatPanelTests
         using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
         panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
-        panel.SetScrollForTests(72, atBottom: false);
+        await runner.AwaitIdleFrame();
+        ScrollBar bar = FindNode<ScrollContainer>(panel, LanConnectConstants.ChatMessagesScrollName).GetVScrollBar();
+        double offset = Math.Max(1, Math.Min(72, BottomValue(bar) / 2));
+        panel.SetScrollForTests(offset, atBottom: false);
+        await runner.AwaitIdleFrame();
 
         state.AppendConfirmedForTests("new", "A", "new", 100, false);
         await panel.RefreshForTests();
+        await runner.AwaitIdleFrame();
 
-        AssertThat(panel.TestState.ScrollOffset).IsEqual(72d);
+        AssertThat(panel.TestState.ScrollOffset).IsEqual(offset);
+        AssertThat(bar.Value).IsEqual(offset);
         AssertThat(panel.TestState.IsAtBottom).IsFalse();
         AssertThat(panel.TestState.NewMessagesBelowCount).IsEqual(1);
         Button newMessages = FindNode<Button>(panel, LanConnectConstants.ChatNewMessagesButtonName);
@@ -177,8 +350,11 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(newMessages.Text).IsEqual("有 1 条新消息");
 
         newMessages.EmitSignal(Button.SignalName.Pressed);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
         AssertThat(panel.TestState.IsAtBottom).IsTrue();
         AssertThat(panel.TestState.NewMessagesBelowCount).IsEqual(0);
+        AssertThat(bar.Value).IsEqual(BottomValue(bar));
     }
 
     private static LanConnectChatChannelState WithDeliveryStates()
@@ -207,6 +383,52 @@ public sealed class LanConnectBasicChatPanelTests
         });
         return state;
     }
+
+    private static LanConnectChatChannelState DisconnectedUnknownState(string clientMessageId, string text)
+    {
+        LanConnectChatChannelState state = EnabledState();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        state.BeginPendingText(clientMessageId, "A", text, queuedAt: now - TimeSpan.FromSeconds(20));
+        state.MarkTimedOut(now);
+        state.MarkDisconnected();
+        return state;
+    }
+
+    private static ServerChatInboundEnvelope BuildAck(string clientMessageId, string messageId, string text)
+    {
+        ServerChatAckEnvelope envelope = new()
+        {
+            ClientMessageId = clientMessageId,
+            Message = new ServerChatCanonicalMessage
+            {
+                MessageId = messageId,
+                SenderId = "sender",
+                SenderName = "A",
+                Content = new ServerChatContent
+                {
+                    Segments = new List<ServerChatTextSegment>
+                    {
+                        new() { Text = text }
+                    }
+                },
+                PlainTextFallback = text,
+                SentAt = DateTimeOffset.UtcNow
+            }
+        };
+        return JsonSerializer.Deserialize<ServerChatInboundEnvelope>(
+            JsonSerializer.Serialize(envelope, LanConnectJson.Options),
+            LanConnectJson.Options)!;
+    }
+
+    private static void SetDraft(Node panel, string text)
+    {
+        LineEdit input = FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName);
+        input.Text = text;
+        input.EmitSignal(LineEdit.SignalName.TextChanged, text);
+    }
+
+    private static double BottomValue(ScrollBar bar) =>
+        Math.Max(bar.MinValue, bar.MaxValue - bar.Page);
 
     private static bool HasLabel(Node root, string text)
     {

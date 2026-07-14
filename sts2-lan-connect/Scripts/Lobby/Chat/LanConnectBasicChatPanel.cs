@@ -18,6 +18,17 @@ internal readonly record struct LanConnectBasicChatPanelTestState(
 
 internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 {
+    private readonly record struct ChatBinding(
+        long Generation,
+        LanConnectChatChannelState State,
+        Func<string, Task> Send,
+        Func<string, Task> Retry);
+
+    private readonly record struct PendingUnknownConfirmation(
+        ChatBinding Binding,
+        string ClientMessageId,
+        string Text);
+
     private static readonly Color TextStrongColor = new(0.94f, 0.91f, 0.84f, 1f);
     private static readonly Color TextMutedColor = new(0.68f, 0.65f, 0.6f, 1f);
     private static readonly Color AccentColor = new(0.88f, 0.58f, 0.17f, 1f);
@@ -34,8 +45,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private Button? _sendButton;
     private Label? _statusLabel;
     private ConfirmationDialog? _unknownConfirmation;
-    private string? _confirmedUnknownText;
+    private PendingUnknownConfirmation? _pendingUnknownConfirmation;
     private long _renderedRevision = -1;
+    private long _bindingGeneration;
     private bool _suppressScrollChange;
     private bool _busy;
     private string _operationStatus = string.Empty;
@@ -70,10 +82,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             }
 
             string focusOwnerName = string.Empty;
-            if (IsInsideTree())
+            if (GodotObject.IsInstanceValid(this) && IsInsideTree())
             {
                 focusOwnerName = GetViewport().GuiGetFocusOwner()?.Name.ToString() ?? string.Empty;
             }
+
+            bool inputEditable = _draftInput != null &&
+                                 GodotObject.IsInstanceValid(_draftInput) &&
+                                 _draftInput.Editable;
 
             return new LanConnectBasicChatPanelTestState(
                 messages.Count,
@@ -84,7 +100,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 _state?.ScrollOffset ?? 0,
                 _state?.IsAtBottom ?? true,
                 _state?.NewMessagesBelowCount ?? 0,
-                _draftInput?.Editable == true,
+                inputEditable,
                 focusOwnerName);
         }
     }
@@ -110,6 +126,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     public override void _ExitTree()
     {
+        _bindingGeneration++;
+        _busy = false;
+        _pendingUnknownConfirmation = null;
         _state?.SetVisible(false);
     }
 
@@ -128,13 +147,18 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             _state.SetVisible(false);
         }
 
+        _bindingGeneration++;
+        _busy = false;
         _state = state;
         _send = send;
         _retry = retry;
         _renderedRevision = -1;
         _operationStatus = string.Empty;
-        _confirmedUnknownText = null;
-        _unknownConfirmation?.Hide();
+        _pendingUnknownConfirmation = null;
+        if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
+        {
+            _unknownConfirmation.Hide();
+        }
         if (_draftInput != null)
         {
             ApplyBoundState();
@@ -255,7 +279,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private void ApplyBoundState()
     {
-        if (_state == null || _draftInput == null)
+        if (_state == null ||
+            _draftInput == null ||
+            !GodotObject.IsInstanceValid(_draftInput))
         {
             return;
         }
@@ -272,12 +298,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
 
-        if (_draftInput != null)
+        if (_draftInput != null && GodotObject.IsInstanceValid(_draftInput))
         {
             _state.SetDraft(_draftInput.Text);
         }
 
-        if (_messagesScroll?.GetVScrollBar() is ScrollBar bar)
+        if (_messagesScroll != null &&
+            GodotObject.IsInstanceValid(_messagesScroll) &&
+            _messagesScroll.GetVScrollBar() is ScrollBar bar)
         {
             _state.SetScrollState(bar.Value, IsNearBottom(bar));
         }
@@ -285,14 +313,19 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private void Refresh()
     {
-        if (_state == null || _messagesList == null || _draftInput == null || _sendButton == null)
+        if (!TryCaptureBinding(out ChatBinding binding) ||
+            _messagesList == null || !GodotObject.IsInstanceValid(_messagesList) ||
+            _draftInput == null || !GodotObject.IsInstanceValid(_draftInput) ||
+            _sendButton == null || !GodotObject.IsInstanceValid(_sendButton))
         {
             return;
         }
 
-        IReadOnlyList<ServerChatMessageState> messages = _state.Messages;
-        bool atBottom = _state.IsAtBottom;
-        double scrollOffset = _state.ScrollOffset;
+        LanConnectChatChannelState state = binding.State;
+        long renderedRevision = state.Revision;
+        IReadOnlyList<ServerChatMessageState> messages = state.Messages;
+        bool atBottom = state.IsAtBottom;
+        double scrollOffset = state.ScrollOffset;
         _suppressScrollChange = true;
         foreach (Node child in _messagesList.GetChildren())
         {
@@ -320,16 +353,21 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         _suppressScrollChange = false;
 
-        if (_draftInput.Text != _state.Draft)
+        if (!IsBindingCurrent(binding))
         {
-            _draftInput.Text = _state.Draft;
+            return;
+        }
+
+        if (_draftInput.Text != state.Draft)
+        {
+            _draftInput.Text = state.Draft;
         }
         UpdateAvailability();
         UpdateNewMessagesButton();
-        _renderedRevision = _state.Revision;
+        _renderedRevision = renderedRevision;
         if (atBottom)
         {
-            Callable.From(ScrollToBottomWithoutConsumingState).CallDeferred();
+            Callable.From(() => ScrollToBottomWithoutConsumingState(binding.Generation)).CallDeferred();
         }
     }
 
@@ -396,7 +434,11 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private async Task SendDraftAsync()
     {
-        if (_state == null || _send == null || _draftInput == null || _sendButton == null || _busy)
+        if (!TryCaptureBinding(out ChatBinding binding) ||
+            !CanTouchControls(binding) ||
+            _draftInput == null || !GodotObject.IsInstanceValid(_draftInput) ||
+            _sendButton == null || !GodotObject.IsInstanceValid(_sendButton) ||
+            _busy)
         {
             return;
         }
@@ -408,7 +450,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             UpdateAvailability();
             return;
         }
-        if (!_state.ChatEnabled)
+        if (!binding.State.ChatEnabled)
         {
             _operationStatus = "聊天暂不可用";
             UpdateAvailability();
@@ -419,35 +461,59 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         UpdateAvailability();
         try
         {
-            await _send(text);
+            await binding.Send(text);
+            if (!CanTouchControls(binding) || _draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
+            {
+                return;
+            }
+
             _draftInput.Text = string.Empty;
-            _state.SetDraft(string.Empty);
+            binding.State.SetDraft(string.Empty);
             _operationStatus = "已提交";
             _draftInput.GrabFocus();
         }
         catch (Exception ex)
         {
-            _operationStatus = $"发送失败：{ex.Message}";
+            if (CanTouchControls(binding))
+            {
+                _operationStatus = $"发送失败：{ex.Message}";
+            }
         }
         finally
         {
-            _busy = false;
-            UpdateAvailability();
-            _renderedRevision = _state.Revision;
+            if (CanTouchControls(binding))
+            {
+                _busy = false;
+                UpdateAvailability();
+            }
         }
     }
 
     private async Task RetryMessageAsync(ServerChatMessageState message, Button button)
     {
-        if (_send == null || _retry == null || button.Disabled)
+        if (!TryCaptureBinding(out ChatBinding binding) ||
+            !CanTouchControls(binding) ||
+            !GodotObject.IsInstanceValid(button) ||
+            button.Disabled)
         {
             return;
         }
 
         if (message.Delivery == ServerChatDeliveryState.DeliveryUnknown && message.DisconnectedAfterUnknown)
         {
-            _confirmedUnknownText = message.Text;
-            _unknownConfirmation?.PopupCentered(new Vector2I(420, 180));
+            if (string.IsNullOrEmpty(message.ClientMessageId))
+            {
+                return;
+            }
+
+            _pendingUnknownConfirmation = new PendingUnknownConfirmation(
+                binding,
+                message.ClientMessageId,
+                message.Text);
+            if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
+            {
+                _unknownConfirmation.PopupCentered(new Vector2I(420, 180));
+            }
             return;
         }
 
@@ -456,18 +522,25 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             if (message.Delivery == ServerChatDeliveryState.Failed)
             {
-                await _send(message.Text);
+                await binding.Send(message.Text);
             }
             else if (message.Delivery == ServerChatDeliveryState.DeliveryUnknown &&
                      !string.IsNullOrEmpty(message.ClientMessageId))
             {
-                await _retry(message.ClientMessageId);
+                await binding.Retry(message.ClientMessageId);
             }
-            _operationStatus = "已重试";
+
+            if (CanTouchControls(binding))
+            {
+                _operationStatus = "已重试";
+            }
         }
         catch (Exception ex)
         {
-            _operationStatus = $"重试失败：{ex.Message}";
+            if (CanTouchControls(binding))
+            {
+                _operationStatus = $"重试失败：{ex.Message}";
+            }
         }
         finally
         {
@@ -475,29 +548,53 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             {
                 button.Disabled = false;
             }
-            UpdateAvailability();
+            if (CanTouchControls(binding))
+            {
+                UpdateAvailability();
+            }
         }
     }
 
     private async Task SendConfirmedUnknownAsync()
     {
-        string? text = _confirmedUnknownText;
-        _confirmedUnknownText = null;
-        if (_send == null || string.IsNullOrEmpty(text))
+        PendingUnknownConfirmation? pending = _pendingUnknownConfirmation;
+        _pendingUnknownConfirmation = null;
+        if (!pending.HasValue || !IsBindingCurrent(pending.Value.Binding))
+        {
+            return;
+        }
+
+        PendingUnknownConfirmation confirmation = pending.Value;
+        ServerChatMessageState? current = FindMessage(
+            confirmation.Binding.State,
+            confirmation.ClientMessageId);
+        if (current == null ||
+            current.Delivery != ServerChatDeliveryState.DeliveryUnknown ||
+            !current.DisconnectedAfterUnknown ||
+            !string.Equals(current.Text, confirmation.Text, StringComparison.Ordinal))
         {
             return;
         }
 
         try
         {
-            await _send(text);
-            _operationStatus = "已作为新消息发送";
+            await confirmation.Binding.Send(confirmation.Text);
+            if (CanTouchControls(confirmation.Binding))
+            {
+                _operationStatus = "已作为新消息发送";
+            }
         }
         catch (Exception ex)
         {
-            _operationStatus = $"重发失败：{ex.Message}";
+            if (CanTouchControls(confirmation.Binding))
+            {
+                _operationStatus = $"重发失败：{ex.Message}";
+            }
         }
-        UpdateAvailability();
+        if (CanTouchControls(confirmation.Binding))
+        {
+            UpdateAvailability();
+        }
     }
 
     private void OnDraftChanged(string text)
@@ -518,16 +615,18 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private void ScrollToBottom()
     {
-        if (_state == null)
+        if (!TryCaptureBinding(out ChatBinding binding) || !CanTouchControls(binding))
         {
             return;
         }
 
         ScrollToBottomWithoutConsumingState();
         double value = _messagesScroll?.GetVScrollBar().Value ?? 0;
-        _state.SetScrollState(value, atBottom: true);
-        UpdateNewMessagesButton();
-        _renderedRevision = _state.Revision;
+        binding.State.SetScrollState(value, atBottom: true);
+        if (IsBindingCurrent(binding))
+        {
+            UpdateNewMessagesButton();
+        }
     }
 
     private void ScrollToBottomWithoutConsumingState()
@@ -542,9 +641,25 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _suppressScrollChange = false;
     }
 
+    private void ScrollToBottomWithoutConsumingState(long generation)
+    {
+        if (generation != _bindingGeneration ||
+            _state?.IsAtBottom != true ||
+            !GodotObject.IsInstanceValid(this) ||
+            IsQueuedForDeletion())
+        {
+            return;
+        }
+
+        ScrollToBottomWithoutConsumingState();
+    }
+
     private void UpdateAvailability()
     {
-        if (_state == null || _draftInput == null || _sendButton == null || _statusLabel == null)
+        if (_state == null ||
+            _draftInput == null || !GodotObject.IsInstanceValid(_draftInput) ||
+            _sendButton == null || !GodotObject.IsInstanceValid(_sendButton) ||
+            _statusLabel == null || !GodotObject.IsInstanceValid(_statusLabel))
         {
             return;
         }
@@ -562,7 +677,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private void UpdateNewMessagesButton()
     {
-        if (_newMessagesButton == null || _state == null)
+        if (_newMessagesButton == null ||
+            !GodotObject.IsInstanceValid(_newMessagesButton) ||
+            _state == null)
         {
             return;
         }
@@ -578,6 +695,43 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             _state.SetVisible(IsInsideTree() && IsVisibleInTree());
         }
+    }
+
+    private bool TryCaptureBinding(out ChatBinding binding)
+    {
+        if (_state == null || _send == null || _retry == null)
+        {
+            binding = default;
+            return false;
+        }
+
+        binding = new ChatBinding(_bindingGeneration, _state, _send, _retry);
+        return true;
+    }
+
+    private bool IsBindingCurrent(ChatBinding binding) =>
+        binding.Generation == _bindingGeneration &&
+        ReferenceEquals(binding.State, _state);
+
+    private bool CanTouchControls(ChatBinding binding) =>
+        IsBindingCurrent(binding) &&
+        GodotObject.IsInstanceValid(this) &&
+        IsInsideTree() &&
+        !IsQueuedForDeletion();
+
+    private static ServerChatMessageState? FindMessage(
+        LanConnectChatChannelState state,
+        string clientMessageId)
+    {
+        foreach (ServerChatMessageState message in state.Messages)
+        {
+            if (string.Equals(message.ClientMessageId, clientMessageId, StringComparison.Ordinal))
+            {
+                return message;
+            }
+        }
+
+        return null;
     }
 
     private static string DeliveryText(ServerChatMessageState message) =>
