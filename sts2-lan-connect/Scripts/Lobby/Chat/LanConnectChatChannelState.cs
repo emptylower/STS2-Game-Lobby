@@ -961,8 +961,12 @@ internal sealed class LanConnectChatChannelState
 
         if (!_isVisible)
         {
-            _unreadIncomingSequences[messageId] = sequence;
-            RecomputeUnreadIndicators();
+            _unreadIncomingSequences.Add(messageId, sequence);
+            _unreadCount = _unreadIncomingSequences.Count;
+            if (!_firstUnreadSequence.HasValue || sequence < _firstUnreadSequence.Value)
+            {
+                _firstUnreadSequence = sequence;
+            }
         }
         else if (!_isAtBottom)
         {
@@ -973,9 +977,17 @@ internal sealed class LanConnectChatChannelState
 
     private void RollBackIncoming(string messageId)
     {
-        if (_unreadIncomingSequences.Remove(messageId))
+        if (_unreadIncomingSequences.Remove(messageId, out long removedSequence))
         {
-            RecomputeUnreadIndicators();
+            _unreadCount = _unreadIncomingSequences.Count;
+            if (_unreadCount == 0)
+            {
+                _firstUnreadSequence = null;
+            }
+            else if (_firstUnreadSequence == removedSequence)
+            {
+                RecomputeFirstUnreadSequence();
+            }
         }
         if (_belowIncomingMessageIds.Remove(messageId))
         {
@@ -983,9 +995,8 @@ internal sealed class LanConnectChatChannelState
         }
     }
 
-    private void RecomputeUnreadIndicators()
+    private void RecomputeFirstUnreadSequence()
     {
-        _unreadCount = _unreadIncomingSequences.Count;
         _firstUnreadSequence = null;
         foreach (long sequence in _unreadIncomingSequences.Values)
         {

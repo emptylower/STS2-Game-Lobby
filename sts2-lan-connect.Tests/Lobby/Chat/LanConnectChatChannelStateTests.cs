@@ -414,6 +414,34 @@ public sealed class LanConnectChatChannelStateTests
         Assert.Equal(failedRevision + 1, failed.Revision);
     }
 
+    [Fact]
+    public void UnreadMinimumUpdatesForOutOfOrderArrivalsAndSelectiveAckRemoval()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
+        state.AppendConfirmedForTests("late", "Silent", "late", sequence: 30, isLocal: false);
+        state.AppendConfirmedForTests("first-a", "Silent", "first-a", sequence: 10, isLocal: false);
+        state.AppendConfirmedForTests("first-b", "Silent", "first-b", sequence: 10, isLocal: false);
+        state.AppendConfirmedForTests("middle", "Silent", "middle", sequence: 20, isLocal: false);
+        Assert.Equal(4, state.UnreadCount);
+        Assert.Equal(10, state.FirstUnreadSequence);
+
+        state.Apply(BuildAck("local-middle", "middle", "Silent", "middle"));
+        Assert.Equal(3, state.UnreadCount);
+        Assert.Equal(10, state.FirstUnreadSequence);
+
+        state.Apply(BuildAck("local-first-a", "first-a", "Silent", "first-a"));
+        Assert.Equal(2, state.UnreadCount);
+        Assert.Equal(10, state.FirstUnreadSequence);
+
+        state.Apply(BuildAck("local-first-b", "first-b", "Silent", "first-b"));
+        Assert.Equal(1, state.UnreadCount);
+        Assert.Equal(30, state.FirstUnreadSequence);
+
+        state.Apply(BuildAck("local-late", "late", "Silent", "late"));
+        Assert.Equal(0, state.UnreadCount);
+        Assert.Null(state.FirstUnreadSequence);
+    }
+
     private static ServerChatInboundEnvelope BuildAck(string clientMessageId, string serverMessageId, string senderName, string text)
     {
         ServerChatAckEnvelope envelope = new()
