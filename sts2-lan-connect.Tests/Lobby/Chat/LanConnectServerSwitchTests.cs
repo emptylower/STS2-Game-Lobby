@@ -197,6 +197,80 @@ public sealed class LanConnectServerSwitchTests
     }
 
     [Fact]
+    public async Task RotatingChatPortKeepsCurrentWhenReplacementConstructionFails()
+    {
+        FakeServerChatClient initial = new();
+        FakeServerChatClient invalidReplacement = new() { ThrowOnStateChangedSubscribe = true };
+        FakeServerChatClient finalReplacement = new();
+        Queue<FakeServerChatClient> replacements = new(new[] { invalidReplacement, finalReplacement });
+        await using LanConnectRotatingServerChatPort port = new(initial, () => replacements.Dequeue());
+        int notifications = 0;
+        port.StateChanged += () => notifications++;
+        await port.StopAsync(CancellationToken.None);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => port.ConnectAsync(
+            new Uri("https://invalid.example/"), "p1", "Silent", CancellationToken.None));
+
+        Assert.Same(initial.State, port.Current.State.Server);
+        Assert.Equal(1, invalidReplacement.DisposeCount);
+        initial.RaiseStateChanged();
+        Assert.Equal(1, notifications);
+        await port.ConnectAsync(
+            new Uri("https://final.example/"), "p1", "Silent", CancellationToken.None);
+        Assert.Equal(new Uri("https://final.example/"), finalReplacement.ConnectCall?.Uri);
+    }
+
+    [Fact]
+    public async Task RotatingChatPortRecoversWhenPreviousDisposeFailsAfterSwap()
+    {
+        FakeServerChatClient initial = new()
+        {
+            DisposeImplementation = () => Task.FromException(new InvalidOperationException("dispose failed"))
+        };
+        FakeServerChatClient firstReplacement = new();
+        FakeServerChatClient finalReplacement = new();
+        Queue<FakeServerChatClient> replacements = new(new[] { firstReplacement, finalReplacement });
+        await using LanConnectRotatingServerChatPort port = new(initial, () => replacements.Dequeue());
+        await port.StopAsync(CancellationToken.None);
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            port.ConnectAsync(new Uri("https://first.example/"), "p1", "Silent", CancellationToken.None));
+
+        Assert.Equal("dispose failed", error.Message);
+        Assert.Same(firstReplacement.State, port.Current.State.Server);
+        await port.StopAsync(CancellationToken.None);
+        await port.ConnectAsync(
+            new Uri("https://final.example/"), "p1", "Silent", CancellationToken.None);
+        Assert.Equal(new Uri("https://final.example/"), finalReplacement.ConnectCall?.Uri);
+    }
+
+    [Fact]
+    public async Task ConcurrentRotatingPortDisposeCallsShareCompletionAndFailure()
+    {
+        TaskCompletionSource disposeEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseDispose = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        FakeServerChatClient initial = new()
+        {
+            DisposeImplementation = async () =>
+            {
+                disposeEntered.SetResult();
+                await releaseDispose.Task;
+            }
+        };
+        LanConnectRotatingServerChatPort port = new(initial, () => new FakeServerChatClient());
+
+        Task first = port.DisposeAsync().AsTask();
+        await disposeEntered.Task;
+        Task second = port.DisposeAsync().AsTask();
+
+        Assert.Same(first, second);
+        Assert.False(second.IsCompleted);
+        releaseDispose.SetResult();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, initial.DisposeCount);
+    }
+
+    [Fact]
     public async Task PreCanceledRequestDoesNotSupersedeActiveSwitch()
     {
         List<string> calls = new();
@@ -403,9 +477,26 @@ public sealed class LanConnectServerSwitchTests
 
     private sealed class FakeServerChatClient : ILanConnectServerChatClient
     {
+        private Action? _stateChanged;
+
         public LanConnectChatChannelState State { get; } = new(LanConnectChatChannel.Server);
 
-        public event Action? StateChanged;
+        public event Action? StateChanged
+        {
+            add
+            {
+                if (ThrowOnStateChangedSubscribe)
+                {
+                    throw new InvalidOperationException("subscribe failed");
+                }
+                _stateChanged += value;
+            }
+            remove => _stateChanged -= value;
+        }
+
+        internal bool ThrowOnStateChangedSubscribe { get; set; }
+
+        internal Func<Task>? DisposeImplementation { get; set; }
 
         internal int StopCount { get; private set; }
 
@@ -441,12 +532,15 @@ public sealed class LanConnectServerSwitchTests
             return Task.CompletedTask;
         }
 
-        public ValueTask DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
             DisposeCount++;
-            return ValueTask.CompletedTask;
+            if (DisposeImplementation != null)
+            {
+                await DisposeImplementation();
+            }
         }
 
-        internal void RaiseStateChanged() => StateChanged?.Invoke();
+        internal void RaiseStateChanged() => _stateChanged?.Invoke();
     }
 }
