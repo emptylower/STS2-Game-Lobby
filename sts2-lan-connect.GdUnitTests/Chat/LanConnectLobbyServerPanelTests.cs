@@ -54,6 +54,24 @@ public sealed class LanConnectLobbyServerPanelTests
     }
 
     [TestCase]
+    public async Task Hd_window_uses_compact_sidebar_scroll_and_keeps_viewports_inside_720p()
+    {
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1280, 720),
+            LanConnectServerChatPresentation.Ready);
+        LanConnectLobbyOverlayTestState state = fixture.Overlay.TestState;
+
+        AssertThat(state.CompactSidebarScrollVisible).IsTrue();
+        AssertThat(state.RoomStageRect.Position.Y).IsGreaterEqual(0f);
+        AssertThat(state.RoomStageRect.End.Y).IsLessEqual(722f);
+        AssertThat(state.CompactSidebarViewportRect.Position.Y).IsGreaterEqual(0f);
+        AssertThat(state.CompactSidebarViewportRect.End.Y).IsLessEqual(722f);
+        AssertThat(state.RoomDetailRect.End.Y).IsLessEqual(state.ServerChatRect.Position.Y);
+        AssertThat(state.RoomDetailMinimumHeight).IsGreater(0f);
+        AssertThat(state.ServerChatMinimumHeight).IsGreater(0f);
+    }
+
+    [TestCase]
     public async Task Selection_refreshes_details_without_rebuilding_server_chat_panel()
     {
         using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(

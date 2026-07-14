@@ -17,6 +17,7 @@ internal readonly record struct LanConnectLobbyOverlayTestState(
     Rect2 SidebarRect,
     Rect2 RoomDetailRect,
     Rect2 ServerChatRect,
+    Rect2 CompactSidebarViewportRect,
     bool ServerPanelVisible,
     string SelectedRoomId,
     string SelectedRoomName,
@@ -228,6 +229,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         RectForTests(_sidebarContainer),
         RectForTests(_roomDetailPanel),
         RectForTests(_serverChatFrame),
+        RectForTests(_compactSidebarScroll),
         _serverChatFrame?.Visible == true && _serverChatPanel?.Visible == true,
         _selectedRoomId ?? string.Empty,
         GetSelectedRoom()?.RoomName ?? string.Empty,
@@ -1437,7 +1439,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         Vector2 size = GetViewportRect().Size;
         float aspectRatio = size.Y <= 0f ? 1f : size.X / size.Y;
-        bool compact = size.X < 1180f || aspectRatio < 1.34f;
+        bool compact = size.X < 1180f || size.Y < 820f || aspectRatio < 1.34f;
         LobbyLayoutMode nextMode = compact ? LobbyLayoutMode.Compact : LobbyLayoutMode.Desktop;
         bool layoutChanged = _layoutMode != nextMode;
         _layoutMode = nextMode;

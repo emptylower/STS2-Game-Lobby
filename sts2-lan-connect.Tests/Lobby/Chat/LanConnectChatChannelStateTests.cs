@@ -9,6 +9,18 @@ namespace Sts2LanConnect.Tests.Lobby.Chat;
 public sealed class LanConnectChatChannelStateTests
 {
     [Fact]
+    public void Channel_kind_defines_distinct_initial_availability()
+    {
+        LanConnectChatChannelState room = new(LanConnectChatChannel.Room);
+        LanConnectChatChannelState server = new(LanConnectChatChannel.Server);
+
+        Assert.True(room.ChatEnabled);
+        Assert.Equal(LanConnectServerChatPresentation.Ready, room.Presentation);
+        Assert.False(server.ChatEnabled);
+        Assert.Equal(LanConnectServerChatPresentation.Connecting, server.Presentation);
+    }
+
+    [Fact]
     public void LegacyConfirmedPreservesSenderIdentityAndTimestamp()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Room);

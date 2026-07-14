@@ -11,6 +11,35 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 public sealed class LanConnectBasicChatPanelTests
 {
     [TestCase]
+    public async Task Room_channel_is_editable_and_send_gate_clears_draft_and_restores_focus_by_default()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        List<string> sentTexts = new();
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(
+            state,
+            text =>
+            {
+                sentTexts.Add(text);
+                return Task.CompletedTask;
+            },
+            _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        AssertThat(panel.TestState.InputEditable).IsTrue();
+        SetDraft(panel, "room hello");
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
+        await runner.AwaitIdleFrame();
+
+        AssertThat(sentTexts.Count).IsEqual(1);
+        AssertThat(sentTexts[0]).IsEqual("room hello");
+        AssertThat(state.Draft).IsEqual(string.Empty);
+        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual(string.Empty);
+        AssertThat(panel.TestState.FocusOwnerName).IsEqual(LanConnectConstants.ChatDraftInputName);
+    }
+
+    [TestCase]
     public async Task Connection_presentation_states_drive_status_and_editability_without_clearing_draft()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Server);

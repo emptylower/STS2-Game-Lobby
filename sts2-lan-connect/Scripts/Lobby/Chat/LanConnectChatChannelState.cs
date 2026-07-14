@@ -158,6 +158,11 @@ internal sealed class LanConnectChatChannelState
         ArgumentNullException.ThrowIfNull(arrivalClock);
         Channel = channel;
         _arrivalClock = arrivalClock;
+        if (channel == LanConnectChatChannel.Room)
+        {
+            _chatEnabled = true;
+            _presentation = LanConnectServerChatPresentation.Ready;
+        }
     }
 
     internal LanConnectChatChannel Channel { get; }
