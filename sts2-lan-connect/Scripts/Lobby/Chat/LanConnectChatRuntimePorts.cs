@@ -23,21 +23,35 @@ internal interface ILanConnectServerChatClient : IAsyncDisposable
     Task StopAsync(CancellationToken cancellationToken = default);
 }
 
+internal enum LanConnectLobbyRuntimeChatCoordinatorCheckpoint
+{
+    BeginAfterSyncLease,
+    EnterBeforeRoomMutationLock,
+    AppendAfterContextValidation
+}
+
 internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 {
     private const int LegacyRoomConfirmedMessageLimit = 60;
     private readonly ILanConnectServerChatClient _client;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly object _lifecycleLock = new();
+    private readonly object _roomMutationLock = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly CancellationToken _lifetimeToken;
+    private readonly Action<LanConnectLobbyRuntimeChatCoordinatorCheckpoint>? _checkpoint;
     private Task? _disposeTask;
+    private TaskCompletionSource? _syncLeasesDrained;
+    private int _syncLeaseCount;
     private bool _disposed;
 
-    internal LanConnectLobbyRuntimeChatCoordinator(ILanConnectServerChatClient client)
+    internal LanConnectLobbyRuntimeChatCoordinator(
+        ILanConnectServerChatClient client,
+        Action<LanConnectLobbyRuntimeChatCoordinatorCheckpoint>? checkpoint = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _lifetimeToken = _lifetimeCancellation.Token;
+        _checkpoint = checkpoint;
         State = new LanConnectDualChatState(client.State);
         _client.StateChanged += OnClientStateChanged;
     }
@@ -53,20 +67,19 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         string text,
         DateTimeOffset sentAt)
     {
-        ThrowIfDisposed();
-        MutateRoom(() => State.Room.BeginPendingText(clientMessageId, senderName, text, senderNetId, sentAt));
+        RunRoomMutation(
+            () => State.Room.BeginPendingText(clientMessageId, senderName, text, senderNetId, sentAt),
+            LanConnectLobbyRuntimeChatCoordinatorCheckpoint.BeginAfterSyncLease);
     }
 
     internal void ConfirmRoomSend(string clientMessageId)
     {
-        ThrowIfDisposed();
-        MutateRoom(() => State.Room.MarkLegacySendConfirmed(clientMessageId, LegacyRoomConfirmedMessageLimit));
+        RunRoomMutation(() => State.Room.MarkLegacySendConfirmed(clientMessageId, LegacyRoomConfirmedMessageLimit));
     }
 
     internal void FailRoomSend(string clientMessageId, string code, string message)
     {
-        ThrowIfDisposed();
-        MutateRoom(() => State.Room.MarkFailed(clientMessageId, code, message));
+        RunRoomMutation(() => State.Room.MarkFailed(clientMessageId, code, message));
     }
 
     internal void AppendRoomConfirmed(
@@ -78,46 +91,43 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         DateTimeOffset sentAt,
         bool isLocal)
     {
-        ThrowIfDisposed();
-        if (!string.Equals(State.ActiveRoomId, roomId, StringComparison.Ordinal))
+        RunRoomMutation(() =>
         {
-            return;
-        }
-        foreach (ServerChatMessageState existing in State.Room.Messages)
-        {
-            if (string.Equals(existing.MessageId, messageId, StringComparison.Ordinal) ||
-                string.Equals(existing.ClientMessageId, messageId, StringComparison.Ordinal))
+            if (!string.Equals(State.ActiveRoomId, roomId, StringComparison.Ordinal))
             {
                 return;
             }
-        }
+            _checkpoint?.Invoke(LanConnectLobbyRuntimeChatCoordinatorCheckpoint.AppendAfterContextValidation);
+            foreach (ServerChatMessageState existing in State.Room.Messages)
+            {
+                if (string.Equals(existing.MessageId, messageId, StringComparison.Ordinal) ||
+                    string.Equals(existing.ClientMessageId, messageId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
 
-        MutateRoom(() => State.Room.AppendLegacyConfirmed(
-            messageId,
-            senderName,
-            senderNetId,
-            text,
-            sentAt,
-            isLocal,
-            LegacyRoomConfirmedMessageLimit));
+            State.Room.AppendLegacyConfirmed(
+                messageId,
+                senderName,
+                senderNetId,
+                text,
+                sentAt,
+                isLocal,
+                LegacyRoomConfirmedMessageLimit);
+        });
     }
 
     internal void EnterRoom(string roomId)
     {
-        ThrowIfDisposed();
-        string? activeBefore = State.ActiveRoomId;
-        long roomRevisionBefore = State.Room.Revision;
-        State.EnterRoom(roomId);
-        RaiseIfRoomChanged(activeBefore, roomRevisionBefore);
+        RunRoomMutation(
+            () => State.EnterRoom(roomId),
+            LanConnectLobbyRuntimeChatCoordinatorCheckpoint.EnterBeforeRoomMutationLock);
     }
 
     internal void LeaveRoom()
     {
-        ThrowIfDisposed();
-        string? activeBefore = State.ActiveRoomId;
-        long roomRevisionBefore = State.Room.Revision;
-        State.LeaveRoom();
-        RaiseIfRoomChanged(activeBefore, roomRevisionBefore);
+        RunRoomMutation(State.LeaveRoom);
     }
 
     internal Task ConnectServerAsync(
@@ -147,7 +157,8 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
                 _disposed = true;
                 _lifetimeCancellation.Cancel();
             }
-            _disposeTask ??= DisposeCoreAsync();
+            Task syncDrain = GetSyncLeaseDrainTaskLocked();
+            _disposeTask ??= DisposeCoreAsync(syncDrain);
             return new ValueTask(_disposeTask);
         }
     }
@@ -171,8 +182,9 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         }
     }
 
-    private async Task DisposeCoreAsync()
+    private async Task DisposeCoreAsync(Task syncDrain)
     {
+        await syncDrain;
         await _operationGate.WaitAsync();
         try
         {
@@ -188,34 +200,102 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 
     private void OnClientStateChanged()
     {
+        if (!TryAcquireSyncLease())
+        {
+            return;
+        }
+
+        try
+        {
+            StateChanged?.Invoke();
+        }
+        finally
+        {
+            ReleaseSyncLease();
+        }
+    }
+
+    private void RunRoomMutation(
+        Action mutation,
+        LanConnectLobbyRuntimeChatCoordinatorCheckpoint? checkpointBeforeRoomLock = null)
+    {
+        AcquireSyncLease();
+        try
+        {
+            if (checkpointBeforeRoomLock.HasValue)
+            {
+                _checkpoint?.Invoke(checkpointBeforeRoomLock.Value);
+            }
+
+            bool changed;
+            lock (_roomMutationLock)
+            {
+                string? activeRoomBefore = State.ActiveRoomId;
+                long roomRevisionBefore = State.Room.Revision;
+                mutation();
+                changed = !string.Equals(activeRoomBefore, State.ActiveRoomId, StringComparison.Ordinal) ||
+                          roomRevisionBefore != State.Room.Revision;
+            }
+
+            if (changed)
+            {
+                StateChanged?.Invoke();
+            }
+        }
+        finally
+        {
+            ReleaseSyncLease();
+        }
+    }
+
+    private void AcquireSyncLease()
+    {
+        lock (_lifecycleLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _syncLeaseCount++;
+        }
+    }
+
+    private bool TryAcquireSyncLease()
+    {
         lock (_lifecycleLock)
         {
             if (_disposed)
             {
-                return;
+                return false;
+            }
+
+            _syncLeaseCount++;
+            return true;
+        }
+    }
+
+    private void ReleaseSyncLease()
+    {
+        TaskCompletionSource? drained = null;
+        lock (_lifecycleLock)
+        {
+            _syncLeaseCount--;
+            if (_syncLeaseCount == 0 && _syncLeasesDrained != null)
+            {
+                drained = _syncLeasesDrained;
+                _syncLeasesDrained = null;
             }
         }
 
-        StateChanged?.Invoke();
+        drained?.TrySetResult();
     }
 
-    private void RaiseIfRoomChanged(string? activeRoomBefore, long roomRevisionBefore)
+    private Task GetSyncLeaseDrainTaskLocked()
     {
-        if (!string.Equals(activeRoomBefore, State.ActiveRoomId, StringComparison.Ordinal) ||
-            roomRevisionBefore != State.Room.Revision)
+        if (_syncLeaseCount == 0)
         {
-            StateChanged?.Invoke();
+            return Task.CompletedTask;
         }
-    }
 
-    private void MutateRoom(Action mutation)
-    {
-        long revisionBefore = State.Room.Revision;
-        mutation();
-        if (State.Room.Revision != revisionBefore)
-        {
-            StateChanged?.Invoke();
-        }
+        _syncLeasesDrained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return _syncLeasesDrained.Task;
     }
 
     private void ThrowIfDisposed()

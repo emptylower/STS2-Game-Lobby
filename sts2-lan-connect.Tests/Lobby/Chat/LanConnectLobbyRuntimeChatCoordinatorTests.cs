@@ -167,6 +167,41 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
     }
 
     [Fact]
+    public async Task RoomContextSwitchCannotInterleaveBetweenAppendValidationAndMutation()
+    {
+        FakeServerChatClient client = new();
+        TaskCompletionSource appendValidated = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource enterAtLock = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim releaseAppend = new(false);
+        LanConnectLobbyRuntimeChatCoordinator coordinator = new(client, checkpoint =>
+        {
+            if (checkpoint == LanConnectLobbyRuntimeChatCoordinatorCheckpoint.AppendAfterContextValidation)
+            {
+                appendValidated.SetResult();
+                releaseAppend.Wait();
+            }
+            else if (checkpoint == LanConnectLobbyRuntimeChatCoordinatorCheckpoint.EnterBeforeRoomMutationLock &&
+                     appendValidated.Task.IsCompleted)
+            {
+                enterAtLock.TrySetResult();
+            }
+        });
+        coordinator.EnterRoom("room-a");
+
+        Task append = Task.Run(() => coordinator.AppendRoomConfirmed(
+            "room-a", "remote-a", "A", "net-a", "hello", DateTimeOffset.UtcNow, false));
+        await appendValidated.Task;
+        Task enter = Task.Run(() => coordinator.EnterRoom("room-b"));
+        await enterAtLock.Task;
+
+        releaseAppend.Set();
+        await Task.WhenAll(append, enter);
+
+        Assert.Equal("room-b", coordinator.State.ActiveRoomId);
+        Assert.Empty(coordinator.State.Room.Messages);
+    }
+
+    [Fact]
     public void LegacyEchoIsDeduplicatedAgainstConfirmedLocalClientMessageId()
     {
         FakeServerChatClient client = new();
@@ -315,6 +350,83 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect.WaitAsync(TimeSpan.FromSeconds(2)));
         await dispose.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(1, client.DisposeCount);
+    }
+
+    [Fact]
+    public async Task DisposeWaitsForPausedSynchronousMutationLeaseAndRejectsLaterMutation()
+    {
+        FakeServerChatClient client = new();
+        TaskCompletionSource leaseAcquired = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim releaseMutation = new(false);
+        LanConnectLobbyRuntimeChatCoordinator coordinator = new(client, checkpoint =>
+        {
+            if (checkpoint == LanConnectLobbyRuntimeChatCoordinatorCheckpoint.BeginAfterSyncLease)
+            {
+                leaseAcquired.SetResult();
+                releaseMutation.Wait();
+            }
+        });
+        int notifications = 0;
+        coordinator.StateChanged += () => notifications++;
+        Task mutation = Task.Run(() => coordinator.BeginRoomPending(
+            "local", "Player", "net", "hello", DateTimeOffset.UtcNow));
+        await leaseAcquired.Task;
+
+        Task dispose = coordinator.DisposeAsync().AsTask();
+        Assert.False(dispose.IsCompleted);
+        releaseMutation.Set();
+        await Task.WhenAll(mutation, dispose);
+        long revisionAfterDispose = coordinator.State.Room.Revision;
+        int notificationsAfterDispose = notifications;
+
+        Assert.Throws<ObjectDisposedException>(() => coordinator.BeginRoomPending(
+            "later", "Player", "net", "later", DateTimeOffset.UtcNow));
+        Assert.Equal(revisionAfterDispose, coordinator.State.Room.Revision);
+        Assert.Equal(notificationsAfterDispose, notifications);
+    }
+
+    [Fact]
+    public async Task DisposeWaitsForInFlightNotificationAndHandlersCanReenterWithoutLockDeadlock()
+    {
+        FakeServerChatClient client = new();
+        LanConnectLobbyRuntimeChatCoordinator coordinator = new(client);
+        coordinator.EnterRoom("room-a");
+        TaskCompletionSource handlerEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim releaseHandler = new(false);
+        int notifications = 0;
+        coordinator.StateChanged += () =>
+        {
+            notifications++;
+            coordinator.EnterRoom("room-a");
+            handlerEntered.SetResult();
+            releaseHandler.Wait();
+        };
+        Task raise = Task.Run(client.RaiseStateChanged);
+        await handlerEntered.Task;
+
+        Task dispose = coordinator.DisposeAsync().AsTask();
+        Assert.False(dispose.IsCompleted);
+        releaseHandler.Set();
+        await Task.WhenAll(raise, dispose);
+        client.RaiseStateChanged();
+
+        Assert.Equal(1, notifications);
+        Assert.Equal(1, client.DisposeCount);
+    }
+
+    [Fact]
+    public async Task StateChangedHandlerCanBeginAsyncDisposeAndReturnWithoutDeadlock()
+    {
+        FakeServerChatClient client = new();
+        LanConnectLobbyRuntimeChatCoordinator coordinator = new(client);
+        Task? requestedDispose = null;
+        coordinator.StateChanged += () => requestedDispose = coordinator.DisposeAsync().AsTask();
+
+        client.RaiseStateChanged();
+
+        Assert.NotNull(requestedDispose);
+        await requestedDispose!.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(1, client.DisposeCount);
     }
 
