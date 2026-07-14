@@ -479,7 +479,8 @@ internal sealed class LanConnectRotatingServerChatPort : ILanConnectServerSwitch
 
 internal enum LanConnectServerSwitchCoordinatorCheckpoint
 {
-    BeforeGenerationRegistration
+    BeforeGenerationRegistration,
+    AfterGenerationRegistration
 }
 
 internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
@@ -496,7 +497,9 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
     private readonly Action<LanConnectServerSwitchCoordinatorCheckpoint>? _checkpoint;
     private SwitchGeneration? _activeSwitch;
     private Task? _disposeTask;
+    private TaskCompletionSource? _switchLeasesDrained;
     private Exception? _lifetimeCancellationError;
+    private int _switchLeaseCount;
     private bool _disposed;
 
     internal LanConnectServerSwitchCoordinator(
@@ -532,7 +535,8 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
             if (_disposeTask == null)
             {
                 _disposed = true;
-                _disposeTask = DisposeCoreAsync(_lifetimeCancellationCompleted.Task);
+                Task switchDrain = GetSwitchLeaseDrainTaskLocked();
+                _disposeTask = DisposeCoreAsync(_lifetimeCancellationCompleted.Task, switchDrain);
                 beginCancellation = true;
             }
             disposeTask = _disposeTask;
@@ -574,13 +578,16 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
             superseded = _activeSwitch;
             supersededCancellationLease = superseded?.AcquireCancellationLease();
             _activeSwitch = ownGeneration;
+            _switchLeaseCount++;
         }
 
-        CancelSuperseded(superseded, supersededCancellationLease);
         CancellationToken ownToken = ownGeneration.Token;
         bool gateAcquired = false;
         try
         {
+            _checkpoint?.Invoke(LanConnectServerSwitchCoordinatorCheckpoint.AfterGenerationRegistration);
+            CancelSuperseded(superseded, supersededCancellationLease);
+            supersededCancellationLease = null;
             await _switchGate.WaitAsync(ownToken);
             gateAcquired = true;
             ownToken.ThrowIfCancellationRequested();
@@ -612,6 +619,7 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
         }
         finally
         {
+            supersededCancellationLease?.Dispose();
             if (gateAcquired)
             {
                 _switchGate.Release();
@@ -625,20 +633,47 @@ internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
                 }
             }
             ownGeneration.Complete();
+            ReleaseSwitchLease();
         }
     }
 
-    private async Task DisposeCoreAsync(Task cancellationCompleted)
+    private async Task DisposeCoreAsync(Task cancellationCompleted, Task switchDrain)
     {
         await cancellationCompleted;
-        await _switchGate.WaitAsync();
-        _switchGate.Release();
+        await switchDrain;
         _lifetimeCancellation.Dispose();
         _switchGate.Dispose();
         if (_lifetimeCancellationError != null)
         {
             throw _lifetimeCancellationError;
         }
+    }
+
+    private Task GetSwitchLeaseDrainTaskLocked()
+    {
+        if (_switchLeaseCount == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        _switchLeasesDrained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return _switchLeasesDrained.Task;
+    }
+
+    private void ReleaseSwitchLease()
+    {
+        TaskCompletionSource? drained = null;
+        lock (_generationLock)
+        {
+            _switchLeaseCount--;
+            if (_switchLeaseCount == 0 && _switchLeasesDrained != null)
+            {
+                drained = _switchLeasesDrained;
+                _switchLeasesDrained = null;
+            }
+        }
+
+        drained?.TrySetResult();
     }
 
     private static Uri NormalizeServerUri(string baseUrl)

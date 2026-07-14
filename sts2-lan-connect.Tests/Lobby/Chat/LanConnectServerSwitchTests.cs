@@ -257,6 +257,38 @@ public sealed class LanConnectServerSwitchTests
         Assert.DoesNotContain(calls, call => call.StartsWith("connect:", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task DisposeWaitsForRegisteredSwitchBeforeItAcquiresGate()
+    {
+        List<string> calls = new();
+        TaskCompletionSource generationRegistered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim releaseRegistration = new(false);
+        LanConnectServerSwitchCoordinator sut = new(
+            new FakeRoomLifecycle(calls),
+            new FakeSwitchChat(calls),
+            new FakeAddressStore(calls),
+            checkpoint =>
+            {
+                if (checkpoint == LanConnectServerSwitchCoordinatorCheckpoint.AfterGenerationRegistration)
+                {
+                    generationRegistered.SetResult();
+                    releaseRegistration.Wait();
+                }
+            });
+        Task switching = Task.Run(() =>
+            sut.SwitchAsync("https://one.example", "p1", "Silent"));
+        await generationRegistered.Task;
+
+        Task dispose = sut.DisposeAsync().AsTask();
+
+        Assert.False(dispose.IsCompleted);
+        releaseRegistration.Set();
+        await Task.WhenAll(switching, dispose).WaitAsync(TimeSpan.FromSeconds(3));
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => sut.SwitchAsync("https://two.example", "p1", "Silent"));
+        Assert.Empty(calls);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("relative/path")]
