@@ -4136,7 +4136,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         string message = $"剪贴板中包含一个房间邀请码。\n房间ID：{roomIdPreview}";
         if (serverDiffers)
         {
-            message += $"\n\n注意：该邀请指向不同的服务器（{payload.S}），加入时会临时切换。";
+            message += $"\n\n注意：该邀请指向不同的服务器（{payload.S}），加入时会切换到该服务器。";
         }
         if (!string.IsNullOrWhiteSpace(payload.P))
         {
@@ -4171,67 +4171,56 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (payload == null) return;
 
-        bool serverDiffers = !string.Equals(
-            payload.S.TrimEnd('/'),
-            LanConnectConfig.LobbyServerBaseUrl.TrimEnd('/'),
-            StringComparison.OrdinalIgnoreCase);
-
-        string originalServerUrl = LanConnectConfig.LobbyServerBaseUrl;
-        string? originalInputText = _serverBaseUrlInput?.Text;
-
-        if (serverDiffers)
-        {
-            // Update both config AND the settings input field.
-            // PersistSettings() (called by JoinRoomAsync) reads from the input field
-            // and writes it back to config — if we only set the config, the input field
-            // still holds the old URL and PersistSettings() would revert our switch.
-            LanConnectConfig.LobbyServerBaseUrl = payload.S;
-            if (_serverBaseUrlInput != null)
-            {
-                _serverBaseUrlInput.Text = payload.S;
-            }
-            GD.Print($"sts2_lan_connect overlay: switched server for invite join: {originalServerUrl} -> {payload.S}");
-        }
-
         try
         {
-            using LobbyApiClient apiClient = LobbyApiClient.CreateConfigured();
-            IReadOnlyList<LobbyRoomSummary> rooms = await apiClient.GetRoomsAsync();
-            LobbyRoomSummary? targetRoom = null;
-            foreach (LobbyRoomSummary r in rooms)
-            {
-                if (string.Equals(r.RoomId, payload.R, StringComparison.Ordinal))
-                {
-                    targetRoom = r;
-                    break;
-                }
-            }
-
-            if (targetRoom == null)
+            LanConnectInviteServerJoinCoordinator coordinator = new(new InviteServerJoinPorts(this));
+            LanConnectInviteJoinResult result = await coordinator.JoinAsync(payload);
+            if (result == LanConnectInviteJoinResult.RoomNotFound)
             {
                 SetStatus("邀请码对应的房间不存在或已关闭。");
                 LanConnectPopupUtil.ShowInfo("邀请码对应的房间不存在或已关闭，可能房主已经关闭了房间。");
-                RevertInviteServerSwitch(serverDiffers, originalServerUrl, originalInputText);
-                return;
             }
-
-            await BeginJoinRoomAsync(targetRoom, payload.P);
         }
         catch (Exception ex)
         {
             GD.Print($"sts2_lan_connect overlay: invite join failed -> {ex}");
             SetStatus($"通过邀请码加入失败：{ex.Message}");
-            RevertInviteServerSwitch(serverDiffers, originalServerUrl, originalInputText);
         }
     }
 
-    private void RevertInviteServerSwitch(bool serverDiffers, string originalServerUrl, string? originalInputText)
+    private sealed class InviteServerJoinPorts(LanConnectLobbyOverlay overlay) : ILanConnectInviteServerJoinPorts
     {
-        if (!serverDiffers) return;
-        LanConnectConfig.LobbyServerBaseUrl = originalServerUrl;
-        if (_serverBaseUrlInput != null && originalInputText != null)
+        public string CurrentServer => LanConnectConfig.LobbyServerBaseUrl;
+
+        public async Task SwitchServerAsync(string server, CancellationToken cancellationToken)
         {
-            _serverBaseUrlInput.Text = originalInputText;
+            LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance ??
+                throw new InvalidOperationException("Lobby runtime is unavailable.");
+            await runtime.SwitchLobbyServerAsync(server, cancellationToken);
+
+            string currentServer = LanConnectConfig.LobbyServerBaseUrl;
+            if (overlay._serverBaseUrlInput != null)
+            {
+                overlay._serverBaseUrlInput.Text = currentServer;
+            }
+            overlay.UpdateNetworkSummary();
+            overlay.UpdateActionButtons();
+            overlay.SetStatus($"已切换到大厅服务：{currentServer}");
+        }
+
+        public async Task<IReadOnlyList<LobbyRoomSummary>> GetRoomsAsync(CancellationToken cancellationToken)
+        {
+            using LobbyApiClient apiClient = LobbyApiClient.CreateConfigured();
+            return await apiClient.GetRoomsAsync(cancellationToken);
+        }
+
+        public Task BeginJoinAsync(
+            LobbyRoomSummary room,
+            string? password,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return overlay.BeginJoinRoomAsync(room, password);
         }
     }
 
