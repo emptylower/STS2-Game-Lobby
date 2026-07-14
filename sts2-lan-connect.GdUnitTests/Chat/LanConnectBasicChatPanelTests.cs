@@ -51,13 +51,66 @@ public sealed class LanConnectBasicChatPanelTests
         await runner.AwaitIdleFrame();
         AssertThat(FindNode<Label>(panel, "ChatChannelTitle").Text).IsEqual("房间聊天");
         AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
-            .IsEqual("房间聊天可用");
+            .IsEqual("请输入消息");
 
         panel.Bind(server, _ => Task.CompletedTask, _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
         AssertThat(FindNode<Label>(panel, "ChatChannelTitle").Text).IsEqual("频道聊天");
         AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
-            .IsEqual("频道可用");
+            .IsEqual("请输入消息");
+    }
+
+    [TestCase]
+    public async Task Rich_entity_draft_shows_budget_but_legacy_send_is_blocked_without_clearing()
+    {
+        LanConnectChatChannelState state = EnabledState(rich: true);
+        state.RichDraft.InsertEntity(new LanConnectEmojiRun("heart"));
+        int sendCalls = 0;
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(state, _ =>
+        {
+            sendCalls++;
+            return Task.CompletedTask;
+        }, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        Button send = FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName);
+        Label budget = FindNode<Label>(panel, LanConnectConstants.ChatDraftBudgetName);
+        AssertThat(send.Disabled).IsTrue();
+        AssertThat(budget.Text.Contains("字符 0/300 · 分段 1/32 · 实体 1/12", StringComparison.Ordinal))
+            .IsTrue();
+        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
+            .IsEqual("当前发送通道尚未启用富内容发送");
+
+        send.EmitSignal(Button.SignalName.Pressed);
+
+        AssertThat(sendCalls).IsEqual(0);
+        AssertThat(state.RichDraft.Runs).ContainsExactly(new LanConnectEmojiRun("heart"));
+    }
+
+    [TestCase]
+    public async Task Closing_and_switching_channels_never_flattens_ordered_rich_runs()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        LanConnectRichDraft draft = fixture.State.Server.RichDraft;
+        draft.ReplaceAllWithText("before ");
+        draft.InsertEntity(new LanConnectEmojiRun("heart"));
+        draft.InsertText(" after");
+        fixture.Overlay.SelectChannelForTests(LanConnectChatChannel.Server);
+        await fixture.Overlay.RefreshForTests();
+        await fixture.Runner.AwaitIdleFrame();
+
+        await fixture.Overlay.CloseForTests();
+        await fixture.Overlay.OpenForTests();
+        fixture.Overlay.SelectChannelForTests(LanConnectChatChannel.Room);
+        fixture.Overlay.SelectChannelForTests(LanConnectChatChannel.Server);
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(draft.Runs).ContainsExactly(
+            new LanConnectTextRun("before "),
+            new LanConnectEmojiRun("heart"),
+            new LanConnectTextRun(" after"));
     }
 
     [TestCase]
@@ -223,7 +276,8 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(sentTexts.Count).IsEqual(1);
         AssertThat(sentTexts[0]).IsEqual("new draft");
         AssertThat(state.Draft).IsEqual(string.Empty);
-        AssertThat(input.Text).IsEqual(string.Empty);
+        AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).Text)
+            .IsEqual(string.Empty);
         AssertThat(panel.TestState.InputEditable).IsTrue();
         AssertThat(panel.TestState.FocusOwnerName).IsEqual(LanConnectConstants.ChatDraftInputName);
     }
@@ -460,7 +514,7 @@ public sealed class LanConnectBasicChatPanelTests
         releaseA.SetResult();
         await runner.AwaitIdleFrame();
 
-        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text).IsEqual("频道可用");
+        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text).IsEqual("请输入消息");
         AssertThat(panel.TestState.InputEditable).IsTrue();
     }
 
@@ -701,7 +755,8 @@ public sealed class LanConnectBasicChatPanelTests
 
         AssertThat(sendCount).IsEqual(1);
         AssertThat(sentText).IsEqual("send from text edit");
-        AssertThat(input.Text).IsEqual(string.Empty);
+        AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).Text)
+            .IsEqual(string.Empty);
     }
 
     [TestCase]
@@ -730,7 +785,8 @@ public sealed class LanConnectBasicChatPanelTests
         await runner.AwaitIdleFrame();
 
         AssertThat(sendCount).IsEqual(0);
-        AssertThat(input.Text).IsEqual("first line\n");
+        AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).Text)
+            .IsEqual("first line\n");
         AssertThat(state.Draft).IsEqual("first line\n");
     }
 
@@ -745,45 +801,49 @@ public sealed class LanConnectBasicChatPanelTests
         panel.Bind(EnabledState(), _ => Task.CompletedTask, _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
 
-        TextEdit input = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName);
         SetDraft(panel, "one");
         await runner.AwaitIdleFrame();
-        float oneLineHeight = input.CustomMinimumSize.Y;
+        float oneLineHeight = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName)
+            .CustomMinimumSize.Y;
 
         SetDraft(panel, "one\ntwo\nthree");
         await runner.AwaitIdleFrame();
-        float threeLineHeight = input.CustomMinimumSize.Y;
+        float threeLineHeight = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName)
+            .CustomMinimumSize.Y;
 
         SetDraft(panel, "one\ntwo\nthree\nfour\nfive");
         await runner.AwaitIdleFrame();
-        float fiveLineHeight = input.CustomMinimumSize.Y;
+        float fiveLineHeight = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName)
+            .CustomMinimumSize.Y;
 
         AssertThat(threeLineHeight).IsGreater(oneLineHeight);
         AssertThat(fiveLineHeight).IsEqual(threeLineHeight);
     }
 
     [TestCase]
-    public async Task Draft_rejects_middle_emoji_insert_at_limit_without_dropping_tail_or_jumping_to_end()
+    public async Task Draft_over_scalar_limit_preserves_text_and_disables_send_with_specific_reason()
     {
         LanConnectChatChannelState state = EnabledState();
         LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
         using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
         panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
-        string accepted = new('a', 500);
+        string accepted = new('a', 300);
         SetDraft(panel, accepted);
 
         TextEdit input = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName);
         input.SetCaretLine(0);
-        input.SetCaretColumn(250);
+        input.SetCaretColumn(150);
         input.InsertTextAtCaret("😀");
         await runner.AwaitIdleFrame();
 
-        AssertThat(input.Text).IsEqual(accepted);
-        AssertThat(state.Draft).IsEqual(accepted);
-        AssertThat(LanConnectChatTextProtocol.CountUnicodeScalars(input.Text)).IsEqual(500);
-        AssertThat(input.GetCaretColumn()).IsEqual(250);
-        AssertThat(input.Text[^1].ToString()).IsEqual("a");
+        TextEdit rebuilt = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName);
+        AssertThat(state.Draft).IsEqual(accepted[..150] + "😀" + accepted[150..]);
+        AssertThat(LanConnectChatTextProtocol.CountUnicodeScalars(rebuilt.Text)).IsEqual(301);
+        AssertThat(FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).Disabled).IsTrue();
+        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
+            .IsEqual("消息文字超过 300 字符");
+        AssertThat(rebuilt.Text[^1].ToString()).IsEqual("a");
     }
 
     private static LanConnectChatChannelState WithDeliveryStates()
@@ -799,7 +859,7 @@ public sealed class LanConnectBasicChatPanelTests
         return state;
     }
 
-    private static LanConnectChatChannelState EnabledState()
+    private static LanConnectChatChannelState EnabledState(bool rich = false)
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
         state.Apply(new ServerChatInboundEnvelope
@@ -808,7 +868,12 @@ public sealed class LanConnectBasicChatPanelTests
             InstanceId = "panel-tests",
             HistoryEpoch = 1,
             ChatEnabled = true,
-            EnabledFeatures = new ServerChatEnabledFeatures()
+            EnabledFeatures = new ServerChatEnabledFeatures
+            {
+                RichContentVersion = rich ? 1 : 0,
+                EmojiSetVersion = rich ? 1 : 0,
+                ItemRefVersion = rich ? 1 : 0
+            }
         });
         state.SetPresentationForTests(LanConnectServerChatPresentation.Ready);
         return state;

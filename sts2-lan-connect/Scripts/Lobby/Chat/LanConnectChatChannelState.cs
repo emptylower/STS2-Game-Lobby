@@ -299,6 +299,21 @@ internal sealed class LanConnectChatChannelState
         }
     }
 
+    internal LanConnectChatFeatureVersions EnabledRichFeatures
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return new LanConnectChatFeatureVersions(
+                    _enabledFeatures.RichContentVersion,
+                    _enabledFeatures.EmojiSetVersion,
+                    _enabledFeatures.ItemRefVersion,
+                    0);
+            }
+        }
+    }
+
     internal int UnreadCount
     {
         get

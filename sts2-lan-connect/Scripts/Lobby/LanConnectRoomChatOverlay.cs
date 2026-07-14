@@ -587,13 +587,6 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             ? chat.Room
             : chat.Server;
         if (_chatPanel?.FindChild(
-                LanConnectConstants.ChatDraftInputName,
-                recursive: true,
-                owned: false) is TextEdit input)
-        {
-            state.SetDraft(input.Text);
-        }
-        if (_chatPanel?.FindChild(
                 LanConnectConstants.ChatMessagesScrollName,
                 recursive: true,
                 owned: false) is ScrollContainer scroll)

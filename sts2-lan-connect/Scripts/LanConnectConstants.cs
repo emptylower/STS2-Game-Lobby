@@ -72,6 +72,14 @@ internal static class LanConnectConstants
 
     public const string ChatDraftInputName = "ChatDraftInput";
 
+    public const string ChatRichDraftEditorName = "ChatRichDraftEditor";
+
+    public const string ChatDraftRunPrefix = "ChatDraftRun_";
+
+    public const string ChatEntityChipPrefix = "ChatEntityChip_";
+
+    public const string ChatDraftBudgetName = "ChatDraftBudget";
+
     public const string ChatSendButtonName = "ChatSendButton";
 
     public const string ChatStatusLabelName = "ChatStatusLabel";

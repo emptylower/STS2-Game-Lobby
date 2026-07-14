@@ -30,8 +30,6 @@ internal readonly record struct LanConnectBasicChatPanelTestState(
 
 internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 {
-    private const int MaxDraftScalars = 500;
-
     private readonly record struct ChatBinding(
         long Generation,
         long ContextGeneration,
@@ -68,7 +66,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private ScrollContainer? _messagesScroll;
     private VBoxContainer? _messagesList;
     private Button? _newMessagesButton;
-    private TextEdit? _draftInput;
+    private LanConnectRichDraftEditor? _draftEditor;
     private Button? _sendButton;
     private Label? _statusLabel;
     private ConfirmationDialog? _unknownConfirmation;
@@ -76,22 +74,20 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private readonly HashSet<SendOperationKey> _sendInFlight = new();
     private readonly HashSet<RetryOperationKey> _retryInFlight = new();
     private long _renderedRevision = -1;
+    private string? _renderedMessageFingerprint;
     private long _bindingGeneration;
     private long _boundContextGeneration;
     private long _scrollInteractionGeneration;
     private bool _suppressScrollChange;
-    private bool _suppressDraftTextChanged;
     private bool _compactLayout;
-    private string _acceptedDraftText = string.Empty;
     private string _operationStatus = string.Empty;
 
     internal LanConnectChatChannelState? State => _state;
 
     internal bool DraftHasFocus =>
-        _draftInput != null &&
-        GodotObject.IsInstanceValid(_draftInput) &&
-        IsInsideTree() &&
-        ReferenceEquals(GetViewport().GuiGetFocusOwner(), _draftInput);
+        _draftEditor != null &&
+        GodotObject.IsInstanceValid(_draftEditor) &&
+        _draftEditor.HasEditorFocus;
 
     internal bool PopupVisible =>
         _unknownConfirmation != null &&
@@ -133,9 +129,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 focusOwnerName = GetViewport().GuiGetFocusOwner()?.Name.ToString() ?? string.Empty;
             }
 
-            bool inputEditable = _draftInput != null &&
-                                 GodotObject.IsInstanceValid(_draftInput) &&
-                                 _draftInput.Editable;
+            bool inputEditable = _draftEditor != null &&
+                                 GodotObject.IsInstanceValid(_draftEditor) &&
+                                 _draftEditor.Editable;
 
             return new LanConnectBasicChatPanelTestState(
                 messages.Count,
@@ -151,7 +147,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 focusOwnerName,
                 RectForTests(this),
                 RectForTests(_messagesScroll),
-                RectForTests(_draftInput),
+                RectForTests(_draftEditor),
                 RectForTests(_sendButton),
                 RetryRectsForTests(),
                 RectForTests(_newMessagesButton),
@@ -218,13 +214,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _retry = retry;
         _blockingModalVisible = blockingModalVisible ?? NeverBlocking;
         _renderedRevision = -1;
+        _renderedMessageFingerprint = null;
         _operationStatus = string.Empty;
         _pendingUnknownConfirmation = null;
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
         {
             _unknownConfirmation.Hide();
         }
-        if (_draftInput != null)
+        if (_draftEditor != null)
         {
             ApplyBoundState();
         }
@@ -257,11 +254,11 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     internal void FocusDraft()
     {
         if (!InteractionBlocked &&
-            _draftInput != null &&
-            GodotObject.IsInstanceValid(_draftInput) &&
-            _draftInput.Editable)
+            _draftEditor != null &&
+            GodotObject.IsInstanceValid(_draftEditor) &&
+            _draftEditor.Editable)
         {
-            _draftInput.GrabFocus();
+            _draftEditor.FocusEditor();
         }
     }
 
@@ -272,14 +269,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             _messagesScroll.CustomMinimumSize = new Vector2(0, compact ? 72 : 140);
         }
-        UpdateDraftHeight();
+        _draftEditor?.SetCompactLayout(compact);
     }
 
     internal void ReleaseDraftFocus()
     {
         if (DraftHasFocus)
         {
-            _draftInput!.ReleaseFocus();
+            _draftEditor!.ReleaseEditorFocus();
         }
     }
 
@@ -295,17 +292,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     internal void HandleDraftEnter(bool shiftPressed)
     {
         if (InteractionBlocked ||
-            _draftInput == null ||
-            !GodotObject.IsInstanceValid(_draftInput) ||
-            !_draftInput.Editable)
+            _draftEditor == null ||
+            !GodotObject.IsInstanceValid(_draftEditor) ||
+            !_draftEditor.Editable)
         {
             return;
         }
 
         if (shiftPressed)
         {
-            _draftInput.InsertTextAtCaret("\n");
-            UpdateDraftHeight();
+            _draftEditor.InsertNewline();
             return;
         }
 
@@ -320,7 +316,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             AddFocusable(controls, _newMessagesButton);
         }
-        AddFocusable(controls, _draftInput);
+        AddFocusable(controls, _draftEditor?.FocusTarget);
         AddFocusable(controls, _sendButton);
         if (_messagesList != null && GodotObject.IsInstanceValid(_messagesList))
         {
@@ -394,23 +390,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         inputRow.AddThemeConstantOverride("separation", 8);
         AddChild(inputRow);
 
-        _draftInput = new TextEdit
+        _draftEditor = new LanConnectRichDraftEditor
         {
-            Name = LanConnectConstants.ChatDraftInputName,
-            PlaceholderText = "输入消息",
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(0, 38),
-            FocusMode = FocusModeEnum.All,
-            WrapMode = TextEdit.LineWrappingMode.Boundary,
-            AutowrapMode = TextServer.AutowrapMode.WordSmart,
-            ScrollFitContentHeight = false,
-            TabInputMode = false
+            Name = LanConnectConstants.ChatRichDraftEditorName,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
         };
-        ApplyInputStyle(_draftInput);
-        _draftInput.Connect(TextEdit.SignalName.TextChanged, Callable.From(OnDraftChanged));
-        _draftInput.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnDraftGuiInput));
-        _draftInput.Connect(Control.SignalName.Resized, Callable.From(UpdateDraftHeight));
-        inputRow.AddChild(_draftInput);
+        _draftEditor.SubmitRequested += () => HandleDraftEnter(shiftPressed: false);
+        _draftEditor.DraftChanged += OnRichDraftChanged;
+        inputRow.AddChild(_draftEditor);
 
         _sendButton = CreateButton("发送", accent: true);
         _sendButton.Name = LanConnectConstants.ChatSendButtonName;
@@ -437,14 +424,18 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private void ApplyBoundState()
     {
         if (_state == null ||
-            _draftInput == null ||
-            !GodotObject.IsInstanceValid(_draftInput))
+            _draftEditor == null ||
+            !GodotObject.IsInstanceValid(_draftEditor))
         {
             return;
         }
 
-        SetDraftTextFromState(_state.Draft, moveCaretToEnd: true);
-        UpdateDraftHeight();
+        _draftEditor.Bind(
+            _state.RichDraft,
+            _state.EnabledRichFeatures,
+            LanConnectConfig.GetEffectivePlayerDisplayName(),
+            AccessibleDraftLabel);
+        _draftEditor.SetCompactLayout(_compactLayout);
         _state.SetVisible(IsInsideTree() && IsVisibleInTree());
         Refresh();
     }
@@ -464,6 +455,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             ReferenceEquals(key.State, _state) && key.ContextGeneration != currentContext);
         _boundContextGeneration = currentContext;
         _renderedRevision = -1;
+        _renderedMessageFingerprint = null;
         _operationStatus = string.Empty;
         _pendingUnknownConfirmation = null;
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
@@ -480,11 +472,6 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
 
-        if (_draftInput != null && GodotObject.IsInstanceValid(_draftInput))
-        {
-            _state.SetDraft(_draftInput.Text);
-        }
-
         if (_messagesScroll != null &&
             GodotObject.IsInstanceValid(_messagesScroll) &&
             _messagesScroll.GetVScrollBar() is ScrollBar bar)
@@ -497,7 +484,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     {
         if (!TryCaptureBinding(out ChatBinding binding) ||
             _messagesList == null || !GodotObject.IsInstanceValid(_messagesList) ||
-            _draftInput == null || !GodotObject.IsInstanceValid(_draftInput) ||
+            _draftEditor == null || !GodotObject.IsInstanceValid(_draftEditor) ||
             _sendButton == null || !GodotObject.IsInstanceValid(_sendButton))
         {
             return;
@@ -508,25 +495,35 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         IReadOnlyList<ServerChatMessageState> messages = state.Messages;
         bool atBottom = state.IsAtBottom;
         double scrollOffset = state.ScrollOffset;
+        string focusedMessageControlName = FocusedDescendantName(_messagesList);
+        string messageFingerprint = BuildMessageFingerprint(state, messages);
+        bool rebuildMessages = !string.Equals(
+            _renderedMessageFingerprint,
+            messageFingerprint,
+            StringComparison.Ordinal);
         _suppressScrollChange = true;
-        foreach (Node child in _messagesList.GetChildren())
+        if (rebuildMessages)
         {
-            _messagesList.RemoveChild(child);
-            child.Free();
-        }
-
-        if (messages.Count == 0)
-        {
-            Label empty = CreateLabel("还没有消息", 13, TextMutedColor);
-            empty.HorizontalAlignment = HorizontalAlignment.Center;
-            _messagesList.AddChild(empty);
-        }
-        else
-        {
-            for (int index = 0; index < messages.Count; index++)
+            foreach (Node child in _messagesList.GetChildren())
             {
-                _messagesList.AddChild(BuildMessageRow(state, messages[index], index));
+                _messagesList.RemoveChild(child);
+                child.Free();
             }
+
+            if (messages.Count == 0)
+            {
+                Label empty = CreateLabel("还没有消息", 13, TextMutedColor);
+                empty.HorizontalAlignment = HorizontalAlignment.Center;
+                _messagesList.AddChild(empty);
+            }
+            else
+            {
+                for (int index = 0; index < messages.Count; index++)
+                {
+                    _messagesList.AddChild(BuildMessageRow(state, messages[index], index));
+                }
+            }
+            _renderedMessageFingerprint = messageFingerprint;
         }
 
         if (_messagesScroll?.GetVScrollBar() is ScrollBar bar)
@@ -540,11 +537,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
 
-        if (_draftInput.Text != state.Draft)
-        {
-            SetDraftTextFromState(state.Draft, moveCaretToEnd: true);
-            UpdateDraftHeight();
-        }
+        _draftEditor.UpdateBudgetContext(
+            state.EnabledRichFeatures,
+            LanConnectConfig.GetEffectivePlayerDisplayName());
+        RestoreMessageFocus(focusedMessageControlName);
         UpdateAvailability();
         UpdateNewMessagesButton();
         _renderedRevision = renderedRevision;
@@ -637,16 +633,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         if (InteractionBlocked ||
             !TryCaptureBinding(out ChatBinding binding) ||
             !CanTouchControls(binding) ||
-            _draftInput == null || !GodotObject.IsInstanceValid(_draftInput) ||
+            _draftEditor == null || !GodotObject.IsInstanceValid(_draftEditor) ||
             _sendButton == null || !GodotObject.IsInstanceValid(_sendButton))
         {
             return;
         }
 
-        string text = _draftInput.Text;
-        if (string.IsNullOrWhiteSpace(text))
+        string text = binding.State.Draft;
+        if (!CanSendCurrentDraft())
         {
-            _operationStatus = "请输入消息";
+            _operationStatus = CurrentDraftBlockingReason();
             UpdateAvailability();
             return;
         }
@@ -656,13 +652,13 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             UpdateAvailability();
             return;
         }
-
         SendOperationKey operationKey = new(binding.State, binding.ContextGeneration);
         if (!_sendInFlight.Add(operationKey))
         {
             return;
         }
         UpdateAvailability();
+        bool restoreFocus = false;
         try
         {
             await binding.Send(text);
@@ -670,15 +666,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 binding.ContextGeneration,
                 binding.DraftGeneration,
                 text);
-            if (!CanTouchControls(binding) || _draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
+            if (!CanTouchControls(binding) || _draftEditor == null || !GodotObject.IsInstanceValid(_draftEditor))
             {
                 return;
             }
 
-            SetDraftTextFromState(binding.State.Draft, moveCaretToEnd: true);
-            UpdateDraftHeight();
             _operationStatus = "已提交";
-            _draftInput.GrabFocus();
+            _draftEditor.RefreshFromDraft(preserveFocus: false);
+            restoreFocus = true;
         }
         catch (Exception ex)
         {
@@ -693,6 +688,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             if (CanTouchSameContext(binding))
             {
                 UpdateAvailability();
+                if (restoreFocus && _draftEditor != null && GodotObject.IsInstanceValid(_draftEditor))
+                {
+                    _draftEditor.FocusEditor();
+                }
             }
         }
     }
@@ -823,204 +822,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
     }
 
-    private void OnDraftChanged()
+    private void OnRichDraftChanged()
     {
-        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
-        {
-            return;
-        }
-        if (_suppressDraftTextChanged)
-        {
-            return;
-        }
-
-        LanConnectChatDraftLimitResult limited = LanConnectChatDraftLimiter.Limit(
-            _acceptedDraftText,
-            _draftInput.Text,
-            GetDraftCaretUtf16Offset(),
-            MaxDraftScalars);
-        if (!string.Equals(_draftInput.Text, limited.Text, StringComparison.Ordinal))
-        {
-            _suppressDraftTextChanged = true;
-            _draftInput.Text = limited.Text;
-            _suppressDraftTextChanged = false;
-            SetDraftCaretUtf16Offset(limited.CaretUtf16Offset);
-        }
-        _acceptedDraftText = limited.Text;
-        _state?.SetDraft(limited.Text);
-        UpdateDraftHeight();
-    }
-
-    private void OnDraftGuiInput(InputEvent inputEvent)
-    {
-        if (inputEvent is not InputEventKey
-            {
-                Pressed: true,
-                Echo: false,
-                Keycode: Key.Enter or Key.KpEnter
-            } keyEvent)
-        {
-            return;
-        }
-
-        bool blocked = InteractionBlocked;
-        LanConnectChatInputAction action = LanConnectChatInputRouter.RouteEnter(
-            inputFocused: true,
-            shiftPressed: keyEvent.ShiftPressed,
-            blockingModalVisible: blocked);
-        switch (action)
-        {
-            case LanConnectChatInputAction.Send:
-                HandleDraftEnter(shiftPressed: false);
-                _draftInput?.AcceptEvent();
-                break;
-            case LanConnectChatInputAction.InsertNewline:
-                HandleDraftEnter(shiftPressed: true);
-                _draftInput?.AcceptEvent();
-                break;
-            case LanConnectChatInputAction.None when blocked:
-                _draftInput?.AcceptEvent();
-                break;
-        }
-    }
-
-    private void UpdateDraftHeight()
-    {
-        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
-        {
-            return;
-        }
-
-        int visibleLines = Math.Clamp(_draftInput.GetTotalVisibleLineCount(), 1, 3);
-        float lineHeight = Math.Max(18, _draftInput.GetLineHeight());
-        float verticalPadding = _compactLayout ? 14 : 20;
-        _draftInput.CustomMinimumSize = new Vector2(0, verticalPadding + visibleLines * lineHeight);
-    }
-
-    private void MoveDraftCaretToEnd()
-    {
-        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
-        {
-            return;
-        }
-
-        int lastLine = Math.Max(0, _draftInput.GetLineCount() - 1);
-        _draftInput.SetCaretLine(lastLine);
-        _draftInput.SetCaretColumn(CountRunes(_draftInput.GetLine(lastLine)));
-    }
-
-    private void SetDraftTextFromState(string text, bool moveCaretToEnd)
-    {
-        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
-        {
-            return;
-        }
-
-        LanConnectChatDraftLimitResult limited = LanConnectChatDraftLimiter.Limit(
-            string.Empty,
-            text ?? string.Empty,
-            (text ?? string.Empty).Length,
-            MaxDraftScalars);
-        _suppressDraftTextChanged = true;
-        _draftInput.Text = limited.Text;
-        _suppressDraftTextChanged = false;
-        _acceptedDraftText = limited.Text;
-        if (_state != null && !string.Equals(_state.Draft, limited.Text, StringComparison.Ordinal))
-        {
-            _state.SetDraft(limited.Text);
-        }
-        if (moveCaretToEnd)
-        {
-            MoveDraftCaretToEnd();
-        }
-        else
-        {
-            SetDraftCaretUtf16Offset(limited.CaretUtf16Offset);
-        }
-    }
-
-    private int GetDraftCaretUtf16Offset()
-    {
-        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
-        {
-            return 0;
-        }
-
-        int caretLine = Math.Clamp(_draftInput.GetCaretLine(), 0, _draftInput.GetLineCount() - 1);
-        int offset = 0;
-        for (int line = 0; line < caretLine; line++)
-        {
-            offset += _draftInput.GetLine(line).Length + 1;
-        }
-        return offset + Utf16OffsetAtRuneIndex(
-            _draftInput.GetLine(caretLine),
-            _draftInput.GetCaretColumn());
-    }
-
-    private void SetDraftCaretUtf16Offset(int utf16Offset)
-    {
-        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
-        {
-            return;
-        }
-
-        int remaining = Math.Clamp(utf16Offset, 0, _draftInput.Text.Length);
-        int lastLine = Math.Max(0, _draftInput.GetLineCount() - 1);
-        for (int line = 0; line <= lastLine; line++)
-        {
-            string lineText = _draftInput.GetLine(line);
-            if (remaining <= lineText.Length || line == lastLine)
-            {
-                _draftInput.SetCaretLine(line);
-                _draftInput.SetCaretColumn(RuneIndexAtUtf16Offset(lineText, remaining));
-                return;
-            }
-            remaining -= lineText.Length + 1;
-        }
-    }
-
-    private static int CountRunes(string text)
-    {
-        int count = 0;
-        foreach (System.Text.Rune _ in text.EnumerateRunes())
-        {
-            count++;
-        }
-        return count;
-    }
-
-    private static int RuneIndexAtUtf16Offset(string text, int utf16Offset)
-    {
-        int clamped = Math.Clamp(utf16Offset, 0, text.Length);
-        int consumed = 0;
-        int count = 0;
-        foreach (System.Text.Rune rune in text.EnumerateRunes())
-        {
-            int next = consumed + rune.Utf16SequenceLength;
-            if (next > clamped)
-            {
-                break;
-            }
-            consumed = next;
-            count++;
-        }
-        return count;
-    }
-
-    private static int Utf16OffsetAtRuneIndex(string text, int runeIndex)
-    {
-        int target = Math.Max(0, runeIndex);
-        int offset = 0;
-        int count = 0;
-        foreach (System.Text.Rune rune in text.EnumerateRunes())
-        {
-            if (count++ >= target)
-            {
-                break;
-            }
-            offset += rune.Utf16SequenceLength;
-        }
-        return offset;
+        _operationStatus = string.Empty;
+        UpdateAvailability();
     }
 
     private static bool NeverBlocking() => false;
@@ -1101,7 +906,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private void UpdateAvailability()
     {
         if (_state == null ||
-            _draftInput == null || !GodotObject.IsInstanceValid(_draftInput) ||
+            _draftEditor == null || !GodotObject.IsInstanceValid(_draftEditor) ||
             _sendButton == null || !GodotObject.IsInstanceValid(_sendButton) ||
             _statusLabel == null || !GodotObject.IsInstanceValid(_statusLabel))
         {
@@ -1117,14 +922,17 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 ? "房间聊天"
                 : "频道聊天";
         }
-        _draftInput.Editable = editable;
-        _sendButton.Disabled = !editable;
+        _draftEditor.Editable = editable;
+        _sendButton.Disabled = !editable ||
+            (!CanSendCurrentDraft() && !IsBlankDraft());
         _statusLabel.Text = ready && !string.IsNullOrEmpty(_operationStatus)
             ? _operationStatus
+            : ready && !CanSendCurrentDraft()
+                ? CurrentDraftBlockingReason()
             : PresentationText(_state);
         _statusLabel.AddThemeColorOverride(
             "font_color",
-            ready ? TextMutedColor : WarningColor);
+            ready && CanSendCurrentDraft() ? TextMutedColor : WarningColor);
     }
 
     private void UpdateNewMessagesButton()
@@ -1139,6 +947,60 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         int count = _state.NewMessagesBelowCount;
         _newMessagesButton.Visible = count > 0;
         _newMessagesButton.Text = count > 0 ? $"有 {count} 条新消息" : string.Empty;
+    }
+
+    private bool CanSendCurrentDraft() =>
+        _draftEditor != null &&
+        _draftEditor.Budget.CanSubmit &&
+        _draftEditor.Budget.EntityCount == 0;
+
+    private bool IsBlankDraft() =>
+        _draftEditor?.IsBlank == true;
+
+    private string FocusedDescendantName(Control root)
+    {
+        if (!IsInsideTree() || GetViewport().GuiGetFocusOwner() is not Control focusOwner)
+        {
+            return string.Empty;
+        }
+        return root.IsAncestorOf(focusOwner) ? focusOwner.Name.ToString() : string.Empty;
+    }
+
+    private void RestoreMessageFocus(string controlName)
+    {
+        if (string.IsNullOrEmpty(controlName) || _messagesList == null)
+        {
+            return;
+        }
+        if (_messagesList.FindChild(
+                controlName,
+                recursive: true,
+                owned: false) is not Control replacement)
+        {
+            return;
+        }
+        Callable.From(() =>
+        {
+            if (GodotObject.IsInstanceValid(replacement) && replacement.IsInsideTree())
+            {
+                replacement.GrabFocus();
+            }
+        }).CallDeferred();
+    }
+
+    private string CurrentDraftBlockingReason()
+    {
+        if (_draftEditor == null)
+        {
+            return "聊天暂不可用";
+        }
+        if (!string.IsNullOrEmpty(_draftEditor.BlockingReason))
+        {
+            return _draftEditor.BlockingReason;
+        }
+        return _draftEditor.Budget.EntityCount > 0
+            ? "当前发送通道尚未启用富内容发送"
+            : string.Empty;
     }
 
     private void UpdateStateVisibility()
@@ -1228,6 +1090,47 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             _ => "聊天暂不可用"
         };
 
+    private static string AccessibleDraftLabel(LanConnectDraftRun run) => run switch
+    {
+        LanConnectEmojiRun => "Emoji",
+        LanConnectItemRun { ItemType: "card" } => "卡牌",
+        LanConnectItemRun { ItemType: "relic" } => "遗物",
+        LanConnectItemRun { ItemType: "potion" } => "药水",
+        _ => "消息实体"
+    };
+
+    private string BuildMessageFingerprint(
+        LanConnectChatChannelState state,
+        IReadOnlyList<ServerChatMessageState> messages)
+    {
+        StringBuilder builder = new();
+        for (int index = 0; index < messages.Count; index++)
+        {
+            ServerChatMessageState message = messages[index];
+            AppendFingerprint(builder, message.MessageId);
+            AppendFingerprint(builder, message.ClientMessageId);
+            AppendFingerprint(builder, message.SenderName);
+            AppendFingerprint(builder, message.Text);
+            AppendFingerprint(builder, message.ErrorCode);
+            AppendFingerprint(builder, message.ErrorMessage);
+            builder.Append('|').Append((int)message.Delivery)
+                .Append('|').Append(message.IsLocal)
+                .Append('|').Append(message.DisconnectedAfterUnknown)
+                .Append('|').Append(message.Sequence)
+                .Append('|').Append(message.SentAt.UtcTicks);
+            string stableKey = RetryStableKey(message, index);
+            builder.Append('|').Append(_retryInFlight.Contains(
+                new RetryOperationKey(state, state.ContextGeneration, stableKey)));
+        }
+        return builder.ToString();
+    }
+
+    private static void AppendFingerprint(StringBuilder builder, string? value)
+    {
+        string text = value ?? string.Empty;
+        builder.Append('|').Append(text.Length).Append(':').Append(text);
+    }
+
     private static string RetryNodeSuffix(ServerChatMessageState message, int index)
     {
         string value = string.IsNullOrWhiteSpace(message.ClientMessageId)
@@ -1281,15 +1184,6 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         button.AddThemeStyleboxOverride("pressed", CreateButtonStyle(background.Darkened(0.06f), AccentColor));
         button.AddThemeColorOverride("font_color", TextStrongColor);
         return button;
-    }
-
-    private static void ApplyInputStyle(TextEdit input)
-    {
-        input.AddThemeColorOverride("font_color", TextStrongColor);
-        input.AddThemeColorOverride("font_placeholder_color", TextMutedColor);
-        input.AddThemeStyleboxOverride("normal", CreateButtonStyle(new Color(0.11f, 0.11f, 0.13f, 0.98f), new Color(0.34f, 0.32f, 0.29f, 1f)));
-        input.AddThemeStyleboxOverride("focus", CreateButtonStyle(new Color(0.13f, 0.13f, 0.15f, 1f), AccentColor));
-        input.AddThemeStyleboxOverride("read_only", CreateButtonStyle(new Color(0.09f, 0.09f, 0.1f, 0.9f), new Color(0.28f, 0.27f, 0.25f, 1f)));
     }
 
     private static void AddFocusable(List<Control> controls, Control? control)
