@@ -101,6 +101,18 @@ function assertAllowedKeys(
   }
 }
 
+function assertOwnRequiredKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  label: string,
+): void {
+  for (const key of required) {
+    if (!Object.hasOwn(value, key)) {
+      throw new ChatProtocolError("invalid_content", `${label} is missing required field: ${key}`);
+    }
+  }
+}
+
 function countUnicodeScalars(text: string): number {
   return Array.from(text).length;
 }
@@ -222,6 +234,7 @@ function canonicalizeContent(
     throw new ChatProtocolError("invalid_content", "content must be an object");
   }
 
+  assertOwnRequiredKeys(input, ["formatVersion", "segments"], "content");
   assertAllowedKeys(input, CONTENT_ALLOWED_KEYS, "content");
 
   if (input.formatVersion !== 1) {
@@ -246,12 +259,14 @@ function canonicalizeContent(
       throw new ChatProtocolError("invalid_content", "segment must be an object");
     }
 
+    assertOwnRequiredKeys(segment, ["kind"], "segment");
     const kind = segment.kind;
     if (typeof kind !== "string") {
       throw new ChatProtocolError("invalid_content", "segment.kind must be a string");
     }
 
     if (kind === "text") {
+      assertOwnRequiredKeys(segment, ["text"], "text segment");
       assertAllowedKeys(segment, TEXT_SEGMENT_ALLOWED_KEYS, "text segment");
       if (typeof segment.text !== "string") {
         throw new ChatProtocolError("invalid_content", "text segment text must be a string");
@@ -274,6 +289,7 @@ function canonicalizeContent(
       if (legacyRichKindPrecedence && features.richContentVersion !== 1) {
         throw new ChatProtocolError("feature_disabled", "emoji segments are not enabled");
       }
+      assertOwnRequiredKeys(segment, ["emojiId"], "emoji segment");
       assertAllowedKeys(segment, EMOJI_SEGMENT_ALLOWED_KEYS, "emoji segment");
       if (typeof segment.emojiId !== "string" || !EMOJI_SET_1_IDS.has(segment.emojiId)) {
         throw new ChatProtocolError("invalid_content", "emojiId must be from Emoji Set 1");
@@ -288,6 +304,7 @@ function canonicalizeContent(
       if (legacyRichKindPrecedence && features.richContentVersion !== 1) {
         throw new ChatProtocolError("feature_disabled", "item_ref segments are not enabled");
       }
+      assertOwnRequiredKeys(segment, ["itemType", "modelId"], "item_ref segment");
       const itemType = segment.itemType;
       if (itemType === "card") {
         assertAllowedKeys(segment, CARD_REF_SEGMENT_ALLOWED_KEYS, "card item_ref segment");

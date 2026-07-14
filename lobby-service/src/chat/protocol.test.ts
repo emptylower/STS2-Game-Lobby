@@ -483,6 +483,78 @@ test("rejects custom prototypes and inherited required fields", () => {
   });
 });
 
+test("requires schema fields to be own properties despite Object.prototype pollution", () => {
+  const textContentValue = {
+    formatVersion: 1,
+    segments: [{ kind: "text", text: "safe" }],
+  };
+
+  withPollutedObjectPrototype({ formatVersion: 1 }, () => {
+    assert.throws(
+      () => canonicalizeChatContent({ segments: textContentValue.segments }, allRichFeatures),
+      hasCode("invalid_content"),
+    );
+  });
+  withPollutedObjectPrototype({ segments: textContentValue.segments }, () => {
+    assert.throws(
+      () => canonicalizeChatContent({ formatVersion: 1 }, allRichFeatures),
+      hasCode("invalid_content"),
+    );
+  });
+  withPollutedObjectPrototype({ kind: "text" }, () => {
+    assert.throws(
+      () =>
+        canonicalizeChatContent(
+          { formatVersion: 1, segments: [{ text: "inherited kind" }] },
+          allRichFeatures,
+        ),
+      hasCode("invalid_content"),
+    );
+  });
+  withPollutedObjectPrototype({ text: "inherited text" }, () => {
+    assert.throws(
+      () =>
+        canonicalizeChatContent(
+          { formatVersion: 1, segments: [{ kind: "text" }] },
+          allRichFeatures,
+        ),
+      hasCode("invalid_content"),
+    );
+  });
+  withPollutedObjectPrototype({ emojiId: "heart" }, () => {
+    assert.throws(
+      () =>
+        canonicalizeChatContent(
+          { formatVersion: 1, segments: [{ kind: "emoji" }] },
+          allRichFeatures,
+        ),
+      hasCode("invalid_content"),
+    );
+  });
+  withPollutedObjectPrototype({ itemType: "card" }, () => {
+    assert.throws(
+      () =>
+        canonicalizeChatContent(
+          { formatVersion: 1, segments: [{ kind: "item_ref", modelId: "MegaCrit.Strike" }] },
+          allRichFeatures,
+        ),
+      hasCode("invalid_content"),
+    );
+  });
+  withPollutedObjectPrototype({ modelId: "MegaCrit.Strike" }, () => {
+    assert.throws(
+      () =>
+        canonicalizeChatContent(
+          { formatVersion: 1, segments: [{ kind: "item_ref", itemType: "card" }] },
+          allRichFeatures,
+        ),
+      hasCode("invalid_content"),
+    );
+  });
+
+  assert.deepEqual(canonicalizeChatContent(textContentValue, allRichFeatures), textContentValue);
+});
+
 test("normalizes NFC/newlines and merges text", () => {
   assert.deepEqual(
     canonicalizeServerContent({
@@ -979,4 +1051,39 @@ function padSenderNameToExactBytesAtSnapshotIndex(
     senderName: "x".repeat(targetBytes - baseSize),
   };
   return measureChatWireBytesAtSnapshotIndex(message, chunkIndex) === targetBytes ? message : null;
+}
+
+function withPollutedObjectPrototype(
+  properties: Record<string, unknown>,
+  action: () => void,
+): void {
+  const originals = new Map<string, PropertyDescriptor | undefined>();
+  const keys = Object.keys(properties);
+  const replaced: string[] = [];
+  try {
+    for (const key of keys) {
+      const original = Object.getOwnPropertyDescriptor(Object.prototype, key);
+      originals.set(key, original);
+      if (original !== undefined && !original.configurable) {
+        throw new Error(`cannot safely replace Object.prototype.${key}`);
+      }
+      Object.defineProperty(Object.prototype, key, {
+        value: properties[key],
+        configurable: true,
+        enumerable: false,
+        writable: true,
+      });
+      replaced.push(key);
+    }
+    action();
+  } finally {
+    for (const key of replaced.reverse()) {
+      const original = originals.get(key);
+      if (original === undefined) {
+        Reflect.deleteProperty(Object.prototype, key);
+      } else {
+        Object.defineProperty(Object.prototype, key, original);
+      }
+    }
+  }
 }
