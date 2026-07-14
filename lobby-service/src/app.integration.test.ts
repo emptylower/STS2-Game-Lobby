@@ -859,6 +859,21 @@ test("control host and client hello establish room v2 rich and legacy routing", 
         false,
       );
     }
+
+    const kickedFrame = waitForChatFrame(old, (frame) => frame.type === "kicked");
+    const kickedClose = waitForChatClose(old);
+    host.send(JSON.stringify({
+      type: "kick_player",
+      targetPlayerNetId: "net:old",
+      targetPlayerName: "Old",
+    }));
+    assert.deepEqual(await kickedFrame, {
+      type: "kicked",
+      roomId: created.roomId,
+      reason: "host_kick",
+      message: "你已被房主移出房间。",
+    });
+    assert.deepEqual(await kickedClose, { code: 4001, reason: "kicked" });
   } finally {
     for (const socket of sockets) socket.terminate();
     await service.close();

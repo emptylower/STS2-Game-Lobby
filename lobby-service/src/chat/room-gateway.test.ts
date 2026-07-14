@@ -331,9 +331,23 @@ test("peer without roomChatVersions receives legacy even for text-only v2 messag
   gateway.registerPeer(sender.registration);
   gateway.registerPeer(oldRecipient.registration);
   gateway.handleControlEnvelope("new-sender", hello("Alice", "net:alice"));
-  const oldHello = hello("Old", "net:old") as Record<string, unknown>;
+  const oldHello = hello("  Old  ", "  net:old  ") as Record<string, unknown>;
   delete oldHello.roomChatVersions;
   gateway.handleControlEnvelope("old-recipient", oldHello);
+  assert.deepEqual(gateway.getLockedIdentity("old-recipient"), {
+    playerName: "Old",
+    playerNetId: "net:old",
+  });
+  gateway.handleControlEnvelope("old-recipient", {
+    ...oldHello,
+    playerName: "Mallory",
+    playerNetId: "net:mallory",
+  });
+  assert.deepEqual(gateway.getLockedIdentity("old-recipient"), {
+    playerName: "Old",
+    playerNetId: "net:old",
+  });
+  assert.equal(oldRecipient.frames.length, 0);
   sender.frames.length = 0;
   oldRecipient.frames.length = 0;
 

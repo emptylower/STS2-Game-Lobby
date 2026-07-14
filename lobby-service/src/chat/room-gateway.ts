@@ -216,6 +216,7 @@ export class RoomChatGateway {
       return;
     }
 
+    let legacyClientIdentity: LockedRoomChatIdentity | null = null;
     try {
       assertOwnKeys(envelope, [
         "type",
@@ -233,8 +234,14 @@ export class RoomChatGateway {
       ) {
         return;
       }
-      normalizePlayerName(envelope.playerName);
-      if (Object.hasOwn(envelope, "playerNetId")) {
+      const playerName = normalizePlayerName(envelope.playerName);
+      if (peer.role === "client") {
+        if (!Object.hasOwn(envelope, "playerNetId")) return;
+        legacyClientIdentity = {
+          playerName,
+          playerNetId: normalizePlayerNetId(envelope.playerNetId),
+        };
+      } else if (Object.hasOwn(envelope, "playerNetId")) {
         normalizePlayerNetId(envelope.playerNetId);
       }
     } catch {
@@ -242,6 +249,7 @@ export class RoomChatGateway {
     }
 
     peer.helloComplete = true;
+    peer.identity = legacyClientIdentity;
   }
 
   private handleRoomChatV2(
