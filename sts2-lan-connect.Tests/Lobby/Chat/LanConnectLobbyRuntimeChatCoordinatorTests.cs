@@ -354,6 +354,52 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
     }
 
     [Fact]
+    public async Task CancellationCallbackRunsOutsideLifecycleLockAndReentrantDisposeSharesTask()
+    {
+        FakeServerChatClient client = new();
+        LanConnectLobbyRuntimeChatCoordinator coordinator = new(client);
+        TaskCompletionSource operationEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim reentrantDisposeReturned = new(false);
+        Task? callbackDisposeTask = null;
+        Thread? callbackThread = null;
+        int cancellationCalls = 0;
+        int callbackObservedUnlockedLifecycle = 0;
+        client.ConnectImplementation = async token =>
+        {
+            using CancellationTokenRegistration registration = token.Register(() =>
+            {
+                Interlocked.Increment(ref cancellationCalls);
+                callbackThread = new Thread(() =>
+                {
+                    callbackDisposeTask = coordinator.DisposeAsync().AsTask();
+                    reentrantDisposeReturned.Set();
+                });
+                callbackThread.Start();
+                if (reentrantDisposeReturned.Wait(TimeSpan.FromSeconds(2)))
+                {
+                    Interlocked.Exchange(ref callbackObservedUnlockedLifecycle, 1);
+                }
+            });
+            operationEntered.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        };
+        Task connect = coordinator.ConnectServerAsync(new Uri("https://lobby.example"), "id", "name");
+        await operationEntered.Task;
+
+        Task firstDisposeTask = coordinator.DisposeAsync().AsTask();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect.WaitAsync(TimeSpan.FromSeconds(3)));
+        await firstDisposeTask.WaitAsync(TimeSpan.FromSeconds(3));
+        callbackThread?.Join();
+        Task repeatedDisposeTask = coordinator.DisposeAsync().AsTask();
+        Assert.Equal(1, Volatile.Read(ref callbackObservedUnlockedLifecycle));
+        Assert.Equal(1, Volatile.Read(ref cancellationCalls));
+        Assert.Same(firstDisposeTask, callbackDisposeTask);
+        Assert.Same(firstDisposeTask, repeatedDisposeTask);
+        Assert.Equal(1, client.DisposeCount);
+    }
+
+    [Fact]
     public async Task DisposeWaitsForPausedSynchronousMutationLeaseAndRejectsLaterMutation()
     {
         FakeServerChatClient client = new();

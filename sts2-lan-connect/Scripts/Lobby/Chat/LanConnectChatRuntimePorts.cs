@@ -39,9 +39,12 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
     private readonly object _roomMutationLock = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly CancellationToken _lifetimeToken;
+    private readonly TaskCompletionSource _lifetimeCancellationCompleted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Action<LanConnectLobbyRuntimeChatCoordinatorCheckpoint>? _checkpoint;
     private Task? _disposeTask;
     private TaskCompletionSource? _syncLeasesDrained;
+    private Exception? _lifetimeCancellationError;
     private int _syncLeaseCount;
     private bool _disposed;
 
@@ -150,17 +153,37 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
+        bool beginCancellation = false;
+        Task disposeTask;
         lock (_lifecycleLock)
         {
-            if (!_disposed)
+            if (_disposeTask == null)
             {
                 _disposed = true;
+                Task syncDrain = GetSyncLeaseDrainTaskLocked();
+                _disposeTask = DisposeCoreAsync(_lifetimeCancellationCompleted.Task, syncDrain);
+                beginCancellation = true;
+            }
+            disposeTask = _disposeTask;
+        }
+
+        if (beginCancellation)
+        {
+            try
+            {
                 _lifetimeCancellation.Cancel();
             }
-            Task syncDrain = GetSyncLeaseDrainTaskLocked();
-            _disposeTask ??= DisposeCoreAsync(syncDrain);
-            return new ValueTask(_disposeTask);
+            catch (Exception ex)
+            {
+                _lifetimeCancellationError = ex;
+            }
+            finally
+            {
+                _lifetimeCancellationCompleted.TrySetResult();
+            }
         }
+
+        return new ValueTask(disposeTask);
     }
 
     private async Task RunClientOperationAsync(
@@ -182,8 +205,9 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         }
     }
 
-    private async Task DisposeCoreAsync(Task syncDrain)
+    private async Task DisposeCoreAsync(Task cancellationCompleted, Task syncDrain)
     {
+        await cancellationCompleted;
         await syncDrain;
         await _operationGate.WaitAsync();
         try
@@ -195,6 +219,11 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         {
             _lifetimeCancellation.Dispose();
             _operationGate.Release();
+        }
+
+        if (_lifetimeCancellationError != null)
+        {
+            throw _lifetimeCancellationError;
         }
     }
 
