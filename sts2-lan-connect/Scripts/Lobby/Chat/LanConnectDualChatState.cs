@@ -42,7 +42,7 @@ internal sealed class LanConnectDualChatState
 
         Room.ClearForContextChange();
         ActiveRoomId = roomId;
-        _openedOnce = false;
+        _openedOnce = RoomOverlayOpen;
         SelectedChannel = LanConnectChatChannel.Room;
         if (RoomOverlayOpen)
         {

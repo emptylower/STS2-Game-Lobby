@@ -144,7 +144,8 @@ public sealed class LanConnectDualChatStateTests
         Assert.Equal(serverRevision + 1, state.Server.Revision);
 
         state.CloseRoomOverlay();
-        Assert.Equal(LanConnectChatChannel.Room, state.OpenRoomOverlay());
+        state.Server.AppendConfirmedForTests("server-after-room-change", "A", "server", 30, false);
+        Assert.Equal(LanConnectChatChannel.Server, state.OpenRoomOverlay());
     }
 
     [Fact]
