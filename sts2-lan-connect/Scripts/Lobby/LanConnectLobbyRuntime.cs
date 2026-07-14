@@ -1264,7 +1264,6 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         {
             cancellationToken.ThrowIfCancellationRequested();
             LanConnectConfig.LobbyServerBaseUrl = baseUrl;
-            cancellationToken.ThrowIfCancellationRequested();
             LanConnectConfig.LastUsedServerAddress = baseUrl;
         }
     }

@@ -70,37 +70,50 @@ public sealed class LanConnectServerSwitchTests
     }
 
     [Fact]
-    public async Task SupersededSwitchDoesNotPersistAfterEnteringCancelableStore()
+    public async Task PersistCommitIsAtomicWithGenerationRegistration()
     {
         List<string> calls = new();
         FakeAddressStore store = new(calls);
         TaskCompletionSource firstPersistEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         TaskCompletionSource releaseFirstPersist = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource secondReachedRegistration = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken firstPersistToken = default;
         int persistCalls = 0;
         store.PersistImplementation = async token =>
         {
             if (Interlocked.Increment(ref persistCalls) == 1)
             {
+                firstPersistToken = token;
                 firstPersistEntered.SetResult();
                 await releaseFirstPersist.Task;
-                token.ThrowIfCancellationRequested();
             }
         };
+        int registrationCalls = 0;
         LanConnectServerSwitchCoordinator sut = new(
             new FakeRoomLifecycle(calls),
             new FakeSwitchChat(calls),
-            store);
+            store,
+            checkpoint =>
+            {
+                if (checkpoint == LanConnectServerSwitchCoordinatorCheckpoint.BeforeGenerationRegistration &&
+                    Interlocked.Increment(ref registrationCalls) == 2)
+                {
+                    secondReachedRegistration.SetResult();
+                }
+            });
 
         Task first = Task.Run(() => sut.SwitchAsync("https://one.example", "p1", "Silent"));
         await firstPersistEntered.Task;
-        Task second = sut.SwitchAsync("https://two.example", "p1", "Silent");
+        Task second = Task.Run(() => sut.SwitchAsync("https://two.example", "p1", "Silent"));
+        await secondReachedRegistration.Task;
+        Assert.False(firstPersistToken.IsCancellationRequested);
         releaseFirstPersist.SetResult();
         await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(3));
 
-        Assert.DoesNotContain("persist:https://one.example", calls);
-        Assert.Contains("persist:https://two.example", calls);
-        Assert.DoesNotContain(calls, call => call.StartsWith("connect:https://one.example", StringComparison.Ordinal));
-        Assert.Contains("connect:https://two.example/:p1:Silent", calls);
+        int firstPersist = calls.IndexOf("persist:https://one.example");
+        int secondPersist = calls.IndexOf("persist:https://two.example");
+        Assert.True(firstPersist >= 0);
+        Assert.True(secondPersist > firstPersist);
     }
 
     [Fact]

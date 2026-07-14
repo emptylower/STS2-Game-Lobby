@@ -389,6 +389,11 @@ internal interface ILanConnectServerSwitchChat
         CancellationToken cancellationToken);
 }
 
+internal enum LanConnectServerSwitchCoordinatorCheckpoint
+{
+    BeforeGenerationRegistration
+}
+
 internal sealed class LanConnectServerSwitchCoordinator
 {
     private readonly ILanConnectRoomLifecycle _room;
@@ -396,16 +401,19 @@ internal sealed class LanConnectServerSwitchCoordinator
     private readonly ILanConnectServerAddressStore _addressStore;
     private readonly SemaphoreSlim _switchGate = new(1, 1);
     private readonly object _generationLock = new();
+    private readonly Action<LanConnectServerSwitchCoordinatorCheckpoint>? _checkpoint;
     private SwitchGeneration? _activeSwitch;
 
     internal LanConnectServerSwitchCoordinator(
         ILanConnectRoomLifecycle room,
         ILanConnectServerSwitchChat chat,
-        ILanConnectServerAddressStore addressStore)
+        ILanConnectServerAddressStore addressStore,
+        Action<LanConnectServerSwitchCoordinatorCheckpoint>? checkpoint = null)
     {
         _room = room ?? throw new ArgumentNullException(nameof(room));
         _chat = chat ?? throw new ArgumentNullException(nameof(chat));
         _addressStore = addressStore ?? throw new ArgumentNullException(nameof(addressStore));
+        _checkpoint = checkpoint;
     }
 
     internal Task SwitchAsync(
@@ -427,6 +435,7 @@ internal sealed class LanConnectServerSwitchCoordinator
         SwitchGeneration ownGeneration = new(callerCancellation);
         SwitchGeneration? superseded;
         IDisposable? supersededCancellationLease;
+        _checkpoint?.Invoke(LanConnectServerSwitchCoordinatorCheckpoint.BeforeGenerationRegistration);
         lock (_generationLock)
         {
             superseded = _activeSwitch;
@@ -457,8 +466,8 @@ internal sealed class LanConnectServerSwitchCoordinator
             lock (_generationLock)
             {
                 ThrowIfSupersededLocked(ownGeneration);
+                _addressStore.Persist(normalized.GetLeftPart(UriPartial.Authority), ownToken);
             }
-            _addressStore.Persist(normalized.GetLeftPart(UriPartial.Authority), ownToken);
 
             ownToken.ThrowIfCancellationRequested();
             await _chat.ConnectAsync(normalized, playerNetId, playerName, ownToken);
