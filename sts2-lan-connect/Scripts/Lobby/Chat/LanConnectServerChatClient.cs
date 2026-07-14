@@ -43,7 +43,7 @@ internal enum LanConnectServerChatClientCheckpoint
     PermanentCleanupBeforeDispose
 }
 
-internal sealed class LanConnectServerChatClient : IAsyncDisposable
+internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
 {
     private const int ProtocolVersion = 1;
     private static readonly TimeSpan DeliveryTimeout = TimeSpan.FromSeconds(10);
@@ -130,6 +130,30 @@ internal sealed class LanConnectServerChatClient : IAsyncDisposable
     internal bool IsPermanentlyStopped => Volatile.Read(ref _permanentlyStopped) != 0;
 
     internal event Action? StateChanged;
+
+    LanConnectChatChannelState ILanConnectServerChatClient.State => State;
+
+    event Action? ILanConnectServerChatClient.StateChanged
+    {
+        add => StateChanged += value;
+        remove => StateChanged -= value;
+    }
+
+    Task ILanConnectServerChatClient.ConnectAsync(
+        Uri lobbyBaseUri,
+        string playerNetId,
+        string playerName,
+        CancellationToken cancellationToken) =>
+        ConnectAsync(lobbyBaseUri, playerNetId, playerName, cancellationToken);
+
+    Task ILanConnectServerChatClient.SendTextAsync(string text, CancellationToken cancellationToken) =>
+        SendTextAsync(text, cancellationToken);
+
+    Task ILanConnectServerChatClient.RetryAsync(string clientMessageId, CancellationToken cancellationToken) =>
+        RetryAsync(clientMessageId, cancellationToken);
+
+    Task ILanConnectServerChatClient.StopAsync(CancellationToken cancellationToken) =>
+        StopAsync(cancellationToken);
 
     private async Task ConnectAttemptAsync(int generation, CancellationToken cancellationToken)
     {

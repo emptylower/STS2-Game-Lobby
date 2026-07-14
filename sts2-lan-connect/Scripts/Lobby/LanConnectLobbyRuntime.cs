@@ -20,7 +20,6 @@ namespace Sts2LanConnect.Scripts;
 internal sealed partial class LanConnectLobbyRuntime : Node
 {
     private const string RuntimeName = "Sts2LanConnectLobbyRuntime";
-    private const int MaxChatMessages = 60;
     private const double RestartSubmenuRetryIntervalSeconds = 0.6d;
     private const int RestartContextRetryDelayMs = 250;
     private const int RestartRoomPollDelayMs = 2000;
@@ -30,8 +29,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
     private JoinedClientSession? _activeClientSession;
     private bool _heartbeatInFlight;
     private double _timeUntilHeartbeat;
-    private readonly List<LobbyRoomChatEntry> _chatMessages = new();
-    private int _chatRevision;
+    private LanConnectLobbyRuntimeChatCoordinator? _chatCoordinator;
     private bool _chatEnabled = true;
     private int _chatEnabledRevision;
     private PendingHostRestart? _pendingHostRestart;
@@ -49,11 +47,16 @@ internal sealed partial class LanConnectLobbyRuntime : Node
 
     internal bool HasActiveRoomSession => _activeSession != null || _activeClientSession != null;
 
-    internal int ChatRevision => _chatRevision;
+    internal int ChatRevision => unchecked((int)Chat.Room.Revision);
+
+    internal LanConnectDualChatState Chat => _chatCoordinator?.State ??
+        throw new InvalidOperationException("Chat is unavailable before the lobby runtime is ready.");
 
     internal bool ChatEnabled => _chatEnabled;
 
     internal int ChatEnabledRevision => _chatEnabledRevision;
+
+    internal event Action? ChatStateChanged;
 
     private sealed record PendingHostRestart(
         string RestartToken,
@@ -74,7 +77,16 @@ internal sealed partial class LanConnectLobbyRuntime : Node
 
     internal IReadOnlyList<LobbyRoomChatEntry> GetChatMessagesSnapshot()
     {
-        return _chatMessages.ToArray();
+        string roomId = Chat.ActiveRoomId ?? string.Empty;
+        return Chat.Room.Messages.Select(message => new LobbyRoomChatEntry
+        {
+            RoomId = roomId,
+            MessageId = message.MessageId ?? message.ClientMessageId ?? string.Empty,
+            SenderName = message.SenderName,
+            MessageText = message.Text,
+            SentAt = message.SentAt,
+            IsLocal = message.IsLocal
+        }).ToArray();
     }
 
     internal string? GetHostedRoomPassword()
@@ -104,6 +116,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         _timeUntilRestartSubmenuAttempt = 0d;
         _lastRestartSubmenuOpenAtUnixMs = 0;
         Instance = this;
+        _chatCoordinator = new LanConnectLobbyRuntimeChatCoordinator(new LanConnectServerChatClient());
+        _chatCoordinator.StateChanged += OnChatStateChanged;
         LanConnectProtocolProfiles.ResetActiveProfile("runtime_ready");
         SaveManager.Instance.Saved += OnRunSaved;
         LanConnectSaveDiagnostics.LogNow("runtime_ready");
@@ -138,17 +152,35 @@ internal sealed partial class LanConnectLobbyRuntime : Node
     {
         SaveManager.Instance.Saved -= OnRunSaved;
         Instance = null;
-        if (_activeSession != null)
-        {
-            TaskHelper.RunSafely(CloseHostedRoomAsync(_activeSession, suppressErrors: true));
-        }
-
-        if (_activeClientSession != null)
-        {
-            TaskHelper.RunSafely(CloseJoinedClientAsync(_activeClientSession));
-        }
+        LanConnectLobbyRuntimeChatCoordinator? chatCoordinator = _chatCoordinator;
+        TaskHelper.RunSafely(ShutdownAsync(chatCoordinator, _activeSession, _activeClientSession));
 
         LanConnectLobbyPlayerNameDirectory.ClearRoom(null);
+    }
+
+    private async Task ShutdownAsync(
+        LanConnectLobbyRuntimeChatCoordinator? chatCoordinator,
+        HostedRoomSession? hostedSession,
+        JoinedClientSession? clientSession)
+    {
+        if (hostedSession != null)
+        {
+            await CloseHostedRoomAsync(hostedSession, suppressErrors: true);
+        }
+        if (clientSession != null)
+        {
+            await CloseJoinedClientAsync(clientSession);
+        }
+
+        if (ReferenceEquals(_chatCoordinator, chatCoordinator))
+        {
+            _chatCoordinator = null;
+        }
+        if (chatCoordinator != null)
+        {
+            chatCoordinator.StateChanged -= OnChatStateChanged;
+            await chatCoordinator.DisposeAsync();
+        }
     }
 
     public void AttachHostedRoom(NetHostGameService netService, LobbyApiClient apiClient, LobbyCreateRoomResponse registration, LanConnectHostedRoomMetadata metadata)
@@ -167,7 +199,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         HostedRoomSession session = new(netService, apiClient, registration, metadata);
         session.SetEnvelopeHandler(envelope => OnHostedControlEnvelope(session, envelope));
         _activeSession = session;
-        ResetChatState(registration.RoomId);
+        EnterChatRoom(registration.RoomId);
         _timeUntilHeartbeat = 0d;
         LanConnectProtocolProfiles.SetActiveProfile(registration.Room.ProtocolProfile, registration.Room.MaxPlayers, "attach_hosted_room");
         GD.Print(
@@ -206,7 +238,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
             netService.NetId.ToString());
         session.SetEnvelopeHandler(envelope => OnJoinedClientControlEnvelope(session, envelope));
         _activeClientSession = session;
-        ResetChatState(joinResponse.Room.RoomId);
+        EnterChatRoom(joinResponse.Room.RoomId);
         LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, joinResponse.Room.MaxPlayers, "attach_joined_client");
         LanConnectLobbyPlayerNameDirectory.BeginRoom(joinResponse.Room.RoomId);
         LanConnectLobbyPlayerNameDirectory.Upsert(joinResponse.Room.RoomId, netService.NetId, LanConnectConfig.GetEffectivePlayerDisplayName());
@@ -348,7 +380,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
             }
 
             LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
-            ClearChatIfInactive(session.RoomId);
+            LeaveChatRoomIfIdle();
             ResetProtocolProfileIfIdle($"close_hosted_room:{session.RoomId}");
         }
     }
@@ -368,7 +400,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         }
 
         LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
-        ClearChatIfInactive(session.RoomId);
+        LeaveChatRoomIfIdle();
         ResetProtocolProfileIfIdle($"close_joined_client:{session.RoomId}");
         return Task.CompletedTask;
     }
@@ -381,8 +413,21 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         }
     }
 
-    internal async Task SendRoomChatMessageAsync(string messageText)
+    internal Task SendRoomChatMessageAsync(string messageText) =>
+        SendChatTextAsync(LanConnectChatChannel.Room, messageText);
+
+    internal async Task SendChatTextAsync(
+        LanConnectChatChannel channel,
+        string messageText,
+        CancellationToken cancellationToken = default)
     {
+        LanConnectLobbyRuntimeChatCoordinator coordinator = GetChatCoordinator();
+        if (channel == LanConnectChatChannel.Server)
+        {
+            await coordinator.SendServerAsync(messageText, cancellationToken);
+            return;
+        }
+
         string normalizedMessage = NormalizeChatMessage(messageText);
         if (string.IsNullOrWhiteSpace(normalizedMessage))
         {
@@ -392,41 +437,72 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         string senderName = LanConnectConfig.GetEffectivePlayerDisplayName();
         DateTimeOffset sentAt = DateTimeOffset.UtcNow;
         string messageId = Guid.NewGuid().ToString("N");
+        coordinator.BeginRoomPending(messageId, senderName, normalizedMessage);
+        try
+        {
+            await SendLegacyRoomChatEnvelopeAsync(
+                messageId,
+                senderName,
+                normalizedMessage,
+                sentAt,
+                cancellationToken);
+            coordinator.ConfirmRoomSend(messageId);
+        }
+        catch (Exception ex)
+        {
+            coordinator.FailRoomSend(messageId, "send_failed", ex.Message);
+            throw;
+        }
+    }
 
+    internal Task ConnectServerChatAsync(
+        Uri lobbyBaseUri,
+        string playerNetId,
+        string playerName,
+        CancellationToken cancellationToken = default) =>
+        GetChatCoordinator().ConnectServerAsync(lobbyBaseUri, playerNetId, playerName, cancellationToken);
+
+    internal Task RetryServerChatAsync(
+        string clientMessageId,
+        CancellationToken cancellationToken = default) =>
+        GetChatCoordinator().RetryServerAsync(clientMessageId, cancellationToken);
+
+    internal Task StopServerChatAsync(CancellationToken cancellationToken = default) =>
+        GetChatCoordinator().StopServerAsync(cancellationToken);
+
+    private async Task SendLegacyRoomChatEnvelopeAsync(
+        string messageId,
+        string senderName,
+        string messageText,
+        DateTimeOffset sentAt,
+        CancellationToken cancellationToken)
+    {
         if (_activeSession != null)
         {
-            await _activeSession.ControlClient.SendAsync(new LobbyControlEnvelope
-            {
-                Type = "room_chat",
-                RoomId = _activeSession.RoomId,
-                ControlChannelId = _activeSession.ControlChannelId,
-                Role = "host",
-                PlayerName = senderName,
-                PlayerNetId = _activeSession.NetService.NetId.ToString(),
-                MessageId = messageId,
-                MessageText = normalizedMessage,
-                SentAtUnixMs = sentAt.ToUnixTimeMilliseconds()
-            }, CancellationToken.None);
-            AppendChatMessage(_activeSession.RoomId, messageId, senderName, _activeSession.NetService.NetId.ToString(), normalizedMessage, sentAt, isLocal: true);
+            LobbyControlEnvelope envelope = CreateHostedRoomChatEnvelope(
+                _activeSession.RoomId,
+                _activeSession.ControlChannelId,
+                senderName,
+                _activeSession.NetService.NetId.ToString(),
+                messageId,
+                messageText,
+                sentAt);
+            await _activeSession.ControlClient.SendAsync(envelope, cancellationToken);
             return;
         }
 
         if (_activeClientSession != null)
         {
-            await _activeClientSession.ControlClient.SendAsync(new LobbyControlEnvelope
-            {
-                Type = "room_chat",
-                RoomId = _activeClientSession.RoomId,
-                ControlChannelId = _activeClientSession.ControlChannelId,
-                Role = "client",
-                TicketId = _activeClientSession.TicketId,
-                PlayerName = senderName,
-                PlayerNetId = _activeClientSession.PlayerNetId,
-                MessageId = messageId,
-                MessageText = normalizedMessage,
-                SentAtUnixMs = sentAt.ToUnixTimeMilliseconds()
-            }, CancellationToken.None);
-            AppendChatMessage(_activeClientSession.RoomId, messageId, senderName, _activeClientSession.PlayerNetId, normalizedMessage, sentAt, isLocal: true);
+            LobbyControlEnvelope envelope = CreateJoinedRoomChatEnvelope(
+                _activeClientSession.RoomId,
+                _activeClientSession.ControlChannelId,
+                _activeClientSession.TicketId,
+                senderName,
+                _activeClientSession.PlayerNetId,
+                messageId,
+                messageText,
+                sentAt);
+            await _activeClientSession.ControlClient.SendAsync(envelope, cancellationToken);
             return;
         }
 
@@ -1009,58 +1085,84 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         DateTimeOffset sentAt = envelope.SentAtUnixMs.HasValue
             ? DateTimeOffset.FromUnixTimeMilliseconds(envelope.SentAtUnixMs.Value)
             : DateTimeOffset.UtcNow;
-        AppendChatMessage(roomId, messageId, senderName, envelope.PlayerNetId, normalizedMessage, sentAt, isLocal: false);
+        GetChatCoordinator().AppendRoomConfirmed(roomId, messageId, senderName, normalizedMessage, isLocal: false);
     }
 
-    private void ResetChatState(string roomId)
+    private void EnterChatRoom(string roomId)
     {
-        _chatMessages.Clear();
-        _chatRevision++;
+        GetChatCoordinator().EnterRoom(roomId);
         _chatEnabled = true;
         _chatEnabledRevision++;
-        AppendChatMessage(roomId, $"system-{Guid.NewGuid():N}", "房间聊天", null, "已连接房间聊天。", DateTimeOffset.UtcNow, isLocal: false);
+        GetChatCoordinator().AppendRoomConfirmed(
+            roomId,
+            $"system-{Guid.NewGuid():N}",
+            "房间聊天",
+            "已连接房间聊天。",
+            isLocal: false);
     }
 
-    private void ClearChatIfInactive(string roomId)
+    private void LeaveChatRoomIfIdle()
     {
-        if (string.Equals(_activeSession?.RoomId, roomId, StringComparison.Ordinal)
-            || string.Equals(_activeClientSession?.RoomId, roomId, StringComparison.Ordinal))
+        if (_activeSession != null || _activeClientSession != null || _chatCoordinator == null)
         {
             return;
         }
 
-        _chatMessages.Clear();
-        _chatRevision++;
+        _chatCoordinator.LeaveRoom();
     }
 
     private void AppendChatMessage(string roomId, string messageId, string senderName, string? senderNetId, string messageText, DateTimeOffset sentAt, bool isLocal)
     {
-        foreach (LobbyRoomChatEntry existing in _chatMessages)
-        {
-            if (string.Equals(existing.MessageId, messageId, StringComparison.Ordinal))
-            {
-                return;
-            }
-        }
-
-        _chatMessages.Add(new LobbyRoomChatEntry
-        {
-            RoomId = roomId,
-            MessageId = messageId,
-            SenderName = senderName,
-            SenderNetId = senderNetId,
-            MessageText = messageText,
-            SentAt = sentAt,
-            IsLocal = isLocal
-        });
-
-        if (_chatMessages.Count > MaxChatMessages)
-        {
-            _chatMessages.RemoveRange(0, _chatMessages.Count - MaxChatMessages);
-        }
-
-        _chatRevision++;
+        GetChatCoordinator().AppendRoomConfirmed(roomId, messageId, senderName, messageText, isLocal);
     }
+
+    internal static LobbyControlEnvelope CreateHostedRoomChatEnvelope(
+        string roomId,
+        string controlChannelId,
+        string playerName,
+        string playerNetId,
+        string messageId,
+        string messageText,
+        DateTimeOffset sentAt) => new()
+    {
+        Type = "room_chat",
+        RoomId = roomId,
+        ControlChannelId = controlChannelId,
+        Role = "host",
+        PlayerName = playerName,
+        PlayerNetId = playerNetId,
+        MessageId = messageId,
+        MessageText = messageText,
+        SentAtUnixMs = sentAt.ToUnixTimeMilliseconds()
+    };
+
+    internal static LobbyControlEnvelope CreateJoinedRoomChatEnvelope(
+        string roomId,
+        string controlChannelId,
+        string ticketId,
+        string playerName,
+        string playerNetId,
+        string messageId,
+        string messageText,
+        DateTimeOffset sentAt) => new()
+    {
+        Type = "room_chat",
+        RoomId = roomId,
+        ControlChannelId = controlChannelId,
+        Role = "client",
+        TicketId = ticketId,
+        PlayerName = playerName,
+        PlayerNetId = playerNetId,
+        MessageId = messageId,
+        MessageText = messageText,
+        SentAtUnixMs = sentAt.ToUnixTimeMilliseconds()
+    };
+
+    private LanConnectLobbyRuntimeChatCoordinator GetChatCoordinator() =>
+        _chatCoordinator ?? throw new InvalidOperationException(
+            "Chat is unavailable before the lobby runtime is ready.");
+
+    private void OnChatStateChanged() => ChatStateChanged?.Invoke();
 
     private static string NormalizeChatMessage(string? messageText)
     {
