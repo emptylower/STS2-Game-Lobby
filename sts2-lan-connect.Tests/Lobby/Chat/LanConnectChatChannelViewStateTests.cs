@@ -47,6 +47,7 @@ public sealed class LanConnectChatChannelViewStateTests
         state.MarkFailed("failed", "rejected", "Rejected");
         state.Queue(new ServerChatPendingMessage { ClientMessageId = "unknown", Text = "unknown" });
         state.MarkTimedOut(DateTimeOffset.UtcNow + TimeSpan.FromSeconds(11));
+        state.SetVisible(true);
 
         state.ClearForContextChange();
 
@@ -57,7 +58,25 @@ public sealed class LanConnectChatChannelViewStateTests
         Assert.Equal(0, state.ScrollOffset);
         Assert.True(state.IsAtBottom);
         Assert.Equal(0, state.NewMessagesBelowCount);
+        Assert.False(state.IsVisible);
         Assert.True(state.ChatEnabled);
+    }
+
+    [Fact]
+    public void LiveRemoteMessagesUseOneMonotonicArrivalSequenceAcrossChannels()
+    {
+        LanConnectChatChannelState server = new(LanConnectChatChannel.Server);
+        LanConnectChatChannelState room = new(LanConnectChatChannel.Room);
+
+        server.Apply(BuildMessage("server-first"));
+        room.Apply(BuildMessage("room-second"));
+
+        ServerChatMessageState serverMessage = Assert.Single(server.Messages);
+        ServerChatMessageState roomMessage = Assert.Single(room.Messages);
+        Assert.True(serverMessage.Sequence > 0);
+        Assert.True(roomMessage.Sequence > serverMessage.Sequence);
+        Assert.Equal(serverMessage.Sequence, server.FirstUnreadSequence);
+        Assert.Equal(roomMessage.Sequence, room.FirstUnreadSequence);
     }
 
     [Fact]
@@ -70,7 +89,8 @@ public sealed class LanConnectChatChannelViewStateTests
         state.Apply(BuildMessage("remote"));
 
         Assert.Equal(1, state.UnreadCount);
-        Assert.Equal(0, state.FirstUnreadSequence);
+        Assert.Equal(Assert.Single(state.Messages, message => message.MessageId == "remote").Sequence,
+            state.FirstUnreadSequence);
     }
 
     [Fact]
@@ -129,8 +149,11 @@ public sealed class LanConnectChatChannelViewStateTests
     public void HiddenSnapshotReplacementDoesNotInflateUnread()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
-        state.AppendConfirmedForTests("old", "Silent", "old", sequence: 4, isLocal: false);
-        state.MarkRead();
+        state.SetVisible(true);
+        state.SetScrollState(42, atBottom: false);
+        state.AppendConfirmedForTests("below", "Silent", "below", sequence: 3, isLocal: false);
+        state.SetVisible(false);
+        state.AppendConfirmedForTests("unread", "Silent", "unread", sequence: 4, isLocal: false);
 
         state.Apply(BuildSnapshotBegin("snapshot", totalMessages: 1));
         state.Apply(BuildSnapshotChunk("snapshot", BuildCanonical("fresh")));
@@ -140,6 +163,29 @@ public sealed class LanConnectChatChannelViewStateTests
         Assert.Equal(0, state.UnreadCount);
         Assert.Null(state.FirstUnreadSequence);
         Assert.Equal(0, state.NewMessagesBelowCount);
+    }
+
+    [Fact]
+    public void HistoryEpochClearResetsDerivedIncomingCountsButKeepsDraftAndScroll()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
+        state.SetDraft("draft");
+        state.SetVisible(true);
+        state.SetScrollState(42, atBottom: false);
+        state.AppendConfirmedForTests("below", "Silent", "below", sequence: 3, isLocal: false);
+        state.SetVisible(false);
+        state.AppendConfirmedForTests("unread", "Silent", "unread", sequence: 4, isLocal: false);
+
+        state.Apply(BuildHistoryCleared(historyEpoch: 2));
+
+        Assert.Empty(state.Messages);
+        Assert.Equal(0, state.UnreadCount);
+        Assert.Null(state.FirstUnreadSequence);
+        Assert.Equal(0, state.NewMessagesBelowCount);
+        Assert.Equal("draft", state.Draft);
+        Assert.Equal(42, state.ScrollOffset);
+        Assert.False(state.IsAtBottom);
+        Assert.False(state.IsVisible);
     }
 
     private static ServerChatInboundEnvelope BuildReady(bool chatEnabled)
@@ -205,6 +251,16 @@ public sealed class LanConnectChatChannelViewStateTests
         {
             SnapshotId = snapshotId,
             HistoryEpoch = 1
+        };
+        return Project(envelope);
+    }
+
+    private static ServerChatInboundEnvelope BuildHistoryCleared(int historyEpoch)
+    {
+        ServerChatHistoryClearedEnvelope envelope = new()
+        {
+            HistoryEpoch = historyEpoch,
+            ChangedAt = DateTimeOffset.Parse("2026-07-14T00:01:00Z")
         };
         return Project(envelope);
     }

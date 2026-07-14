@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -54,6 +55,7 @@ internal readonly record struct LanConnectChatApplyResult(bool ReconnectRequired
 internal sealed class LanConnectChatChannelState
 {
     private static readonly TimeSpan StalePendingThreshold = TimeSpan.FromSeconds(10);
+    private static long _arrivalSequence;
 
     private readonly object _mutationLock = new();
     private readonly List<ServerChatMessageState> _messages = new();
@@ -64,6 +66,13 @@ internal sealed class LanConnectChatChannelState
     private long _revision;
     private bool _chatEnabled;
     private ServerChatEnabledFeatures _enabledFeatures = new();
+    private string _draft = string.Empty;
+    private int _unreadCount;
+    private long? _firstUnreadSequence;
+    private double _scrollOffset;
+    private bool _isAtBottom = true;
+    private int _newMessagesBelowCount;
+    private bool _isVisible;
 
     internal LanConnectChatChannelState(LanConnectChatChannel channel)
     {
@@ -105,31 +114,101 @@ internal sealed class LanConnectChatChannelState
         }
     }
 
-    internal string Draft { get; private set; } = string.Empty;
+    internal string Draft
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _draft;
+            }
+        }
+        private set => _draft = value;
+    }
 
-    internal int UnreadCount { get; private set; }
+    internal int UnreadCount
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _unreadCount;
+            }
+        }
+        private set => _unreadCount = value;
+    }
 
-    internal long? FirstUnreadSequence { get; private set; }
+    internal long? FirstUnreadSequence
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _firstUnreadSequence;
+            }
+        }
+        private set => _firstUnreadSequence = value;
+    }
 
-    internal double ScrollOffset { get; private set; }
+    internal double ScrollOffset
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _scrollOffset;
+            }
+        }
+        private set => _scrollOffset = value;
+    }
 
-    internal bool IsAtBottom { get; private set; } = true;
+    internal bool IsAtBottom
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _isAtBottom;
+            }
+        }
+        private set => _isAtBottom = value;
+    }
 
-    internal int NewMessagesBelowCount { get; private set; }
+    internal int NewMessagesBelowCount
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _newMessagesBelowCount;
+            }
+        }
+        private set => _newMessagesBelowCount = value;
+    }
 
-    internal bool IsVisible { get; private set; }
+    internal bool IsVisible
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _isVisible;
+            }
+        }
+        private set => _isVisible = value;
+    }
 
     internal void SetDraft(string? value)
     {
         lock (_mutationLock)
         {
             string next = value ?? string.Empty;
-            if (Draft == next)
+            if (_draft == next)
             {
                 return;
             }
 
-            Draft = next;
+            _draft = next;
             Touch();
         }
     }
@@ -138,8 +217,8 @@ internal sealed class LanConnectChatChannelState
     {
         lock (_mutationLock)
         {
-            bool mutated = IsVisible != value;
-            IsVisible = value;
+            bool mutated = _isVisible != value;
+            _isVisible = value;
             if (value)
             {
                 mutated |= MarkReadCore();
@@ -157,12 +236,12 @@ internal sealed class LanConnectChatChannelState
         lock (_mutationLock)
         {
             double nextOffset = Math.Max(0, offset);
-            bool mutated = ScrollOffset != nextOffset || IsAtBottom != atBottom;
-            ScrollOffset = nextOffset;
-            IsAtBottom = atBottom;
-            if (atBottom && NewMessagesBelowCount != 0)
+            bool mutated = _scrollOffset != nextOffset || _isAtBottom != atBottom;
+            _scrollOffset = nextOffset;
+            _isAtBottom = atBottom;
+            if (atBottom && _newMessagesBelowCount != 0)
             {
-                NewMessagesBelowCount = 0;
+                _newMessagesBelowCount = 0;
                 mutated = true;
             }
 
@@ -330,6 +409,7 @@ internal sealed class LanConnectChatChannelState
             {
                 _serverMessageIndex[messageId] = _messages.Count - 1;
             }
+            ObserveArrivalSequence(sequence);
             TrackIncoming(sequence, isLocal);
             Touch();
         }
@@ -377,12 +457,13 @@ internal sealed class LanConnectChatChannelState
         {
             _messages.Clear();
             _snapshotAssembly = null;
-            Draft = string.Empty;
-            UnreadCount = 0;
-            FirstUnreadSequence = null;
-            ScrollOffset = 0;
-            IsAtBottom = true;
-            NewMessagesBelowCount = 0;
+            _draft = string.Empty;
+            _unreadCount = 0;
+            _firstUnreadSequence = null;
+            _scrollOffset = 0;
+            _isAtBottom = true;
+            _newMessagesBelowCount = 0;
+            _isVisible = false;
             RebuildIndices();
             Touch();
         }
@@ -510,6 +591,7 @@ internal sealed class LanConnectChatChannelState
             MessageId = canonical.MessageId,
             SenderName = canonical.SenderName ?? string.Empty,
             Text = text,
+            Sequence = NextArrivalSequence(),
             IsLocal = false,
             Delivery = ServerChatDeliveryState.Confirmed,
             SentAt = canonical.SentAt == default ? DateTimeOffset.UtcNow : canonical.SentAt
@@ -686,6 +768,7 @@ internal sealed class LanConnectChatChannelState
             }
         }
         RebuildIndices();
+        ResetIncomingIndicators();
         return mutated;
     }
 
@@ -766,13 +849,13 @@ internal sealed class LanConnectChatChannelState
 
     private bool MarkReadCore()
     {
-        if (UnreadCount == 0 && FirstUnreadSequence == null)
+        if (_unreadCount == 0 && _firstUnreadSequence == null)
         {
             return false;
         }
 
-        UnreadCount = 0;
-        FirstUnreadSequence = null;
+        _unreadCount = 0;
+        _firstUnreadSequence = null;
         return true;
     }
 
@@ -783,14 +866,37 @@ internal sealed class LanConnectChatChannelState
             return;
         }
 
-        if (!IsVisible)
+        if (!_isVisible)
         {
-            UnreadCount++;
-            FirstUnreadSequence ??= sequence;
+            _unreadCount++;
+            _firstUnreadSequence ??= sequence;
         }
-        else if (!IsAtBottom)
+        else if (!_isAtBottom)
         {
-            NewMessagesBelowCount++;
+            _newMessagesBelowCount++;
+        }
+    }
+
+    private void ResetIncomingIndicators()
+    {
+        _unreadCount = 0;
+        _firstUnreadSequence = null;
+        _newMessagesBelowCount = 0;
+    }
+
+    private static long NextArrivalSequence() => Interlocked.Increment(ref _arrivalSequence);
+
+    private static void ObserveArrivalSequence(long sequence)
+    {
+        long current = Volatile.Read(ref _arrivalSequence);
+        while (sequence > current)
+        {
+            long observed = Interlocked.CompareExchange(ref _arrivalSequence, sequence, current);
+            if (observed == current)
+            {
+                return;
+            }
+            current = observed;
         }
     }
 
