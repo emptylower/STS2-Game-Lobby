@@ -107,6 +107,24 @@ public sealed class LanConnectRoomChatTabsTests
     }
 
     [TestCase]
+    public async Task Reopening_with_hidden_server_preserves_its_only_unread_message()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        await fixture.Overlay.CloseForTests();
+        fixture.State.Server.SetDraft("keep hidden draft");
+        fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Server, sequence: 20);
+        fixture.State.Server.SetPresentationForTests(LanConnectServerChatPresentation.Unsupported);
+
+        await fixture.Overlay.OpenForTests();
+
+        AssertThat(fixture.Overlay.TestState.SelectedChannel).IsEqual(LanConnectChatChannel.Room);
+        AssertThat(fixture.Overlay.TestState.ServerUnread).IsEqual(1);
+        AssertThat(fixture.State.Server.IsVisible).IsFalse();
+        AssertThat(fixture.State.Server.Draft).IsEqual("keep hidden draft");
+        AssertThat(fixture.State.Server.Messages.Count).IsEqual(1);
+    }
+
+    [TestCase]
     public async Task Leaving_room_closes_overlay_and_clears_only_room_state()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();

@@ -435,12 +435,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             return;
         }
 
-        chat.OpenRoomOverlay();
-        if (chat.Server.Presentation == LanConnectServerChatPresentation.Unsupported &&
-            chat.SelectedChannel == LanConnectChatChannel.Server)
-        {
-            chat.Select(LanConnectChatChannel.Room);
-        }
+        bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
+        chat.OpenRoomOverlay(serverSelectable);
         RefreshFromSource();
     }
 

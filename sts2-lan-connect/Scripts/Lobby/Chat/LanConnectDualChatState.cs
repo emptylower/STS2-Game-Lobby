@@ -66,14 +66,16 @@ internal sealed class LanConnectDualChatState
         _openedOnce = false;
     }
 
-    internal LanConnectChatChannel OpenRoomOverlay()
+    internal LanConnectChatChannel OpenRoomOverlay(bool serverSelectable = true)
     {
         if (ActiveRoomId == null)
         {
             throw new InvalidOperationException("A room must be active before opening room chat.");
         }
 
-        SelectedChannel = ChooseForOpen();
+        SelectedChannel = serverSelectable
+            ? ChooseForOpen()
+            : LanConnectChatChannel.Room;
         RoomOverlayOpen = true;
         Select(SelectedChannel);
         _openedOnce = true;

@@ -303,6 +303,23 @@ public sealed class LanConnectDualChatStateTests
     }
 
     [Fact]
+    public void OpeningWithoutSelectableServerForcesRoomWithoutConsumingHiddenServerUnread()
+    {
+        LanConnectDualChatState state = EnterAndCloseOnce();
+        state.Server.SetDraft("keep server draft");
+        state.Server.AppendConfirmedForTests("hidden-server", "A", "server", 30, false);
+
+        LanConnectChatChannel selected = state.OpenRoomOverlay(serverSelectable: false);
+
+        Assert.Equal(LanConnectChatChannel.Room, selected);
+        Assert.Equal(LanConnectChatChannel.Room, state.SelectedChannel);
+        Assert.Equal(1, state.Server.UnreadCount);
+        Assert.False(state.Server.IsVisible);
+        Assert.Equal("keep server draft", state.Server.Draft);
+        Assert.Single(state.Server.Messages);
+    }
+
+    [Fact]
     public void ClearServerContextClearsOnlyServer()
     {
         LanConnectDualChatState state = CreateEnteredState();
