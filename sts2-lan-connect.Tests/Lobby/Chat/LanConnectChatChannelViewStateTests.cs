@@ -188,6 +188,50 @@ public sealed class LanConnectChatChannelViewStateTests
         Assert.False(state.IsVisible);
     }
 
+    [Fact]
+    public async Task SharedArrivalClockIsUniqueAndMonotonicAcrossConcurrentStates()
+    {
+        LanConnectChatArrivalSequenceClock clock = new();
+        LanConnectChatChannelState[] states = Enumerable.Range(0, 64)
+            .Select(index => new LanConnectChatChannelState(
+                index % 2 == 0 ? LanConnectChatChannel.Server : LanConnectChatChannel.Room, clock))
+            .ToArray();
+
+        await Task.WhenAll(states.Select((state, index) => Task.Run(() =>
+            state.Apply(BuildMessage($"message-{index}")))));
+
+        long[] sequences = states.Select(state => Assert.Single(state.Messages).Sequence).Order().ToArray();
+        Assert.Equal(Enumerable.Range(1, states.Length).Select(value => (long)value), sequences);
+    }
+
+    [Fact]
+    public void ExhaustedArrivalClockFailsBeforeMutatingChannelState()
+    {
+        LanConnectChatArrivalSequenceClock clock = new(long.MaxValue);
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Server, clock);
+
+        Assert.Throws<InvalidOperationException>(() => state.Apply(BuildMessage("overflow")));
+
+        Assert.Empty(state.Messages);
+        Assert.Equal(0, state.UnreadCount);
+        Assert.Null(state.FirstUnreadSequence);
+        Assert.Equal(0, state.Revision);
+    }
+
+    [Fact]
+    public void ExplicitMaximumSequenceIsRejectedBeforeHelperMutation()
+    {
+        LanConnectChatArrivalSequenceClock clock = new();
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Server, clock);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            state.AppendConfirmedForTests("poison", "Silent", "poison", long.MaxValue, isLocal: false));
+
+        Assert.Empty(state.Messages);
+        state.Apply(BuildMessage("healthy"));
+        Assert.Equal(1, Assert.Single(state.Messages).Sequence);
+    }
+
     private static ServerChatInboundEnvelope BuildReady(bool chatEnabled)
     {
         ServerChatReadyEnvelope envelope = new()

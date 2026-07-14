@@ -317,6 +317,103 @@ public sealed class LanConnectChatChannelStateTests
         Assert.Empty(state.Messages);
     }
 
+    [Fact]
+    public void BroadcastBeforeAckMergesPendingAndRollsBackHiddenUnread()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
+        state.Queue(Pending("client-1", "Ironclad", "hello"));
+        state.Apply(BuildMessage("server-msg-1", "Ironclad", "hello"));
+        state.Apply(BuildMessage("remote-2", "Silent", "other"));
+        long otherSequence = Assert.Single(state.Messages, message => message.MessageId == "remote-2").Sequence;
+        Assert.Equal(2, state.UnreadCount);
+
+        state.Apply(BuildAck("client-1", "server-msg-1", "Ironclad", "hello"));
+        state.Apply(BuildMessage("server-msg-1", "Ironclad", "hello"));
+
+        Assert.Equal(2, state.Messages.Count);
+        ServerChatMessageState message = Assert.Single(state.Messages, entry => entry.MessageId == "server-msg-1");
+        Assert.Equal("server-msg-1", message.MessageId);
+        Assert.Equal("client-1", message.ClientMessageId);
+        Assert.True(message.IsLocal);
+        Assert.Equal(ServerChatDeliveryState.Confirmed, message.Delivery);
+        Assert.Equal(1, state.UnreadCount);
+        Assert.Equal(otherSequence, state.FirstUnreadSequence);
+    }
+
+    [Fact]
+    public void BroadcastBeforeAckMergesPendingAndRollsBackBelowCount()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
+        state.SetVisible(true);
+        state.SetScrollState(84, atBottom: false);
+        state.Queue(Pending("client-1", "Ironclad", "hello"));
+        state.Apply(BuildMessage("server-msg-1", "Ironclad", "hello"));
+        state.Apply(BuildMessage("remote-2", "Silent", "other"));
+        Assert.Equal(2, state.NewMessagesBelowCount);
+
+        state.Apply(BuildAck("client-1", "server-msg-1", "Ironclad", "hello"));
+
+        Assert.Equal(2, state.Messages.Count);
+        Assert.Equal(1, state.NewMessagesBelowCount);
+        Assert.Equal(84, state.ScrollOffset);
+    }
+
+    [Fact]
+    public void SnapshotBeforeAckMergesPendingIntoOneAuthoritativeMessage()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
+        state.Queue(Pending("client-1", "Ironclad", "draft"));
+        state.Apply(BuildSnapshotBegin("snapshot", "instance-1", historyEpoch: 1, totalMessages: 1));
+        state.Apply(BuildSnapshotChunk(
+            "snapshot", 0, BuildCanonical("server-msg-1", "Ironclad", "canonical", sequence: 0)));
+        state.Apply(BuildSnapshotEnd("snapshot", historyEpoch: 1));
+        Assert.Equal(2, state.Messages.Count);
+
+        state.Apply(BuildAck("client-1", "server-msg-1", "Ironclad", "canonical"));
+
+        ServerChatMessageState message = Assert.Single(state.Messages);
+        Assert.Equal("server-msg-1", message.MessageId);
+        Assert.Equal("client-1", message.ClientMessageId);
+        Assert.Equal("canonical", message.Text);
+        Assert.True(message.IsLocal);
+        Assert.Equal(ServerChatDeliveryState.Confirmed, message.Delivery);
+        long revisionAfterAck = state.Revision;
+        state.MarkTimedOut(FixedNow + TimeSpan.FromDays(1));
+        state.Apply(BuildMessage("server-msg-1", "Ironclad", "canonical"));
+        Assert.Equal(revisionAfterAck, state.Revision);
+        Assert.Single(state.Messages);
+    }
+
+    [Fact]
+    public void EquivalentAckErrorAndMarkFailedAreRevisionNoOps()
+    {
+        LanConnectChatChannelState ack = new(LanConnectChatChannel.Server);
+        ack.Queue(Pending("ack", "Ironclad", "hello"));
+        ServerChatInboundEnvelope ackEnvelope = BuildAck("ack", "server-ack", "Ironclad", "hello");
+        ack.Apply(ackEnvelope);
+        long ackRevision = ack.Revision;
+        ack.Apply(ackEnvelope);
+        Assert.Equal(ackRevision, ack.Revision);
+
+        LanConnectChatChannelState error = new(LanConnectChatChannel.Server);
+        error.Queue(Pending("error", "Ironclad", "hello"));
+        error.Apply(BuildError("error", "rejected", "Rejected"));
+        long errorRevision = error.Revision;
+        error.Apply(BuildError("error", "rejected", "Rejected"));
+        Assert.Equal(errorRevision, error.Revision);
+        error.Apply(BuildError("error", "rejected", "Changed"));
+        Assert.Equal(errorRevision + 1, error.Revision);
+
+        LanConnectChatChannelState failed = new(LanConnectChatChannel.Server);
+        failed.Queue(Pending("failed", "Ironclad", "hello"));
+        failed.MarkFailed("failed", "send_failed", "Failed");
+        long failedRevision = failed.Revision;
+        failed.MarkFailed("failed", "send_failed", "Failed");
+        Assert.Equal(failedRevision, failed.Revision);
+        failed.MarkFailed("failed", "send_failed", "Changed");
+        Assert.Equal(failedRevision + 1, failed.Revision);
+    }
+
     private static ServerChatInboundEnvelope BuildAck(string clientMessageId, string serverMessageId, string senderName, string text)
     {
         ServerChatAckEnvelope envelope = new()

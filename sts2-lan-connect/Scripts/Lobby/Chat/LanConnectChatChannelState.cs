@@ -52,16 +52,70 @@ internal sealed class ServerChatMessageState
 
 internal readonly record struct LanConnectChatApplyResult(bool ReconnectRequired);
 
+internal sealed class LanConnectChatArrivalSequenceClock
+{
+    private long _current;
+
+    internal LanConnectChatArrivalSequenceClock(long initialValue = 0)
+    {
+        if (initialValue < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(initialValue));
+        }
+        _current = initialValue;
+    }
+
+    internal long Next()
+    {
+        while (true)
+        {
+            long current = Volatile.Read(ref _current);
+            if (current == long.MaxValue)
+            {
+                throw new InvalidOperationException("The chat arrival sequence is exhausted.");
+            }
+
+            long next = current + 1;
+            if (Interlocked.CompareExchange(ref _current, next, current) == current)
+            {
+                return next;
+            }
+        }
+    }
+
+    internal void Observe(long sequence)
+    {
+        if (sequence == long.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sequence), "The maximum sequence is reserved for overflow detection.");
+        }
+
+        long current = Volatile.Read(ref _current);
+        while (sequence > current)
+        {
+            long observed = Interlocked.CompareExchange(ref _current, sequence, current);
+            if (observed == current)
+            {
+                return;
+            }
+            current = observed;
+        }
+    }
+}
+
 internal sealed class LanConnectChatChannelState
 {
     private static readonly TimeSpan StalePendingThreshold = TimeSpan.FromSeconds(10);
-    private static long _arrivalSequence;
+    private static readonly LanConnectChatArrivalSequenceClock SharedArrivalClock = new();
 
     private readonly object _mutationLock = new();
     private readonly List<ServerChatMessageState> _messages = new();
     private readonly Dictionary<string, int> _clientPendingIndex = new();
     private readonly Dictionary<string, int> _serverMessageIndex = new();
     private readonly Dictionary<string, DateTimeOffset> _pendingQueueTimes = new();
+    private readonly Dictionary<string, long> _unreadIncomingSequences = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _belowIncomingMessageIds = new(StringComparer.Ordinal);
+    private readonly LanConnectChatArrivalSequenceClock _arrivalClock;
     private SnapshotAssembly? _snapshotAssembly;
     private long _revision;
     private bool _chatEnabled;
@@ -75,8 +129,17 @@ internal sealed class LanConnectChatChannelState
     private bool _isVisible;
 
     internal LanConnectChatChannelState(LanConnectChatChannel channel)
+        : this(channel, SharedArrivalClock)
     {
+    }
+
+    internal LanConnectChatChannelState(
+        LanConnectChatChannel channel,
+        LanConnectChatArrivalSequenceClock arrivalClock)
+    {
+        ArgumentNullException.ThrowIfNull(arrivalClock);
         Channel = channel;
+        _arrivalClock = arrivalClock;
     }
 
     internal LanConnectChatChannel Channel { get; }
@@ -242,6 +305,7 @@ internal sealed class LanConnectChatChannelState
             if (atBottom && _newMessagesBelowCount != 0)
             {
                 _newMessagesBelowCount = 0;
+                _belowIncomingMessageIds.Clear();
                 mutated = true;
             }
 
@@ -367,19 +431,26 @@ internal sealed class LanConnectChatChannelState
             if (_clientPendingIndex.TryGetValue(clientMessageId, out int index) &&
                 index < _messages.Count)
             {
+                ServerChatMessageState existing = _messages[index];
+                if (HasFailure(existing, code, message))
+                {
+                    return;
+                }
+
                 _messages[index] = new ServerChatMessageState
                 {
-                    MessageId = _messages[index].MessageId,
-                    ClientMessageId = _messages[index].ClientMessageId,
-                    SenderName = _messages[index].SenderName,
-                    Text = _messages[index].Text,
-                    Sequence = _messages[index].Sequence,
-                    IsLocal = _messages[index].IsLocal,
+                    MessageId = existing.MessageId,
+                    ClientMessageId = existing.ClientMessageId,
+                    SenderName = existing.SenderName,
+                    Text = existing.Text,
+                    Sequence = existing.Sequence,
+                    IsLocal = existing.IsLocal,
                     Delivery = ServerChatDeliveryState.Failed,
                     ErrorCode = code,
                     ErrorMessage = message,
-                    SentAt = _messages[index].SentAt
+                    SentAt = existing.SentAt
                 };
+                _pendingQueueTimes.Remove(clientMessageId);
                 Touch();
             }
         }
@@ -393,6 +464,8 @@ internal sealed class LanConnectChatChannelState
             {
                 return;
             }
+
+            _arrivalClock.Observe(sequence);
 
             ServerChatMessageState entry = new()
             {
@@ -409,8 +482,7 @@ internal sealed class LanConnectChatChannelState
             {
                 _serverMessageIndex[messageId] = _messages.Count - 1;
             }
-            ObserveArrivalSequence(sequence);
-            TrackIncoming(sequence, isLocal);
+            TrackIncoming(messageId, sequence, isLocal);
             Touch();
         }
     }
@@ -458,11 +530,9 @@ internal sealed class LanConnectChatChannelState
             _messages.Clear();
             _snapshotAssembly = null;
             _draft = string.Empty;
-            _unreadCount = 0;
-            _firstUnreadSequence = null;
+            ResetIncomingIndicators();
             _scrollOffset = 0;
             _isAtBottom = true;
-            _newMessagesBelowCount = 0;
             _isVisible = false;
             RebuildIndices();
             Touch();
@@ -483,34 +553,54 @@ internal sealed class LanConnectChatChannelState
             return new LanConnectChatApplyResult(ReconnectRequired: false);
         }
 
-        if (_clientPendingIndex.TryGetValue(clientMessageId, out int index) &&
-            index < _messages.Count)
+        bool hasClientEntry = _clientPendingIndex.TryGetValue(clientMessageId, out int clientIndex) &&
+                              clientIndex < _messages.Count &&
+                              _messages[clientIndex].ClientMessageId == clientMessageId;
+        bool hasServerEntry = _serverMessageIndex.TryGetValue(canonical.MessageId, out int serverIndex) &&
+                              serverIndex < _messages.Count &&
+                              _messages[serverIndex].MessageId == canonical.MessageId;
+
+        if (hasClientEntry)
         {
-            ServerChatMessageState existing = _messages[index];
-            ServerChatMessageState updated = new()
+            bool removedDuplicate = hasServerEntry && serverIndex != clientIndex;
+            if (removedDuplicate)
             {
-                MessageId = canonical.MessageId,
-                ClientMessageId = existing.ClientMessageId,
-                SenderName = string.IsNullOrEmpty(canonical.SenderName) ? existing.SenderName : canonical.SenderName,
-                Text = text,
-                Sequence = existing.Sequence,
-                IsLocal = existing.IsLocal || true,
-                Delivery = ServerChatDeliveryState.Confirmed,
-                SentAt = canonical.SentAt == default ? existing.SentAt : canonical.SentAt
-            };
-            _messages[index] = updated;
-            if (!string.IsNullOrEmpty(updated.MessageId))
-            {
-                _serverMessageIndex[updated.MessageId] = index;
+                RollBackIncoming(canonical.MessageId);
+                _messages.RemoveAt(serverIndex);
+                if (serverIndex < clientIndex)
+                {
+                    clientIndex--;
+                }
             }
+
+            ServerChatMessageState existing = _messages[clientIndex];
+            ServerChatMessageState updated = CreateAcknowledged(existing, canonical, clientMessageId, text);
+            bool mutated = removedDuplicate || !MessagesEqual(existing, updated);
+            if (!mutated)
+            {
+                return new LanConnectChatApplyResult(ReconnectRequired: false);
+            }
+
+            _messages[clientIndex] = updated;
             _pendingQueueTimes.Remove(clientMessageId);
+            RebuildIndices();
             Touch();
             return new LanConnectChatApplyResult(ReconnectRequired: false);
         }
 
-        if (!string.IsNullOrEmpty(canonical.MessageId) &&
-            _serverMessageIndex.ContainsKey(canonical.MessageId))
+        if (hasServerEntry)
         {
+            ServerChatMessageState existing = _messages[serverIndex];
+            ServerChatMessageState updated = CreateAcknowledged(existing, canonical, clientMessageId, text);
+            if (MessagesEqual(existing, updated))
+            {
+                return new LanConnectChatApplyResult(ReconnectRequired: false);
+            }
+
+            RollBackIncoming(canonical.MessageId);
+            _messages[serverIndex] = updated;
+            RebuildIndices();
+            Touch();
             return new LanConnectChatApplyResult(ReconnectRequired: false);
         }
 
@@ -525,10 +615,7 @@ internal sealed class LanConnectChatChannelState
             SentAt = canonical.SentAt == default ? DateTimeOffset.UtcNow : canonical.SentAt
         };
         _messages.Add(fresh);
-        if (!string.IsNullOrEmpty(fresh.MessageId))
-        {
-            _serverMessageIndex[fresh.MessageId] = _messages.Count - 1;
-        }
+        RebuildIndices();
         Touch();
         return new LanConnectChatApplyResult(ReconnectRequired: false);
     }
@@ -547,6 +634,11 @@ internal sealed class LanConnectChatChannelState
             index < _messages.Count)
         {
             ServerChatMessageState existing = _messages[index];
+            if (HasFailure(existing, code, message))
+            {
+                return new LanConnectChatApplyResult(ReconnectRequired: false);
+            }
+
             _messages[index] = new ServerChatMessageState
             {
                 MessageId = existing.MessageId,
@@ -591,14 +683,14 @@ internal sealed class LanConnectChatChannelState
             MessageId = canonical.MessageId,
             SenderName = canonical.SenderName ?? string.Empty,
             Text = text,
-            Sequence = NextArrivalSequence(),
+            Sequence = _arrivalClock.Next(),
             IsLocal = false,
             Delivery = ServerChatDeliveryState.Confirmed,
             SentAt = canonical.SentAt == default ? DateTimeOffset.UtcNow : canonical.SentAt
         };
         _messages.Add(entry);
         _serverMessageIndex[canonical.MessageId] = _messages.Count - 1;
-        TrackIncoming(entry.Sequence, entry.IsLocal);
+        TrackIncoming(entry.MessageId, entry.Sequence, entry.IsLocal);
         Touch();
         return new LanConnectChatApplyResult(ReconnectRequired: false);
     }
@@ -856,24 +948,51 @@ internal sealed class LanConnectChatChannelState
 
         _unreadCount = 0;
         _firstUnreadSequence = null;
+        _unreadIncomingSequences.Clear();
         return true;
     }
 
-    private void TrackIncoming(long sequence, bool isLocal)
+    private void TrackIncoming(string? messageId, long sequence, bool isLocal)
     {
-        if (isLocal)
+        if (isLocal || string.IsNullOrEmpty(messageId))
         {
             return;
         }
 
         if (!_isVisible)
         {
-            _unreadCount++;
-            _firstUnreadSequence ??= sequence;
+            _unreadIncomingSequences[messageId] = sequence;
+            RecomputeUnreadIndicators();
         }
         else if (!_isAtBottom)
         {
-            _newMessagesBelowCount++;
+            _belowIncomingMessageIds.Add(messageId);
+            _newMessagesBelowCount = _belowIncomingMessageIds.Count;
+        }
+    }
+
+    private void RollBackIncoming(string messageId)
+    {
+        if (_unreadIncomingSequences.Remove(messageId))
+        {
+            RecomputeUnreadIndicators();
+        }
+        if (_belowIncomingMessageIds.Remove(messageId))
+        {
+            _newMessagesBelowCount = _belowIncomingMessageIds.Count;
+        }
+    }
+
+    private void RecomputeUnreadIndicators()
+    {
+        _unreadCount = _unreadIncomingSequences.Count;
+        _firstUnreadSequence = null;
+        foreach (long sequence in _unreadIncomingSequences.Values)
+        {
+            if (!_firstUnreadSequence.HasValue || sequence < _firstUnreadSequence.Value)
+            {
+                _firstUnreadSequence = sequence;
+            }
         }
     }
 
@@ -882,25 +1001,45 @@ internal sealed class LanConnectChatChannelState
         _unreadCount = 0;
         _firstUnreadSequence = null;
         _newMessagesBelowCount = 0;
-    }
-
-    private static long NextArrivalSequence() => Interlocked.Increment(ref _arrivalSequence);
-
-    private static void ObserveArrivalSequence(long sequence)
-    {
-        long current = Volatile.Read(ref _arrivalSequence);
-        while (sequence > current)
-        {
-            long observed = Interlocked.CompareExchange(ref _arrivalSequence, sequence, current);
-            if (observed == current)
-            {
-                return;
-            }
-            current = observed;
-        }
+        _unreadIncomingSequences.Clear();
+        _belowIncomingMessageIds.Clear();
     }
 
     private void Touch() => _revision++;
+
+    private static ServerChatMessageState CreateAcknowledged(
+        ServerChatMessageState existing,
+        ServerChatCanonicalMessage canonical,
+        string clientMessageId,
+        string text) =>
+        new()
+        {
+            MessageId = canonical.MessageId,
+            ClientMessageId = clientMessageId,
+            SenderName = string.IsNullOrEmpty(canonical.SenderName) ? existing.SenderName : canonical.SenderName,
+            Text = text,
+            Sequence = existing.Sequence,
+            IsLocal = true,
+            Delivery = ServerChatDeliveryState.Confirmed,
+            SentAt = canonical.SentAt == default ? existing.SentAt : canonical.SentAt
+        };
+
+    private static bool HasFailure(ServerChatMessageState message, string code, string errorMessage) =>
+        message.Delivery == ServerChatDeliveryState.Failed &&
+        string.Equals(message.ErrorCode, code, StringComparison.Ordinal) &&
+        string.Equals(message.ErrorMessage, errorMessage, StringComparison.Ordinal);
+
+    private static bool MessagesEqual(ServerChatMessageState left, ServerChatMessageState right) =>
+        string.Equals(left.MessageId, right.MessageId, StringComparison.Ordinal) &&
+        string.Equals(left.ClientMessageId, right.ClientMessageId, StringComparison.Ordinal) &&
+        string.Equals(left.SenderName, right.SenderName, StringComparison.Ordinal) &&
+        string.Equals(left.Text, right.Text, StringComparison.Ordinal) &&
+        left.Sequence == right.Sequence &&
+        left.IsLocal == right.IsLocal &&
+        left.Delivery == right.Delivery &&
+        string.Equals(left.ErrorCode, right.ErrorCode, StringComparison.Ordinal) &&
+        string.Equals(left.ErrorMessage, right.ErrorMessage, StringComparison.Ordinal) &&
+        left.SentAt == right.SentAt;
 
     private static ServerChatMessageState WithDelivery(ServerChatMessageState source, ServerChatDeliveryState delivery) =>
         new()
