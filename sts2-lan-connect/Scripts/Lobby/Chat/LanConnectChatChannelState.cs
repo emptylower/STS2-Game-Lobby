@@ -389,20 +389,46 @@ internal sealed class LanConnectChatChannelState
     internal bool ClearDraftIfMatches(
         long expectedContextGeneration,
         long expectedDraftGeneration,
-        string expectedDraft)
+        string expectedDraft) =>
+        ClearDraftIfMatchesCore(
+            expectedContextGeneration,
+            expectedDraftGeneration,
+            expectedDraft,
+            afterStateValidation: null);
+
+    internal bool ClearDraftIfMatchesForTests(
+        long expectedContextGeneration,
+        long expectedDraftGeneration,
+        string expectedDraft,
+        Action afterStateValidation) =>
+        ClearDraftIfMatchesCore(
+            expectedContextGeneration,
+            expectedDraftGeneration,
+            expectedDraft,
+            afterStateValidation);
+
+    private bool ClearDraftIfMatchesCore(
+        long expectedContextGeneration,
+        long expectedDraftGeneration,
+        string expectedDraft,
+        Action? afterStateValidation)
     {
+        ArgumentNullException.ThrowIfNull(expectedDraft);
         lock (_mutationLock)
         {
             ReconcileDraftContentRevision();
             if (_contextGeneration != expectedContextGeneration ||
-                _draftGeneration != expectedDraftGeneration ||
-                !string.Equals(_draft.ToCompatibilityText(), expectedDraft, StringComparison.Ordinal))
+                _draftGeneration != expectedDraftGeneration)
             {
                 return false;
             }
 
-            _draft.Clear();
-            return true;
+            afterStateValidation?.Invoke();
+            LanConnectDraftConditionalClearResult result = _draft.ClearIfMatches(
+                _observedDraftContentRevision,
+                expectedDraft);
+            ApplyDraftContentRevision(result.ContentRevision);
+            return result.Cleared;
         }
     }
 

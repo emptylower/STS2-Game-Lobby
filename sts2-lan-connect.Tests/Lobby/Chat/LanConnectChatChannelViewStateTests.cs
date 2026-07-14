@@ -280,7 +280,7 @@ public sealed class LanConnectChatChannelViewStateTests
     }
 
     [Fact]
-    public async Task ConditionalClearReconcilesPendingRichEditWithSameCompatibilityText()
+    public async Task ConditionalClearRejectsEditAfterStateValidationAndBeforeAtomicDraftClear()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
         LanConnectRichDraft draft = state.RichDraft;
@@ -289,42 +289,59 @@ public sealed class LanConnectChatChannelViewStateTests
         long expectedDraftGeneration = state.DraftGeneration;
         long expectedStateRevision = state.Revision;
         long contentRevisionBefore = draft.ContentRevision;
-        System.Reflection.FieldInfo? lockField = typeof(LanConnectChatChannelState).GetField(
-            "_mutationLock",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-        Assert.NotNull(lockField);
-        object mutationLock = Assert.IsType<object>(lockField!.GetValue(state));
-        Task edit;
+        Task? edit = null;
 
-        lock (mutationLock)
-        {
-            edit = Task.Run(() =>
+        bool cleared = state.ClearDraftIfMatchesForTests(
+            expectedContextGeneration,
+            expectedDraftGeneration,
+            "[Emoji]",
+            () =>
             {
-                draft.SetSelection(new LanConnectDraftSelection(
-                    new LanConnectDraftPosition(0, 0),
-                    new LanConnectDraftPosition(0, "[Emoji]".Length)));
-                draft.InsertEntity(new LanConnectEmojiRun("smile"));
+                edit = Task.Run(() =>
+                {
+                    draft.SetSelection(new LanConnectDraftSelection(
+                        new LanConnectDraftPosition(0, 0),
+                        new LanConnectDraftPosition(0, "[Emoji]".Length)));
+                    draft.InsertEntity(new LanConnectEmojiRun("smile"));
+                });
+                Assert.True(SpinWait.SpinUntil(
+                    () => draft.ContentRevision > contentRevisionBefore,
+                    TimeSpan.FromSeconds(5)));
+                Assert.Equal("[Emoji]", draft.ToCompatibilityText());
             });
-            Assert.True(SpinWait.SpinUntil(
-                () => draft.ContentRevision > contentRevisionBefore,
-                TimeSpan.FromSeconds(5)));
-            Assert.Equal("[Emoji]", draft.ToCompatibilityText());
 
-            Assert.False(state.ClearDraftIfMatches(
-                expectedContextGeneration,
-                expectedDraftGeneration,
-                "[Emoji]"));
-            Assert.False(draft.IsEmpty);
-            Assert.Equal(expectedDraftGeneration + 1, state.DraftGeneration);
-            Assert.Equal(expectedStateRevision + 1, state.Revision);
-        }
+        Assert.NotNull(edit);
+        Assert.False(cleared);
+        Assert.False(draft.IsEmpty);
+        Assert.Equal(expectedDraftGeneration + 1, state.DraftGeneration);
+        Assert.Equal(expectedStateRevision + 1, state.Revision);
 
-        await edit;
+        await edit!;
 
         Assert.Equal(new LanConnectDraftRun[] { new LanConnectEmojiRun("smile") }, draft.Runs);
         Assert.Equal("[Emoji]", state.Draft);
         Assert.Equal(expectedDraftGeneration + 1, state.DraftGeneration);
         Assert.Equal(expectedStateRevision + 1, state.Revision);
+    }
+
+    [Fact]
+    public void ConditionalClearStillClearsAnUnchangedMatchingDraft()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        state.SetDraft("send me");
+        long contextGeneration = state.ContextGeneration;
+        long draftGeneration = state.DraftGeneration;
+        long stateRevision = state.Revision;
+
+        bool cleared = state.ClearDraftIfMatches(
+            contextGeneration,
+            draftGeneration,
+            "send me");
+
+        Assert.True(cleared);
+        Assert.Equal(string.Empty, state.Draft);
+        Assert.Equal(draftGeneration + 1, state.DraftGeneration);
+        Assert.Equal(stateRevision + 1, state.Revision);
     }
 
     private static void RepeatSafely(

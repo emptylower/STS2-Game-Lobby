@@ -38,6 +38,10 @@ internal readonly record struct LanConnectDraftMeasure(
     internal bool CanSubmit => WithinProtocolLimits && FeaturesSupported;
 }
 
+internal readonly record struct LanConnectDraftConditionalClearResult(
+    bool Cleared,
+    long ContentRevision);
+
 internal sealed class LanConnectRichDraft
 {
     private readonly object _sync = new();
@@ -439,37 +443,73 @@ internal sealed class LanConnectRichDraft
         return clearedThroughRevision;
     }
 
+    internal LanConnectDraftConditionalClearResult ClearIfMatches(
+        long expectedContentRevision,
+        string expectedCompatibilityText)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCompatibilityText);
+        bool cleared = false;
+        long? notificationRevision = null;
+        long observedRevision;
+        lock (_sync)
+        {
+            if (_contentRevision == expectedContentRevision &&
+                string.Equals(
+                    ToCompatibilityTextCore(),
+                    expectedCompatibilityText,
+                    StringComparison.Ordinal))
+            {
+                cleared = true;
+                if (!IsEmptyCore)
+                {
+                    _runs.Clear();
+                    _runs.Add(new LanConnectTextRun(string.Empty));
+                    SetCollapsedOffset(0, preferRight: true);
+                    notificationRevision = NextContentRevision();
+                }
+            }
+            observedRevision = _contentRevision;
+        }
+        NotifyContentChanged(notificationRevision);
+        return new LanConnectDraftConditionalClearResult(cleared, observedRevision);
+    }
+
     internal string ToCompatibilityText()
     {
         lock (_sync)
         {
-            System.Text.StringBuilder builder = new();
-            foreach (LanConnectDraftRun run in _runs)
-            {
-                switch (run)
-                {
-                    case LanConnectTextRun text:
-                        builder.Append(text.Text);
-                        break;
-                    case LanConnectEmojiRun:
-                        builder.Append("[Emoji]");
-                        break;
-                    case LanConnectItemRun { ItemType: "card" }:
-                        builder.Append("[Card]");
-                        break;
-                    case LanConnectItemRun { ItemType: "relic" }:
-                        builder.Append("[Relic]");
-                        break;
-                    case LanConnectItemRun { ItemType: "potion" }:
-                        builder.Append("[Potion]");
-                        break;
-                    case LanConnectItemRun:
-                        builder.Append("[Item]");
-                        break;
-                }
-            }
-            return builder.ToString();
+            return ToCompatibilityTextCore();
         }
+    }
+
+    private string ToCompatibilityTextCore()
+    {
+        System.Text.StringBuilder builder = new();
+        foreach (LanConnectDraftRun run in _runs)
+        {
+            switch (run)
+            {
+                case LanConnectTextRun text:
+                    builder.Append(text.Text);
+                    break;
+                case LanConnectEmojiRun:
+                    builder.Append("[Emoji]");
+                    break;
+                case LanConnectItemRun { ItemType: "card" }:
+                    builder.Append("[Card]");
+                    break;
+                case LanConnectItemRun { ItemType: "relic" }:
+                    builder.Append("[Relic]");
+                    break;
+                case LanConnectItemRun { ItemType: "potion" }:
+                    builder.Append("[Potion]");
+                    break;
+                case LanConnectItemRun:
+                    builder.Append("[Item]");
+                    break;
+            }
+        }
+        return builder.ToString();
     }
 
     internal bool IsExactlyText(string text)
