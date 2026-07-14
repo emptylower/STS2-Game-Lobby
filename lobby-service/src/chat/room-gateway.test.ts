@@ -371,6 +371,79 @@ test("room rate limits replay dedupe before consuming and cache connection denia
   assert.equal(sender.frames.at(-2)?.type, "room_chat_ack");
 });
 
+test("legacy room chat preserves generic broadcast semantics until silently rate limited", () => {
+  const gateway = createGateway({ connectionBurst: 1, ipMessagesPerMinute: 30 });
+  const sender = peer("legacy-rate-sender");
+  gateway.registerPeer(sender.registration);
+
+  assert.equal(gateway.handleControlEnvelope("legacy-rate-sender", {
+    type: "room_chat",
+    messageText: "accepted by the generic control broadcaster",
+  }), false);
+  assert.equal(sender.frames.length, 0);
+
+  assert.equal(gateway.handleControlEnvelope("legacy-rate-sender", {
+    type: "room_chat",
+    messageText: "silently dropped by the gateway",
+  }), true);
+  assert.equal(sender.frames.length, 0);
+
+  const boundedGateway = createGateway({ connectionBurst: 10, connectionLimiterMaxKeys: 1 });
+  const capacityOwner = peer("legacy-capacity-owner");
+  const overflow = peer("legacy-capacity-overflow");
+  boundedGateway.registerPeer(capacityOwner.registration);
+  boundedGateway.registerPeer(overflow.registration);
+  assert.equal(boundedGateway.handleControlEnvelope("legacy-capacity-owner", {
+    type: "room_chat",
+    messageText: "fills the limiter key capacity",
+  }), false);
+  assert.equal(boundedGateway.handleControlEnvelope("legacy-capacity-overflow", {
+    type: "room_chat",
+    messageText: "silently dropped when the limiter is busy",
+  }), true);
+  assert.equal(overflow.frames.length, 0);
+});
+
+test("legacy and v2 room chat share connection and IP rate-limit budgets", () => {
+  const connectionGateway = createGateway({ connectionBurst: 1, ipMessagesPerMinute: 30 });
+  const samePeer = peer("cross-protocol-sender");
+  connectionGateway.registerPeer(samePeer.registration);
+  connectionGateway.handleControlEnvelope(
+    "cross-protocol-sender",
+    hello("Alice", "net:alice"),
+  );
+  samePeer.frames.length = 0;
+
+  assert.equal(connectionGateway.handleControlEnvelope("cross-protocol-sender", {
+    type: "room_chat",
+    messageText: "uses the shared connection token",
+  }), false);
+  connectionGateway.handleControlEnvelope(
+    "cross-protocol-sender",
+    roomSend("42424242-4242-4242-8242-424242424242", textContent("v2 limited")),
+  );
+  assert.equal(samePeer.frames.at(-1)?.code, "rate_limited");
+
+  const sharedIp = "203.0.113.50";
+  const ipGateway = createGateway({ connectionBurst: 10, ipMessagesPerMinute: 1 });
+  const v2Sender = peer("cross-ip-v2", "client", { clientIp: sharedIp });
+  const legacySender = peer("cross-ip-legacy", "client", { clientIp: sharedIp });
+  ipGateway.registerPeer(v2Sender.registration);
+  ipGateway.registerPeer(legacySender.registration);
+  ipGateway.handleControlEnvelope("cross-ip-v2", hello("V2", "net:v2"));
+  v2Sender.frames.length = 0;
+  ipGateway.handleControlEnvelope(
+    "cross-ip-v2",
+    roomSend("43434343-4343-4343-8343-434343434343", textContent("uses the shared IP token")),
+  );
+
+  assert.equal(ipGateway.handleControlEnvelope("cross-ip-legacy", {
+    type: "room_chat",
+    messageText: "legacy IP bypass attempt",
+  }), true);
+  assert.equal(legacySender.frames.length, 0);
+});
+
 test("room gateway close clears peer indexes and limiter state", () => {
   const gateway = createGateway({
     connectionBurst: 1,

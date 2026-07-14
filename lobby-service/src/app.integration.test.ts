@@ -881,6 +881,92 @@ test("control host and client hello establish room v2 rich and legacy routing", 
   }
 });
 
+test("legacy room chat burst forwards only the shared connection budget without sender errors", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const sockets: WebSocket[] = [];
+  try {
+    const address = await service.start();
+    const createResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "legacy-rate-limit",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as {
+      roomId: string;
+      controlChannelId: string;
+      hostToken: string;
+    };
+    const joinResponse = await fetch(`http://127.0.0.1:${address.port}/rooms/${created.roomId}/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        playerName: "Recipient",
+        playerNetId: "net:recipient",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+      }),
+    });
+    assert.equal(joinResponse.status, 200);
+    const joined = await joinResponse.json() as { ticketId: string };
+    const baseUrl = `ws://127.0.0.1:${address.port}${config.wsPath}`;
+    const sender = await openControlWebSocket(
+      `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=host&token=${created.hostToken}`,
+    );
+    const recipient = await openControlWebSocket(
+      `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=client&ticketId=${joined.ticketId}`,
+    );
+    sockets.push(sender, recipient);
+    await Promise.all([
+      waitForChatFrame(sender, (frame) => frame.type === "connected"),
+      waitForChatFrame(recipient, (frame) => frame.type === "connected"),
+    ]);
+    chatSocketState(sender).frames.length = 0;
+    chatSocketState(recipient).frames.length = 0;
+
+    for (let index = 0; index < 7; index += 1) {
+      sender.send(JSON.stringify({
+        type: "room_chat",
+        messageText: `legacy-${index}`,
+      }));
+    }
+    await waitForChatFrame(
+      recipient,
+      (frame) => frame.type === "room_chat" && frame.messageText === "legacy-4",
+    );
+    await sleep(50);
+
+    const recipientLegacyFrames = chatSocketState(recipient).frames.filter(
+      (frame) => frame.type === "room_chat",
+    );
+    assert.deepEqual(
+      recipientLegacyFrames.map((frame) => frame.messageText),
+      ["legacy-0", "legacy-1", "legacy-2", "legacy-3"],
+    );
+    assert.equal(
+      chatSocketState(sender).frames.some((frame) => frame.type === "room_chat_error"),
+      false,
+    );
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
 test("control websocket closes frames over the configured payload before routing", async () => {
   const config = testConfig({ port: 0 });
   assert.equal(config.chat.maxPayloadBytes, 8_192);

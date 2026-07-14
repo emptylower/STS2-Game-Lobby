@@ -80,6 +80,11 @@ interface PeerState extends RoomChatPeerRegistration {
   dedupeLastSeenAt: number;
 }
 
+type RoomRateLimitResult =
+  | { allowed: true }
+  | { allowed: false; code: "rate_limited"; retryAfterMs: number }
+  | { allowed: false; code: "server_busy" };
+
 interface RoomChatV2Envelope {
   clientMessageId: string;
   roomId: string;
@@ -205,6 +210,9 @@ export class RoomChatGateway {
     if (envelope.type === "room_chat_v2") {
       this.handleRoomChatV2(peer, envelope, rawEnvelope);
       return true;
+    }
+    if (envelope.type === "room_chat") {
+      return !this.consumeRoomMessageRate(peer).allowed;
     }
     return false;
   }
@@ -401,40 +409,16 @@ export class RoomChatGateway {
       return;
     }
 
-    try {
-      const connectionRate = this.connectionLimiter.consume(peer.connectionSessionId);
-      if (!connectionRate.allowed) {
-        this.cacheAndSendError(
-          peer,
-          envelope.clientMessageId,
-          canonicalJson,
-          "rate_limited",
-          connectionRate.retryAfterMs,
-        );
-        return;
-      }
-      const ipRate = this.ipLimiter.consume(peer.clientIp);
-      if (!ipRate.allowed) {
-        this.cacheAndSendError(
-          peer,
-          envelope.clientMessageId,
-          canonicalJson,
-          "rate_limited",
-          ipRate.retryAfterMs,
-        );
-        return;
-      }
-    } catch (error) {
-      if (error instanceof RateLimitError) {
-        this.cacheAndSendError(
-          peer,
-          envelope.clientMessageId,
-          canonicalJson,
-          "server_busy",
-        );
-        return;
-      }
-      throw error;
+    const rateLimit = this.consumeRoomMessageRate(peer);
+    if (!rateLimit.allowed) {
+      this.cacheAndSendError(
+        peer,
+        envelope.clientMessageId,
+        canonicalJson,
+        rateLimit.code,
+        rateLimit.code === "rate_limited" ? rateLimit.retryAfterMs : undefined,
+      );
+      return;
     }
 
     const now = this.now();
@@ -555,6 +539,33 @@ export class RoomChatGateway {
     const frame = createErrorFrame(code, clientMessageId, retryAfterMs);
     this.storeDedupe(peer, clientMessageId, canonicalJson, frame);
     peer.send(frame);
+  }
+
+  private consumeRoomMessageRate(peer: PeerState): RoomRateLimitResult {
+    try {
+      const connectionRate = this.connectionLimiter.consume(peer.connectionSessionId);
+      if (!connectionRate.allowed) {
+        return {
+          allowed: false,
+          code: "rate_limited",
+          retryAfterMs: connectionRate.retryAfterMs,
+        };
+      }
+      const ipRate = this.ipLimiter.consume(peer.clientIp);
+      if (!ipRate.allowed) {
+        return {
+          allowed: false,
+          code: "rate_limited",
+          retryAfterMs: ipRate.retryAfterMs,
+        };
+      }
+      return { allowed: true };
+    } catch (error) {
+      if (error instanceof RateLimitError) {
+        return { allowed: false, code: "server_busy" };
+      }
+      throw error;
+    }
   }
 
   private sendError(
