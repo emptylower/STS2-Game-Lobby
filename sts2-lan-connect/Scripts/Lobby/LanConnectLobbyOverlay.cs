@@ -226,10 +226,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Func<string, Task>? _testServerChatSend;
     private Func<string, Task>? _testServerChatRetry;
     private Func<string, Task<CancellationToken>>? _testServerSwitch;
+    private Action<Func<string, Task>, Action>? _testServerPickerLauncher;
+    private Func<CancellationToken, Task<bool>>? _testServerRefresh;
     private string? _testDefaultServer;
     private string? _testAppliedServerOverride;
     private bool _testAppliedServerOverrideInitialized;
     private string? _failedServerOverride;
+    private bool _serverPickerOpen;
     private long _serverChatPresentationRevision = -1;
     private bool _testMode;
     private float? _uiScaleOverride;
@@ -271,7 +274,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Func<string, Task> retry,
         float? uiScale = null,
         Func<string, Task<CancellationToken>>? switchServer = null,
-        string? defaultServer = null)
+        string? defaultServer = null,
+        Action<Func<string, Task>, Action>? launchServerPicker = null,
+        Func<CancellationToken, Task<bool>>? refreshServer = null)
     {
         ArgumentNullException.ThrowIfNull(serverState);
         ArgumentNullException.ThrowIfNull(rooms);
@@ -281,6 +286,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _testServerChatSend = send;
         _testServerChatRetry = retry;
         _testServerSwitch = switchServer;
+        _testServerPickerLauncher = launchServerPicker;
+        _testServerRefresh = refreshServer;
         _testDefaultServer = defaultServer;
         _uiScaleOverride = uiScale.HasValue ? Math.Max(1f, uiScale.Value) : null;
         _testMode = true;
@@ -368,6 +375,14 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     internal bool ClearNetworkOverridesEnabledForTests => _clearNetworkOverridesButton?.Disabled == false;
 
+    internal bool RefreshButtonEnabledForTests => _refreshButton?.Disabled == false;
+
+    internal bool ServerPickerOpenForTests => _serverPickerOpen;
+
+    internal bool CreateRoomButtonEnabledForTests => _createButton?.Disabled == false;
+
+    internal bool JoinRoomButtonEnabledForTests => _joinButton?.Disabled == false;
+
     internal string LastStatusMessageForTests => _lastStatusMessage;
 
     internal void SetPersistedServerOverrideForTests(string value)
@@ -383,13 +398,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         UpdateServerOverrideButtons();
     }
 
+    internal void OpenServerPickerForTests() => OpenServerPicker();
+
     public override void _Process(double delta)
     {
         AnimateProgressDialog(delta);
         AnimateHealthIndicator(delta);
         RefreshServerChatPresentation();
 
-        if (_testMode || !Visible || _refreshInFlight)
+        if (_testMode || !Visible || _refreshInFlight || _serverPickerOpen)
         {
             return;
         }
@@ -2526,15 +2543,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return row;
     }
 
-    private async Task RefreshRoomsAsync(
+    private async Task<bool> RefreshRoomsAsync(
         bool userInitiated = false,
         bool allowActionInFlight = false,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_refreshInFlight || (_actionInFlight && !allowActionInFlight))
+        if (_refreshInFlight || _serverPickerOpen || (_actionInFlight && !allowActionInFlight))
         {
-            return;
+            return false;
         }
 
         PersistSettings();
@@ -2599,6 +2616,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             GD.Print(
                 $"sts2_lan_connect overlay: refresh completed with {_rooms.Count} rooms, probeRttMs={(measuredProbeRtt.HasValue ? $"{measuredProbeRtt.Value:0}" : "<unavailable>")}");
             SetStatus(string.Empty);
+            return true;
         }
         catch (OperationCanceledException)
         {
@@ -2619,6 +2637,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             {
                 SetStatus($"大厅刷新失败，已保留上次成功列表：{ex.Message}\n{RefreshFailureSwitchHint}");
             }
+            return false;
         }
         catch (Exception ex)
         {
@@ -2635,6 +2654,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             {
                 SetStatus($"大厅刷新失败，已保留上次成功列表：{ex.Message}\n{RefreshFailureSwitchHint}");
             }
+            return false;
         }
         finally
         {
@@ -4205,18 +4225,77 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     // peer-gossip cache — no more legacy mother registry.
     private void OpenServerPicker()
     {
-        LanConnectServerSelectionStartup.Show(GetTree(), onPicked: addr =>
+        if (IsServerSwitchUiBusy)
         {
-            // The picker switches through the runtime before invoking this callback.
-            if (_serverBaseUrlInput != null)
+            return;
+        }
+
+        _serverPickerOpen = true;
+        UpdateServerPickerBusyState();
+        try
+        {
+            Func<string, Task> onPicked = async addr =>
             {
-                _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
+                CloseServerPickerState();
+                // The picker switches through the runtime before invoking this callback.
+                if (_serverBaseUrlInput != null)
+                {
+                    _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
+                }
+                UpdateNetworkSummary();
+                bool refreshed = await RefreshRoomsAsync(userInitiated: true);
+                if (refreshed)
+                {
+                    SetStatus($"已切换到大厅服务：{addr}");
+                }
+            };
+            Action onCancelled = CloseServerPickerState;
+
+            if (_testServerPickerLauncher != null)
+            {
+                _testServerPickerLauncher(onPicked, onCancelled);
             }
-            UpdateNetworkSummary();
+            else
+            {
+                LanConnectServerSelectionStartup.Show(GetTree(), onPicked, onCancelled);
+            }
+        }
+        catch
+        {
+            CloseServerPickerState();
+            throw;
+        }
+    }
+
+    private void CloseServerPickerState()
+    {
+        if (!_serverPickerOpen)
+        {
+            return;
+        }
+
+        _serverPickerOpen = false;
+        UpdateServerPickerBusyState();
+    }
+
+    private void UpdateServerPickerBusyState()
+    {
+        UpdateServerOverrideButtons();
+        if (!_testMode)
+        {
             UpdateActionButtons();
-            SetStatus($"已切换到大厅服务：{addr}");
-            TaskHelper.RunSafely(RefreshRoomsAsync(userInitiated: true));
-        });
+        }
+        else
+        {
+            if (_createButton != null)
+            {
+                _createButton.Disabled = _serverPickerOpen;
+            }
+            if (_joinButton != null)
+            {
+                _joinButton.Disabled = _serverPickerOpen;
+            }
+        }
     }
 
     private void PersistSettings()
@@ -4369,15 +4448,31 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             }
             _failedServerOverride = null;
             UpdateNetworkSummary();
-            if (!_testMode)
+            bool refreshed;
+            if (_testServerRefresh != null)
             {
-                await RefreshRoomsAsync(
+                refreshed = await _testServerRefresh(serverContextToken);
+                if (!refreshed)
+                {
+                    SetStatus($"大厅刷新失败，已保留上次成功列表。\n{RefreshFailureSwitchHint}");
+                }
+            }
+            else if (!_testMode)
+            {
+                refreshed = await RefreshRoomsAsync(
                     userInitiated: true,
                     allowActionInFlight: true,
                     cancellationToken: serverContextToken);
                 serverContextToken.ThrowIfCancellationRequested();
             }
-            SetStatus($"已切换到大厅服务：{targetServer}");
+            else
+            {
+                refreshed = true;
+            }
+            if (refreshed)
+            {
+                SetStatus($"已切换到大厅服务：{targetServer}");
+            }
         }
         catch (OperationCanceledException)
         {
@@ -4425,6 +4520,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void UpdateServerOverrideButtons()
     {
+        if (_refreshButton != null)
+        {
+            _refreshButton.Disabled = IsServerSwitchUiBusy;
+        }
+
         if (_chooseDirectoryServerButton != null)
         {
             _chooseDirectoryServerButton.Disabled = IsServerSwitchUiBusy;
@@ -4466,7 +4566,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             ? _testAppliedServerOverride ?? string.Empty
             : LanConnectConfig.LobbyServerBaseUrlOverride;
 
-    private bool IsServerSwitchUiBusy => _refreshInFlight || _actionInFlight;
+    private bool IsServerSwitchUiBusy => _refreshInFlight || _actionInFlight || _serverPickerOpen;
 
     private void ToggleSettingsVisibility()
     {
@@ -4498,7 +4598,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private void UpdateActionButtons()
     {
         bool refreshBusy = _refreshInFlight;
-        bool actionBusy = _actionInFlight;
+        bool actionBusy = _actionInFlight || _serverPickerOpen;
         bool hasRunSave = SaveManager.Instance.HasMultiplayerRunSave;
         bool hasActiveRoom = LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true;
         bool hasLobbyEndpoint = HasAvailableLobbyEndpoint();

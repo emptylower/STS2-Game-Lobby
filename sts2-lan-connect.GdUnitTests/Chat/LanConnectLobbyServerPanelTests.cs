@@ -278,6 +278,78 @@ public sealed class LanConnectLobbyServerPanelTests
         AssertThat(fixture.Overlay.DirectoryServerButtonEnabledForTests).IsTrue();
     }
 
+    [TestCase]
+    public async Task Server_picker_is_serialized_and_cancel_restores_entries()
+    {
+        int launches = 0;
+        Action? cancelPicker = null;
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready,
+            switchServer: _ => Task.FromResult(CancellationToken.None),
+            defaultServer: BundledDefaultServer,
+            launchServerPicker: (_, onCancelled) =>
+            {
+                launches++;
+                cancelPicker = onCancelled;
+            });
+        fixture.Overlay.SetServerOverrideDraftForTests("https://picker.example");
+
+        fixture.Overlay.SetRefreshInFlightForTests(true);
+        fixture.Overlay.OpenServerPickerForTests();
+        AssertThat(launches).IsEqual(0);
+
+        fixture.Overlay.SetRefreshInFlightForTests(false);
+        fixture.Overlay.OpenServerPickerForTests();
+        fixture.Overlay.OpenServerPickerForTests();
+
+        AssertThat(launches).IsEqual(1);
+        AssertThat(fixture.Overlay.ServerPickerOpenForTests).IsTrue();
+        AssertThat(fixture.Overlay.RefreshButtonEnabledForTests).IsFalse();
+        AssertThat(fixture.Overlay.ServerOverrideApplyEnabledForTests).IsFalse();
+        AssertThat(fixture.Overlay.ClearNetworkOverridesEnabledForTests).IsFalse();
+        AssertThat(fixture.Overlay.DirectoryServerButtonEnabledForTests).IsFalse();
+        AssertThat(fixture.Overlay.CreateRoomButtonEnabledForTests).IsFalse();
+        AssertThat(fixture.Overlay.JoinRoomButtonEnabledForTests).IsFalse();
+
+        cancelPicker!();
+
+        AssertThat(fixture.Overlay.ServerPickerOpenForTests).IsFalse();
+        AssertThat(fixture.Overlay.RefreshButtonEnabledForTests).IsTrue();
+        AssertThat(fixture.Overlay.DirectoryServerButtonEnabledForTests).IsTrue();
+        AssertThat(fixture.Overlay.CreateRoomButtonEnabledForTests).IsTrue();
+        AssertThat(fixture.Overlay.JoinRoomButtonEnabledForTests).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Successful_switch_with_failed_refresh_preserves_refresh_failure_status()
+    {
+        int switches = 0;
+        int refreshes = 0;
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready,
+            switchServer: _ =>
+            {
+                switches++;
+                return Task.FromResult(CancellationToken.None);
+            },
+            defaultServer: BundledDefaultServer,
+            refreshServer: _ =>
+            {
+                refreshes++;
+                return Task.FromResult(false);
+            });
+        fixture.Overlay.SetServerOverrideDraftForTests("https://refresh-fails.example");
+
+        await fixture.Overlay.ApplyServerOverrideForTests();
+
+        AssertThat(switches).IsEqual(1);
+        AssertThat(refreshes).IsEqual(1);
+        AssertThat(fixture.Overlay.LastStatusMessageForTests).Contains("可能服务器拥堵");
+        AssertThat(fixture.Overlay.LastStatusMessageForTests.Contains("已切换", StringComparison.Ordinal)).IsFalse();
+    }
+
     private static LanConnectChatChannelState ReadyState(string instanceId)
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
@@ -318,7 +390,9 @@ internal sealed class LobbyOverlayFixture : IDisposable
         Vector2I viewportSize,
         LanConnectServerChatPresentation presentation,
         Func<string, Task<CancellationToken>>? switchServer = null,
-        string? defaultServer = null)
+        string? defaultServer = null,
+        Action<Func<string, Task>, Action>? launchServerPicker = null,
+        Func<CancellationToken, Task<bool>>? refreshServer = null)
     {
         LanConnectChatChannelState serverState = new(LanConnectChatChannel.Server);
         serverState.SetPresentationForTests(presentation);
@@ -354,7 +428,9 @@ internal sealed class LobbyOverlayFixture : IDisposable
             send: _ => Task.CompletedTask,
             retry: _ => Task.CompletedTask,
             switchServer: switchServer,
-            defaultServer: defaultServer);
+            defaultServer: defaultServer,
+            launchServerPicker: launchServerPicker,
+            refreshServer: refreshServer);
         await runner.AwaitIdleFrame();
         await overlay.RefreshLayoutForTests(viewportSize);
         await runner.AwaitIdleFrame();
