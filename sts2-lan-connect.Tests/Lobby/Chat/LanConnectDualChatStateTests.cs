@@ -24,6 +24,14 @@ public sealed class LanConnectDualChatStateTests
         Assert.Throws<ArgumentNullException>(() => new LanConnectDualChatState(null!));
     }
 
+    [Fact]
+    public void ConstructorRejectsRoomStateAsServerState()
+    {
+        LanConnectChatChannelState room = new(LanConnectChatChannel.Room);
+
+        Assert.Throws<ArgumentException>(() => new LanConnectDualChatState(room));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -114,6 +122,52 @@ public sealed class LanConnectDualChatStateTests
     }
 
     [Fact]
+    public void EnteringNewRoomFromOpenServerTabSelectsAndShowsClearedRoom()
+    {
+        LanConnectDualChatState state = CreateEnteredState();
+        state.Room.SetDraft("old room");
+        Assert.Equal(LanConnectChatChannel.Room, state.OpenRoomOverlay());
+        state.Select(LanConnectChatChannel.Server);
+        Assert.True(state.Server.IsVisible);
+        long roomRevision = state.Room.Revision;
+        long serverRevision = state.Server.Revision;
+
+        state.EnterRoom("room-b");
+
+        Assert.Equal("room-b", state.ActiveRoomId);
+        Assert.True(state.RoomOverlayOpen);
+        Assert.Equal(LanConnectChatChannel.Room, state.SelectedChannel);
+        Assert.True(state.Room.IsVisible);
+        Assert.False(state.Server.IsVisible);
+        Assert.Equal(string.Empty, state.Room.Draft);
+        Assert.Equal(roomRevision + 2, state.Room.Revision);
+        Assert.Equal(serverRevision + 1, state.Server.Revision);
+
+        state.CloseRoomOverlay();
+        Assert.Equal(LanConnectChatChannel.Room, state.OpenRoomOverlay());
+    }
+
+    [Fact]
+    public void EnteringNewRoomFromOpenRoomTabRestoresRoomVisibilityWithoutTouchingServer()
+    {
+        LanConnectDualChatState state = CreateEnteredState();
+        state.Room.SetDraft("old room");
+        Assert.Equal(LanConnectChatChannel.Room, state.OpenRoomOverlay());
+        long roomRevision = state.Room.Revision;
+        long serverRevision = state.Server.Revision;
+
+        state.EnterRoom("room-b");
+
+        Assert.True(state.RoomOverlayOpen);
+        Assert.Equal(LanConnectChatChannel.Room, state.SelectedChannel);
+        Assert.True(state.Room.IsVisible);
+        Assert.False(state.Server.IsVisible);
+        Assert.Equal(string.Empty, state.Room.Draft);
+        Assert.Equal(roomRevision + 2, state.Room.Revision);
+        Assert.Equal(serverRevision, state.Server.Revision);
+    }
+
+    [Fact]
     public void LeaveRoomClearsRoomAndOverlayButPreservesServerContext()
     {
         LanConnectDualChatState state = EnterAndCloseOnce();
@@ -139,6 +193,85 @@ public sealed class LanConnectDualChatStateTests
 
         Assert.Equal(1, state.Server.UnreadCount);
         Assert.Equal(2, state.Server.Messages.Count);
+    }
+
+    [Fact]
+    public void LeaveRoomIsNoOpWithoutAnActiveRoom()
+    {
+        LanConnectChatChannelState server = new(LanConnectChatChannel.Server);
+        server.SetVisible(true);
+        LanConnectDualChatState state = new(server);
+        state.Room.SetDraft("untouched");
+        long roomRevision = state.Room.Revision;
+        long serverRevision = state.Server.Revision;
+
+        state.LeaveRoom();
+
+        Assert.Equal(roomRevision, state.Room.Revision);
+        Assert.Equal(serverRevision, state.Server.Revision);
+        Assert.Equal("untouched", state.Room.Draft);
+        Assert.True(state.Server.IsVisible);
+        Assert.False(state.RoomOverlayOpen);
+        Assert.Null(state.ActiveRoomId);
+    }
+
+    [Fact]
+    public void RepeatedLeaveRoomIsNoOp()
+    {
+        LanConnectDualChatState state = CreateEnteredState();
+        state.Room.SetDraft("clear once");
+        state.OpenRoomOverlay();
+        state.LeaveRoom();
+        long roomRevision = state.Room.Revision;
+        long serverRevision = state.Server.Revision;
+
+        state.LeaveRoom();
+
+        Assert.Equal(roomRevision, state.Room.Revision);
+        Assert.Equal(serverRevision, state.Server.Revision);
+        Assert.False(state.Room.IsVisible);
+        Assert.False(state.Server.IsVisible);
+    }
+
+    [Fact]
+    public void OpenRoomOverlayWithoutActiveRoomFailsWithoutMutation()
+    {
+        LanConnectChatChannelState server = new(LanConnectChatChannel.Server);
+        server.SetVisible(true);
+        LanConnectDualChatState state = new(server);
+        state.Room.SetDraft("untouched");
+        long roomRevision = state.Room.Revision;
+        long serverRevision = state.Server.Revision;
+
+        Assert.Throws<InvalidOperationException>(() => state.OpenRoomOverlay());
+
+        Assert.Equal(roomRevision, state.Room.Revision);
+        Assert.Equal(serverRevision, state.Server.Revision);
+        Assert.Equal("untouched", state.Room.Draft);
+        Assert.True(state.Server.IsVisible);
+        Assert.False(state.Room.IsVisible);
+        Assert.False(state.RoomOverlayOpen);
+        Assert.Equal(LanConnectChatChannel.Room, state.SelectedChannel);
+    }
+
+    [Fact]
+    public void OpenRoomOverlayAfterLeaveFailsWithoutMutation()
+    {
+        LanConnectDualChatState state = EnterAndCloseOnce();
+        state.Select(LanConnectChatChannel.Server);
+        state.LeaveRoom();
+        long roomRevision = state.Room.Revision;
+        long serverRevision = state.Server.Revision;
+
+        Assert.Throws<InvalidOperationException>(() => state.OpenRoomOverlay());
+
+        Assert.Equal(roomRevision, state.Room.Revision);
+        Assert.Equal(serverRevision, state.Server.Revision);
+        Assert.Null(state.ActiveRoomId);
+        Assert.False(state.RoomOverlayOpen);
+        Assert.False(state.Room.IsVisible);
+        Assert.False(state.Server.IsVisible);
+        Assert.Equal(LanConnectChatChannel.Server, state.SelectedChannel);
     }
 
     [Fact]
@@ -184,6 +317,50 @@ public sealed class LanConnectDualChatStateTests
         Assert.Equal(string.Empty, state.Server.Draft);
         Assert.Empty(state.Server.Messages);
         Assert.Equal("room-a", state.ActiveRoomId);
+    }
+
+    [Fact]
+    public void ClearServerContextRestoresOpenServerTabVisibility()
+    {
+        LanConnectDualChatState state = EnterAndCloseOnce();
+        state.Server.SetDraft("server");
+        state.Server.AppendConfirmedForTests("server", "A", "server", 30, false);
+        Assert.Equal(LanConnectChatChannel.Server, state.OpenRoomOverlay());
+        long roomRevision = state.Room.Revision;
+        long serverRevision = state.Server.Revision;
+
+        state.ClearServerContext();
+
+        Assert.True(state.RoomOverlayOpen);
+        Assert.Equal(LanConnectChatChannel.Server, state.SelectedChannel);
+        Assert.False(state.Room.IsVisible);
+        Assert.True(state.Server.IsVisible);
+        Assert.Empty(state.Server.Messages);
+        Assert.Equal(string.Empty, state.Server.Draft);
+        Assert.Equal(roomRevision, state.Room.Revision);
+        Assert.Equal(serverRevision + 2, state.Server.Revision);
+    }
+
+    [Fact]
+    public void ClearServerContextKeepsOpenRoomTabVisible()
+    {
+        LanConnectDualChatState state = CreateEnteredState();
+        state.Server.SetDraft("server");
+        state.Server.AppendConfirmedForTests("server", "A", "server", 30, false);
+        Assert.Equal(LanConnectChatChannel.Room, state.OpenRoomOverlay());
+        long roomRevision = state.Room.Revision;
+        long serverRevision = state.Server.Revision;
+
+        state.ClearServerContext();
+
+        Assert.True(state.RoomOverlayOpen);
+        Assert.Equal(LanConnectChatChannel.Room, state.SelectedChannel);
+        Assert.True(state.Room.IsVisible);
+        Assert.False(state.Server.IsVisible);
+        Assert.Empty(state.Server.Messages);
+        Assert.Equal(string.Empty, state.Server.Draft);
+        Assert.Equal(roomRevision, state.Room.Revision);
+        Assert.Equal(serverRevision + 1, state.Server.Revision);
     }
 
     private static LanConnectDualChatState CreateEnteredState()

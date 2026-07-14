@@ -10,6 +10,11 @@ internal sealed class LanConnectDualChatState
     internal LanConnectDualChatState(LanConnectChatChannelState server)
     {
         ArgumentNullException.ThrowIfNull(server);
+        if (server.Channel != LanConnectChatChannel.Server)
+        {
+            throw new ArgumentException("Server state must use the server channel.", nameof(server));
+        }
+
         Server = server;
         Room = new LanConnectChatChannelState(LanConnectChatChannel.Room);
     }
@@ -39,10 +44,20 @@ internal sealed class LanConnectDualChatState
         ActiveRoomId = roomId;
         _openedOnce = false;
         SelectedChannel = LanConnectChatChannel.Room;
+        if (RoomOverlayOpen)
+        {
+            _lastSelected = LanConnectChatChannel.Room;
+            ApplyVisibility();
+        }
     }
 
     internal void LeaveRoom()
     {
+        if (ActiveRoomId == null)
+        {
+            return;
+        }
+
         RoomOverlayOpen = false;
         Room.SetVisible(false);
         Server.SetVisible(false);
@@ -53,6 +68,11 @@ internal sealed class LanConnectDualChatState
 
     internal LanConnectChatChannel OpenRoomOverlay()
     {
+        if (ActiveRoomId == null)
+        {
+            throw new InvalidOperationException("A room must be active before opening room chat.");
+        }
+
         SelectedChannel = ChooseForOpen();
         RoomOverlayOpen = true;
         Select(SelectedChannel);
@@ -63,19 +83,27 @@ internal sealed class LanConnectDualChatState
     internal void CloseRoomOverlay()
     {
         RoomOverlayOpen = false;
-        Room.SetVisible(false);
-        Server.SetVisible(false);
+        ApplyVisibility();
     }
 
     internal void Select(LanConnectChatChannel channel)
     {
         SelectedChannel = channel;
         _lastSelected = channel;
-        Room.SetVisible(RoomOverlayOpen && channel == LanConnectChatChannel.Room);
-        Server.SetVisible(RoomOverlayOpen && channel == LanConnectChatChannel.Server);
+        ApplyVisibility();
     }
 
-    internal void ClearServerContext() => Server.ClearForContextChange();
+    internal void ClearServerContext()
+    {
+        Server.ClearForContextChange();
+        ApplyVisibility();
+    }
+
+    private void ApplyVisibility()
+    {
+        Room.SetVisible(RoomOverlayOpen && SelectedChannel == LanConnectChatChannel.Room);
+        Server.SetVisible(RoomOverlayOpen && SelectedChannel == LanConnectChatChannel.Server);
+    }
 
     private LanConnectChatChannel ChooseForOpen()
     {
