@@ -108,6 +108,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private VBoxContainer? _networkSettingsContainer;
     private Button? _toggleNetworkSettingsButton;
     private Button? _toggleSensitiveNetworkButton;
+    private Button? _applyServerOverrideButton;
     private Button? _clearNetworkOverridesButton;
     private Button? _chooseDirectoryServerButton;
     private LineEdit? _serverBaseUrlInput;
@@ -224,6 +225,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private LanConnectChatChannelState? _testServerChatState;
     private Func<string, Task>? _testServerChatSend;
     private Func<string, Task>? _testServerChatRetry;
+    private Func<string, Task>? _testServerSwitch;
+    private string? _testDefaultServer;
+    private string? _testAppliedServerOverride;
     private long _serverChatPresentationRevision = -1;
     private bool _testMode;
     private float? _uiScaleOverride;
@@ -263,7 +267,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         IReadOnlyList<LobbyRoomSummary> rooms,
         Func<string, Task> send,
         Func<string, Task> retry,
-        float? uiScale = null)
+        float? uiScale = null,
+        Func<string, Task>? switchServer = null,
+        string? defaultServer = null)
     {
         ArgumentNullException.ThrowIfNull(serverState);
         ArgumentNullException.ThrowIfNull(rooms);
@@ -272,6 +278,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _testServerChatState = serverState;
         _testServerChatSend = send;
         _testServerChatRetry = retry;
+        _testServerSwitch = switchServer;
+        _testDefaultServer = defaultServer;
         _uiScaleOverride = uiScale.HasValue ? Math.Max(1f, uiScale.Value) : null;
         _testMode = true;
         _rooms.Clear();
@@ -335,6 +343,24 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         ArgumentNullException.ThrowIfNull(serverState);
         _testServerChatState = serverState;
     }
+
+    internal void SetServerOverrideDraftForTests(string value)
+    {
+        if (_serverBaseUrlInput == null)
+        {
+            throw new InvalidOperationException("The server override input has not been built.");
+        }
+        _serverBaseUrlInput.Text = value;
+        UpdateServerOverrideButtons();
+    }
+
+    internal void PersistSettingsForTests() => PersistSettings();
+
+    internal Task ApplyServerOverrideForTests() => ApplyServerOverrideAsync();
+
+    internal Task ClearNetworkOverridesForTests() => ClearNetworkOverridesAsync();
+
+    internal bool ServerOverrideApplyEnabledForTests => _applyServerOverrideButton?.Disabled == false;
 
     public override void _Process(double delta)
     {
@@ -799,7 +825,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         body.AddChild(CreateSectionLabel("玩家与网络"));
 
-        Label intro = CreateBodyLabel("普通玩家默认走内置大厅服务。开发网络设置仅保留 HTTP 覆盖与建房令牌，默认不会在界面里明文回显。\n中心服务器地址已内置，不再提供 UI 入口。 ");
+        Label intro = CreateBodyLabel("普通玩家默认走内置大厅服务。开发网络设置保留 HTTP 覆盖与建房令牌，默认不会在界面里明文回显。\n服务器地址只会在显式应用后切换。 ");
         intro.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         intro.AddThemeColorOverride("font_color", TextMutedColor);
         body.AddChild(intro);
@@ -821,7 +847,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _networkSettingsContainer.AddThemeConstantOverride("separation", 12);
         body.AddChild(_networkSettingsContainer);
 
-        Label networkHint = CreateBodyLabel("这些字段只保存自定义覆盖值。留空表示继续使用打包时附带的默认大厅，不会把默认地址写入 config.json。建房令牌留空时继续使用打包默认值。\n中心服务器地址固定走内置默认，不提供单独覆盖入口。");
+        Label networkHint = CreateBodyLabel("HTTP 覆盖必须点击应用，并会先安全离开当前房间再切换服务器；留空后应用表示切回打包默认大厅。建房令牌会在输入失焦时保存，留空则使用打包默认值。");
         networkHint.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         networkHint.AddThemeColorOverride("font_color", TextMutedColor);
         _networkSettingsContainer.AddChild(networkHint);
@@ -832,22 +858,28 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_serverBaseUrlInput != null)
         {
             _serverBaseUrlInput.Secret = true;
+            _serverBaseUrlInput.TextChanged += _ => UpdateServerOverrideButtons();
         }
 
         if (_createRoomTokenInput != null)
         {
             _createRoomTokenInput.Secret = true;
+            _createRoomTokenInput.TextChanged += _ => UpdateServerOverrideButtons();
         }
 
         HBoxContainer networkActions = new();
         networkActions.AddThemeConstantOverride("separation", 10);
         _networkSettingsContainer.AddChild(networkActions);
 
+        _applyServerOverrideButton = CreateInlineButton("应用 HTTP 覆盖", ApplyServerOverride);
+        networkActions.AddChild(_applyServerOverrideButton);
+
         _toggleSensitiveNetworkButton = CreateInlineButton("显示覆盖地址", ToggleSensitiveNetworkVisibility);
         networkActions.AddChild(_toggleSensitiveNetworkButton);
 
         _clearNetworkOverridesButton = CreateInlineButton("清空覆盖", ClearNetworkOverrides);
         networkActions.AddChild(_clearNetworkOverridesButton);
+        UpdateServerOverrideButtons();
 
         Label repairHint = CreateBodyLabel("如果 Windows / 移动端多人续局出现坏档、读档失败或房间绑定异常，可在这里执行一次带备份的强制修复。");
         repairHint.AutowrapMode = TextServer.AutowrapMode.WordSmart;
@@ -1147,6 +1179,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             {
                 AddFocusTarget(targets, _serverBaseUrlInput);
                 AddFocusTarget(targets, _createRoomTokenInput);
+                AddFocusTarget(targets, _applyServerOverrideButton);
                 AddFocusTarget(targets, _toggleSensitiveNetworkButton);
                 AddFocusTarget(targets, _clearNetworkOverridesButton);
             }
@@ -4137,14 +4170,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         LanConnectServerSelectionStartup.Show(GetTree(), onPicked: addr =>
         {
-            // Startup.Show already wrote LanConnectConfig.LobbyServerBaseUrl
-            // before invoking onPicked, so the on-disk config is up to date.
-            // We mirror the value into the overlay's settings input so the
-            // user sees the new address right away, then refresh rooms from
-            // the chosen server.
+            // The picker switches through the runtime before invoking this callback.
             if (_serverBaseUrlInput != null)
             {
-                _serverBaseUrlInput.Text = addr;
+                _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
             }
             UpdateNetworkSummary();
             UpdateActionButtons();
@@ -4164,11 +4193,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             }
 
             LanConnectConfig.PlayerDisplayName = playerDisplayName;
-        }
-
-        if (_serverBaseUrlInput != null)
-        {
-            LanConnectConfig.LobbyServerBaseUrl = _serverBaseUrlInput.Text.Trim();
         }
 
         if (_createRoomTokenInput != null)
@@ -4224,8 +4248,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
     }
 
-    private void ClearNetworkOverrides()
+    private void ClearNetworkOverrides() => TaskHelper.RunSafely(ClearNetworkOverridesAsync());
+
+    private async Task ClearNetworkOverridesAsync()
     {
+        bool clearServerOverride = !string.IsNullOrWhiteSpace(
+            _testMode ? _testAppliedServerOverride : LanConnectConfig.LobbyServerBaseUrlOverride);
         if (_serverBaseUrlInput != null)
         {
             _serverBaseUrlInput.Text = string.Empty;
@@ -4237,6 +4265,97 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         PersistSettings();
+        if (clearServerOverride)
+        {
+            await ApplyServerOverrideAsync();
+        }
+    }
+
+    private void ApplyServerOverride() => TaskHelper.RunSafely(ApplyServerOverrideAsync());
+
+    private async Task ApplyServerOverrideAsync()
+    {
+        if (_actionInFlight || _serverBaseUrlInput == null)
+        {
+            return;
+        }
+
+        PersistSettings();
+        string requestedOverride = _serverBaseUrlInput.Text.Trim();
+        string targetServer = string.IsNullOrWhiteSpace(requestedOverride)
+            ? _testDefaultServer ?? LanConnectLobbyEndpointDefaults.GetDefaultBaseUrl()
+            : requestedOverride;
+        if (string.IsNullOrWhiteSpace(targetServer))
+        {
+            _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
+            UpdateServerOverrideButtons();
+            SetStatus("未找到可切换的打包默认大厅，请填写 HTTP 覆盖地址。");
+            return;
+        }
+
+        _actionInFlight = true;
+        UpdateServerOverrideButtons();
+        if (!_testMode)
+        {
+            UpdateActionButtons();
+        }
+        bool switched = false;
+        try
+        {
+            SetStatus("正在切换大厅服务器...");
+            if (_testServerSwitch != null)
+            {
+                await _testServerSwitch(targetServer);
+            }
+            else
+            {
+                LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance
+                    ?? throw new InvalidOperationException("Lobby runtime is unavailable.");
+                await runtime.SwitchLobbyServerAsync(targetServer);
+            }
+
+            switched = true;
+            if (_testMode)
+            {
+                _testAppliedServerOverride = requestedOverride;
+            }
+            else
+            {
+                _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
+            }
+            UpdateNetworkSummary();
+            SetStatus($"已切换到大厅服务：{targetServer}");
+        }
+        catch (OperationCanceledException)
+        {
+            if (!_testMode)
+            {
+                _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
+            }
+            SetStatus("服务器切换已取消。");
+        }
+        catch (Exception ex)
+        {
+            if (!_testMode)
+            {
+                _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
+            }
+            SetStatus($"切换大厅服务器失败：{ex.Message}");
+        }
+        finally
+        {
+            _actionInFlight = false;
+            UpdateServerOverrideButtons();
+            if (!_testMode)
+            {
+                UpdateActionButtons();
+            }
+        }
+
+        if (switched && !_testMode)
+        {
+            await RefreshRoomsAsync(userInitiated: true);
+        }
     }
 
     private void ToggleNetworkSettingsVisibility()
@@ -4252,7 +4371,26 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _networkSettingsContainer.Visible
                 ? "收起开发网络设置"
                 : "展开开发网络设置");
-        _clearNetworkOverridesButton.Disabled = !LanConnectConfig.HasLobbyServerOverrides && string.IsNullOrWhiteSpace(_serverBaseUrlInput?.Text);
+        UpdateServerOverrideButtons();
+    }
+
+    private void UpdateServerOverrideButtons()
+    {
+        if (_clearNetworkOverridesButton != null)
+        {
+            bool hasOverrideText = !string.IsNullOrWhiteSpace(_serverBaseUrlInput?.Text)
+                || !string.IsNullOrWhiteSpace(_createRoomTokenInput?.Text);
+            _clearNetworkOverridesButton.Disabled = _actionInFlight
+                || !(LanConnectConfig.HasLobbyServerOverrides || hasOverrideText);
+        }
+
+        if (_applyServerOverrideButton != null)
+        {
+            _applyServerOverrideButton.Disabled = _actionInFlight || string.Equals(
+                _serverBaseUrlInput?.Text.Trim(),
+                LanConnectConfig.LobbyServerBaseUrlOverride,
+                StringComparison.Ordinal);
+        }
     }
 
     private void ToggleSettingsVisibility()
@@ -4351,12 +4489,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _pageNextButton.Disabled = _currentPageIndex >= Math.Max(0, GetTotalPages(GetFilteredRooms().Count) - 1);
         }
 
-        if (_clearNetworkOverridesButton != null)
-        {
-            bool hasOverrideText = !string.IsNullOrWhiteSpace(_serverBaseUrlInput?.Text)
-                || !string.IsNullOrWhiteSpace(_createRoomTokenInput?.Text);
-            _clearNetworkOverridesButton.Disabled = !(LanConnectConfig.HasLobbyServerOverrides || hasOverrideText);
-        }
+        UpdateServerOverrideButtons();
 
         // Update structured action status rows
         if (_actionCreateStatusDot != null && _actionCreateStatusValue != null)
@@ -4790,7 +4923,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             string currentServer = LanConnectConfig.LobbyServerBaseUrl;
             if (overlay._serverBaseUrlInput != null)
             {
-                overlay._serverBaseUrlInput.Text = currentServer;
+                overlay._serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
             }
             overlay.UpdateNetworkSummary();
             overlay.UpdateActionButtons();

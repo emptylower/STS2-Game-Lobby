@@ -9,6 +9,8 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 [RequireGodotRuntime]
 public sealed class LanConnectLobbyServerPanelTests
 {
+    private const string BundledDefaultServer = "https://bundled-default.example";
+
     [TestCase]
     public async Task Desktop_sidebar_is_room_details_above_fixed_server_chat()
     {
@@ -121,6 +123,47 @@ public sealed class LanConnectLobbyServerPanelTests
         AssertThat(replacement.IsVisible).IsTrue();
     }
 
+    [TestCase]
+    public async Task Server_override_requires_explicit_coordinated_apply()
+    {
+        List<string> switches = [];
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready,
+            server =>
+            {
+                switches.Add(server);
+                return Task.CompletedTask;
+            },
+            BundledDefaultServer);
+
+        string requestedServer = string.Equals(
+            LanConnectConfig.LobbyServerBaseUrlOverride,
+            "https://phase2-gate.example",
+            StringComparison.Ordinal)
+            ? "https://phase2-gate-alt.example"
+            : "https://phase2-gate.example";
+        fixture.Overlay.SetServerOverrideDraftForTests(requestedServer);
+        AssertThat(fixture.Overlay.ServerOverrideApplyEnabledForTests).IsTrue();
+        fixture.Overlay.PersistSettingsForTests();
+        AssertThat(switches.Count).IsEqual(0);
+
+        await fixture.Overlay.ClearNetworkOverridesForTests();
+        AssertThat(switches.Count).IsEqual(0);
+
+        fixture.Overlay.SetServerOverrideDraftForTests(requestedServer);
+
+        await fixture.Overlay.ApplyServerOverrideForTests();
+
+        AssertThat(switches.Count).IsEqual(1);
+        AssertThat(switches[0]).IsEqual(requestedServer);
+
+        await fixture.Overlay.ClearNetworkOverridesForTests();
+
+        AssertThat(switches.Count).IsEqual(2);
+        AssertThat(switches[1]).IsEqual(BundledDefaultServer);
+    }
+
     private static LanConnectChatChannelState ReadyState(string instanceId)
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
@@ -159,7 +202,9 @@ internal sealed class LobbyOverlayFixture : IDisposable
 
     internal static async Task<LobbyOverlayFixture> Create(
         Vector2I viewportSize,
-        LanConnectServerChatPresentation presentation)
+        LanConnectServerChatPresentation presentation,
+        Func<string, Task>? switchServer = null,
+        string? defaultServer = null)
     {
         LanConnectChatChannelState serverState = new(LanConnectChatChannel.Server);
         serverState.SetPresentationForTests(presentation);
@@ -193,7 +238,9 @@ internal sealed class LobbyOverlayFixture : IDisposable
             serverState,
             Rooms(),
             send: _ => Task.CompletedTask,
-            retry: _ => Task.CompletedTask);
+            retry: _ => Task.CompletedTask,
+            switchServer: switchServer,
+            defaultServer: defaultServer);
         await runner.AwaitIdleFrame();
         await overlay.RefreshLayoutForTests(viewportSize);
         await runner.AwaitIdleFrame();
