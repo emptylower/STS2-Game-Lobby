@@ -542,7 +542,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         int serverUnread = chat?.Server.UnreadCount ?? 0;
         SetBadge(_roomUnreadBadge, roomUnread);
         SetBadge(_serverUnreadBadge, serverUnread);
-        int total = roomUnread + serverUnread;
+        bool serverSelectable = chat?.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
+        int total = roomUnread + (serverSelectable ? serverUnread : 0);
         if (_toggleBadge != null)
         {
             _toggleBadge.Visible = total > 0;

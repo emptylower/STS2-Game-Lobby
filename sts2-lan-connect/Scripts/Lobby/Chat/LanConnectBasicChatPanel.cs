@@ -41,6 +41,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private LanConnectChatChannelState? _state;
     private Func<string, Task>? _send;
     private Func<string, Task>? _retry;
+    private Label? _titleLabel;
     private ScrollContainer? _messagesScroll;
     private VBoxContainer? _messagesList;
     private Button? _newMessagesButton;
@@ -206,9 +207,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         titleRow.AddThemeConstantOverride("separation", 10);
         AddChild(titleRow);
 
-        Label title = CreateLabel("频道聊天", 16, TextStrongColor);
-        title.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        titleRow.AddChild(title);
+        _titleLabel = CreateLabel("频道聊天", 16, TextStrongColor);
+        _titleLabel.Name = "ChatChannelTitle";
+        _titleLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        titleRow.AddChild(_titleLabel);
 
         _statusLabel = CreateLabel(string.Empty, 12, TextMutedColor);
         _statusLabel.Name = LanConnectConstants.ChatStatusLabelName;
@@ -720,6 +722,12 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         bool ready = _state.Presentation == LanConnectServerChatPresentation.Ready && _state.ChatEnabled;
         bool editable = ready && !_busy;
+        if (_titleLabel != null && GodotObject.IsInstanceValid(_titleLabel))
+        {
+            _titleLabel.Text = _state.Channel == LanConnectChatChannel.Room
+                ? "房间聊天"
+                : "频道聊天";
+        }
         _draftInput.Editable = editable;
         _sendButton.Disabled = !editable;
         _statusLabel.Text = ready && !string.IsNullOrEmpty(_operationStatus)
@@ -805,6 +813,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             LanConnectServerChatPresentation.Unsupported => "当前服务器不支持频道聊天",
             LanConnectServerChatPresentation.Connecting => "正在连接频道...",
             LanConnectServerChatPresentation.Reconnecting => "频道连接中断，正在重连...",
+            LanConnectServerChatPresentation.Ready when state.Channel == LanConnectChatChannel.Room =>
+                state.ChatEnabled ? "房间聊天可用" : "房间聊天暂不可用",
             LanConnectServerChatPresentation.Ready => state.ChatEnabled ? "频道可用" : "聊天暂不可用",
             LanConnectServerChatPresentation.Disabled => "频道已由服务器停用",
             LanConnectServerChatPresentation.TransportFailure when !string.IsNullOrWhiteSpace(state.PresentationDetail) =>

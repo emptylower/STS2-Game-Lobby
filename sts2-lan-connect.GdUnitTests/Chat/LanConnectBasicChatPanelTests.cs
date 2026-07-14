@@ -40,6 +40,27 @@ public sealed class LanConnectBasicChatPanelTests
     }
 
     [TestCase]
+    public async Task Rebinding_updates_stable_channel_title_and_ready_status()
+    {
+        LanConnectChatChannelState room = new(LanConnectChatChannel.Room);
+        LanConnectChatChannelState server = EnabledState();
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+
+        panel.Bind(room, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        AssertThat(FindNode<Label>(panel, "ChatChannelTitle").Text).IsEqual("房间聊天");
+        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
+            .IsEqual("房间聊天可用");
+
+        panel.Bind(server, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        AssertThat(FindNode<Label>(panel, "ChatChannelTitle").Text).IsEqual("频道聊天");
+        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
+            .IsEqual("频道可用");
+    }
+
+    [TestCase]
     public async Task Connection_presentation_states_drive_status_and_editability_without_clearing_draft()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Server);

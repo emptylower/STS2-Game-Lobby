@@ -125,6 +125,27 @@ public sealed class LanConnectRoomChatTabsTests
     }
 
     [TestCase]
+    public async Task Hidden_server_unread_is_excluded_from_toggle_badge_until_support_returns()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        await fixture.Overlay.CloseForTests();
+        fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Server, sequence: 20);
+        await fixture.Overlay.RefreshForTests();
+        Control toggleBadge = FindNode<Control>(fixture.Overlay, "ChatToggleUnreadBadge");
+        AssertThat(toggleBadge.Visible).IsTrue();
+
+        fixture.State.Server.SetPresentationForTests(LanConnectServerChatPresentation.Unsupported);
+        await fixture.Overlay.RefreshForTests();
+        AssertThat(fixture.Overlay.TestState.ServerUnread).IsEqual(1);
+        AssertThat(toggleBadge.Visible).IsFalse();
+
+        fixture.State.Server.SetPresentationForTests(LanConnectServerChatPresentation.Ready);
+        await fixture.Overlay.RefreshForTests();
+        AssertThat(fixture.Overlay.TestState.ServerUnread).IsEqual(1);
+        AssertThat(toggleBadge.Visible).IsTrue();
+    }
+
+    [TestCase]
     public async Task Leaving_room_closes_overlay_and_clears_only_room_state()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
