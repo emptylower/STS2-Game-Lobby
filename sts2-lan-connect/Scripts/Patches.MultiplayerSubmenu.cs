@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Logging;
@@ -208,7 +209,11 @@ internal static class MultiplayerSubmenuPatches
 
         LanConnectServerSelectionStartup.Show(
             tree,
-            onPicked: _ => overlay.ShowOverlay(),
+            onPicked: _ =>
+            {
+                overlay.ShowOverlay();
+                return Task.CompletedTask;
+            },
             onCancelled: null);
     }
 

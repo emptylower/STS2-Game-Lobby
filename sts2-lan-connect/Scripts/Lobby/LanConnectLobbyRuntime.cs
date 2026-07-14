@@ -12,12 +12,13 @@ using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Multiplayer;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
+using MegaCrit.Sts2.Core.Platform;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
 
 namespace Sts2LanConnect.Scripts;
 
-internal sealed partial class LanConnectLobbyRuntime : Node
+internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLifecycle
 {
     private const string RuntimeName = "Sts2LanConnectLobbyRuntime";
     private const double RestartSubmenuRetryIntervalSeconds = 0.6d;
@@ -30,6 +31,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node
     private bool _heartbeatInFlight;
     private double _timeUntilHeartbeat;
     private LanConnectLobbyRuntimeChatCoordinator? _chatCoordinator;
+    private LanConnectServerSwitchCoordinator? _serverSwitchCoordinator;
+    private string? _serverChatPlayerNetId;
     private bool _chatEnabled = true;
     private int _chatEnabledRevision;
     private PendingHostRestart? _pendingHostRestart;
@@ -119,6 +122,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         Instance = this;
         _chatCoordinator = new LanConnectLobbyRuntimeChatCoordinator(new LanConnectServerChatClient());
         _chatCoordinator.StateChanged += OnChatStateChanged;
+        _serverSwitchCoordinator = new LanConnectServerSwitchCoordinator(
+            this,
+            _chatCoordinator,
+            new ConfigServerAddressStore());
         LanConnectProtocolProfiles.ResetActiveProfile("runtime_ready");
         SaveManager.Instance.Saved += OnRunSaved;
         LanConnectSaveDiagnostics.LogNow("runtime_ready");
@@ -261,6 +268,30 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         session.NetService.Disconnect(NetError.Quit, now: true);
         return CloseHostedRoomAsync(session, suppressErrors);
     }
+
+    internal async Task CloseActiveRoomAsync(CancellationToken cancellationToken = default)
+    {
+        HostedRoomSession? hostedSession = _activeSession;
+        JoinedClientSession? clientSession = _activeClientSession;
+        if (hostedSession != null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            hostedSession.NetService.Disconnect(NetError.Quit, now: true);
+            await CloseHostedRoomAsync(hostedSession, suppressErrors: false);
+        }
+
+        if (clientSession != null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            clientSession.NetService.Disconnect(NetError.Quit, now: true);
+            await CloseJoinedClientAsync(clientSession);
+        }
+    }
+
+    bool ILanConnectRoomLifecycle.HasActiveRoom => HasActiveRoomSession;
+
+    Task ILanConnectRoomLifecycle.LeaveActiveRoomAsync(CancellationToken cancellationToken) =>
+        CloseActiveRoomAsync(cancellationToken);
 
     private static void InstallDeferred()
     {
@@ -471,6 +502,19 @@ internal sealed partial class LanConnectLobbyRuntime : Node
 
     internal Task StopServerChatAsync(CancellationToken cancellationToken = default) =>
         GetChatCoordinator().StopServerAsync(cancellationToken);
+
+    internal Task SwitchLobbyServerAsync(
+        string baseUrl,
+        CancellationToken cancellationToken = default)
+    {
+        LanConnectServerSwitchCoordinator coordinator = _serverSwitchCoordinator ??
+            throw new InvalidOperationException("Server switching is unavailable before the lobby runtime is ready.");
+        return coordinator.SwitchAsync(
+            baseUrl,
+            ResolveCurrentPlayerNetId(),
+            LanConnectConfig.GetEffectivePlayerDisplayName(),
+            cancellationToken);
+    }
 
     private async Task SendLegacyRoomChatEnvelopeAsync(
         string messageId,
@@ -1180,7 +1224,48 @@ internal sealed partial class LanConnectLobbyRuntime : Node
         _chatCoordinator ?? throw new InvalidOperationException(
             "Chat is unavailable before the lobby runtime is ready.");
 
+    private string ResolveCurrentPlayerNetId()
+    {
+        string? activePlayerNetId = _activeSession?.NetService.NetId.ToString() ?? _activeClientSession?.PlayerNetId;
+        if (!string.IsNullOrWhiteSpace(activePlayerNetId))
+        {
+            _serverChatPlayerNetId = activePlayerNetId;
+            return activePlayerNetId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_serverChatPlayerNetId))
+        {
+            return _serverChatPlayerNetId;
+        }
+
+        try
+        {
+            ulong platformPlayerId = PlatformUtil.GetLocalPlayerId(PlatformUtil.PrimaryPlatform);
+            if (platformPlayerId > 1)
+            {
+                _serverChatPlayerNetId = platformPlayerId.ToString();
+                return _serverChatPlayerNetId;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"sts2_lan_connect failed to resolve platform player id for server chat: {ex.Message}");
+        }
+
+        _serverChatPlayerNetId = LanConnectNetUtil.GenerateClientNetId().ToString();
+        return _serverChatPlayerNetId;
+    }
+
     private void OnChatStateChanged() => ChatStateChanged?.Invoke();
+
+    private sealed class ConfigServerAddressStore : ILanConnectServerAddressStore
+    {
+        public void Persist(string baseUrl)
+        {
+            LanConnectConfig.LobbyServerBaseUrl = baseUrl;
+            LanConnectConfig.LastUsedServerAddress = baseUrl;
+        }
+    }
 
     private static string NormalizeChatMessage(string? messageText)
     {

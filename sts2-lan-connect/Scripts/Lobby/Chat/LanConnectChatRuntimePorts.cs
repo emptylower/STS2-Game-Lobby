@@ -30,7 +30,7 @@ internal enum LanConnectLobbyRuntimeChatCoordinatorCheckpoint
     AppendAfterContextValidation
 }
 
-internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
+internal sealed class LanConnectLobbyRuntimeChatCoordinator : ILanConnectServerSwitchChat, IAsyncDisposable
 {
     private const int LegacyRoomConfirmedMessageLimit = 60;
     private readonly ILanConnectServerChatClient _client;
@@ -150,6 +150,34 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 
     internal Task StopServerAsync(CancellationToken cancellationToken = default) =>
         RunClientOperationAsync(token => _client.StopAsync(token), cancellationToken);
+
+    Task ILanConnectServerSwitchChat.StopAsync(CancellationToken cancellationToken) =>
+        StopServerAsync(cancellationToken);
+
+    void ILanConnectServerSwitchChat.ClearForContextChange()
+    {
+        AcquireSyncLease();
+        try
+        {
+            long revisionBefore = State.Server.Revision;
+            State.Server.ClearForContextChange();
+            if (State.Server.Revision != revisionBefore)
+            {
+                StateChanged?.Invoke();
+            }
+        }
+        finally
+        {
+            ReleaseSyncLease();
+        }
+    }
+
+    Task ILanConnectServerSwitchChat.ConnectAsync(
+        Uri lobbyBaseUri,
+        string playerNetId,
+        string playerName,
+        CancellationToken cancellationToken) =>
+        ConnectServerAsync(lobbyBaseUri, playerNetId, playerName, cancellationToken);
 
     public ValueTask DisposeAsync()
     {
@@ -332,6 +360,162 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         lock (_lifecycleLock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+        }
+    }
+}
+
+internal interface ILanConnectRoomLifecycle
+{
+    bool HasActiveRoom { get; }
+
+    Task LeaveActiveRoomAsync(CancellationToken cancellationToken);
+}
+
+internal interface ILanConnectServerAddressStore
+{
+    void Persist(string baseUrl);
+}
+
+internal interface ILanConnectServerSwitchChat
+{
+    Task StopAsync(CancellationToken cancellationToken);
+
+    void ClearForContextChange();
+
+    Task ConnectAsync(
+        Uri lobbyBaseUri,
+        string playerNetId,
+        string playerName,
+        CancellationToken cancellationToken);
+}
+
+internal sealed class LanConnectServerSwitchCoordinator
+{
+    private readonly ILanConnectRoomLifecycle _room;
+    private readonly ILanConnectServerSwitchChat _chat;
+    private readonly ILanConnectServerAddressStore _addressStore;
+    private readonly SemaphoreSlim _switchGate = new(1, 1);
+    private readonly object _generationLock = new();
+    private CancellationTokenSource? _activeSwitchCancellation;
+
+    internal LanConnectServerSwitchCoordinator(
+        ILanConnectRoomLifecycle room,
+        ILanConnectServerSwitchChat chat,
+        ILanConnectServerAddressStore addressStore)
+    {
+        _room = room ?? throw new ArgumentNullException(nameof(room));
+        _chat = chat ?? throw new ArgumentNullException(nameof(chat));
+        _addressStore = addressStore ?? throw new ArgumentNullException(nameof(addressStore));
+    }
+
+    internal Task SwitchAsync(
+        string baseUrl,
+        string playerNetId,
+        string playerName,
+        CancellationToken cancellationToken = default)
+    {
+        Uri normalized = NormalizeServerUri(baseUrl);
+        return SwitchCoreAsync(normalized, playerNetId, playerName, cancellationToken);
+    }
+
+    private async Task SwitchCoreAsync(
+        Uri normalized,
+        string playerNetId,
+        string playerName,
+        CancellationToken callerCancellation)
+    {
+        CancellationTokenSource ownCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(callerCancellation);
+        CancellationTokenSource? superseded;
+        lock (_generationLock)
+        {
+            superseded = _activeSwitchCancellation;
+            _activeSwitchCancellation = ownCancellation;
+        }
+
+        CancelAndDisposeSuperseded(superseded);
+        bool gateAcquired = false;
+        try
+        {
+            await _switchGate.WaitAsync(ownCancellation.Token);
+            gateAcquired = true;
+            ownCancellation.Token.ThrowIfCancellationRequested();
+
+            if (_room.HasActiveRoom)
+            {
+                await _room.LeaveActiveRoomAsync(ownCancellation.Token);
+            }
+
+            ownCancellation.Token.ThrowIfCancellationRequested();
+            await _chat.StopAsync(ownCancellation.Token);
+            ownCancellation.Token.ThrowIfCancellationRequested();
+            _chat.ClearForContextChange();
+            ownCancellation.Token.ThrowIfCancellationRequested();
+
+            _addressStore.Persist(normalized.GetLeftPart(UriPartial.Authority));
+            ownCancellation.Token.ThrowIfCancellationRequested();
+            await _chat.ConnectAsync(normalized, playerNetId, playerName, ownCancellation.Token);
+        }
+        catch (OperationCanceledException) when (
+            !callerCancellation.IsCancellationRequested && ownCancellation.IsCancellationRequested)
+        {
+            // A newer switch owns the user-visible result.
+        }
+        finally
+        {
+            if (gateAcquired)
+            {
+                _switchGate.Release();
+            }
+
+            bool disposeOwn = false;
+            lock (_generationLock)
+            {
+                if (ReferenceEquals(_activeSwitchCancellation, ownCancellation))
+                {
+                    _activeSwitchCancellation = null;
+                    disposeOwn = true;
+                }
+            }
+
+            if (disposeOwn)
+            {
+                ownCancellation.Dispose();
+            }
+        }
+    }
+
+    private static Uri NormalizeServerUri(string baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(baseUrl) ||
+            !Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out Uri? parsed) ||
+            !string.Equals(parsed.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Lobby server must be an absolute HTTP or HTTPS URL.", nameof(baseUrl));
+        }
+
+        return new Uri(parsed.GetLeftPart(UriPartial.Authority) + "/", UriKind.Absolute);
+    }
+
+    private static void CancelAndDisposeSuperseded(CancellationTokenSource? superseded)
+    {
+        if (superseded == null)
+        {
+            return;
+        }
+
+        try
+        {
+            superseded.Cancel();
+        }
+        catch (AggregateException)
+        {
+            // Cancellation callback failures belong to the superseded operation.
+        }
+        finally
+        {
+            superseded.Dispose();
         }
     }
 }
