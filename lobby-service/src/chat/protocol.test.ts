@@ -174,6 +174,49 @@ test("requires enabled rich emoji and item features", () => {
   );
 });
 
+test("validates the complete rich schema before applying feature gates", () => {
+  const richDisabled: EnabledRichFeatures = {
+    ...allRichFeatures,
+    richContentVersion: 0,
+  };
+  const invalidContents = [
+    {
+      formatVersion: 1,
+      segments: [
+        { kind: "emoji", emojiId: "heart" },
+        { kind: "item_ref", itemType: "relic", modelId: "MegaCrit.Anchor", displayName: "Anchor" },
+      ],
+    },
+    {
+      formatVersion: 1,
+      segments: [
+        { kind: "emoji", emojiId: "heart" },
+        { kind: "future_segment", value: 1 },
+      ],
+    },
+    {
+      formatVersion: 1,
+      segments: Array.from({ length: 13 }, () => ({ kind: "emoji", emojiId: "heart" })),
+    },
+  ];
+
+  for (const content of invalidContents) {
+    assert.throws(
+      () => canonicalizeChatContent(content, richDisabled),
+      hasCode("invalid_content"),
+    );
+  }
+
+  assert.throws(
+    () =>
+      canonicalizeChatContent(
+        { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "heart" }] },
+        richDisabled,
+      ),
+    hasCode("feature_disabled"),
+  );
+});
+
 test("validates model IDs as 1 to 160 allowed ASCII characters", () => {
   const accepted = ["A", "MegaCrit.mod_name-card.01", "a".repeat(160)];
   for (const modelId of accepted) {
@@ -376,15 +419,68 @@ test("rejects unknown reserved and combat segment fields", () => {
   for (const segment of invalidSegments) {
     assert.throws(
       () => canonicalizeChatContent({ formatVersion: 1, segments: [segment] }, allRichFeatures),
-      (error: unknown) =>
-        hasCode(
-          segment.kind === "power_state" || segment.kind === "target_ref"
-            ? "feature_disabled"
-            : "invalid_content",
-        )(error),
+      hasCode("invalid_content"),
       `expected rejection for ${segment.kind}`,
     );
   }
+});
+
+test("keeps Phase 1 combat kinds feature-disabled while strict rich server schema rejects them", () => {
+  for (const segment of [
+    { kind: "power_state", modelId: "MegaCrit.Strength", amount: 1, roomSessionId: UUID_A },
+    { kind: "target_ref", targetKind: "player", targetKey: "1", roomSessionId: UUID_A },
+  ]) {
+    assert.throws(
+      () => canonicalizeChatContent({ formatVersion: 1, segments: [segment] }, allRichFeatures),
+      hasCode("invalid_content"),
+    );
+    assert.throws(
+      () => canonicalizeServerContent({ formatVersion: 1, segments: [segment] }),
+      hasCode("feature_disabled"),
+    );
+  }
+});
+
+test("rejects custom prototypes and inherited required fields", () => {
+  class ContentInstance {
+    formatVersion = 1;
+    segments = [{ kind: "text", text: "class content" }];
+  }
+
+  const inheritedContent = Object.create({
+    formatVersion: 1,
+    segments: [{ kind: "text", text: "inherited content" }],
+  });
+  const inheritedSegment = Object.create({ kind: "text", text: "inherited segment" });
+  const customPrototypeContent = Object.assign(Object.create({ marker: true }), {
+    formatVersion: 1,
+    segments: [{ kind: "text", text: "custom prototype" }],
+  });
+
+  for (const content of [
+    new ContentInstance(),
+    inheritedContent,
+    customPrototypeContent,
+    { formatVersion: 1, segments: [inheritedSegment] },
+  ]) {
+    assert.throws(
+      () => canonicalizeChatContent(content, allRichFeatures),
+      hasCode("invalid_content"),
+    );
+  }
+
+  const nullPrototypeSegment = Object.assign(Object.create(null), {
+    kind: "text",
+    text: "null prototype",
+  });
+  const nullPrototypeContent = Object.assign(Object.create(null), {
+    formatVersion: 1,
+    segments: [nullPrototypeSegment],
+  });
+  assert.deepEqual(canonicalizeChatContent(nullPrototypeContent, allRichFeatures), {
+    formatVersion: 1,
+    segments: [{ kind: "text", text: "null prototype" }],
+  });
 });
 
 test("normalizes NFC/newlines and merges text", () => {
@@ -785,6 +881,36 @@ test("assertWireBudget measures exact 8192 and 8193 actual mixed message envelop
   assert.throws(() => assertWireBudget(exact8193, 8192), hasCode("invalid_content"));
 });
 
+test("wire budget reserves the worst configured snapshot chunk index", () => {
+  const content = canonicalizeChatContent(
+    {
+      formatVersion: 1,
+      segments: [
+        { kind: "text", text: "look " },
+        { kind: "emoji", emojiId: "thumbs-up" },
+        { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike", upgradeLevel: 1 },
+      ],
+    },
+    allRichFeatures,
+  );
+  const base = sampleMessage(content, "");
+  const oldBoundary = padSenderNameToExactBytesAtSnapshotIndex(base, 8192, 0);
+  assert.ok(oldBoundary);
+  assert.equal(measureChatWireBytesAtSnapshotIndex(oldBoundary, 0), 8192);
+  assert.equal(measureChatWireBytesAtSnapshotIndex(oldBoundary, 10), 8193);
+  assert.equal(measureChatWireBytesAtSnapshotIndex(oldBoundary, 999), 8194);
+  assert.throws(() => assertWireBudget(oldBoundary, 8192), hasCode("invalid_content"));
+  assert.equal(
+    (projectChatWireEnvelopes(oldBoundary).snapshotChunk as { chunkIndex: unknown }).chunkIndex,
+    999,
+  );
+
+  const correctedBoundary = padSenderNameToExactBytes(base, 8192);
+  assert.ok(correctedBoundary);
+  assert.equal(measureChatWireBytes(correctedBoundary), 8192);
+  assertWireBudget(correctedBoundary, 8192);
+});
+
 function makeExactByteObject(targetBytes: number): { p: string } {
   // {"p":"..."} => 8 overhead bytes for ASCII payload.
   const overhead = Buffer.byteLength(JSON.stringify({ p: "" }), "utf8");
@@ -821,4 +947,36 @@ function padSenderNameToExactBytes(
     senderName: "x".repeat(targetBytes - baseSize),
   };
   return measureChatWireBytes(message) === targetBytes ? message : null;
+}
+
+function measureChatWireBytesAtSnapshotIndex(
+  message: CanonicalChatMessage,
+  chunkIndex: number,
+): number {
+  const { ack, chatMessage, snapshotChunk } = projectChatWireEnvelopes(message);
+  const indexedSnapshotChunk = {
+    ...(snapshotChunk as Record<string, unknown>),
+    chunkIndex,
+  };
+  return Math.max(
+    utf8JsonBytes(ack),
+    utf8JsonBytes(chatMessage),
+    utf8JsonBytes(indexedSnapshotChunk),
+  );
+}
+
+function padSenderNameToExactBytesAtSnapshotIndex(
+  base: CanonicalChatMessage,
+  targetBytes: number,
+  chunkIndex: number,
+): CanonicalChatMessage | null {
+  const baseSize = measureChatWireBytesAtSnapshotIndex(base, chunkIndex);
+  if (baseSize > targetBytes) {
+    return null;
+  }
+  const message: CanonicalChatMessage = {
+    ...base,
+    senderName: "x".repeat(targetBytes - baseSize),
+  };
+  return measureChatWireBytesAtSnapshotIndex(message, chunkIndex) === targetBytes ? message : null;
 }

@@ -59,6 +59,10 @@ const CARD_REF_SEGMENT_ALLOWED_KEYS = new Set(["kind", "itemType", "modelId", "u
 const STATIC_ITEM_REF_SEGMENT_ALLOWED_KEYS = new Set(["kind", "itemType", "modelId"]);
 const EMOJI_SET_1_IDS = new Set<string>(EMOJI_SET_1);
 const MODEL_ID_PATTERN = /^[A-Za-z0-9._-]{1,160}$/;
+// config.ts permits snapshotLimit up to 1000. If every message needs its own
+// chunk, valid indices span 0..999; reserve the widest supported index.
+const MAX_CONFIGURED_SNAPSHOT_LIMIT = 1000;
+const WORST_SNAPSHOT_CHUNK_INDEX = MAX_CONFIGURED_SNAPSHOT_LIMIT - 1;
 const PHASE_ONE_FEATURES: EnabledRichFeatures = {
   richContentVersion: 0,
   emojiSetVersion: 0,
@@ -74,7 +78,15 @@ export const WIRE_SENDER_ID_LENGTH = 22;
 export const WIRE_SENT_AT_LENGTH = 24;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
 }
 
 function assertAllowedKeys(
@@ -198,13 +210,13 @@ export function canonicalizeChatContent(
   input: unknown,
   features: EnabledRichFeatures,
 ): ChatContent {
-  return canonicalizeContent(input, features, true);
+  return canonicalizeContent(input, features, false);
 }
 
 function canonicalizeContent(
   input: unknown,
   features: EnabledRichFeatures,
-  validateDisabledVariants: boolean,
+  legacyRichKindPrecedence: boolean,
 ): ChatContent {
   if (!isPlainObject(input)) {
     throw new ChatProtocolError("invalid_content", "content must be an object");
@@ -226,6 +238,8 @@ function canonicalizeContent(
 
   const canonicalSegments: ChatSegment[] = [];
   let entityCount = 0;
+  let requiresEmoji = false;
+  let requiresItemRef = false;
 
   for (const segment of input.segments) {
     if (!isPlainObject(segment)) {
@@ -257,24 +271,21 @@ function canonicalizeContent(
     }
 
     if (kind === "emoji") {
-      if (!validateDisabledVariants && features.richContentVersion !== 1) {
+      if (legacyRichKindPrecedence && features.richContentVersion !== 1) {
         throw new ChatProtocolError("feature_disabled", "emoji segments are not enabled");
       }
       assertAllowedKeys(segment, EMOJI_SEGMENT_ALLOWED_KEYS, "emoji segment");
       if (typeof segment.emojiId !== "string" || !EMOJI_SET_1_IDS.has(segment.emojiId)) {
         throw new ChatProtocolError("invalid_content", "emojiId must be from Emoji Set 1");
       }
-      if (features.richContentVersion !== 1 || features.emojiSetVersion !== 1) {
-        throw new ChatProtocolError("feature_disabled", "emoji segments are not enabled");
-      }
-
+      requiresEmoji = true;
       entityCount += 1;
       canonicalSegments.push({ kind: "emoji", emojiId: segment.emojiId as EmojiId });
       continue;
     }
 
     if (kind === "item_ref") {
-      if (!validateDisabledVariants && features.richContentVersion !== 1) {
+      if (legacyRichKindPrecedence && features.richContentVersion !== 1) {
         throw new ChatProtocolError("feature_disabled", "item_ref segments are not enabled");
       }
       const itemType = segment.itemType;
@@ -305,10 +316,7 @@ function canonicalizeContent(
         }
       }
 
-      if (features.richContentVersion !== 1 || features.itemRefVersion !== 1) {
-        throw new ChatProtocolError("feature_disabled", "item_ref segments are not enabled");
-      }
-
+      requiresItemRef = true;
       entityCount += 1;
       if (itemType === "card") {
         if (Object.hasOwn(segment, "upgradeLevel")) {
@@ -328,7 +336,10 @@ function canonicalizeContent(
     }
 
     if (kind === "power_state" || kind === "target_ref") {
-      throw new ChatProtocolError("feature_disabled", `segment kind "${kind}" is not enabled`);
+      throw new ChatProtocolError(
+        legacyRichKindPrecedence ? "feature_disabled" : "invalid_content",
+        `segment kind "${kind}" is not valid for server chat`,
+      );
     }
     throw new ChatProtocolError("invalid_content", `segment kind "${kind}" is not valid`);
   }
@@ -367,6 +378,13 @@ function canonicalizeContent(
     );
   }
 
+  if (requiresEmoji && (features.richContentVersion !== 1 || features.emojiSetVersion !== 1)) {
+    throw new ChatProtocolError("feature_disabled", "emoji segments are not enabled");
+  }
+  if (requiresItemRef && (features.richContentVersion !== 1 || features.itemRefVersion !== 1)) {
+    throw new ChatProtocolError("feature_disabled", "item_ref segments are not enabled");
+  }
+
   return {
     formatVersion: 1,
     segments: canonicalSegments,
@@ -374,7 +392,7 @@ function canonicalizeContent(
 }
 
 export function canonicalizeServerContent(input: unknown): ChatContent {
-  return canonicalizeContent(input, PHASE_ONE_FEATURES, false);
+  return canonicalizeContent(input, PHASE_ONE_FEATURES, true);
 }
 
 export function renderPlainTextFallback(content: ChatContent): string {
@@ -448,7 +466,7 @@ export function projectChatWireEnvelopes(message: CanonicalChatMessage): {
     type: "chat_snapshot_chunk",
     protocolVersion: 1,
     snapshotId: "00000000-0000-0000-0000-000000000000",
-    chunkIndex: 0,
+    chunkIndex: WORST_SNAPSHOT_CHUNK_INDEX,
     messages: [message],
   };
   return { ack, chatMessage, snapshotChunk };
