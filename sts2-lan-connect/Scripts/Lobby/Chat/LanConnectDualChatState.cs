@@ -45,6 +45,7 @@ internal sealed class LanConnectDualChatState
     {
         RoomOverlayOpen = false;
         Room.SetVisible(false);
+        Server.SetVisible(false);
         Room.ClearForContextChange();
         ActiveRoomId = null;
         _openedOnce = false;

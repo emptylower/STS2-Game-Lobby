@@ -116,11 +116,12 @@ public sealed class LanConnectDualChatStateTests
     [Fact]
     public void LeaveRoomClearsRoomAndOverlayButPreservesServerContext()
     {
-        LanConnectDualChatState state = CreateEnteredState();
+        LanConnectDualChatState state = EnterAndCloseOnce();
         state.Room.SetDraft("room");
         state.Server.SetDraft("server");
         state.Server.AppendConfirmedForTests("server", "A", "message", 30, false);
-        state.OpenRoomOverlay();
+        Assert.Equal(LanConnectChatChannel.Server, state.OpenRoomOverlay());
+        Assert.True(state.Server.IsVisible);
         long serverRevision = state.Server.Revision;
 
         state.LeaveRoom();
@@ -132,7 +133,12 @@ public sealed class LanConnectDualChatStateTests
         Assert.Equal(string.Empty, state.Room.Draft);
         Assert.Equal("server", state.Server.Draft);
         Assert.Single(state.Server.Messages);
-        Assert.Equal(serverRevision, state.Server.Revision);
+        Assert.Equal(serverRevision + 1, state.Server.Revision);
+
+        state.Server.AppendConfirmedForTests("server-after-leave", "B", "hidden", 31, false);
+
+        Assert.Equal(1, state.Server.UnreadCount);
+        Assert.Equal(2, state.Server.Messages.Count);
     }
 
     [Fact]
