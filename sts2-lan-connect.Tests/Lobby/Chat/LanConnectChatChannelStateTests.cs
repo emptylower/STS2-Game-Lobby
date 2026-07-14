@@ -21,6 +21,42 @@ public sealed class LanConnectChatChannelStateTests
     }
 
     [Fact]
+    public void ClearDraftIfMatchesOnlyClearsTheSubmittedSnapshot()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        state.SetDraft("new content");
+        long revision = state.Revision;
+        long contextGeneration = state.ContextGeneration;
+        long draftGeneration = state.DraftGeneration;
+
+        Assert.False(state.ClearDraftIfMatches(contextGeneration, draftGeneration, "submitted content"));
+        Assert.Equal("new content", state.Draft);
+        Assert.Equal(revision, state.Revision);
+
+        Assert.True(state.ClearDraftIfMatches(contextGeneration, draftGeneration, "new content"));
+        Assert.Equal(string.Empty, state.Draft);
+        Assert.Equal(revision + 1, state.Revision);
+
+        state.SetDraft("same text in new room");
+        long staleContext = state.ContextGeneration;
+        long staleDraft = state.DraftGeneration;
+        state.ClearForContextChange();
+        state.SetDraft("same text in new room");
+        Assert.False(state.ClearDraftIfMatches(staleContext, staleDraft, "same text in new room"));
+        Assert.Equal("same text in new room", state.Draft);
+
+        long currentContext = state.ContextGeneration;
+        long firstSameTextDraft = state.DraftGeneration;
+        state.SetDraft("other");
+        state.SetDraft("same text in new room");
+        Assert.False(state.ClearDraftIfMatches(
+            currentContext,
+            firstSameTextDraft,
+            "same text in new room"));
+        Assert.Equal("same text in new room", state.Draft);
+    }
+
+    [Fact]
     public void LegacyConfirmedPreservesSenderIdentityAndTimestamp()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Room);

@@ -273,9 +273,173 @@ public sealed class LanConnectBasicChatPanelTests
         releaseA.SetResult();
         await runner.AwaitIdleFrame();
 
+        AssertThat(stateA.Draft).IsEqual(string.Empty);
         AssertThat(stateB.Draft).IsEqual("draft B");
         AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("draft B");
         AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text).IsEqual("频道可用");
+        AssertThat(panel.TestState.InputEditable).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Failed_send_after_rebind_preserves_old_and_new_channel_drafts()
+    {
+        LanConnectChatChannelState stateA = EnabledState();
+        LanConnectChatChannelState stateB = EnabledState();
+        stateB.SetDraft("draft B");
+        TaskCompletionSource releaseA = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(stateA, _ => releaseA.Task, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        SetDraft(panel, "draft A");
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
+        panel.Bind(stateB, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        releaseA.SetException(new InvalidOperationException("offline"));
+        await runner.AwaitIdleFrame();
+
+        AssertThat(stateA.Draft).IsEqual("draft A");
+        AssertThat(stateB.Draft).IsEqual("draft B");
+        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("draft B");
+        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text).IsEqual("频道可用");
+    }
+
+    [TestCase]
+    public async Task Old_success_cannot_clear_retyped_same_text_after_returning_to_channel()
+    {
+        LanConnectChatChannelState stateA = EnabledState();
+        LanConnectChatChannelState stateB = EnabledState();
+        TaskCompletionSource releaseA = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(stateA, _ => releaseA.Task, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        SetDraft(panel, "hello");
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
+        panel.Bind(stateB, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        panel.Bind(stateA, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        SetDraft(panel, "other");
+        SetDraft(panel, "hello");
+        releaseA.SetResult();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(stateA.Draft).IsEqual("hello");
+        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("hello");
+        AssertThat(panel.TestState.InputEditable).IsTrue();
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task Send_in_flight_stays_owned_by_channel_across_tab_round_trip(bool succeeds)
+    {
+        LanConnectChatChannelState stateA = EnabledState();
+        LanConnectChatChannelState stateB = EnabledState();
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int sendCalls = 0;
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(stateA, _ =>
+        {
+            sendCalls++;
+            return release.Task;
+        }, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        SetDraft(panel, "hello");
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
+        panel.Bind(stateB, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        AssertThat(panel.TestState.InputEditable).IsTrue();
+        panel.Bind(stateA, _ =>
+        {
+            sendCalls++;
+            return release.Task;
+        }, _ => Task.CompletedTask);
+        AssertThat(panel.TestState.InputEditable).IsFalse();
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
+        AssertThat(sendCalls).IsEqual(1);
+
+        if (succeeds)
+        {
+            release.SetResult();
+        }
+        else
+        {
+            release.SetException(new InvalidOperationException("offline"));
+        }
+        await runner.AwaitIdleFrame();
+
+        AssertThat(panel.TestState.InputEditable).IsTrue();
+        AssertThat(stateA.Draft).IsEqual(succeeds ? string.Empty : "hello");
+    }
+
+    [TestCase]
+    public async Task Retry_in_flight_stays_disabled_across_tab_round_trip()
+    {
+        LanConnectChatChannelState stateA = WithDeliveryStates();
+        LanConnectChatChannelState stateB = EnabledState();
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int retryCalls = 0;
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        Func<string, Task> send = _ =>
+        {
+            retryCalls++;
+            return release.Task;
+        };
+        panel.Bind(stateA, send, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        string buttonName = LanConnectConstants.ChatRetryButtonPrefix + "client-failed";
+
+        FindNode<Button>(panel, buttonName).EmitSignal(Button.SignalName.Pressed);
+        panel.Bind(stateB, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        panel.Bind(stateA, send, _ => Task.CompletedTask);
+        Button retry = FindNode<Button>(panel, buttonName);
+        AssertThat(retry.Disabled).IsTrue();
+        retry.EmitSignal(Button.SignalName.Pressed);
+        AssertThat(retryCalls).IsEqual(1);
+
+        release.SetResult();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(FindNode<Button>(panel, buttonName).Disabled).IsFalse();
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task Old_room_send_completion_cannot_mutate_reused_state_in_new_room(bool succeeds)
+    {
+        LanConnectDualChatState chat = new(new LanConnectChatChannelState(LanConnectChatChannel.Server));
+        chat.EnterRoom("room-a");
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(chat.Room, _ => release.Task, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        SetDraft(panel, "same draft");
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
+        chat.LeaveRoom();
+        chat.EnterRoom("room-b");
+        chat.Room.SetDraft("same draft");
+        await runner.AwaitIdleFrame();
+        FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).GrabFocus();
+        AssertThat(panel.TestState.FocusOwnerName).IsEqual(LanConnectConstants.ChatDraftInputName);
+        if (succeeds)
+        {
+            release.SetResult();
+        }
+        else
+        {
+            release.SetException(new InvalidOperationException("offline"));
+        }
+        await runner.AwaitIdleFrame();
+
+        AssertThat(chat.Room.Draft).IsEqual("same draft");
+        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("same draft");
+        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
+            .IsEqual("房间聊天可用");
+        AssertThat(panel.TestState.FocusOwnerName).IsEqual(LanConnectConstants.ChatDraftInputName);
         AssertThat(panel.TestState.InputEditable).IsTrue();
     }
 

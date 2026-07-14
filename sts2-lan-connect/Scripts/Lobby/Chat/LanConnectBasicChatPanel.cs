@@ -21,6 +21,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 {
     private readonly record struct ChatBinding(
         long Generation,
+        long ContextGeneration,
+        long DraftGeneration,
         LanConnectChatChannelState State,
         Func<string, Task> Send,
         Func<string, Task> Retry);
@@ -30,7 +32,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         string ClientMessageId,
         string Text);
 
-    private readonly record struct RetryOperationKey(long Generation, string StableKey);
+    private readonly record struct SendOperationKey(
+        LanConnectChatChannelState State,
+        long ContextGeneration);
+
+    private readonly record struct RetryOperationKey(
+        LanConnectChatChannelState State,
+        long ContextGeneration,
+        string StableKey);
 
     private static readonly Color TextStrongColor = new(0.94f, 0.91f, 0.84f, 1f);
     private static readonly Color TextMutedColor = new(0.68f, 0.65f, 0.6f, 1f);
@@ -50,12 +59,13 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private Label? _statusLabel;
     private ConfirmationDialog? _unknownConfirmation;
     private PendingUnknownConfirmation? _pendingUnknownConfirmation;
+    private readonly HashSet<SendOperationKey> _sendInFlight = new();
     private readonly HashSet<RetryOperationKey> _retryInFlight = new();
     private long _renderedRevision = -1;
     private long _bindingGeneration;
+    private long _boundContextGeneration;
     private long _scrollInteractionGeneration;
     private bool _suppressScrollChange;
-    private bool _busy;
     private string _operationStatus = string.Empty;
 
     internal LanConnectChatChannelState? State => _state;
@@ -124,6 +134,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     public override void _Process(double delta)
     {
         _ = delta;
+        if (_state != null && _state.ContextGeneration != _boundContextGeneration)
+        {
+            ResetForContextChange();
+        }
         if (_state != null && _state.Revision != _renderedRevision)
         {
             Refresh();
@@ -133,8 +147,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     public override void _ExitTree()
     {
         _bindingGeneration++;
-        _busy = false;
         _pendingUnknownConfirmation = null;
+        _sendInFlight.Clear();
         _retryInFlight.Clear();
         _state?.SetVisible(false);
     }
@@ -155,14 +169,13 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
 
         _bindingGeneration++;
-        _busy = false;
         _state = state;
+        _boundContextGeneration = state.ContextGeneration;
         _send = send;
         _retry = retry;
         _renderedRevision = -1;
         _operationStatus = string.Empty;
         _pendingUnknownConfirmation = null;
-        _retryInFlight.Clear();
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
         {
             _unknownConfirmation.Hide();
@@ -300,6 +313,30 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         Refresh();
     }
 
+    private void ResetForContextChange()
+    {
+        if (_state == null)
+        {
+            return;
+        }
+
+        _bindingGeneration++;
+        long currentContext = _state.ContextGeneration;
+        _sendInFlight.RemoveWhere(key =>
+            ReferenceEquals(key.State, _state) && key.ContextGeneration != currentContext);
+        _retryInFlight.RemoveWhere(key =>
+            ReferenceEquals(key.State, _state) && key.ContextGeneration != currentContext);
+        _boundContextGeneration = currentContext;
+        _renderedRevision = -1;
+        _operationStatus = string.Empty;
+        _pendingUnknownConfirmation = null;
+        if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
+        {
+            _unknownConfirmation.Hide();
+        }
+        ApplyBoundState();
+    }
+
     private void CaptureCurrentViewState()
     {
         if (_state == null)
@@ -352,7 +389,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             for (int index = 0; index < messages.Count; index++)
             {
-                _messagesList.AddChild(BuildMessageRow(messages[index], index));
+                _messagesList.AddChild(BuildMessageRow(state, messages[index], index));
             }
         }
 
@@ -388,7 +425,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
     }
 
-    private Control BuildMessageRow(ServerChatMessageState message, int index)
+    private Control BuildMessageRow(
+        LanConnectChatChannelState state,
+        ServerChatMessageState message,
+        int index)
     {
         PanelContainer row = new();
         row.SizeFlagsHorizontal = SizeFlags.ExpandFill;
@@ -441,7 +481,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 retryButton.Name = LanConnectConstants.ChatRetryButtonPrefix + RetryNodeSuffix(message, index);
                 retryButton.FocusMode = FocusModeEnum.All;
                 retryButton.Disabled = _retryInFlight.Contains(
-                    new RetryOperationKey(_bindingGeneration, stableKey));
+                    new RetryOperationKey(state, state.ContextGeneration, stableKey));
                 retryButton.Connect(
                     Button.SignalName.Pressed,
                     Callable.From(() => _ = RetryMessageAsync(message, stableKey, retryButton)));
@@ -457,8 +497,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         if (!TryCaptureBinding(out ChatBinding binding) ||
             !CanTouchControls(binding) ||
             _draftInput == null || !GodotObject.IsInstanceValid(_draftInput) ||
-            _sendButton == null || !GodotObject.IsInstanceValid(_sendButton) ||
-            _busy)
+            _sendButton == null || !GodotObject.IsInstanceValid(_sendButton))
         {
             return;
         }
@@ -477,18 +516,25 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
 
-        _busy = true;
+        SendOperationKey operationKey = new(binding.State, binding.ContextGeneration);
+        if (!_sendInFlight.Add(operationKey))
+        {
+            return;
+        }
         UpdateAvailability();
         try
         {
             await binding.Send(text);
+            binding.State.ClearDraftIfMatches(
+                binding.ContextGeneration,
+                binding.DraftGeneration,
+                text);
             if (!CanTouchControls(binding) || _draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
             {
                 return;
             }
 
-            _draftInput.Text = string.Empty;
-            binding.State.SetDraft(string.Empty);
+            _draftInput.Text = binding.State.Draft;
             _operationStatus = "已提交";
             _draftInput.GrabFocus();
         }
@@ -501,9 +547,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         finally
         {
-            if (CanTouchControls(binding))
+            _sendInFlight.Remove(operationKey);
+            if (CanTouchSameContext(binding))
             {
-                _busy = false;
                 UpdateAvailability();
             }
         }
@@ -540,7 +586,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
 
-        RetryOperationKey operationKey = new(binding.Generation, stableKey);
+        RetryOperationKey operationKey = new(
+            binding.State,
+            binding.ContextGeneration,
+            stableKey);
         if (!_retryInFlight.Add(operationKey))
         {
             return;
@@ -575,7 +624,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         finally
         {
             _retryInFlight.Remove(operationKey);
-            if (IsBindingCurrent(binding))
+            if (CanTouchSameContext(binding))
             {
                 Button? currentButton = FindCurrentRetryButton(buttonName);
                 if (currentButton != null)
@@ -583,7 +632,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                     currentButton.Disabled = false;
                 }
             }
-            if (CanTouchControls(binding))
+            if (CanTouchSameContext(binding))
             {
                 UpdateAvailability();
             }
@@ -721,7 +770,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
 
         bool ready = _state.Presentation == LanConnectServerChatPresentation.Ready && _state.ChatEnabled;
-        bool editable = ready && !_busy;
+        bool editable = ready && !_sendInFlight.Contains(
+            new SendOperationKey(_state, _state.ContextGeneration));
         if (_titleLabel != null && GodotObject.IsInstanceValid(_titleLabel))
         {
             _titleLabel.Text = _state.Channel == LanConnectChatChannel.Room
@@ -768,16 +818,32 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return false;
         }
 
-        binding = new ChatBinding(_bindingGeneration, _state, _send, _retry);
+        binding = new ChatBinding(
+            _bindingGeneration,
+            _boundContextGeneration,
+            _state.DraftGeneration,
+            _state,
+            _send,
+            _retry);
         return true;
     }
 
     private bool IsBindingCurrent(ChatBinding binding) =>
         binding.Generation == _bindingGeneration &&
-        ReferenceEquals(binding.State, _state);
+        binding.ContextGeneration == _boundContextGeneration &&
+        ReferenceEquals(binding.State, _state) &&
+        binding.State.ContextGeneration == binding.ContextGeneration;
 
     private bool CanTouchControls(ChatBinding binding) =>
         IsBindingCurrent(binding) &&
+        GodotObject.IsInstanceValid(this) &&
+        IsInsideTree() &&
+        !IsQueuedForDeletion();
+
+    private bool CanTouchSameContext(ChatBinding binding) =>
+        binding.ContextGeneration == _boundContextGeneration &&
+        ReferenceEquals(binding.State, _state) &&
+        binding.State.ContextGeneration == binding.ContextGeneration &&
         GodotObject.IsInstanceValid(this) &&
         IsInsideTree() &&
         !IsQueuedForDeletion();

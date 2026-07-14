@@ -134,6 +134,8 @@ internal sealed class LanConnectChatChannelState
     private readonly LanConnectChatArrivalSequenceClock _arrivalClock;
     private SnapshotAssembly? _snapshotAssembly;
     private long _revision;
+    private long _contextGeneration;
+    private long _draftGeneration;
     private bool _chatEnabled;
     private ServerChatEnabledFeatures _enabledFeatures = new();
     private string _draft = string.Empty;
@@ -185,6 +187,28 @@ internal sealed class LanConnectChatChannelState
             lock (_mutationLock)
             {
                 return _revision;
+            }
+        }
+    }
+
+    internal long ContextGeneration
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _contextGeneration;
+            }
+        }
+    }
+
+    internal long DraftGeneration
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _draftGeneration;
             }
         }
     }
@@ -341,7 +365,29 @@ internal sealed class LanConnectChatChannelState
             }
 
             _draft = next;
+            _draftGeneration++;
             Touch();
+        }
+    }
+
+    internal bool ClearDraftIfMatches(
+        long expectedContextGeneration,
+        long expectedDraftGeneration,
+        string expectedDraft)
+    {
+        lock (_mutationLock)
+        {
+            if (_contextGeneration != expectedContextGeneration ||
+                _draftGeneration != expectedDraftGeneration ||
+                !string.Equals(_draft, expectedDraft, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            _draft = string.Empty;
+            _draftGeneration++;
+            Touch();
+            return true;
         }
     }
 
@@ -687,8 +733,13 @@ internal sealed class LanConnectChatChannelState
     {
         lock (_mutationLock)
         {
+            _contextGeneration++;
             _messages.Clear();
             _snapshotAssembly = null;
+            if (_draft.Length > 0)
+            {
+                _draftGeneration++;
+            }
             _draft = string.Empty;
             ResetIncomingIndicators();
             _scrollOffset = 0;
