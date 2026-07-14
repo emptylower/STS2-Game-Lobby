@@ -13,7 +13,15 @@ internal readonly record struct LanConnectRoomChatOverlayTestState(
     string Draft,
     double ScrollOffset,
     int NewMessagesBelowCount,
-    string FocusOwnerName);
+    string FocusOwnerName,
+    Rect2 PanelRect,
+    Rect2 DraftRect,
+    Rect2 SendRect,
+    IReadOnlyList<Rect2> TabRects,
+    IReadOnlyList<Rect2> RetryRects,
+    Rect2 NewMessagesRect,
+    Rect2 PinRect,
+    IReadOnlyList<LanConnectNamedControlRect> FocusTargetRects);
 
 internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 {
@@ -65,6 +73,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private double _dragHeldSeconds;
     private Vector2 _dragPointerStart;
     private Vector2 _dragRootStart;
+    private float _currentPanelWidth = PanelWidth;
+    private float _currentPanelHeight = PanelHeight;
 
     internal LanConnectRoomChatOverlayTestState TestState
     {
@@ -85,9 +95,23 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 selectedState?.Draft ?? string.Empty,
                 selectedState?.ScrollOffset ?? 0,
                 selectedState?.NewMessagesBelowCount ?? 0,
-                panelState.FocusOwnerName);
+                panelState.FocusOwnerName,
+                RectForTests(_panelFrame),
+                panelState.DraftRect,
+                panelState.SendRect,
+                VisibleRectsForTests(_roomTab, _serverTab),
+                panelState.RetryRects,
+                panelState.NewMessagesRect,
+                RectForTests(_pinButton),
+                FocusTargetRectsForTests(panelState));
         }
     }
+
+    internal LanConnectBasicChatPanel ChatPanelForTests =>
+        _chatPanel ?? throw new InvalidOperationException("The room chat panel has not been built.");
+
+    internal LanConnectChatChannelState SelectedChannelStateForTests =>
+        SelectedState(ResolveChat()) ?? throw new InvalidOperationException("The room chat state is unavailable.");
 
     internal static void Install()
     {
@@ -99,6 +123,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         Layer = 20;
         ProcessMode = ProcessModeEnum.Always;
         BuildUi();
+        GetViewport().Connect(Viewport.SignalName.SizeChanged, Callable.From(ApplyViewportBounds));
+        ApplyViewportBounds();
         RefreshFromSource();
     }
 
@@ -335,6 +361,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             CustomMinimumSize = new Vector2(0, 390)
         };
         body.AddChild(_chatPanel);
+        ApplyViewportBounds();
     }
 
     private void RefreshFromSource()
@@ -870,17 +897,45 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
         _root.OffsetRight = offset.X;
         _root.OffsetTop = offset.Y;
-        _root.OffsetLeft = offset.X - PanelWidth;
+        _root.OffsetLeft = offset.X - _currentPanelWidth;
         _root.OffsetBottom = offset.Y;
+    }
+
+    private void ApplyViewportBounds()
+    {
+        if (_root == null || !GodotObject.IsInstanceValid(_root))
+        {
+            return;
+        }
+
+        Vector2 viewportSize = GetViewport()?.GetVisibleRect().Size ?? new Vector2(1920f, 1080f);
+        bool compact = viewportSize.X <= 1280f || viewportSize.Y <= 720f;
+        _currentPanelWidth = MathF.Min(PanelWidth, MathF.Max(300f, viewportSize.X - 36f));
+        float availablePanelHeight = MathF.Max(270f, viewportSize.Y - 90f);
+        _currentPanelHeight = MathF.Min(PanelHeight, availablePanelHeight);
+
+        if (_panelFrame != null && GodotObject.IsInstanceValid(_panelFrame))
+        {
+            _panelFrame.CustomMinimumSize = new Vector2(_currentPanelWidth, _currentPanelHeight);
+        }
+        if (_chatPanel != null && GodotObject.IsInstanceValid(_chatPanel))
+        {
+            _chatPanel.CustomMinimumSize = new Vector2(0, compact ? 180 : 390);
+            _chatPanel.SetCompactLayout(compact);
+        }
+
+        Vector2 currentOffset = new(_root.OffsetRight, _root.OffsetTop);
+        ApplyOverlayPosition(ClampOverlayOffset(currentOffset));
     }
 
     private Vector2 ClampOverlayOffset(Vector2 offset)
     {
         Vector2 viewportSize = GetViewport()?.GetVisibleRect().Size ?? new Vector2(1920f, 1080f);
-        float minRight = -viewportSize.X + PanelWidth + 18f;
+        float minRight = -viewportSize.X + _currentPanelWidth + 18f;
         float maxRight = -18f;
         float minTop = 18f;
-        float maxTop = MathF.Max(minTop, viewportSize.Y - PanelHeight + 18f);
+        float stackHeight = 44f + 10f + _currentPanelHeight;
+        float maxTop = MathF.Max(minTop, viewportSize.Y - stackHeight - 18f);
         return new Vector2(
             Mathf.Clamp(offset.X, minRight, maxRight),
             Mathf.Clamp(offset.Y, minTop, maxTop));
@@ -891,6 +946,45 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     private static Vector2 GetDefaultOverlayOffset() =>
         new(-DefaultRightMargin, DefaultTopMargin);
+
+    private static Rect2 RectForTests(Control? control) =>
+        control != null && GodotObject.IsInstanceValid(control) && control.IsInsideTree() && control.Visible
+            ? control.GetGlobalRect()
+            : default;
+
+    private static IReadOnlyList<Rect2> VisibleRectsForTests(params Control?[] controls)
+    {
+        List<Rect2> rects = new();
+        foreach (Control? control in controls)
+        {
+            Rect2 rect = RectForTests(control);
+            if (rect.Size.X > 0f && rect.Size.Y > 0f)
+            {
+                rects.Add(rect);
+            }
+        }
+        return rects;
+    }
+
+    private IReadOnlyList<LanConnectNamedControlRect> FocusTargetRectsForTests(
+        LanConnectBasicChatPanelTestState panelState)
+    {
+        List<LanConnectNamedControlRect> rects = new();
+        AddNamedRect(rects, _roomTab);
+        AddNamedRect(rects, _serverTab);
+        rects.AddRange(panelState.FocusTargetRects);
+        AddNamedRect(rects, _pinButton);
+        return rects;
+    }
+
+    private static void AddNamedRect(List<LanConnectNamedControlRect> rects, Control? control)
+    {
+        Rect2 rect = RectForTests(control);
+        if (rect.Size.X > 0f && rect.Size.Y > 0f)
+        {
+            rects.Add(new LanConnectNamedControlRect(control!.Name.ToString(), rect));
+        }
+    }
 
     private static Button CreateTab(string name, string text, string badgeName, out Label badge)
     {

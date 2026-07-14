@@ -6,6 +6,8 @@ using MegaCrit.Sts2.Core.Helpers;
 
 namespace Sts2LanConnect.Scripts;
 
+internal readonly record struct LanConnectNamedControlRect(string Name, Rect2 Rect);
+
 internal readonly record struct LanConnectBasicChatPanelTestState(
     int MessageCount,
     int PendingCount,
@@ -16,7 +18,13 @@ internal readonly record struct LanConnectBasicChatPanelTestState(
     bool IsAtBottom,
     int NewMessagesBelowCount,
     bool InputEditable,
-    string FocusOwnerName);
+    string FocusOwnerName,
+    Rect2 PanelRect,
+    Rect2 DraftRect,
+    Rect2 SendRect,
+    IReadOnlyList<Rect2> RetryRects,
+    Rect2 NewMessagesRect,
+    IReadOnlyList<LanConnectNamedControlRect> FocusTargetRects);
 
 internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 {
@@ -71,6 +79,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private long _scrollInteractionGeneration;
     private bool _suppressScrollChange;
     private bool _suppressDraftTextChanged;
+    private bool _compactLayout;
     private string _acceptedDraftText = string.Empty;
     private string _operationStatus = string.Empty;
 
@@ -136,7 +145,13 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 _state?.IsAtBottom ?? true,
                 _state?.NewMessagesBelowCount ?? 0,
                 inputEditable,
-                focusOwnerName);
+                focusOwnerName,
+                RectForTests(this),
+                RectForTests(_draftInput),
+                RectForTests(_sendButton),
+                RetryRectsForTests(),
+                RectForTests(_newMessagesButton),
+                FocusTargetRectsForTests());
         }
     }
 
@@ -246,6 +261,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
     }
 
+    internal void SetCompactLayout(bool compact)
+    {
+        _compactLayout = compact;
+        if (_messagesScroll != null && GodotObject.IsInstanceValid(_messagesScroll))
+        {
+            _messagesScroll.CustomMinimumSize = new Vector2(0, compact ? 72 : 140);
+        }
+        UpdateDraftHeight();
+    }
+
     internal void ReleaseDraftFocus()
     {
         if (DraftHasFocus)
@@ -325,6 +350,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _statusLabel = CreateLabel(string.Empty, 12, TextMutedColor);
         _statusLabel.Name = LanConnectConstants.ChatStatusLabelName;
         _statusLabel.HorizontalAlignment = HorizontalAlignment.Right;
+        _statusLabel.ClipText = true;
+        _statusLabel.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
+        _statusLabel.CustomMinimumSize = Vector2.Zero;
+        _statusLabel.SizeFlagsHorizontal = SizeFlags.ShrinkEnd;
         titleRow.AddChild(_statusLabel);
 
         _messagesScroll = new ScrollContainer
@@ -351,6 +380,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         _newMessagesButton = CreateButton(string.Empty, accent: false);
         _newMessagesButton.Name = LanConnectConstants.ChatNewMessagesButtonName;
+        _newMessagesButton.CustomMinimumSize = new Vector2(0, 34);
         _newMessagesButton.Visible = false;
         _newMessagesButton.Connect(Button.SignalName.Pressed, Callable.From(ScrollToBottom));
         AddChild(_newMessagesButton);
@@ -550,6 +580,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             12,
             message.IsLocal ? AccentColor : TextStrongColor);
         sender.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        sender.ClipText = true;
+        sender.CustomMinimumSize = Vector2.Zero;
         sender.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
         metadata.AddChild(sender);
 
@@ -582,6 +614,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 Button retryButton = CreateButton("重试", accent: false);
                 retryButton.Name = LanConnectConstants.ChatRetryButtonPrefix + RetryNodeSuffix(message, index);
                 retryButton.FocusMode = FocusModeEnum.All;
+                retryButton.CustomMinimumSize = new Vector2(64, 34);
                 retryButton.Disabled = _retryInFlight.Contains(
                     new RetryOperationKey(state, state.ContextGeneration, stableKey));
                 retryButton.Connect(
@@ -855,7 +888,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         int visibleLines = Math.Clamp(_draftInput.GetTotalVisibleLineCount(), 1, 3);
         float lineHeight = Math.Max(18, _draftInput.GetLineHeight());
-        _draftInput.CustomMinimumSize = new Vector2(0, 20 + visibleLines * lineHeight);
+        float verticalPadding = _compactLayout ? 14 : 20;
+        _draftInput.CustomMinimumSize = new Vector2(0, verticalPadding + visibleLines * lineHeight);
     }
 
     private void MoveDraftCaretToEnd()
@@ -1264,6 +1298,68 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             controls.Add(control);
         }
     }
+
+    private IReadOnlyList<Rect2> RetryRectsForTests()
+    {
+        if (_messagesList == null || !GodotObject.IsInstanceValid(_messagesList))
+        {
+            return Array.Empty<Rect2>();
+        }
+
+        List<Rect2> rects = new();
+        foreach (Node node in _messagesList.FindChildren(
+                     LanConnectConstants.ChatRetryButtonPrefix + "*",
+                     "Button",
+                     recursive: true,
+                     owned: false))
+        {
+            if (node is Control { Visible: true } control)
+            {
+                Rect2 rect = RectForTests(control);
+                if (IsVisibleInMessagesViewport(rect))
+                {
+                    rects.Add(rect);
+                }
+            }
+        }
+        return rects;
+    }
+
+    private IReadOnlyList<LanConnectNamedControlRect> FocusTargetRectsForTests()
+    {
+        List<LanConnectNamedControlRect> rects = new();
+        foreach (Control control in GetFocusChainControls())
+        {
+            Rect2 rect = RectForTests(control);
+            if (control.Name.ToString().StartsWith(
+                    LanConnectConstants.ChatRetryButtonPrefix,
+                    StringComparison.Ordinal) &&
+                !IsVisibleInMessagesViewport(rect))
+            {
+                continue;
+            }
+            if (rect.Size.X > 0f && rect.Size.Y > 0f)
+            {
+                rects.Add(new LanConnectNamedControlRect(control.Name.ToString(), rect));
+            }
+        }
+        return rects;
+    }
+
+    private bool IsVisibleInMessagesViewport(Rect2 rect)
+    {
+        Rect2 viewport = RectForTests(_messagesScroll);
+        return rect.Size.X > 0f && rect.Size.Y > 0f &&
+               rect.Position.X >= viewport.Position.X &&
+               rect.Position.Y >= viewport.Position.Y &&
+               rect.End.X <= viewport.End.X &&
+               rect.End.Y <= viewport.End.Y;
+    }
+
+    private static Rect2 RectForTests(Control? control) =>
+        control != null && GodotObject.IsInstanceValid(control) && control.IsInsideTree() && control.Visible
+            ? control.GetGlobalRect()
+            : default;
 
     private static StyleBoxFlat CreateButtonStyle(Color background, Color border)
     {

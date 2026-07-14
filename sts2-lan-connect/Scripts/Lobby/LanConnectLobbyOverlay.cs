@@ -23,7 +23,9 @@ internal readonly record struct LanConnectLobbyOverlayTestState(
     string SelectedRoomName,
     bool CompactSidebarScrollVisible,
     float RoomDetailMinimumHeight,
-    float ServerChatMinimumHeight);
+    float ServerChatMinimumHeight,
+    IReadOnlyList<Rect2> FocusTargetRects,
+    LanConnectBasicChatPanelTestState ServerChatPanelState);
 
 internal sealed partial class LanConnectLobbyOverlay : Control
 {
@@ -223,10 +225,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Func<string, Task>? _testServerChatRetry;
     private long _serverChatPresentationRevision = -1;
     private bool _testMode;
+    private float? _uiScaleOverride;
 
     internal LanConnectLobbyOverlayTestState TestState => new(
         RectForTests(_roomStagePanel),
-        RectForTests(_sidebarContainer),
+        RectForTests(_layoutMode == LobbyLayoutMode.Compact ? _compactSidebarScroll : _sidebarContainer),
         RectForTests(_roomDetailPanel),
         RectForTests(_serverChatFrame),
         RectForTests(_compactSidebarScroll),
@@ -235,7 +238,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         GetSelectedRoom()?.RoomName ?? string.Empty,
         _compactSidebarScroll?.Visible == true && _compactSidebarScroll.IsInsideTree(),
         _roomDetailPanel?.CustomMinimumSize.Y ?? 0f,
-        _serverChatFrame?.CustomMinimumSize.Y ?? 0f);
+        _serverChatFrame?.CustomMinimumSize.Y ?? 0f,
+        GetLobbyFocusTargets().Select(RectForTests).Where(rect => rect.Size.X > 0f && rect.Size.Y > 0f).ToArray(),
+        _serverChatPanel?.TestState ?? default);
 
     internal LanConnectBasicChatPanel ServerChatPanelForTests =>
         _serverChatPanel ?? throw new InvalidOperationException("The lobby server chat panel has not been built.");
@@ -255,7 +260,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         LanConnectChatChannelState serverState,
         IReadOnlyList<LobbyRoomSummary> rooms,
         Func<string, Task> send,
-        Func<string, Task> retry)
+        Func<string, Task> retry,
+        float uiScale = 1f)
     {
         ArgumentNullException.ThrowIfNull(serverState);
         ArgumentNullException.ThrowIfNull(rooms);
@@ -264,6 +270,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _testServerChatState = serverState;
         _testServerChatSend = send;
         _testServerChatRetry = retry;
+        _uiScaleOverride = Math.Max(1f, uiScale);
         _testMode = true;
         _rooms.Clear();
         _rooms.AddRange(rooms);
@@ -284,6 +291,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         RefreshSelectedRoomDetails();
         RefreshServerChatPresentation(force: true);
         return Task.CompletedTask;
+    }
+
+    internal void ScrollCompactSidebarToChatForTests()
+    {
+        if (_compactSidebarScroll?.GetVScrollBar() is not ScrollBar bar)
+        {
+            return;
+        }
+        bar.Value = Math.Max(bar.MinValue, bar.MaxValue - bar.Page);
     }
 
     internal void SelectRoomForTests(string roomId)
@@ -1328,27 +1344,43 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (_layoutMode == LobbyLayoutMode.Compact)
         {
-            VBoxContainer layout = new()
+            const float sidebarFraction = 0.4f;
+            const float gapPx = 12f;
+            float halfGap = gapPx / 2f;
+            Control wrapper = new()
             {
                 SizeFlagsHorizontal = SizeFlags.ExpandFill,
                 SizeFlagsVertical = SizeFlags.ExpandFill
             };
-            layout.SetAnchorsPreset(LayoutPreset.FullRect);
-            layout.AddThemeConstantOverride("separation", 18);
-            _mainContentHost.AddChild(layout);
+            wrapper.SetAnchorsPreset(LayoutPreset.FullRect);
+            _mainContentHost.AddChild(wrapper);
 
-            AttachChild(layout, _roomStagePanel);
+            _roomStagePanel.GetParent()?.RemoveChild(_roomStagePanel);
+            wrapper.AddChild(_roomStagePanel);
+            _roomStagePanel.AnchorLeft = 0f;
+            _roomStagePanel.AnchorRight = 1f - sidebarFraction;
+            _roomStagePanel.AnchorTop = 0f;
+            _roomStagePanel.AnchorBottom = 1f;
+            _roomStagePanel.OffsetLeft = 0f;
+            _roomStagePanel.OffsetRight = -halfGap;
+            _roomStagePanel.OffsetTop = 0f;
+            _roomStagePanel.OffsetBottom = 0f;
+
             _compactSidebarScroll = new ScrollContainer
             {
                 Name = "LobbyCompactSidebarScroll",
-                SizeFlagsHorizontal = SizeFlags.ExpandFill,
-                SizeFlagsVertical = SizeFlags.ExpandFill,
                 HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled
             };
-            layout.AddChild(_compactSidebarScroll);
+            _compactSidebarScroll.AnchorLeft = 1f - sidebarFraction;
+            _compactSidebarScroll.AnchorRight = 1f;
+            _compactSidebarScroll.AnchorTop = 0f;
+            _compactSidebarScroll.AnchorBottom = 1f;
+            _compactSidebarScroll.OffsetLeft = halfGap;
+            _compactSidebarScroll.OffsetRight = 0f;
+            _compactSidebarScroll.OffsetTop = 0f;
+            _compactSidebarScroll.OffsetBottom = 0f;
+            wrapper.AddChild(_compactSidebarScroll);
             AttachChild(_compactSidebarScroll, _sidebarContainer);
-            _roomStagePanel.SizeFlagsStretchRatio = 1f;
-            _compactSidebarScroll.SizeFlagsStretchRatio = 1f;
         }
         else
         {
@@ -1437,9 +1469,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void ApplyResponsiveLayout()
     {
-        Vector2 size = GetViewportRect().Size;
+        Vector2 size = Size.X > 0f && Size.Y > 0f ? Size : GetViewportRect().Size;
         float aspectRatio = size.Y <= 0f ? 1f : size.X / size.Y;
-        bool compact = size.X < 1180f || size.Y < 820f || aspectRatio < 1.34f;
+        float uiScale = _uiScaleOverride ?? Math.Max(1f, GetWindow()?.ContentScaleFactor ?? 1f);
+        bool compact = uiScale > 1.001f || size.X < 1180f || size.Y < 820f || aspectRatio < 1.34f;
         LobbyLayoutMode nextMode = compact ? LobbyLayoutMode.Compact : LobbyLayoutMode.Desktop;
         bool layoutChanged = _layoutMode != nextMode;
         _layoutMode = nextMode;
@@ -1472,26 +1505,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_headerContentHost != null)
         {
             _headerContentHost.CustomMinimumSize = new Vector2(0f, compact ? 106f : 64f);
-        }
-
-        if (_headerTitleLabel != null)
-        {
-            _headerTitleLabel.AddThemeFontSizeOverride("font_size", compact ? 22 : 26);
-        }
-
-        if (_headerSubtitleLabel != null)
-        {
-            _headerSubtitleLabel.AddThemeFontSizeOverride("font_size", compact ? 14 : 15);
-        }
-
-        if (_heroTitleLabel != null)
-        {
-            _heroTitleLabel.AddThemeFontSizeOverride("font_size", compact ? 30 : 34);
-        }
-
-        if (_heroSubtitleLabel != null)
-        {
-            _heroSubtitleLabel.AddThemeFontSizeOverride("font_size", compact ? 14 : 15);
         }
 
         if (_headerToolbar != null)
@@ -1618,6 +1631,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _serverChatFrame.SizeFlagsVertical = compact ? SizeFlags.ShrinkBegin : SizeFlags.ExpandFill;
         _roomDetailPanel.SizeFlagsStretchRatio = 1f;
         _serverChatFrame.SizeFlagsStretchRatio = 1.15f;
+        _serverChatPanel?.SetCompactLayout(compact);
     }
 
     private void RefreshSelectedRoomDetails()
