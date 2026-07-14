@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertWireBudget,
+  canonicalizeChatContent,
   canonicalizeServerContent,
   type CanonicalChatMessage,
   type ChatContent,
   deterministicContentJson,
+  EMOJI_SET_1,
+  type EnabledRichFeatures,
   measureChatWireBytes,
   projectChatWireEnvelopes,
   renderPlainTextFallback,
@@ -23,6 +26,13 @@ const UUID_A = "01234567-89ab-cdef-0123-456789abcdef";
 const SENDER_ID = "ABCDEFGHIJKLMNOPQRSTUV"; // 22 ASCII base64url
 const SENT_AT = "2026-07-12T12:00:00.000Z"; // 24 ASCII
 
+const allRichFeatures: EnabledRichFeatures = {
+  richContentVersion: 1,
+  emojiSetVersion: 1,
+  itemRefVersion: 1,
+  combatRefVersion: 0,
+};
+
 function textContent(text: string): ChatContent {
   return { formatVersion: 1, segments: [{ kind: "text", text }] };
 }
@@ -37,6 +47,345 @@ function sampleMessage(content: ChatContent, senderName = "Ironclad"): Canonical
     sentAt: SENT_AT,
   };
 }
+
+test("canonicalizes ordered text emoji and item refs", () => {
+  assert.deepEqual(
+    canonicalizeChatContent(
+      {
+        formatVersion: 1,
+        segments: [
+          { kind: "text", text: "  看看\r\n" },
+          { kind: "emoji", emojiId: "thumbs-up" },
+          { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike", upgradeLevel: 1 },
+          { kind: "item_ref", itemType: "relic", modelId: "MegaCrit.Anchor" },
+          { kind: "item_ref", itemType: "potion", modelId: "MegaCrit.FirePotion" },
+        ],
+      },
+      allRichFeatures,
+    ),
+    {
+      formatVersion: 1,
+      segments: [
+        { kind: "text", text: "看看\n" },
+        { kind: "emoji", emojiId: "thumbs-up" },
+        { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike", upgradeLevel: 1 },
+        { kind: "item_ref", itemType: "relic", modelId: "MegaCrit.Anchor" },
+        { kind: "item_ref", itemType: "potion", modelId: "MegaCrit.FirePotion" },
+      ],
+    },
+  );
+});
+
+test("rejects unknown emoji and sender supplied item labels", () => {
+  assert.throws(
+    () =>
+      canonicalizeChatContent(
+        { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "not-published" }] },
+        allRichFeatures,
+      ),
+    hasCode("invalid_content"),
+  );
+  assert.throws(
+    () =>
+      canonicalizeChatContent(
+        {
+          formatVersion: 1,
+          segments: [
+            {
+              kind: "item_ref",
+              itemType: "relic",
+              modelId: "MegaCrit.Anchor",
+              displayName: "Anchor",
+            },
+          ],
+        },
+        allRichFeatures,
+      ),
+    hasCode("invalid_content"),
+  );
+});
+
+test("accepts exactly the 18 accepted emoji IDs and rejects a nineteenth", () => {
+  assert.equal(EMOJI_SET_1.length, 18);
+  assert.equal(new Set(EMOJI_SET_1).size, 18);
+  for (const emojiId of EMOJI_SET_1) {
+    assert.deepEqual(
+      canonicalizeChatContent(
+        { formatVersion: 1, segments: [{ kind: "emoji", emojiId }] },
+        allRichFeatures,
+      ),
+      { formatVersion: 1, segments: [{ kind: "emoji", emojiId }] },
+    );
+  }
+  assert.throws(
+    () =>
+      canonicalizeChatContent(
+        { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "plus" }] },
+        allRichFeatures,
+      ),
+    hasCode("invalid_content"),
+  );
+});
+
+test("requires enabled rich emoji and item features", () => {
+  const emoji = { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "smile" }] };
+  const item = {
+    formatVersion: 1,
+    segments: [{ kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike" }],
+  };
+
+  assert.throws(
+    () => canonicalizeChatContent(emoji, { ...allRichFeatures, richContentVersion: 0 }),
+    hasCode("feature_disabled"),
+  );
+  assert.throws(
+    () => canonicalizeChatContent(emoji, { ...allRichFeatures, emojiSetVersion: 0 }),
+    hasCode("feature_disabled"),
+  );
+  assert.throws(
+    () => canonicalizeChatContent(item, { ...allRichFeatures, itemRefVersion: 0 }),
+    hasCode("feature_disabled"),
+  );
+  assert.throws(
+    () => canonicalizeChatContent(item, { ...allRichFeatures, richContentVersion: 0 }),
+    hasCode("feature_disabled"),
+  );
+
+  assert.throws(
+    () =>
+      canonicalizeChatContent(
+        { formatVersion: 1, segments: [{ kind: "emoji", emojiId: "not-published" }] },
+        { ...allRichFeatures, richContentVersion: 0 },
+      ),
+    hasCode("invalid_content"),
+  );
+  assert.throws(
+    () =>
+      canonicalizeChatContent(
+        {
+          formatVersion: 1,
+          segments: [
+            { kind: "item_ref", itemType: "relic", modelId: "MegaCrit.Anchor", displayName: "Anchor" },
+          ],
+        },
+        { ...allRichFeatures, richContentVersion: 0 },
+      ),
+    hasCode("invalid_content"),
+  );
+});
+
+test("validates model IDs as 1 to 160 allowed ASCII characters", () => {
+  const accepted = ["A", "MegaCrit.mod_name-card.01", "a".repeat(160)];
+  for (const modelId of accepted) {
+    assert.deepEqual(
+      canonicalizeChatContent(
+        { formatVersion: 1, segments: [{ kind: "item_ref", itemType: "relic", modelId }] },
+        allRichFeatures,
+      ),
+      { formatVersion: 1, segments: [{ kind: "item_ref", itemType: "relic", modelId }] },
+    );
+  }
+
+  const rejected: unknown[] = [
+    "",
+    "a".repeat(161),
+    "MegaCrit/Strike",
+    "MegaCrit:Strike",
+    "牌",
+    "has space",
+    1,
+    null,
+  ];
+  for (const modelId of rejected) {
+    assert.throws(
+      () =>
+        canonicalizeChatContent(
+          { formatVersion: 1, segments: [{ kind: "item_ref", itemType: "relic", modelId }] },
+          allRichFeatures,
+        ),
+      hasCode("invalid_content"),
+      `expected invalid modelId ${JSON.stringify(modelId)}`,
+    );
+  }
+});
+
+test("accepts card upgrade levels 0 through 9 only", () => {
+  for (let upgradeLevel = 0; upgradeLevel <= 9; upgradeLevel += 1) {
+    assert.deepEqual(
+      canonicalizeChatContent(
+        {
+          formatVersion: 1,
+          segments: [{ kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike", upgradeLevel }],
+        },
+        allRichFeatures,
+      ),
+      {
+        formatVersion: 1,
+        segments: [{ kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike", upgradeLevel }],
+      },
+    );
+  }
+
+  for (const upgradeLevel of [-1, 10, 1.5, "1", null]) {
+    assert.throws(
+      () =>
+        canonicalizeChatContent(
+          {
+            formatVersion: 1,
+            segments: [{ kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike", upgradeLevel }],
+          },
+          allRichFeatures,
+        ),
+      hasCode("invalid_content"),
+    );
+  }
+
+  for (const itemType of ["relic", "potion"] as const) {
+    assert.throws(
+      () =>
+        canonicalizeChatContent(
+          {
+            formatVersion: 1,
+            segments: [{ kind: "item_ref", itemType, modelId: "MegaCrit.Item", upgradeLevel: 0 }],
+          },
+          allRichFeatures,
+        ),
+      hasCode("invalid_content"),
+    );
+  }
+});
+
+test("enforces rich segment and entity limits", () => {
+  const segments = [
+    ...Array.from({ length: 12 }, () => ({ kind: "emoji", emojiId: "check" })),
+    ...Array.from({ length: 20 }, (_, index) => ({ kind: "text", text: String(index % 10) })),
+  ];
+  const canonical = canonicalizeChatContent({ formatVersion: 1, segments }, allRichFeatures);
+  assert.equal(segments.length, 32);
+  assert.equal(canonical.segments.length, 13);
+
+  assert.throws(
+    () =>
+      canonicalizeChatContent(
+        { formatVersion: 1, segments: [...segments, { kind: "text", text: "x" }] },
+        allRichFeatures,
+      ),
+    hasCode("invalid_content"),
+  );
+  assert.throws(
+    () =>
+      canonicalizeChatContent(
+        {
+          formatVersion: 1,
+          segments: Array.from({ length: 13 }, () => ({ kind: "emoji", emojiId: "check" })),
+        },
+        allRichFeatures,
+      ),
+    hasCode("invalid_content"),
+  );
+});
+
+test("enforces 300 Unicode scalars across separated text runs", () => {
+  const astral = "😀";
+  assert.equal(
+    canonicalizeChatContent(
+      {
+        formatVersion: 1,
+        segments: [
+          { kind: "text", text: astral.repeat(150) },
+          { kind: "emoji", emojiId: "heart" },
+          { kind: "text", text: astral.repeat(150) },
+        ],
+      },
+      allRichFeatures,
+    ).segments.length,
+    3,
+  );
+  assert.throws(
+    () =>
+      canonicalizeChatContent(
+        {
+          formatVersion: 1,
+          segments: [
+            { kind: "text", text: astral.repeat(150) },
+            { kind: "emoji", emojiId: "heart" },
+            { kind: "text", text: astral.repeat(151) },
+          ],
+        },
+        allRichFeatures,
+      ),
+    hasCode("invalid_content"),
+  );
+});
+
+test("accepts entity-only content and merges only adjacent text runs", () => {
+  assert.deepEqual(
+    canonicalizeChatContent(
+      {
+        formatVersion: 1,
+        segments: [
+          { kind: "emoji", emojiId: "sparkles" },
+          { kind: "item_ref", itemType: "potion", modelId: "MegaCrit.FirePotion" },
+        ],
+      },
+      allRichFeatures,
+    ),
+    {
+      formatVersion: 1,
+      segments: [
+        { kind: "emoji", emojiId: "sparkles" },
+        { kind: "item_ref", itemType: "potion", modelId: "MegaCrit.FirePotion" },
+      ],
+    },
+  );
+
+  assert.deepEqual(
+    canonicalizeChatContent(
+      {
+        formatVersion: 1,
+        segments: [
+          { kind: "text", text: "  first" },
+          { kind: "text", text: " second " },
+          { kind: "emoji", emojiId: "eye" },
+          { kind: "text", text: " third " },
+          { kind: "text", text: "fourth  " },
+        ],
+      },
+      allRichFeatures,
+    ),
+    {
+      formatVersion: 1,
+      segments: [
+        { kind: "text", text: "first second " },
+        { kind: "emoji", emojiId: "eye" },
+        { kind: "text", text: " third fourth" },
+      ],
+    },
+  );
+});
+
+test("rejects unknown reserved and combat segment fields", () => {
+  const invalidSegments = [
+    { kind: "emoji", emojiId: "heart", label: "Heart" },
+    { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike", url: "https://example.com" },
+    { kind: "item_ref", itemType: "unknown", modelId: "MegaCrit.Item" },
+    { kind: "power_state", modelId: "MegaCrit.Strength", amount: 1, roomSessionId: UUID_A },
+    { kind: "target_ref", targetKind: "player", targetKey: "1", roomSessionId: UUID_A },
+    { kind: "future_segment", value: 1 },
+  ];
+  for (const segment of invalidSegments) {
+    assert.throws(
+      () => canonicalizeChatContent({ formatVersion: 1, segments: [segment] }, allRichFeatures),
+      (error: unknown) =>
+        hasCode(
+          segment.kind === "power_state" || segment.kind === "target_ref"
+            ? "feature_disabled"
+            : "invalid_content",
+        )(error),
+      `expected rejection for ${segment.kind}`,
+    );
+  }
+});
 
 test("normalizes NFC/newlines and merges text", () => {
   assert.deepEqual(
@@ -258,6 +607,8 @@ test("rejects NUL/C0/C1/bidi/format characters but allows LF", () => {
     "\u{e0020}", // tag space
     "\u{e007f}", // cancel tag
     "\u{e0100}", // variation selector-17
+    "\ud800", // unpaired high surrogate
+    "\udc00", // unpaired low surrogate
   ];
 
   for (const ch of disallowed) {
@@ -289,6 +640,27 @@ test("renderPlainTextFallback joins text segments", () => {
   assert.equal(renderPlainTextFallback(content), "hello world");
 });
 
+test("renderPlainTextFallback uses generic rich placeholders without leaking sender data", () => {
+  const content = canonicalizeChatContent(
+    {
+      formatVersion: 1,
+      segments: [
+        { kind: "text", text: "look " },
+        { kind: "emoji", emojiId: "thumbs-up" },
+        { kind: "item_ref", itemType: "card", modelId: "Secret.ModCard", upgradeLevel: 2 },
+        { kind: "item_ref", itemType: "relic", modelId: "Secret.ModRelic" },
+        { kind: "item_ref", itemType: "potion", modelId: "Secret.ModPotion" },
+      ],
+    },
+    allRichFeatures,
+  );
+  const fallback = renderPlainTextFallback(content);
+  assert.equal(fallback, "look [Emoji][Card][Relic][Potion]");
+  assert.equal(fallback.includes("Secret"), false);
+  assert.equal(fallback.includes("ModCard"), false);
+  assert.equal(fallback.includes("Anchor"), false);
+});
+
 test("deterministicContentJson uses fixed field order", () => {
   const content = canonicalizeServerContent({
     formatVersion: 1,
@@ -297,6 +669,24 @@ test("deterministicContentJson uses fixed field order", () => {
   assert.equal(
     deterministicContentJson(content),
     '{"formatVersion":1,"segments":[{"kind":"text","text":"hi"}]}',
+  );
+
+  const rich = canonicalizeChatContent(
+    {
+      formatVersion: 1,
+      segments: [
+        { emojiId: "heart", kind: "emoji" },
+        { modelId: "MegaCrit.Strike", upgradeLevel: 1, itemType: "card", kind: "item_ref" },
+        { modelId: "MegaCrit.Defend", itemType: "card", kind: "item_ref" },
+        { modelId: "MegaCrit.Anchor", itemType: "relic", kind: "item_ref" },
+        { modelId: "MegaCrit.FirePotion", itemType: "potion", kind: "item_ref" },
+      ],
+    },
+    allRichFeatures,
+  );
+  assert.equal(
+    deterministicContentJson(rich),
+    '{"formatVersion":1,"segments":[{"kind":"emoji","emojiId":"heart"},{"kind":"item_ref","itemType":"card","modelId":"MegaCrit.Strike","upgradeLevel":1},{"kind":"item_ref","itemType":"card","modelId":"MegaCrit.Defend"},{"kind":"item_ref","itemType":"relic","modelId":"MegaCrit.Anchor"},{"kind":"item_ref","itemType":"potion","modelId":"MegaCrit.FirePotion"}]}',
   );
 });
 
@@ -356,6 +746,45 @@ test("assertWireBudget accepts exact 8192 and rejects 8193 worst-case projection
   assert.ok(measureChatWireBytes(realistic) < 8192);
 });
 
+test("assertWireBudget measures exact 8192 and 8193 actual mixed message envelopes", () => {
+  const content = canonicalizeChatContent(
+    {
+      formatVersion: 1,
+      segments: [
+        { kind: "text", text: "look " },
+        { kind: "emoji", emojiId: "thumbs-up" },
+        { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike", upgradeLevel: 1 },
+      ],
+    },
+    allRichFeatures,
+  );
+  const base = sampleMessage(content, "");
+  assert.equal(base.plainTextFallback, "look [Emoji][Card]");
+
+  const exact8192 = padSenderNameToExactBytes(base, 8192);
+  assert.ok(exact8192);
+  const envelopes8192 = projectChatWireEnvelopes(exact8192);
+  const sizes8192 = [
+    utf8JsonBytes(envelopes8192.ack),
+    utf8JsonBytes(envelopes8192.chatMessage),
+    utf8JsonBytes(envelopes8192.snapshotChunk),
+  ];
+  assert.equal(
+    measureChatWireBytes(exact8192),
+    Math.max(...sizes8192),
+  );
+  assert.equal(measureChatWireBytes(exact8192), 8192);
+  assert.equal(utf8JsonBytes(envelopes8192.snapshotChunk), 8192);
+  assert.ok(sizes8192.every((size) => size <= 8192));
+  assertWireBudget(exact8192, 8192);
+
+  const exact8193 = padSenderNameToExactBytes(base, 8193);
+  assert.ok(exact8193);
+  assert.equal(measureChatWireBytes(exact8193), 8193);
+  assert.equal(utf8JsonBytes(projectChatWireEnvelopes(exact8193).snapshotChunk), 8193);
+  assert.throws(() => assertWireBudget(exact8193, 8192), hasCode("invalid_content"));
+});
+
 function makeExactByteObject(targetBytes: number): { p: string } {
   // {"p":"..."} => 8 overhead bytes for ASCII payload.
   const overhead = Buffer.byteLength(JSON.stringify({ p: "" }), "utf8");
@@ -375,6 +804,21 @@ function padFallbackToExactBytes(
   const message: CanonicalChatMessage = {
     ...base,
     plainTextFallback: `${base.plainTextFallback}${"x".repeat(pad)}`,
+  };
+  return measureChatWireBytes(message) === targetBytes ? message : null;
+}
+
+function padSenderNameToExactBytes(
+  base: CanonicalChatMessage,
+  targetBytes: number,
+): CanonicalChatMessage | null {
+  const baseSize = measureChatWireBytes(base);
+  if (baseSize > targetBytes) {
+    return null;
+  }
+  const message: CanonicalChatMessage = {
+    ...base,
+    senderName: "x".repeat(targetBytes - baseSize),
   };
   return measureChatWireBytes(message) === targetBytes ? message : null;
 }

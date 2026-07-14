@@ -1,5 +1,24 @@
+export const EMOJI_SET_1 = [
+  "smile", "laugh", "heart", "thumbs-up", "thumbs-down", "sparkles",
+  "flame", "zap", "shield", "swords", "target", "crown",
+  "skull", "ghost", "eye", "message-circle", "check", "x",
+] as const;
+
+export type EmojiId = typeof EMOJI_SET_1[number];
 export type TextSegment = { kind: "text"; text: string };
-export type ChatContent = { formatVersion: 1; segments: TextSegment[] };
+export type EmojiSegment = { kind: "emoji"; emojiId: EmojiId };
+export type ItemRefSegment =
+  | { kind: "item_ref"; itemType: "card"; modelId: string; upgradeLevel?: number }
+  | { kind: "item_ref"; itemType: "relic" | "potion"; modelId: string };
+export type ChatSegment = TextSegment | EmojiSegment | ItemRefSegment;
+export type ChatContent = { formatVersion: 1; segments: ChatSegment[] };
+
+export interface EnabledRichFeatures {
+  richContentVersion: 0 | 1;
+  emojiSetVersion: 0 | 1;
+  itemRefVersion: 0 | 1;
+  combatRefVersion: 0;
+}
 
 export interface CanonicalChatMessage {
   messageId: string;
@@ -31,15 +50,21 @@ export class ChatProtocolError extends Error {
 }
 
 const MAX_SEGMENTS = 32;
+const MAX_ENTITIES = 12;
 const MAX_TEXT_SCALARS = 300;
 const CONTENT_ALLOWED_KEYS = new Set(["formatVersion", "segments"]);
 const TEXT_SEGMENT_ALLOWED_KEYS = new Set(["kind", "text"]);
-const RICH_KINDS = new Set([
-  "emoji",
-  "item_ref",
-  "power_state",
-  "target_ref",
-]);
+const EMOJI_SEGMENT_ALLOWED_KEYS = new Set(["kind", "emojiId"]);
+const CARD_REF_SEGMENT_ALLOWED_KEYS = new Set(["kind", "itemType", "modelId", "upgradeLevel"]);
+const STATIC_ITEM_REF_SEGMENT_ALLOWED_KEYS = new Set(["kind", "itemType", "modelId"]);
+const EMOJI_SET_1_IDS = new Set<string>(EMOJI_SET_1);
+const MODEL_ID_PATTERN = /^[A-Za-z0-9._-]{1,160}$/;
+const PHASE_ONE_FEATURES: EnabledRichFeatures = {
+  richContentVersion: 0,
+  emojiSetVersion: 0,
+  itemRefVersion: 0,
+  combatRefVersion: 0,
+};
 
 /** Lowercase UUID strings are 36 ASCII bytes. */
 export const WIRE_UUID_LENGTH = 36;
@@ -137,10 +162,24 @@ function isDisallowedControlChar(ch: string): boolean {
 }
 
 function normalizeText(raw: string): string {
-  // Design: validate UTF-8 (JS strings are already UTF-16 of scalar values),
-  // then NFC, then CRLF/CR -> LF.
+  assertWellFormedUnicode(raw);
   const nfc = raw.normalize("NFC");
   return nfc.replace(/\r\n|\r/g, "\n");
+}
+
+function assertWellFormedUnicode(text: string): void {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        throw new ChatProtocolError("invalid_content", "text contains an unpaired surrogate");
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new ChatProtocolError("invalid_content", "text contains an unpaired surrogate");
+    }
+  }
 }
 
 function assertNoDisallowedChars(text: string): void {
@@ -155,7 +194,18 @@ function assertNoDisallowedChars(text: string): void {
   }
 }
 
-export function canonicalizeServerContent(input: unknown): ChatContent {
+export function canonicalizeChatContent(
+  input: unknown,
+  features: EnabledRichFeatures,
+): ChatContent {
+  return canonicalizeContent(input, features, true);
+}
+
+function canonicalizeContent(
+  input: unknown,
+  features: EnabledRichFeatures,
+  validateDisabledVariants: boolean,
+): ChatContent {
   if (!isPlainObject(input)) {
     throw new ChatProtocolError("invalid_content", "content must be an object");
   }
@@ -174,7 +224,8 @@ export function canonicalizeServerContent(input: unknown): ChatContent {
     throw new ChatProtocolError("invalid_content", `segments must be at most ${MAX_SEGMENTS}`);
   }
 
-  const normalizedTexts: string[] = [];
+  const canonicalSegments: ChatSegment[] = [];
+  let entityCount = 0;
 
   for (const segment of input.segments) {
     if (!isPlainObject(segment)) {
@@ -195,30 +246,121 @@ export function canonicalizeServerContent(input: unknown): ChatContent {
       const normalized = normalizeText(segment.text);
       assertNoDisallowedChars(normalized);
       if (normalized.length > 0) {
-        normalizedTexts.push(normalized);
+        const previous = canonicalSegments.at(-1);
+        if (previous?.kind === "text") {
+          previous.text = `${previous.text}${normalized}`.normalize("NFC");
+        } else {
+          canonicalSegments.push({ kind: "text", text: normalized });
+        }
       }
       continue;
     }
 
-    // Phase 1: known rich kinds are not enabled yet; unknown kinds are invalid content.
-    if (RICH_KINDS.has(kind)) {
-      throw new ChatProtocolError("feature_disabled", `segment kind "${kind}" is not enabled in phase 1`);
+    if (kind === "emoji") {
+      if (!validateDisabledVariants && features.richContentVersion !== 1) {
+        throw new ChatProtocolError("feature_disabled", "emoji segments are not enabled");
+      }
+      assertAllowedKeys(segment, EMOJI_SEGMENT_ALLOWED_KEYS, "emoji segment");
+      if (typeof segment.emojiId !== "string" || !EMOJI_SET_1_IDS.has(segment.emojiId)) {
+        throw new ChatProtocolError("invalid_content", "emojiId must be from Emoji Set 1");
+      }
+      if (features.richContentVersion !== 1 || features.emojiSetVersion !== 1) {
+        throw new ChatProtocolError("feature_disabled", "emoji segments are not enabled");
+      }
+
+      entityCount += 1;
+      canonicalSegments.push({ kind: "emoji", emojiId: segment.emojiId as EmojiId });
+      continue;
+    }
+
+    if (kind === "item_ref") {
+      if (!validateDisabledVariants && features.richContentVersion !== 1) {
+        throw new ChatProtocolError("feature_disabled", "item_ref segments are not enabled");
+      }
+      const itemType = segment.itemType;
+      if (itemType === "card") {
+        assertAllowedKeys(segment, CARD_REF_SEGMENT_ALLOWED_KEYS, "card item_ref segment");
+      } else if (itemType === "relic" || itemType === "potion") {
+        assertAllowedKeys(segment, STATIC_ITEM_REF_SEGMENT_ALLOWED_KEYS, `${itemType} item_ref segment`);
+      } else {
+        assertAllowedKeys(segment, CARD_REF_SEGMENT_ALLOWED_KEYS, "item_ref segment");
+        throw new ChatProtocolError("invalid_content", "itemType must be card, relic, or potion");
+      }
+
+      if (typeof segment.modelId !== "string" || !MODEL_ID_PATTERN.test(segment.modelId)) {
+        throw new ChatProtocolError(
+          "invalid_content",
+          "modelId must be 1 to 160 ASCII letters, digits, dots, underscores, or hyphens",
+        );
+      }
+
+      if (itemType === "card" && Object.hasOwn(segment, "upgradeLevel")) {
+        if (
+          typeof segment.upgradeLevel !== "number" ||
+          !Number.isInteger(segment.upgradeLevel) ||
+          segment.upgradeLevel < 0 ||
+          segment.upgradeLevel > 9
+        ) {
+          throw new ChatProtocolError("invalid_content", "card upgradeLevel must be an integer from 0 to 9");
+        }
+      }
+
+      if (features.richContentVersion !== 1 || features.itemRefVersion !== 1) {
+        throw new ChatProtocolError("feature_disabled", "item_ref segments are not enabled");
+      }
+
+      entityCount += 1;
+      if (itemType === "card") {
+        if (Object.hasOwn(segment, "upgradeLevel")) {
+          canonicalSegments.push({
+            kind: "item_ref",
+            itemType,
+            modelId: segment.modelId,
+            upgradeLevel: segment.upgradeLevel as number,
+          });
+        } else {
+          canonicalSegments.push({ kind: "item_ref", itemType, modelId: segment.modelId });
+        }
+      } else {
+        canonicalSegments.push({ kind: "item_ref", itemType, modelId: segment.modelId });
+      }
+      continue;
+    }
+
+    if (kind === "power_state" || kind === "target_ref") {
+      throw new ChatProtocolError("feature_disabled", `segment kind "${kind}" is not enabled`);
     }
     throw new ChatProtocolError("invalid_content", `segment kind "${kind}" is not valid`);
   }
 
-  // Merge adjacent text segments (all are text in phase 1), then re-apply NFC so
-  // combining marks that arrived in a later segment precompose with prior bases.
-  let merged = normalizedTexts.join("").normalize("NFC");
+  if (entityCount > MAX_ENTITIES) {
+    throw new ChatProtocolError("invalid_content", `content must contain at most ${MAX_ENTITIES} entities`);
+  }
 
-  // Trim leading/trailing whitespace (spaces, tabs, newlines). Internal spaces/newlines kept.
-  merged = merged.replace(/^[\s\u00a0]+|[\s\u00a0]+$/g, "");
+  const first = canonicalSegments[0];
+  if (first?.kind === "text") {
+    first.text = first.text.replace(/^[\s\u00a0]+/u, "");
+    if (first.text.length === 0) {
+      canonicalSegments.shift();
+    }
+  }
+  const last = canonicalSegments.at(-1);
+  if (last?.kind === "text") {
+    last.text = last.text.replace(/[\s\u00a0]+$/u, "");
+    if (last.text.length === 0) {
+      canonicalSegments.pop();
+    }
+  }
 
-  if (merged.length === 0) {
+  if (canonicalSegments.length === 0) {
     throw new ChatProtocolError("invalid_content", "content must not be blank-only");
   }
 
-  if (countUnicodeScalars(merged) > MAX_TEXT_SCALARS) {
+  const textScalars = canonicalSegments.reduce(
+    (total, segment) => total + (segment.kind === "text" ? countUnicodeScalars(segment.text) : 0),
+    0,
+  );
+  if (textScalars > MAX_TEXT_SCALARS) {
     throw new ChatProtocolError(
       "invalid_content",
       `text must be at most ${MAX_TEXT_SCALARS} Unicode scalars`,
@@ -227,22 +369,48 @@ export function canonicalizeServerContent(input: unknown): ChatContent {
 
   return {
     formatVersion: 1,
-    segments: [{ kind: "text", text: merged }],
+    segments: canonicalSegments,
   };
 }
 
+export function canonicalizeServerContent(input: unknown): ChatContent {
+  return canonicalizeContent(input, PHASE_ONE_FEATURES, false);
+}
+
 export function renderPlainTextFallback(content: ChatContent): string {
-  return content.segments.map((segment) => segment.text).join("");
+  return content.segments.map((segment) => {
+    if (segment.kind === "text") return segment.text;
+    if (segment.kind === "emoji") return "[Emoji]";
+    return segment.itemType === "card" ? "[Card]"
+      : segment.itemType === "relic" ? "[Relic]" : "[Potion]";
+  }).join("");
 }
 
 export function deterministicContentJson(content: ChatContent): string {
   // Fixed field order for dedupe comparisons.
   const body = {
     formatVersion: content.formatVersion,
-    segments: content.segments.map((segment) => ({
-      kind: segment.kind,
-      text: segment.text,
-    })),
+    segments: content.segments.map((segment) => {
+      if (segment.kind === "text") {
+        return { kind: "text", text: segment.text };
+      }
+      if (segment.kind === "emoji") {
+        return { kind: "emoji", emojiId: segment.emojiId };
+      }
+      if (segment.itemType === "card" && segment.upgradeLevel !== undefined) {
+        return {
+          kind: "item_ref",
+          itemType: "card",
+          modelId: segment.modelId,
+          upgradeLevel: segment.upgradeLevel,
+        };
+      }
+      return {
+        kind: "item_ref",
+        itemType: segment.itemType,
+        modelId: segment.modelId,
+      };
+    }),
   };
   return JSON.stringify(body);
 }
