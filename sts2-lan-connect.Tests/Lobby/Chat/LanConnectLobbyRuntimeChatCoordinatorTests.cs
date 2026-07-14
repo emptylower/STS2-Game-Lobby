@@ -262,14 +262,14 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
     public async Task RuntimeRemoteEnvelopeAndLegacySnapshotPreserveSenderNetIdAndOriginalSentAt()
     {
         FakeServerChatClient client = new();
-        await using LanConnectLobbyRuntimeChatCoordinator coordinator = new(client);
-        coordinator.EnterRoom("room-a");
+        await using LanConnectRotatingServerChatPort owner = new(client, () => new FakeServerChatClient());
+        owner.Current.EnterRoom("room-a");
         LanConnectLobbyRuntime runtime =
             (LanConnectLobbyRuntime)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
                 typeof(LanConnectLobbyRuntime));
         typeof(LanConnectLobbyRuntime)
-            .GetField("_chatCoordinator", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-            .SetValue(runtime, coordinator);
+            .GetField("_chatOwner", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(runtime, owner);
         DateTimeOffset sentAt = DateTimeOffset.FromUnixTimeMilliseconds(987654);
         LobbyControlEnvelope envelope = new()
         {

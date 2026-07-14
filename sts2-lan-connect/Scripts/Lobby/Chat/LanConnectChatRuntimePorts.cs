@@ -30,7 +30,7 @@ internal enum LanConnectLobbyRuntimeChatCoordinatorCheckpoint
     AppendAfterContextValidation
 }
 
-internal sealed class LanConnectLobbyRuntimeChatCoordinator : ILanConnectServerSwitchChat, IAsyncDisposable
+internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 {
     private const int LegacyRoomConfirmedMessageLimit = 60;
     private readonly ILanConnectServerChatClient _client;
@@ -151,10 +151,7 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : ILanConnectServerS
     internal Task StopServerAsync(CancellationToken cancellationToken = default) =>
         RunClientOperationAsync(token => _client.StopAsync(token), cancellationToken);
 
-    Task ILanConnectServerSwitchChat.StopAsync(CancellationToken cancellationToken) =>
-        StopServerAsync(cancellationToken);
-
-    void ILanConnectServerSwitchChat.ClearForContextChange()
+    internal void ClearServerForContextChange()
     {
         AcquireSyncLease();
         try
@@ -171,13 +168,6 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : ILanConnectServerS
             ReleaseSyncLease();
         }
     }
-
-    Task ILanConnectServerSwitchChat.ConnectAsync(
-        Uri lobbyBaseUri,
-        string playerNetId,
-        string playerName,
-        CancellationToken cancellationToken) =>
-        ConnectServerAsync(lobbyBaseUri, playerNetId, playerName, cancellationToken);
 
     public ValueTask DisposeAsync()
     {
@@ -373,6 +363,7 @@ internal interface ILanConnectRoomLifecycle
 
 internal interface ILanConnectServerAddressStore
 {
+    // Called under the switch generation commit lock; implementations must be bounded and non-reentrant.
     void Persist(string baseUrl, CancellationToken cancellationToken);
 }
 
@@ -389,20 +380,124 @@ internal interface ILanConnectServerSwitchChat
         CancellationToken cancellationToken);
 }
 
+internal sealed class LanConnectRotatingServerChatPort : ILanConnectServerSwitchChat, IAsyncDisposable
+{
+    private readonly Func<ILanConnectServerChatClient> _clientFactory;
+    private readonly object _lifecycleLock = new();
+    private LanConnectLobbyRuntimeChatCoordinator _current;
+    private bool _disposed;
+
+    internal LanConnectRotatingServerChatPort(
+        ILanConnectServerChatClient initialClient,
+        Func<ILanConnectServerChatClient> clientFactory)
+    {
+        _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
+        _current = new LanConnectLobbyRuntimeChatCoordinator(
+            initialClient ?? throw new ArgumentNullException(nameof(initialClient)));
+        _current.StateChanged += OnCurrentStateChanged;
+    }
+
+    internal LanConnectLobbyRuntimeChatCoordinator Current
+    {
+        get
+        {
+            lock (_lifecycleLock)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                return _current;
+            }
+        }
+    }
+
+    internal event Action? StateChanged;
+
+    public Task StopAsync(CancellationToken cancellationToken) =>
+        Current.StopServerAsync(cancellationToken);
+
+    public void ClearForContextChange() => Current.ClearServerForContextChange();
+
+    public async Task ConnectAsync(
+        Uri lobbyBaseUri,
+        string playerNetId,
+        string playerName,
+        CancellationToken cancellationToken)
+    {
+        LanConnectLobbyRuntimeChatCoordinator previous = Current;
+        previous.StateChanged -= OnCurrentStateChanged;
+        await previous.DisposeAsync();
+
+        LanConnectLobbyRuntimeChatCoordinator replacement =
+            new(_clientFactory() ?? throw new InvalidOperationException("Server chat client factory returned null."));
+        replacement.StateChanged += OnCurrentStateChanged;
+        Exception? installError = null;
+        lock (_lifecycleLock)
+        {
+            if (_disposed)
+            {
+                installError = new ObjectDisposedException(nameof(LanConnectRotatingServerChatPort));
+            }
+            else if (!ReferenceEquals(_current, previous))
+            {
+                installError = new InvalidOperationException(
+                    "Server chat owner changed outside the switch coordinator.");
+            }
+            else
+            {
+                _current = replacement;
+            }
+        }
+        if (installError != null)
+        {
+            replacement.StateChanged -= OnCurrentStateChanged;
+            await replacement.DisposeAsync();
+            throw installError;
+        }
+
+        StateChanged?.Invoke();
+        cancellationToken.ThrowIfCancellationRequested();
+        await replacement.ConnectServerAsync(lobbyBaseUri, playerNetId, playerName, cancellationToken);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        LanConnectLobbyRuntimeChatCoordinator current;
+        lock (_lifecycleLock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+            _disposed = true;
+            current = _current;
+            current.StateChanged -= OnCurrentStateChanged;
+        }
+        await current.DisposeAsync();
+    }
+
+    private void OnCurrentStateChanged() => StateChanged?.Invoke();
+}
+
 internal enum LanConnectServerSwitchCoordinatorCheckpoint
 {
     BeforeGenerationRegistration
 }
 
-internal sealed class LanConnectServerSwitchCoordinator
+internal sealed class LanConnectServerSwitchCoordinator : IAsyncDisposable
 {
     private readonly ILanConnectRoomLifecycle _room;
     private readonly ILanConnectServerSwitchChat _chat;
     private readonly ILanConnectServerAddressStore _addressStore;
     private readonly SemaphoreSlim _switchGate = new(1, 1);
     private readonly object _generationLock = new();
+    private readonly CancellationTokenSource _lifetimeCancellation = new();
+    private readonly CancellationToken _lifetimeToken;
+    private readonly TaskCompletionSource _lifetimeCancellationCompleted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Action<LanConnectServerSwitchCoordinatorCheckpoint>? _checkpoint;
     private SwitchGeneration? _activeSwitch;
+    private Task? _disposeTask;
+    private Exception? _lifetimeCancellationError;
+    private bool _disposed;
 
     internal LanConnectServerSwitchCoordinator(
         ILanConnectRoomLifecycle room,
@@ -414,6 +509,7 @@ internal sealed class LanConnectServerSwitchCoordinator
         _chat = chat ?? throw new ArgumentNullException(nameof(chat));
         _addressStore = addressStore ?? throw new ArgumentNullException(nameof(addressStore));
         _checkpoint = checkpoint;
+        _lifetimeToken = _lifetimeCancellation.Token;
     }
 
     internal Task SwitchAsync(
@@ -422,8 +518,43 @@ internal sealed class LanConnectServerSwitchCoordinator
         string playerName,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Uri normalized = NormalizeServerUri(baseUrl);
         return SwitchCoreAsync(normalized, playerNetId, playerName, cancellationToken);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        bool beginCancellation = false;
+        Task disposeTask;
+        lock (_generationLock)
+        {
+            if (_disposeTask == null)
+            {
+                _disposed = true;
+                _disposeTask = DisposeCoreAsync(_lifetimeCancellationCompleted.Task);
+                beginCancellation = true;
+            }
+            disposeTask = _disposeTask;
+        }
+
+        if (beginCancellation)
+        {
+            try
+            {
+                _lifetimeCancellation.Cancel();
+            }
+            catch (Exception ex)
+            {
+                _lifetimeCancellationError = ex;
+            }
+            finally
+            {
+                _lifetimeCancellationCompleted.TrySetResult();
+            }
+        }
+
+        return new ValueTask(disposeTask);
     }
 
     private async Task SwitchCoreAsync(
@@ -432,12 +563,14 @@ internal sealed class LanConnectServerSwitchCoordinator
         string playerName,
         CancellationToken callerCancellation)
     {
-        SwitchGeneration ownGeneration = new(callerCancellation);
+        SwitchGeneration ownGeneration;
         SwitchGeneration? superseded;
         IDisposable? supersededCancellationLease;
         _checkpoint?.Invoke(LanConnectServerSwitchCoordinatorCheckpoint.BeforeGenerationRegistration);
         lock (_generationLock)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            ownGeneration = new SwitchGeneration(callerCancellation, _lifetimeToken);
             superseded = _activeSwitch;
             supersededCancellationLease = superseded?.AcquireCancellationLease();
             _activeSwitch = ownGeneration;
@@ -495,6 +628,19 @@ internal sealed class LanConnectServerSwitchCoordinator
         }
     }
 
+    private async Task DisposeCoreAsync(Task cancellationCompleted)
+    {
+        await cancellationCompleted;
+        await _switchGate.WaitAsync();
+        _switchGate.Release();
+        _lifetimeCancellation.Dispose();
+        _switchGate.Dispose();
+        if (_lifetimeCancellationError != null)
+        {
+            throw _lifetimeCancellationError;
+        }
+    }
+
     private static Uri NormalizeServerUri(string baseUrl)
     {
         if (string.IsNullOrWhiteSpace(baseUrl) ||
@@ -542,9 +688,13 @@ internal sealed class LanConnectServerSwitchCoordinator
         private int _cancellationLeaseCount;
         private bool _completed;
 
-        internal SwitchGeneration(CancellationToken callerCancellation)
+        internal SwitchGeneration(
+            CancellationToken callerCancellation,
+            CancellationToken ownerCancellation)
         {
-            _cancellation = CancellationTokenSource.CreateLinkedTokenSource(callerCancellation);
+            _cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                callerCancellation,
+                ownerCancellation);
             Token = _cancellation.Token;
         }
 

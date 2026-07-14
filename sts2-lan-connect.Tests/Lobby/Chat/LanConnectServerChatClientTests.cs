@@ -221,6 +221,19 @@ public sealed class LanConnectServerChatClientTests
         await client.DisposeAsync();
     }
 
+    [Fact]
+    public async Task StoppedRealClientCannotBeConnectedAgain()
+    {
+        FakeApi api = new([]);
+        LanConnectServerChatClient client = CreateClient(api, () => new FakeTransport([]));
+
+        await client.StopAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None));
+        await client.DisposeAsync();
+    }
+
     [Theory]
     [InlineData(0.0, 0.8, 1.6, 3.2, 6.4, 12.0)]
     [InlineData(0.5, 1.0, 2.0, 4.0, 8.0, 15.0)]

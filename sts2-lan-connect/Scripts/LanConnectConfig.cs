@@ -349,6 +349,24 @@ internal static class LanConnectConfig
         }
     }
 
+    internal static void PersistLobbyServerAddress(string baseUrl)
+    {
+        string normalized = NormalizeLobbyEndpointOverride(baseUrl);
+        string lastUsed = baseUrl?.Trim() ?? string.Empty;
+        lock (Sync)
+        {
+            if (string.Equals(_data.LobbyServerBaseUrl, normalized, StringComparison.Ordinal) &&
+                string.Equals(_data.LastUsedServerAddress, lastUsed, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _data.LobbyServerBaseUrl = normalized;
+            _data.LastUsedServerAddress = lastUsed;
+            SaveUnsafe();
+        }
+    }
+
     public static LanConnectSavedRoomBinding? TryGetSaveRoomBinding(string saveKey)
     {
         lock (Sync)

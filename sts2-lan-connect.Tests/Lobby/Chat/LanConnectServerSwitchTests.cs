@@ -148,6 +148,115 @@ public sealed class LanConnectServerSwitchTests
         Assert.Contains("connect:https://two.example/:p1:Silent", calls);
     }
 
+    [Fact]
+    public async Task RotatingChatPortReplacesPermanentlyStoppedClientBeforeConnect()
+    {
+        FakeServerChatClient initial = new();
+        FakeServerChatClient replacement = new();
+        await using LanConnectRotatingServerChatPort port = new(initial, () => replacement);
+        int notifications = 0;
+        port.StateChanged += () => notifications++;
+
+        await port.StopAsync(CancellationToken.None);
+        port.ClearForContextChange();
+        await port.ConnectAsync(new Uri("https://new.example/"), "p1", "Silent", CancellationToken.None);
+
+        Assert.Equal(1, initial.StopCount);
+        Assert.Equal(1, initial.DisposeCount);
+        Assert.Null(initial.ConnectCall);
+        Assert.Equal(new Uri("https://new.example/"), replacement.ConnectCall?.Uri);
+        Assert.Equal("p1", replacement.ConnectCall?.PlayerNetId);
+        Assert.Same(replacement.State, port.Current.State.Server);
+        int notificationsAfterReplacement = notifications;
+        replacement.RaiseStateChanged();
+        Assert.Equal(notificationsAfterReplacement + 1, notifications);
+    }
+
+    [Fact]
+    public async Task RotatingChatPortRemainsReplaceableWhenConnectIsCanceledAfterOldDispose()
+    {
+        FakeServerChatClient initial = new();
+        FakeServerChatClient canceledReplacement = new();
+        FakeServerChatClient finalReplacement = new();
+        Queue<FakeServerChatClient> replacements = new(new[] { canceledReplacement, finalReplacement });
+        await using LanConnectRotatingServerChatPort port = new(initial, () => replacements.Dequeue());
+        await port.StopAsync(CancellationToken.None);
+        using CancellationTokenSource canceled = new();
+        canceled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => port.ConnectAsync(
+            new Uri("https://canceled.example/"), "p1", "Silent", canceled.Token));
+
+        await port.StopAsync(CancellationToken.None);
+        port.ClearForContextChange();
+        await port.ConnectAsync(
+            new Uri("https://final.example/"), "p1", "Silent", CancellationToken.None);
+        Assert.Equal(1, canceledReplacement.StopCount);
+        Assert.Equal(1, canceledReplacement.DisposeCount);
+        Assert.Equal(new Uri("https://final.example/"), finalReplacement.ConnectCall?.Uri);
+    }
+
+    [Fact]
+    public async Task PreCanceledRequestDoesNotSupersedeActiveSwitch()
+    {
+        List<string> calls = new();
+        FakeSwitchChat chat = new(calls);
+        TaskCompletionSource firstStopEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseFirstStop = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken firstToken = default;
+        chat.StopImplementation = async token =>
+        {
+            firstToken = token;
+            firstStopEntered.SetResult();
+            await releaseFirstStop.Task;
+        };
+        LanConnectServerSwitchCoordinator sut = new(
+            new FakeRoomLifecycle(calls),
+            chat,
+            new FakeAddressStore(calls));
+        Task first = sut.SwitchAsync("https://one.example", "p1", "Silent");
+        await firstStopEntered.Task;
+        using CancellationTokenSource canceled = new();
+        canceled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => sut.SwitchAsync("https://two.example", "p1", "Silent", canceled.Token));
+
+        Assert.False(firstToken.IsCancellationRequested);
+        releaseFirstStop.SetResult();
+        await first.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Contains("persist:https://one.example", calls);
+        Assert.Contains("connect:https://one.example/:p1:Silent", calls);
+        await sut.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task DisposeCancelsAndDrainsActiveSwitchAndRejectsLaterRequests()
+    {
+        List<string> calls = new();
+        FakeSwitchChat chat = new(calls);
+        TaskCompletionSource stopEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        chat.StopImplementation = async token =>
+        {
+            stopEntered.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        };
+        LanConnectServerSwitchCoordinator sut = new(
+            new FakeRoomLifecycle(calls),
+            chat,
+            new FakeAddressStore(calls));
+        Task switching = sut.SwitchAsync("https://one.example", "p1", "Silent");
+        await stopEntered.Task;
+
+        Task dispose = sut.DisposeAsync().AsTask();
+
+        await Task.WhenAll(switching, dispose).WaitAsync(TimeSpan.FromSeconds(3));
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => sut.SwitchAsync("https://two.example", "p1", "Silent"));
+        Assert.DoesNotContain(calls, call => call.StartsWith("persist:", StringComparison.Ordinal));
+        Assert.DoesNotContain(calls, call => call.StartsWith("connect:", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("relative/path")]
@@ -258,5 +367,54 @@ public sealed class LanConnectServerSwitchTests
             cancellationToken.ThrowIfCancellationRequested();
             calls.Add($"persist:{baseUrl}");
         }
+    }
+
+    private sealed class FakeServerChatClient : ILanConnectServerChatClient
+    {
+        public LanConnectChatChannelState State { get; } = new(LanConnectChatChannel.Server);
+
+        public event Action? StateChanged;
+
+        internal int StopCount { get; private set; }
+
+        internal int DisposeCount { get; private set; }
+
+        internal (Uri Uri, string PlayerNetId, string PlayerName)? ConnectCall { get; private set; }
+
+        public Task ConnectAsync(
+            Uri lobbyBaseUri,
+            string playerNetId,
+            string playerName,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (StopCount != 0)
+            {
+                throw new InvalidOperationException("A stopped server chat client cannot reconnect.");
+            }
+            ConnectCall = (lobbyBaseUri, playerNetId, playerName);
+            return Task.CompletedTask;
+        }
+
+        public Task SendTextAsync(string text, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
+        public Task RetryAsync(string clientMessageId, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
+        public Task StopAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            StopCount++;
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
+
+        internal void RaiseStateChanged() => StateChanged?.Invoke();
     }
 }

@@ -30,7 +30,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
     private JoinedClientSession? _activeClientSession;
     private bool _heartbeatInFlight;
     private double _timeUntilHeartbeat;
-    private LanConnectLobbyRuntimeChatCoordinator? _chatCoordinator;
+    private LanConnectRotatingServerChatPort? _chatOwner;
     private LanConnectServerSwitchCoordinator? _serverSwitchCoordinator;
     private string? _serverChatPlayerNetId;
     private bool _chatEnabled = true;
@@ -52,7 +52,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
 
     internal int ChatRevision => unchecked((int)Chat.Room.Revision);
 
-    internal LanConnectDualChatState Chat => _chatCoordinator?.State ??
+    internal LanConnectDualChatState Chat => _chatOwner?.Current.State ??
         throw new InvalidOperationException("Chat is unavailable before the lobby runtime is ready.");
 
     internal bool ChatEnabled => _chatEnabled;
@@ -120,11 +120,13 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         _timeUntilRestartSubmenuAttempt = 0d;
         _lastRestartSubmenuOpenAtUnixMs = 0;
         Instance = this;
-        _chatCoordinator = new LanConnectLobbyRuntimeChatCoordinator(new LanConnectServerChatClient());
-        _chatCoordinator.StateChanged += OnChatStateChanged;
+        _chatOwner = new LanConnectRotatingServerChatPort(
+            new LanConnectServerChatClient(),
+            static () => new LanConnectServerChatClient());
+        _chatOwner.StateChanged += OnChatStateChanged;
         _serverSwitchCoordinator = new LanConnectServerSwitchCoordinator(
             this,
-            _chatCoordinator,
+            _chatOwner,
             new ConfigServerAddressStore());
         LanConnectProtocolProfiles.ResetActiveProfile("runtime_ready");
         SaveManager.Instance.Saved += OnRunSaved;
@@ -160,17 +162,28 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
     {
         SaveManager.Instance.Saved -= OnRunSaved;
         Instance = null;
-        LanConnectLobbyRuntimeChatCoordinator? chatCoordinator = _chatCoordinator;
-        TaskHelper.RunSafely(ShutdownAsync(chatCoordinator, _activeSession, _activeClientSession));
+        LanConnectServerSwitchCoordinator? serverSwitchCoordinator = _serverSwitchCoordinator;
+        LanConnectRotatingServerChatPort? chatOwner = _chatOwner;
+        _serverSwitchCoordinator = null;
+        TaskHelper.RunSafely(ShutdownAsync(
+            serverSwitchCoordinator,
+            chatOwner,
+            _activeSession,
+            _activeClientSession));
 
         LanConnectLobbyPlayerNameDirectory.ClearRoom(null);
     }
 
     private async Task ShutdownAsync(
-        LanConnectLobbyRuntimeChatCoordinator? chatCoordinator,
+        LanConnectServerSwitchCoordinator? serverSwitchCoordinator,
+        LanConnectRotatingServerChatPort? chatOwner,
         HostedRoomSession? hostedSession,
         JoinedClientSession? clientSession)
     {
+        if (serverSwitchCoordinator != null)
+        {
+            await serverSwitchCoordinator.DisposeAsync();
+        }
         if (hostedSession != null)
         {
             await CloseHostedRoomAsync(hostedSession, suppressErrors: true);
@@ -180,14 +193,14 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             await CloseJoinedClientAsync(clientSession);
         }
 
-        if (ReferenceEquals(_chatCoordinator, chatCoordinator))
+        if (ReferenceEquals(_chatOwner, chatOwner))
         {
-            _chatCoordinator = null;
+            _chatOwner = null;
         }
-        if (chatCoordinator != null)
+        if (chatOwner != null)
         {
-            chatCoordinator.StateChanged -= OnChatStateChanged;
-            await chatCoordinator.DisposeAsync();
+            chatOwner.StateChanged -= OnChatStateChanged;
+            await chatOwner.DisposeAsync();
         }
     }
 
@@ -277,7 +290,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         {
             cancellationToken.ThrowIfCancellationRequested();
             hostedSession.NetService.Disconnect(NetError.Quit, now: true);
-            await CloseHostedRoomAsync(hostedSession, suppressErrors: false);
+            await CloseHostedRoomAsync(hostedSession, suppressErrors: false, cancellationToken);
         }
 
         if (clientSession != null)
@@ -379,7 +392,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         }
     }
 
-    private async Task CloseHostedRoomAsync(HostedRoomSession session, bool suppressErrors)
+    private async Task CloseHostedRoomAsync(
+        HostedRoomSession session,
+        bool suppressErrors,
+        CancellationToken cancellationToken = default)
     {
         if (session.IsClosing)
         {
@@ -393,7 +409,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             await session.ApiClient.DeleteRoomAsync(session.RoomId, new LobbyDeleteRoomRequest
             {
                 HostToken = session.HostToken
-            });
+            }, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -1158,12 +1177,12 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
 
     private void LeaveChatRoomIfIdle()
     {
-        if (_activeSession != null || _activeClientSession != null || _chatCoordinator == null)
+        if (_activeSession != null || _activeClientSession != null || _chatOwner == null)
         {
             return;
         }
 
-        _chatCoordinator.LeaveRoom();
+        _chatOwner.Current.LeaveRoom();
     }
 
     private void AppendChatMessage(string roomId, string messageId, string senderName, string? senderNetId, string messageText, DateTimeOffset sentAt, bool isLocal)
@@ -1221,7 +1240,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
     };
 
     private LanConnectLobbyRuntimeChatCoordinator GetChatCoordinator() =>
-        _chatCoordinator ?? throw new InvalidOperationException(
+        _chatOwner?.Current ?? throw new InvalidOperationException(
             "Chat is unavailable before the lobby runtime is ready.");
 
     private string ResolveCurrentPlayerNetId()
@@ -1263,8 +1282,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         public void Persist(string baseUrl, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            LanConnectConfig.LobbyServerBaseUrl = baseUrl;
-            LanConnectConfig.LastUsedServerAddress = baseUrl;
+            LanConnectConfig.PersistLobbyServerAddress(baseUrl);
         }
     }
 
