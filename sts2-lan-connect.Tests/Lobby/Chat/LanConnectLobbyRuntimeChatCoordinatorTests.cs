@@ -366,6 +366,7 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         int callbackObservedUnlockedLifecycle = 0;
         client.ConnectImplementation = async token =>
         {
+            TaskCompletionSource operationCancelled = new(TaskCreationOptions.RunContinuationsAsynchronously);
             using CancellationTokenRegistration registration = token.Register(() =>
             {
                 Interlocked.Increment(ref cancellationCalls);
@@ -379,9 +380,10 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
                 {
                     Interlocked.Exchange(ref callbackObservedUnlockedLifecycle, 1);
                 }
+                operationCancelled.TrySetCanceled(token);
             });
             operationEntered.SetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            await operationCancelled.Task;
         };
         Task connect = coordinator.ConnectServerAsync(new Uri("https://lobby.example"), "id", "name");
         await operationEntered.Task;
