@@ -623,6 +623,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 retryButton.Disabled = _retryInFlight.Contains(
                     new RetryOperationKey(state, state.ContextGeneration, stableKey));
                 retryButton.Connect(
+                    Control.SignalName.FocusEntered,
+                    Callable.From(() => _messageFocusRestoreGeneration++));
+                retryButton.Connect(
                     Button.SignalName.Pressed,
                     Callable.From(() => _ = RetryMessageAsync(message, stableKey, retryButton)));
                 deliveryRow.AddChild(retryButton);
@@ -999,6 +1002,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             if (focusOwner != null &&
                 GodotObject.IsInstanceValid(focusOwner) &&
                 !_messagesList.IsAncestorOf(focusOwner))
+            {
+                return;
+            }
+            if (focusOwner != null &&
+                GodotObject.IsInstanceValid(focusOwner) &&
+                _messagesList.IsAncestorOf(focusOwner) &&
+                !focusOwner.IsQueuedForDeletion() &&
+                !ReferenceEquals(focusOwner, replacement))
             {
                 return;
             }

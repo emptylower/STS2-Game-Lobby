@@ -676,6 +676,33 @@ public sealed class LanConnectBasicChatPanelTests
     }
 
     [TestCase]
+    public async Task Deferred_message_focus_restore_never_steals_another_retry_in_the_same_list()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.BeginPendingText("focus-retry-a", "Me", "failed a");
+        state.MarkFailed("focus-retry-a", "offline", "offline");
+        state.BeginPendingText("focus-retry-b", "Me", "failed b");
+        state.MarkFailed("focus-retry-b", "offline", "offline");
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "focus-retry-a")
+            .GrabFocus();
+
+        state.AppendConfirmedForTests("new-row", "A", "new row", 3, false);
+        await panel.RefreshForTests();
+        Button retryB = FindNode<Button>(
+            panel,
+            LanConnectConstants.ChatRetryButtonPrefix + "focus-retry-b");
+        retryB.GrabFocus();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(panel.TestState.FocusOwnerName)
+            .IsEqual(LanConnectConstants.ChatRetryButtonPrefix + "focus-retry-b");
+    }
+
+    [TestCase]
     public async Task Scrolled_up_panel_preserves_offset_and_exposes_new_message_action()
     {
         LanConnectChatChannelState state = EnabledState();
