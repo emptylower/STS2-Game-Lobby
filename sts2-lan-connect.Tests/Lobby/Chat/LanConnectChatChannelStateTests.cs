@@ -302,20 +302,19 @@ public sealed class LanConnectChatChannelStateTests
     }
 
     [Fact]
-    public void ClearForContextChangeClearsConfirmedKeepsPendingAndUnknown()
+    public void ClearForContextChangeClearsConfirmedPendingFailedAndUnknown()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
         state.AppendConfirmedForTests("stale-1", "Ironclad", "stale", 0, isLocal: false);
         state.Queue(Pending("client-pend", "Ironclad", "p"));
+        state.Queue(Pending("client-fail", "Ironclad", "f"));
+        state.MarkFailed("client-fail", "rejected", "Rejected");
         state.Queue(PendingAt("client-unknown", "Ironclad", "u", FixedNow - TimeSpan.FromSeconds(20)));
         state.MarkTimedOut(FixedNow + TimeSpan.FromSeconds(10));
 
         state.ClearForContextChange();
 
-        Assert.Equal(2, state.Messages.Count);
-        Assert.DoesNotContain(state.Messages, m => m.MessageId == "stale-1");
-        Assert.Contains(state.Messages, m => m.ClientMessageId == "client-pend" && m.Delivery == ServerChatDeliveryState.Pending);
-        Assert.Contains(state.Messages, m => m.ClientMessageId == "client-unknown" && m.Delivery == ServerChatDeliveryState.DeliveryUnknown);
+        Assert.Empty(state.Messages);
     }
 
     private static ServerChatInboundEnvelope BuildAck(string clientMessageId, string serverMessageId, string senderName, string text)

@@ -105,6 +105,85 @@ internal sealed class LanConnectChatChannelState
         }
     }
 
+    internal string Draft { get; private set; } = string.Empty;
+
+    internal int UnreadCount { get; private set; }
+
+    internal long? FirstUnreadSequence { get; private set; }
+
+    internal double ScrollOffset { get; private set; }
+
+    internal bool IsAtBottom { get; private set; } = true;
+
+    internal int NewMessagesBelowCount { get; private set; }
+
+    internal bool IsVisible { get; private set; }
+
+    internal void SetDraft(string? value)
+    {
+        lock (_mutationLock)
+        {
+            string next = value ?? string.Empty;
+            if (Draft == next)
+            {
+                return;
+            }
+
+            Draft = next;
+            Touch();
+        }
+    }
+
+    internal void SetVisible(bool value)
+    {
+        lock (_mutationLock)
+        {
+            bool mutated = IsVisible != value;
+            IsVisible = value;
+            if (value)
+            {
+                mutated |= MarkReadCore();
+            }
+
+            if (mutated)
+            {
+                Touch();
+            }
+        }
+    }
+
+    internal void SetScrollState(double offset, bool atBottom)
+    {
+        lock (_mutationLock)
+        {
+            double nextOffset = Math.Max(0, offset);
+            bool mutated = ScrollOffset != nextOffset || IsAtBottom != atBottom;
+            ScrollOffset = nextOffset;
+            IsAtBottom = atBottom;
+            if (atBottom && NewMessagesBelowCount != 0)
+            {
+                NewMessagesBelowCount = 0;
+                mutated = true;
+            }
+
+            if (mutated)
+            {
+                Touch();
+            }
+        }
+    }
+
+    internal void MarkRead()
+    {
+        lock (_mutationLock)
+        {
+            if (MarkReadCore())
+            {
+                Touch();
+            }
+        }
+    }
+
     internal void Queue(ServerChatPendingMessage message)
     {
         ArgumentNullException.ThrowIfNull(message);
@@ -143,7 +222,7 @@ internal sealed class LanConnectChatChannelState
                 _clientPendingIndex[key] = _messages.Count - 1;
             }
             _pendingQueueTimes[key] = queuedAt;
-            _revision++;
+            Touch();
         }
     }
 
@@ -192,7 +271,7 @@ internal sealed class LanConnectChatChannelState
                 _messages[index].Delivery == ServerChatDeliveryState.Pending)
             {
                 _messages[index] = WithDelivery(_messages[index], ServerChatDeliveryState.Confirmed);
-                _revision++;
+                Touch();
             }
         }
     }
@@ -222,7 +301,7 @@ internal sealed class LanConnectChatChannelState
                     ErrorMessage = message,
                     SentAt = _messages[index].SentAt
                 };
-                _revision++;
+                Touch();
             }
         }
     }
@@ -231,6 +310,11 @@ internal sealed class LanConnectChatChannelState
     {
         lock (_mutationLock)
         {
+            if (!string.IsNullOrEmpty(messageId) && _serverMessageIndex.ContainsKey(messageId))
+            {
+                return;
+            }
+
             ServerChatMessageState entry = new()
             {
                 MessageId = messageId,
@@ -246,7 +330,8 @@ internal sealed class LanConnectChatChannelState
             {
                 _serverMessageIndex[messageId] = _messages.Count - 1;
             }
-            _revision++;
+            TrackIncoming(sequence, isLocal);
+            Touch();
         }
     }
 
@@ -272,7 +357,7 @@ internal sealed class LanConnectChatChannelState
             }
             if (mutated)
             {
-                _revision++;
+                Touch();
             }
         }
     }
@@ -290,15 +375,16 @@ internal sealed class LanConnectChatChannelState
     {
         lock (_mutationLock)
         {
-            for (int i = _messages.Count - 1; i >= 0; i--)
-            {
-                if (_messages[i].Delivery == ServerChatDeliveryState.Confirmed)
-                {
-                    _messages.RemoveAt(i);
-                }
-            }
+            _messages.Clear();
+            _snapshotAssembly = null;
+            Draft = string.Empty;
+            UnreadCount = 0;
+            FirstUnreadSequence = null;
+            ScrollOffset = 0;
+            IsAtBottom = true;
+            NewMessagesBelowCount = 0;
             RebuildIndices();
-            _revision++;
+            Touch();
         }
     }
 
@@ -337,7 +423,7 @@ internal sealed class LanConnectChatChannelState
                 _serverMessageIndex[updated.MessageId] = index;
             }
             _pendingQueueTimes.Remove(clientMessageId);
-            _revision++;
+            Touch();
             return new LanConnectChatApplyResult(ReconnectRequired: false);
         }
 
@@ -362,7 +448,7 @@ internal sealed class LanConnectChatChannelState
         {
             _serverMessageIndex[fresh.MessageId] = _messages.Count - 1;
         }
-        _revision++;
+        Touch();
         return new LanConnectChatApplyResult(ReconnectRequired: false);
     }
 
@@ -394,7 +480,7 @@ internal sealed class LanConnectChatChannelState
                 SentAt = existing.SentAt
             };
             _pendingQueueTimes.Remove(clientMessageId);
-            _revision++;
+            Touch();
         }
         return new LanConnectChatApplyResult(ReconnectRequired: false);
     }
@@ -430,7 +516,8 @@ internal sealed class LanConnectChatChannelState
         };
         _messages.Add(entry);
         _serverMessageIndex[canonical.MessageId] = _messages.Count - 1;
-        _revision++;
+        TrackIncoming(entry.Sequence, entry.IsLocal);
+        Touch();
         return new LanConnectChatApplyResult(ReconnectRequired: false);
     }
 
@@ -531,7 +618,7 @@ internal sealed class LanConnectChatChannelState
         _enabledFeatures = CopyFeatures(newFeatures);
         if (metadataChanged)
         {
-            _revision++;
+            Touch();
         }
         return new LanConnectChatApplyResult(ReconnectRequired: false);
     }
@@ -567,7 +654,7 @@ internal sealed class LanConnectChatChannelState
 
         if (mutated)
         {
-            _revision++;
+            Touch();
         }
         return new LanConnectChatApplyResult(ReconnectRequired: false);
     }
@@ -579,7 +666,7 @@ internal sealed class LanConnectChatChannelState
         {
             ClearConfirmedKeepPendingAndUnknown();
             _lastSnapshotEpoch = newEpoch;
-            _revision++;
+            Touch();
         }
         return new LanConnectChatApplyResult(ReconnectRequired: false);
     }
@@ -637,7 +724,7 @@ internal sealed class LanConnectChatChannelState
         _instanceId = assembly.InstanceId;
         _lastSnapshotEpoch = assembly.HistoryEpoch;
         RebuildIndices();
-        _revision++;
+        Touch();
     }
 
     private LanConnectChatApplyResult RejectSnapshot()
@@ -676,6 +763,38 @@ internal sealed class LanConnectChatChannelState
             }
         }
     }
+
+    private bool MarkReadCore()
+    {
+        if (UnreadCount == 0 && FirstUnreadSequence == null)
+        {
+            return false;
+        }
+
+        UnreadCount = 0;
+        FirstUnreadSequence = null;
+        return true;
+    }
+
+    private void TrackIncoming(long sequence, bool isLocal)
+    {
+        if (isLocal)
+        {
+            return;
+        }
+
+        if (!IsVisible)
+        {
+            UnreadCount++;
+            FirstUnreadSequence ??= sequence;
+        }
+        else if (!IsAtBottom)
+        {
+            NewMessagesBelowCount++;
+        }
+    }
+
+    private void Touch() => _revision++;
 
     private static ServerChatMessageState WithDelivery(ServerChatMessageState source, ServerChatDeliveryState delivery) =>
         new()
