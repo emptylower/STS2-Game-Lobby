@@ -256,8 +256,10 @@ public sealed class LanConnectRichDraftTests
         Assert.Equal(
             LanConnectServerChatProtocol.MeasureWorstCaseInboundBytes(content, "Ironclad"),
             measure.WorstCaseInboundBytes);
+        Assert.True(measure.ContentValid);
         Assert.True(measure.FeaturesSupported);
         Assert.True(measure.WithinProtocolLimits);
+        Assert.True(measure.CanSubmit);
 
         LanConnectRichDraft overEntities = LanConnectRichDraft.FromRuns(
             Enumerable.Range(0, 13).Select(_ =>
@@ -265,7 +267,203 @@ public sealed class LanConnectRichDraftTests
         LanConnectDraftMeasure over = overEntities.Measure(enabled, "Ironclad");
         Assert.Equal(13, over.SegmentCount);
         Assert.Equal(13, over.EntityCount);
+        Assert.False(over.ContentValid);
+        Assert.False(over.FeaturesSupported);
         Assert.False(over.WithinProtocolLimits);
+        Assert.False(over.CanSubmit);
+    }
+
+    [Fact]
+    public void MeasureUsesFinalCanonicalNfcAndTrimmedContent()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText("  e\u0301  ");
+        LanConnectChatFeatureVersions callerEnabled = new(0, 0, 0, 0);
+        LanConnectChatContent canonical = LanConnectServerChatProtocol.Canonicalize(
+            draft.ToContent(),
+            new LanConnectChatFeatureVersions(1, 1, 1, 0));
+
+        LanConnectDraftMeasure measure = draft.Measure(callerEnabled, "Ironclad");
+
+        Assert.Equal("é", Assert.IsType<LanConnectTextSegment>(Assert.Single(canonical.Segments)).Text);
+        Assert.Equal(1, measure.TextScalars);
+        Assert.Equal(1, measure.SegmentCount);
+        Assert.Equal(0, measure.EntityCount);
+        Assert.Equal(
+            LanConnectServerChatProtocol.MeasureWorstCaseInboundBytes(canonical, "Ironclad"),
+            measure.WorstCaseInboundBytes);
+        Assert.True(measure.ContentValid);
+        Assert.True(measure.FeaturesSupported);
+    }
+
+    [Fact]
+    public void MeasureCanonicalizesCrlfBeforeCountingAndWireProjection()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText("  e\u0301\r\nline  ");
+        LanConnectChatContent canonical = LanConnectServerChatProtocol.Canonicalize(
+            draft.ToContent(),
+            new LanConnectChatFeatureVersions(1, 1, 1, 0));
+
+        LanConnectDraftMeasure measure = draft.Measure(new(1, 1, 1, 0), "Ironclad");
+
+        Assert.Equal("é\nline", Assert.IsType<LanConnectTextSegment>(Assert.Single(canonical.Segments)).Text);
+        Assert.Equal(6, measure.TextScalars);
+        Assert.Equal(
+            LanConnectServerChatProtocol.MeasureWorstCaseInboundBytes(canonical, "Ironclad"),
+            measure.WorstCaseInboundBytes);
+        Assert.True(measure.CanSubmit);
+    }
+
+    [Fact]
+    public void MeasureDropsBlankBoundaryRunsBeforeFeatureEligibility()
+    {
+        LanConnectRichDraft draft = Draft(
+            new LanConnectTextRun("  "),
+            new LanConnectEmojiRun("heart"),
+            new LanConnectTextRun("x"),
+            new LanConnectItemRun("card", "MegaCrit.Strike", 1),
+            new LanConnectTextRun(" \n "));
+        LanConnectChatContent canonical = LanConnectServerChatProtocol.Canonicalize(
+            draft.ToContent(),
+            new LanConnectChatFeatureVersions(1, 1, 1, 0));
+
+        LanConnectDraftMeasure measure = draft.Measure(
+            new LanConnectChatFeatureVersions(0, 0, 0, 0),
+            "Ironclad");
+
+        Assert.Equal(3, canonical.Segments.Count);
+        Assert.Equal(3, measure.SegmentCount);
+        Assert.Equal(1, measure.TextScalars);
+        Assert.Equal(2, measure.EntityCount);
+        Assert.Equal(
+            LanConnectServerChatProtocol.MeasureWorstCaseInboundBytes(canonical, "Ironclad"),
+            measure.WorstCaseInboundBytes);
+        Assert.True(measure.ContentValid);
+        Assert.False(measure.FeaturesSupported);
+        Assert.False(measure.CanSubmit);
+    }
+
+    [Fact]
+    public void MeasureReturnsStableInvalidStateForBlankAndMalformedEntities()
+    {
+        LanConnectRichDraft[] invalidDrafts =
+        [
+            new(),
+            LanConnectRichDraft.FromText(" \r\n "),
+            Draft(new LanConnectEmojiRun("unknown")),
+            Draft(new LanConnectItemRun("card", "bad/model", null)),
+            Draft(new LanConnectItemRun("card", "MegaCrit.Strike\n", null)),
+            Draft(new LanConnectItemRun("card", "MegaCrit.Strike", 10)),
+            Draft(new LanConnectItemRun("relic", "MegaCrit.Anchor", 1))
+        ];
+
+        foreach (LanConnectRichDraft draft in invalidDrafts)
+        {
+            LanConnectDraftMeasure measure = draft.Measure(new(1, 1, 1, 0), "Ironclad");
+            Assert.False(measure.ContentValid);
+            Assert.False(measure.FeaturesSupported);
+            Assert.False(measure.WithinProtocolLimits);
+            Assert.False(measure.CanSubmit);
+        }
+    }
+
+    [Fact]
+    public void MeasureReportsScalarAndEntityProtocolBoundariesWithoutThrowing()
+    {
+        LanConnectDraftMeasure atScalars = LanConnectRichDraft.FromText(new string('x', 300))
+            .Measure(new(1, 1, 1, 0), "Ironclad");
+        LanConnectDraftMeasure overScalars = LanConnectRichDraft.FromText(new string('x', 301))
+            .Measure(new(1, 1, 1, 0), "Ironclad");
+        LanConnectDraftMeasure atEntities = LanConnectRichDraft.FromRuns(
+                Enumerable.Range(0, 12).Select(_ =>
+                    (LanConnectDraftRun)new LanConnectEmojiRun("smile")))
+            .Measure(new(1, 1, 1, 0), "Ironclad");
+        LanConnectDraftMeasure overEntities = LanConnectRichDraft.FromRuns(
+                Enumerable.Range(0, 13).Select(_ =>
+                    (LanConnectDraftRun)new LanConnectEmojiRun("smile")))
+            .Measure(new(1, 1, 1, 0), "Ironclad");
+
+        Assert.Equal(300, atScalars.TextScalars);
+        Assert.True(atScalars.CanSubmit);
+        Assert.Equal(301, overScalars.TextScalars);
+        Assert.False(overScalars.ContentValid);
+        Assert.False(overScalars.CanSubmit);
+        Assert.Equal(12, atEntities.EntityCount);
+        Assert.True(atEntities.CanSubmit);
+        Assert.Equal(13, overEntities.EntityCount);
+        Assert.False(overEntities.ContentValid);
+        Assert.False(overEntities.CanSubmit);
+    }
+
+    [Fact]
+    public void MeasureReportsThirtyTwoAndThirtyThreeRawSegmentsWhenInvalid()
+    {
+        static LanConnectRichDraft Segments(int count) => LanConnectRichDraft.FromRuns(
+            Enumerable.Range(0, count).Select(index => index % 2 == 0
+                ? (LanConnectDraftRun)new LanConnectTextRun("x")
+                : new LanConnectEmojiRun("smile")));
+
+        LanConnectDraftMeasure atBoundary = Segments(32).Measure(new(1, 1, 1, 0), "Ironclad");
+        LanConnectDraftMeasure overBoundary = Segments(33).Measure(new(1, 1, 1, 0), "Ironclad");
+
+        Assert.Equal(32, atBoundary.SegmentCount);
+        Assert.Equal(33, overBoundary.SegmentCount);
+        Assert.False(atBoundary.ContentValid);
+        Assert.False(overBoundary.ContentValid);
+        Assert.False(atBoundary.CanSubmit);
+        Assert.False(overBoundary.CanSubmit);
+    }
+
+    [Fact]
+    public void MeasureTreatsExactWireBudgetAsSubmittableAndOneByteOverAsBlocked()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText("hello");
+        LanConnectChatContent canonical = LanConnectServerChatProtocol.Canonicalize(
+            draft.ToContent(),
+            new LanConnectChatFeatureVersions(1, 1, 1, 0));
+        string senderAt8192 = FindExactSenderName(canonical, 8192);
+
+        LanConnectDraftMeasure atBoundary = draft.Measure(new(1, 1, 1, 0), senderAt8192);
+        LanConnectDraftMeasure overBoundary = draft.Measure(new(1, 1, 1, 0), senderAt8192 + "S");
+
+        Assert.Equal(8192, atBoundary.WorstCaseInboundBytes);
+        Assert.True(atBoundary.ContentValid);
+        Assert.True(atBoundary.CanSubmit);
+        Assert.Equal(8193, overBoundary.WorstCaseInboundBytes);
+        Assert.True(overBoundary.ContentValid);
+        Assert.True(overBoundary.FeaturesSupported);
+        Assert.False(overBoundary.WithinProtocolLimits);
+        Assert.False(overBoundary.CanSubmit);
+    }
+
+    [Fact]
+    public void RunsAreSnapshotsAndContentEventsCarryRevisionOutsideDraftLock()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText("a");
+        IReadOnlyList<LanConnectDraftRun> snapshot = draft.Runs;
+        List<long> revisions = [];
+        draft.ContentChanged += revision =>
+        {
+            Task<IReadOnlyList<LanConnectDraftRun>> read = Task.Run(() => draft.Runs);
+            Assert.True(read.Wait(TimeSpan.FromSeconds(2)));
+            revisions.Add(revision);
+        };
+
+        draft.InsertText("b");
+        draft.Backspace();
+
+        Assert.Equal(new LanConnectDraftRun[] { new LanConnectTextRun("a") }, snapshot);
+        Assert.Equal(new long[] { 1, 2 }, revisions);
+        Assert.Equal(2, draft.ContentRevision);
+    }
+
+    private static string FindExactSenderName(LanConnectChatContent content, int target)
+    {
+        int baseline = LanConnectServerChatProtocol.MeasureWorstCaseInboundBytes(content, "S");
+        int padding = target - baseline;
+        Assert.True(padding >= 0);
+        string senderName = new('S', padding + 1);
+        Assert.Equal(target, LanConnectServerChatProtocol.MeasureWorstCaseInboundBytes(content, senderName));
+        return senderName;
     }
 
     private static LanConnectRichDraft Draft(params LanConnectDraftRun[] runs) =>

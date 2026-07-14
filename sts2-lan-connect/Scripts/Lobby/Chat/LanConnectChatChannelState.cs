@@ -136,6 +136,7 @@ internal sealed class LanConnectChatChannelState
     private long _revision;
     private long _contextGeneration;
     private long _draftGeneration;
+    private long _observedDraftContentRevision;
     private bool _suppressDraftNotifications;
     private bool _chatEnabled;
     private ServerChatEnabledFeatures _enabledFeatures = new();
@@ -161,6 +162,7 @@ internal sealed class LanConnectChatChannelState
         ArgumentNullException.ThrowIfNull(arrivalClock);
         Channel = channel;
         _arrivalClock = arrivalClock;
+        _observedDraftContentRevision = _draft.ContentRevision;
         _draft.ContentChanged += OnDraftContentChanged;
         if (channel == LanConnectChatChannel.Room)
         {
@@ -188,6 +190,7 @@ internal sealed class LanConnectChatChannelState
         {
             lock (_mutationLock)
             {
+                ReconcileDraftContentRevision();
                 return _revision;
             }
         }
@@ -210,6 +213,7 @@ internal sealed class LanConnectChatChannelState
         {
             lock (_mutationLock)
             {
+                ReconcileDraftContentRevision();
                 return _draftGeneration;
             }
         }
@@ -278,6 +282,7 @@ internal sealed class LanConnectChatChannelState
         {
             lock (_mutationLock)
             {
+                ReconcileDraftContentRevision();
                 return _draft.ToCompatibilityText();
             }
         }
@@ -370,6 +375,7 @@ internal sealed class LanConnectChatChannelState
     {
         lock (_mutationLock)
         {
+            ReconcileDraftContentRevision();
             string next = value ?? string.Empty;
             if (_draft.IsExactlyText(next))
             {
@@ -387,6 +393,7 @@ internal sealed class LanConnectChatChannelState
     {
         lock (_mutationLock)
         {
+            ReconcileDraftContentRevision();
             if (_contextGeneration != expectedContextGeneration ||
                 _draftGeneration != expectedDraftGeneration ||
                 !string.Equals(_draft.ToCompatibilityText(), expectedDraft, StringComparison.Ordinal))
@@ -741,6 +748,7 @@ internal sealed class LanConnectChatChannelState
     {
         lock (_mutationLock)
         {
+            ReconcileDraftContentRevision();
             _contextGeneration++;
             _messages.Clear();
             _snapshotAssembly = null;
@@ -749,14 +757,18 @@ internal sealed class LanConnectChatChannelState
                 _draftGeneration++;
             }
             _suppressDraftNotifications = true;
+            long clearedThroughRevision;
             try
             {
-                _draft.Clear();
+                clearedThroughRevision = _draft.Clear();
             }
             finally
             {
                 _suppressDraftNotifications = false;
             }
+            _observedDraftContentRevision = Math.Max(
+                _observedDraftContentRevision,
+                clearedThroughRevision);
             ResetIncomingIndicators();
             _scrollOffset = 0;
             _isAtBottom = true;
@@ -766,17 +778,33 @@ internal sealed class LanConnectChatChannelState
         }
     }
 
-    private void OnDraftContentChanged()
+    private void OnDraftContentChanged(long contentRevision)
     {
         lock (_mutationLock)
         {
-            if (_suppressDraftNotifications)
-            {
-                return;
-            }
-            _draftGeneration++;
-            Touch();
+            ApplyDraftContentRevision(contentRevision);
         }
+    }
+
+    private void ReconcileDraftContentRevision() =>
+        ApplyDraftContentRevision(_draft.ContentRevision);
+
+    private void ApplyDraftContentRevision(long contentRevision)
+    {
+        if (contentRevision <= _observedDraftContentRevision)
+        {
+            return;
+        }
+
+        long revisionDelta = contentRevision - _observedDraftContentRevision;
+        _observedDraftContentRevision = contentRevision;
+        if (_suppressDraftNotifications)
+        {
+            return;
+        }
+
+        _draftGeneration += revisionDelta;
+        _revision += revisionDelta;
     }
 
     private LanConnectChatApplyResult ApplyAck(ServerChatInboundEnvelope envelope)

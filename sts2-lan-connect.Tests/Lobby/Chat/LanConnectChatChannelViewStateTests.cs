@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Sts2LanConnect.Scripts;
 
@@ -172,6 +173,176 @@ public sealed class LanConnectChatChannelViewStateTests
         Assert.Same(owned, state.RichDraft);
         Assert.True(owned.IsEmpty);
         Assert.Equal(string.Empty, state.Draft);
+    }
+
+    [Fact]
+    public async Task ConcurrentDraftEditsReadsAndContextClearsRemainConsistent()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        LanConnectRichDraft draft = state.RichDraft;
+        ConcurrentQueue<Exception> failures = new();
+
+        Task[] workers =
+        [
+            Task.Run(() => RepeatSafely(600, failures, index =>
+            {
+                draft.SetCaret(new LanConnectDraftPosition(index % 8, index % 16));
+                draft.InsertText(index % 2 == 0 ? "x" : "\U0001F600");
+                if (index % 3 == 0)
+                {
+                    draft.Backspace();
+                }
+            })),
+            Task.Run(() => RepeatSafely(600, failures, index =>
+            {
+                draft.SetSelection(new LanConnectDraftSelection(
+                    new LanConnectDraftPosition(index % 5, index % 11),
+                    new LanConnectDraftPosition((index + 1) % 5, (index + 3) % 11)));
+                draft.InsertEntity(new LanConnectEmojiRun("smile"));
+                if (index % 2 == 0)
+                {
+                    draft.Delete();
+                }
+            })),
+            Task.Run(() => RepeatSafely(800, failures, index =>
+            {
+                int observed = draft.Runs.Count +
+                    draft.Selection.Active.RunIndex +
+                    draft.ToContent().Segments.Count +
+                    draft.ToCompatibilityText().Length +
+                    state.Draft.Length +
+                    index;
+                GC.KeepAlive(observed);
+            })),
+            Task.Run(() => RepeatSafely(250, failures, index =>
+            {
+                if (index % 2 == 0)
+                {
+                    state.ClearForContextChange();
+                }
+                else
+                {
+                    state.SetDraft("context");
+                }
+            }))
+        ];
+
+        await Task.WhenAll(workers);
+
+        Assert.Empty(failures);
+        state.ClearForContextChange();
+        long generationAfterClear = state.DraftGeneration;
+        long revisionAfterClear = state.Revision;
+        Assert.True(draft.IsEmpty);
+        Assert.Equal(string.Empty, state.Draft);
+        Assert.Equal(generationAfterClear, state.DraftGeneration);
+        Assert.Equal(revisionAfterClear, state.Revision);
+
+        draft.InsertText("final");
+        Assert.Equal(generationAfterClear + 1, state.DraftGeneration);
+        Assert.Equal(revisionAfterClear + 1, state.Revision);
+        Assert.Equal("final", state.Draft);
+    }
+
+    [Fact]
+    public async Task ContextClearDoesNotSuppressAnEditThatStartsAfterItsClearRevision()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        LanConnectRichDraft draft = state.RichDraft;
+        state.SetDraft("before");
+        long generationBefore = state.DraftGeneration;
+        long stateRevisionBefore = state.Revision;
+        long expectedClearRevision = draft.ContentRevision + 1;
+        using ManualResetEventSlim clearNotificationEntered = new(false);
+        using ManualResetEventSlim releaseClearNotification = new(false);
+        draft.ContentChanged += revision =>
+        {
+            if (revision == expectedClearRevision)
+            {
+                clearNotificationEntered.Set();
+                releaseClearNotification.Wait(TimeSpan.FromSeconds(5));
+            }
+        };
+
+        Task clear = Task.Run(state.ClearForContextChange);
+        Assert.True(clearNotificationEntered.Wait(TimeSpan.FromSeconds(5)));
+        Task edit = Task.Run(() => draft.InsertText("after"));
+        Assert.True(SpinWait.SpinUntil(
+            () => draft.ContentRevision > expectedClearRevision,
+            TimeSpan.FromSeconds(5)));
+        releaseClearNotification.Set();
+
+        await Task.WhenAll(clear, edit);
+
+        Assert.Equal("after", state.Draft);
+        Assert.Equal(generationBefore + 2, state.DraftGeneration);
+        Assert.Equal(stateRevisionBefore + 2, state.Revision);
+    }
+
+    [Fact]
+    public async Task ConditionalClearReconcilesPendingRichEditWithSameCompatibilityText()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        LanConnectRichDraft draft = state.RichDraft;
+        state.SetDraft("[Emoji]");
+        long expectedContextGeneration = state.ContextGeneration;
+        long expectedDraftGeneration = state.DraftGeneration;
+        long expectedStateRevision = state.Revision;
+        long contentRevisionBefore = draft.ContentRevision;
+        System.Reflection.FieldInfo? lockField = typeof(LanConnectChatChannelState).GetField(
+            "_mutationLock",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(lockField);
+        object mutationLock = Assert.IsType<object>(lockField!.GetValue(state));
+        Task edit;
+
+        lock (mutationLock)
+        {
+            edit = Task.Run(() =>
+            {
+                draft.SetSelection(new LanConnectDraftSelection(
+                    new LanConnectDraftPosition(0, 0),
+                    new LanConnectDraftPosition(0, "[Emoji]".Length)));
+                draft.InsertEntity(new LanConnectEmojiRun("smile"));
+            });
+            Assert.True(SpinWait.SpinUntil(
+                () => draft.ContentRevision > contentRevisionBefore,
+                TimeSpan.FromSeconds(5)));
+            Assert.Equal("[Emoji]", draft.ToCompatibilityText());
+
+            Assert.False(state.ClearDraftIfMatches(
+                expectedContextGeneration,
+                expectedDraftGeneration,
+                "[Emoji]"));
+            Assert.False(draft.IsEmpty);
+            Assert.Equal(expectedDraftGeneration + 1, state.DraftGeneration);
+            Assert.Equal(expectedStateRevision + 1, state.Revision);
+        }
+
+        await edit;
+
+        Assert.Equal(new LanConnectDraftRun[] { new LanConnectEmojiRun("smile") }, draft.Runs);
+        Assert.Equal("[Emoji]", state.Draft);
+        Assert.Equal(expectedDraftGeneration + 1, state.DraftGeneration);
+        Assert.Equal(expectedStateRevision + 1, state.Revision);
+    }
+
+    private static void RepeatSafely(
+        int count,
+        ConcurrentQueue<Exception> failures,
+        Action<int> action)
+    {
+        for (int index = 0; index < count; index++)
+        {
+            try
+            {
+                action(index);
+            }
+            catch (Exception exception)
+            {
+                failures.Enqueue(exception);
+            }
+        }
     }
 
     [Fact]

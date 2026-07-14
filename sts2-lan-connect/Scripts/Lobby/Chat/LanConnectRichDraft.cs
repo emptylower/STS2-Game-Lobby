@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -26,22 +25,27 @@ internal readonly record struct LanConnectDraftMeasure(
     int SegmentCount,
     int EntityCount,
     int WorstCaseInboundBytes,
+    bool ContentValid,
     bool FeaturesSupported)
 {
     internal bool WithinProtocolLimits =>
+        ContentValid &&
         TextScalars <= LanConnectServerChatProtocol.MaxTextScalars &&
         SegmentCount <= LanConnectServerChatProtocol.MaxSegments &&
         EntityCount <= LanConnectServerChatProtocol.MaxEntities &&
         WorstCaseInboundBytes <= LanConnectServerChatProtocol.MaxPayloadBytes;
+
+    internal bool CanSubmit => WithinProtocolLimits && FeaturesSupported;
 }
 
 internal sealed class LanConnectRichDraft
 {
+    private readonly object _sync = new();
     private readonly List<LanConnectDraftRun> _runs;
-    private readonly ReadOnlyCollection<LanConnectDraftRun> _readOnlyRuns;
     private LanConnectDraftSelection _selection;
+    private long _contentRevision;
 
-    internal event Action? ContentChanged;
+    internal event Action<long>? ContentChanged;
 
     internal LanConnectRichDraft()
         : this([new LanConnectTextRun(string.Empty)])
@@ -52,17 +56,54 @@ internal sealed class LanConnectRichDraft
     {
         ArgumentNullException.ThrowIfNull(runs);
         _runs = new List<LanConnectDraftRun>(runs);
-        _readOnlyRuns = _runs.AsReadOnly();
         NormalizeRuns();
         LanConnectDraftPosition end = PositionFromOffset(DocumentLength, preferRight: false);
         _selection = new LanConnectDraftSelection(end, end);
     }
 
-    internal IReadOnlyList<LanConnectDraftRun> Runs => _readOnlyRuns;
+    internal IReadOnlyList<LanConnectDraftRun> Runs
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _runs.ToArray();
+            }
+        }
+    }
 
-    internal LanConnectDraftSelection Selection => _selection;
+    internal LanConnectDraftSelection Selection
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _selection;
+            }
+        }
+    }
 
-    internal bool IsEmpty => _runs.Count == 1 && _runs[0] is LanConnectTextRun { Text.Length: 0 };
+    internal bool IsEmpty
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return IsEmptyCore;
+            }
+        }
+    }
+
+    internal long ContentRevision
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _contentRevision;
+            }
+        }
+    }
 
     internal static LanConnectRichDraft FromText(string? text) =>
         new([new LanConnectTextRun(text ?? string.Empty)]);
@@ -71,21 +112,32 @@ internal sealed class LanConnectRichDraft
 
     internal void SetCaret(LanConnectDraftPosition position)
     {
-        LanConnectDraftPosition clamped = ClampPosition(position);
-        _selection = new LanConnectDraftSelection(clamped, clamped);
+        lock (_sync)
+        {
+            LanConnectDraftPosition clamped = ClampPosition(position);
+            _selection = new LanConnectDraftSelection(clamped, clamped);
+        }
     }
 
     internal void SetSelection(LanConnectDraftSelection selection)
     {
-        _selection = new LanConnectDraftSelection(
-            ClampPosition(selection.Anchor),
-            ClampPosition(selection.Active));
+        lock (_sync)
+        {
+            _selection = new LanConnectDraftSelection(
+                ClampPosition(selection.Anchor),
+                ClampPosition(selection.Active));
+        }
     }
 
     internal void InsertText(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        ReplaceSelection([new LanConnectTextRun(text)]);
+        long? revision;
+        lock (_sync)
+        {
+            revision = ReplaceSelectionCore([new LanConnectTextRun(text)]);
+        }
+        NotifyContentChanged(revision);
     }
 
     internal void InsertEntity(LanConnectDraftRun entity)
@@ -95,127 +147,164 @@ internal sealed class LanConnectRichDraft
         {
             throw new ArgumentException("Only Emoji and item runs are atomic draft entities.", nameof(entity));
         }
-        ReplaceSelection([entity]);
+        long? revision;
+        lock (_sync)
+        {
+            revision = ReplaceSelectionCore([entity]);
+        }
+        NotifyContentChanged(revision);
     }
 
     internal void MoveLeft(bool extendSelection = false)
     {
-        int anchor = OffsetFromPosition(_selection.Anchor);
-        int active = OffsetFromPosition(_selection.Active);
-        if (!extendSelection && anchor != active)
+        lock (_sync)
         {
-            SetCollapsedOffset(Math.Min(anchor, active), preferRight: true);
-            return;
-        }
+            int anchor = OffsetFromPosition(_selection.Anchor);
+            int active = OffsetFromPosition(_selection.Active);
+            if (!extendSelection && anchor != active)
+            {
+                SetCollapsedOffset(Math.Min(anchor, active), preferRight: true);
+                return;
+            }
 
-        int next = PreviousLogicalOffset(active);
-        if (extendSelection)
-        {
-            _selection = new LanConnectDraftSelection(
-                _selection.Anchor,
-                PositionFromOffset(next, preferRight: true));
-        }
-        else
-        {
-            SetCollapsedOffset(next, preferRight: true);
+            int next = PreviousLogicalOffset(active);
+            if (extendSelection)
+            {
+                _selection = new LanConnectDraftSelection(
+                    _selection.Anchor,
+                    PositionFromOffset(next, preferRight: true));
+            }
+            else
+            {
+                SetCollapsedOffset(next, preferRight: true);
+            }
         }
     }
 
     internal void MoveRight(bool extendSelection = false)
     {
-        int anchor = OffsetFromPosition(_selection.Anchor);
-        int active = OffsetFromPosition(_selection.Active);
-        if (!extendSelection && anchor != active)
+        lock (_sync)
         {
-            SetCollapsedOffset(Math.Max(anchor, active), preferRight: false);
-            return;
-        }
+            int anchor = OffsetFromPosition(_selection.Anchor);
+            int active = OffsetFromPosition(_selection.Active);
+            if (!extendSelection && anchor != active)
+            {
+                SetCollapsedOffset(Math.Max(anchor, active), preferRight: false);
+                return;
+            }
 
-        int next = NextLogicalOffset(active);
-        if (extendSelection)
-        {
-            _selection = new LanConnectDraftSelection(
-                _selection.Anchor,
-                PositionFromOffset(next, preferRight: false));
-        }
-        else
-        {
-            SetCollapsedOffset(next, preferRight: false);
+            int next = NextLogicalOffset(active);
+            if (extendSelection)
+            {
+                _selection = new LanConnectDraftSelection(
+                    _selection.Anchor,
+                    PositionFromOffset(next, preferRight: false));
+            }
+            else
+            {
+                SetCollapsedOffset(next, preferRight: false);
+            }
         }
     }
 
     internal void Backspace()
     {
-        (int start, int end) = OrderedSelectionOffsets();
-        if (start != end)
+        long? revision = null;
+        lock (_sync)
         {
-            ReplaceRange(start, end, []);
-            return;
+            (int start, int end) = OrderedSelectionOffsets();
+            if (start != end)
+            {
+                revision = ReplaceRangeCore(start, end, []);
+            }
+            else
+            {
+                int previous = PreviousLogicalOffset(start);
+                if (previous != start)
+                {
+                    revision = ReplaceRangeCore(previous, start, []);
+                }
+            }
         }
-        int previous = PreviousLogicalOffset(start);
-        if (previous != start)
-        {
-            ReplaceRange(previous, start, []);
-        }
+        NotifyContentChanged(revision);
     }
 
     internal void Delete()
     {
-        (int start, int end) = OrderedSelectionOffsets();
-        if (start != end)
+        long? revision = null;
+        lock (_sync)
         {
-            ReplaceRange(start, end, []);
-            return;
+            (int start, int end) = OrderedSelectionOffsets();
+            if (start != end)
+            {
+                revision = ReplaceRangeCore(start, end, []);
+            }
+            else
+            {
+                int next = NextLogicalOffset(end);
+                if (next != end)
+                {
+                    revision = ReplaceRangeCore(end, next, []);
+                }
+            }
         }
-        int next = NextLogicalOffset(end);
-        if (next != end)
-        {
-            ReplaceRange(end, next, []);
-        }
+        NotifyContentChanged(revision);
     }
 
     internal void ReplaceSelectionWithText(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        ReplaceSelection([new LanConnectTextRun(text)]);
+        long? revision;
+        lock (_sync)
+        {
+            revision = ReplaceSelectionCore([new LanConnectTextRun(text)]);
+        }
+        NotifyContentChanged(revision);
     }
 
     internal void ReplaceAllWithText(string? text)
     {
         string next = text ?? string.Empty;
-        if (IsExactlyText(next))
+        long? revision = null;
+        lock (_sync)
         {
-            return;
+            if (!IsExactlyTextCore(next))
+            {
+                _runs.Clear();
+                _runs.Add(new LanConnectTextRun(next));
+                NormalizeRuns();
+                SetCollapsedOffset(DocumentLength, preferRight: false);
+                revision = NextContentRevision();
+            }
         }
-        _runs.Clear();
-        _runs.Add(new LanConnectTextRun(next));
-        NormalizeRuns();
-        SetCollapsedOffset(DocumentLength, preferRight: false);
-        ContentChanged?.Invoke();
+        NotifyContentChanged(revision);
     }
 
     internal string CopySelection(Func<LanConnectDraftRun, string> genericLabel)
     {
         ArgumentNullException.ThrowIfNull(genericLabel);
-        (int start, int end) = OrderedSelectionOffsets();
-        if (start == end)
+        lock (_sync)
         {
-            return string.Empty;
-        }
+            (int start, int end) = OrderedSelectionOffsets();
+            if (start == end)
+            {
+                return string.Empty;
+            }
 
-        System.Text.StringBuilder builder = new();
-        foreach (LanConnectDraftRun run in Slice(start, end))
-        {
-            if (run is LanConnectTextRun text)
+            System.Text.StringBuilder builder = new();
+            foreach (LanConnectDraftRun run in Slice(start, end))
             {
-                builder.Append(text.Text);
+                if (run is LanConnectTextRun text)
+                {
+                    builder.Append(text.Text);
+                }
+                else
+                {
+                    builder.Append(genericLabel(run) ?? string.Empty);
+                }
             }
-            else
-            {
-                builder.Append(genericLabel(run) ?? string.Empty);
-            }
+            return builder.ToString();
         }
-        return builder.ToString();
     }
 
     internal void Paste(string text)
@@ -225,6 +314,14 @@ internal sealed class LanConnectRichDraft
     }
 
     internal LanConnectChatContent ToContent()
+    {
+        lock (_sync)
+        {
+            return ToContentCore();
+        }
+    }
+
+    private LanConnectChatContent ToContentCore()
     {
         List<LanConnectChatSegment> segments = [];
         foreach (LanConnectDraftRun run in _runs)
@@ -265,74 +362,130 @@ internal sealed class LanConnectRichDraft
     {
         ArgumentNullException.ThrowIfNull(enabled);
         ArgumentNullException.ThrowIfNull(senderName);
-        LanConnectChatContent content = ToContent();
+        LanConnectChatContent rawContent = ToContent();
+        LanConnectChatContent content = rawContent;
+        bool contentValid = false;
+        try
+        {
+            content = LanConnectServerChatProtocol.Canonicalize(
+                rawContent,
+                new LanConnectChatFeatureVersions(1, 1, 1, 0));
+            contentValid = true;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or ArgumentException)
+        {
+            // The editor still needs stable counters for invalid drafts.
+        }
         int scalars = 0;
         int entities = 0;
         foreach (LanConnectChatSegment segment in content.Segments)
         {
             if (segment is LanConnectTextSegment text)
             {
-                scalars += LanConnectServerChatProtocol.CountUnicodeScalars(text.Text);
+                try
+                {
+                    scalars += LanConnectServerChatProtocol.CountUnicodeScalars(text.Text);
+                }
+                catch (InvalidOperationException)
+                {
+                    scalars += text.Text.Length;
+                }
             }
             else
             {
                 entities++;
             }
         }
+        int wireBytes;
+        try
+        {
+            wireBytes = LanConnectServerChatProtocol.MeasureWorstCaseInboundBytes(content, senderName);
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or ArgumentException)
+        {
+            wireBytes = int.MaxValue;
+        }
         return new LanConnectDraftMeasure(
             scalars,
             content.Segments.Count,
             entities,
-            LanConnectServerChatProtocol.MeasureWorstCaseInboundBytes(content, senderName),
-            LanConnectChatFeatureResolver.SupportsContent(content, enabled));
+            wireBytes,
+            contentValid,
+            contentValid && LanConnectChatFeatureResolver.SupportsContent(content, enabled));
     }
 
-    internal void Clear()
+    internal long Clear()
     {
-        if (IsEmpty)
+        long? revision = null;
+        long clearedThroughRevision;
+        lock (_sync)
         {
-            SetCollapsedOffset(0, preferRight: true);
-            return;
+            if (IsEmptyCore)
+            {
+                SetCollapsedOffset(0, preferRight: true);
+            }
+            else
+            {
+                _runs.Clear();
+                _runs.Add(new LanConnectTextRun(string.Empty));
+                SetCollapsedOffset(0, preferRight: true);
+                revision = NextContentRevision();
+            }
+            clearedThroughRevision = _contentRevision;
         }
-        _runs.Clear();
-        _runs.Add(new LanConnectTextRun(string.Empty));
-        SetCollapsedOffset(0, preferRight: true);
-        ContentChanged?.Invoke();
+        NotifyContentChanged(revision);
+        return clearedThroughRevision;
     }
 
     internal string ToCompatibilityText()
     {
-        System.Text.StringBuilder builder = new();
-        foreach (LanConnectDraftRun run in _runs)
+        lock (_sync)
         {
-            switch (run)
+            System.Text.StringBuilder builder = new();
+            foreach (LanConnectDraftRun run in _runs)
             {
-                case LanConnectTextRun text:
-                    builder.Append(text.Text);
-                    break;
-                case LanConnectEmojiRun:
-                    builder.Append("[Emoji]");
-                    break;
-                case LanConnectItemRun { ItemType: "card" }:
-                    builder.Append("[Card]");
-                    break;
-                case LanConnectItemRun { ItemType: "relic" }:
-                    builder.Append("[Relic]");
-                    break;
-                case LanConnectItemRun { ItemType: "potion" }:
-                    builder.Append("[Potion]");
-                    break;
-                case LanConnectItemRun:
-                    builder.Append("[Item]");
-                    break;
+                switch (run)
+                {
+                    case LanConnectTextRun text:
+                        builder.Append(text.Text);
+                        break;
+                    case LanConnectEmojiRun:
+                        builder.Append("[Emoji]");
+                        break;
+                    case LanConnectItemRun { ItemType: "card" }:
+                        builder.Append("[Card]");
+                        break;
+                    case LanConnectItemRun { ItemType: "relic" }:
+                        builder.Append("[Relic]");
+                        break;
+                    case LanConnectItemRun { ItemType: "potion" }:
+                        builder.Append("[Potion]");
+                        break;
+                    case LanConnectItemRun:
+                        builder.Append("[Item]");
+                        break;
+                }
             }
+            return builder.ToString();
         }
-        return builder.ToString();
     }
 
-    internal bool IsExactlyText(string text) =>
+    internal bool IsExactlyText(string text)
+    {
+        lock (_sync)
+        {
+            return IsExactlyTextCore(text);
+        }
+    }
+
+    private bool IsExactlyTextCore(string text) =>
         _runs.Count == 1 && _runs[0] is LanConnectTextRun current &&
         string.Equals(current.Text, text, StringComparison.Ordinal);
+
+    private bool IsEmptyCore =>
+        _runs.Count == 1 && _runs[0] is LanConnectTextRun { Text.Length: 0 };
 
     private int DocumentLength
     {
@@ -347,13 +500,16 @@ internal sealed class LanConnectRichDraft
         }
     }
 
-    private void ReplaceSelection(IReadOnlyList<LanConnectDraftRun> replacement)
+    private long? ReplaceSelectionCore(IReadOnlyList<LanConnectDraftRun> replacement)
     {
         (int start, int end) = OrderedSelectionOffsets();
-        ReplaceRange(start, end, replacement);
+        return ReplaceRangeCore(start, end, replacement);
     }
 
-    private void ReplaceRange(int start, int end, IReadOnlyList<LanConnectDraftRun> replacement)
+    private long? ReplaceRangeCore(
+        int start,
+        int end,
+        IReadOnlyList<LanConnectDraftRun> replacement)
     {
         LanConnectDraftRun[] before = _runs.ToArray();
         List<LanConnectDraftRun> left = Slice(0, start);
@@ -367,7 +523,18 @@ internal sealed class LanConnectRichDraft
         SetCollapsedOffset(caretOffset, preferRight: false);
         if (!RunsEqual(before, _runs))
         {
-            ContentChanged?.Invoke();
+            return NextContentRevision();
+        }
+        return null;
+    }
+
+    private long NextContentRevision() => ++_contentRevision;
+
+    private void NotifyContentChanged(long? revision)
+    {
+        if (revision.HasValue)
+        {
+            ContentChanged?.Invoke(revision.Value);
         }
     }
 
