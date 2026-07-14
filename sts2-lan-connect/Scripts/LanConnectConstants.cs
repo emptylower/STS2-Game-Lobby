@@ -64,6 +64,7 @@ internal static class LanConnectConstants
     public const string RoomManagementButtonName = "LanConnectRoomManagementButton";
 
     public const string RoomManagementPanelName = "LanConnectRoomManagementPanel";
+    public const string BlockingModalGroupName = "sts2_lan_connect_blocking_modal";
 
     public const string ChatMessagesScrollName = "ChatMessagesScroll";
 

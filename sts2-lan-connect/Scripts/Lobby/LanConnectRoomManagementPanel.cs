@@ -32,6 +32,11 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
     private int _lastChatEnabledRevision = -1;
     private int _lastPlayerListHash = -1;
 
+    internal LanConnectRoomManagementPanel()
+    {
+        LanConnectBlockingModal.Register(this);
+    }
+
     internal static void ShowPanel(Node parent)
     {
         if (_instance != null && GodotObject.IsInstanceValid(_instance))

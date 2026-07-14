@@ -2189,6 +2189,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             Visible = false,
             MouseFilter = MouseFilterEnum.Stop
         };
+        LanConnectBlockingModal.Register(shell);
         shell.SetAnchorsPreset(LayoutPreset.FullRect);
 
         ColorRect veil = new()

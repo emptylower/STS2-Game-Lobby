@@ -24,7 +24,8 @@ public sealed class LanConnectRoomChatTabsTests
 
         Button pin = FindNode<Button>(fixture.Overlay, "ChatPinButton");
         AssertThat(pin.Visible).IsTrue();
-        AssertThat(pin.Text).Contains("📌");
+        AssertThat(pin.Icon).IsNotNull();
+        AssertThat(pin.Icon.GetSize().X).IsGreater(0f);
         AssertThat(pin.TooltipText).IsNotEmpty();
         pin.EmitSignal(Button.SignalName.Pressed);
         await fixture.Runner.AwaitIdleFrame();

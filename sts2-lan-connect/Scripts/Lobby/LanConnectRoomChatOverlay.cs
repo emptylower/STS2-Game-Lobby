@@ -29,6 +29,13 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private static readonly Color AccentColor = new(0.86f, 0.69f, 0.33f, 1f);
     private static readonly Color TextStrongColor = new(0.96f, 0.94f, 0.88f, 1f);
     private static readonly Color TextMutedColor = new(0.76f, 0.74f, 0.69f, 1f);
+    private static ImageTexture? _pinIconTexture;
+
+    private const string PinIconSvg = """
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 17v5"/><path d="M5 17h14"/><path d="M17 3.1c-.5-.1-1-.1-1.5-.1h-7c-.5 0-1 0-1.5.1"/><path d="m6 8 1 1v4.5L5 17h14l-2-3.5V9l1-1"/><path d="M6 3h12"/>
+        </svg>
+        """;
 
     private MarginContainer? _root;
     private Control? _toggleBadge;
@@ -297,10 +304,12 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         title.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         header.AddChild(title);
 
-        _pinButton = CreateButton("📌 固定", accent: false, TogglePinned);
+        _pinButton = CreateButton("固定", accent: false, TogglePinned);
         _pinButton.Name = "ChatPinButton";
         _pinButton.CustomMinimumSize = new Vector2(104, 36);
         _pinButton.TooltipText = "固定聊天浮层";
+        _pinButton.Icon = GetPinIconTexture();
+        _pinButton.ExpandIcon = true;
         header.AddChild(_pinButton);
 
         Button closeButton = CreateButton("收起", accent: false, ClosePanel);
@@ -454,6 +463,19 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         RefreshFromSource();
     }
 
+    private void ShowPanelPreservingSelection()
+    {
+        LanConnectDualChatState? chat = ResolveChat();
+        if (chat?.ActiveRoomId == null)
+        {
+            return;
+        }
+
+        bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
+        chat.ShowRoomOverlayPreservingSelection(serverSelectable);
+        RefreshFromSource();
+    }
+
     private void ClosePanel()
     {
         LanConnectDualChatState? chat = ResolveChat();
@@ -523,7 +545,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         _pinned = value;
         if (_pinButton != null)
         {
-            _pinButton.Text = _pinned ? "📌 取消固定" : "📌 固定";
+            _pinButton.Text = _pinned ? "取消固定" : "固定";
         }
     }
 
@@ -676,7 +698,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 ClosePanel();
                 return true;
             case LanConnectChatInputAction.ShowOverlay:
-                OpenPanel();
+                ShowPanelPreservingSelection();
                 return ResolveChat()?.RoomOverlayOpen == true;
             case LanConnectChatInputAction.PinOverlay:
                 SetPinned(true);
@@ -692,19 +714,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     private bool HasBlockingModalOutsideOverlay()
     {
-        if (!IsInsideTree())
-        {
-            return false;
-        }
-
-        foreach (Node node in GetTree().Root.FindChildren("*", "Window", recursive: true, owned: false))
-        {
-            if (node is Window { Visible: true, Exclusive: true } window && !IsAncestorOf(window))
-            {
-                return true;
-            }
-        }
-        return false;
+        return IsInsideTree() && LanConnectBlockingModal.IsAnyVisible(GetTree(), this);
     }
 
     private void ConfigureFocusChain()
@@ -1015,4 +1025,23 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         ContentMarginRight = 10,
         ContentMarginBottom = 7
     };
+
+    private static ImageTexture? GetPinIconTexture()
+    {
+        if (_pinIconTexture != null && GodotObject.IsInstanceValid(_pinIconTexture))
+        {
+            return _pinIconTexture;
+        }
+
+        Image image = new();
+        Error error = image.LoadSvgFromString(PinIconSvg, scale: 2f);
+        if (error != Error.Ok)
+        {
+            GD.PrintErr($"sts2_lan_connect: failed to load room chat pin icon: {error}");
+            return null;
+        }
+
+        _pinIconTexture = ImageTexture.CreateFromImage(image);
+        return _pinIconTexture;
+    }
 }

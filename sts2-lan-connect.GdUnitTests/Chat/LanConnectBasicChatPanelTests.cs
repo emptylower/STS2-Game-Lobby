@@ -762,6 +762,30 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(fiveLineHeight).IsEqual(threeLineHeight);
     }
 
+    [TestCase]
+    public async Task Draft_rejects_middle_emoji_insert_at_limit_without_dropping_tail_or_jumping_to_end()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        string accepted = new('a', 500);
+        SetDraft(panel, accepted);
+
+        TextEdit input = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName);
+        input.SetCaretLine(0);
+        input.SetCaretColumn(250);
+        input.InsertTextAtCaret("😀");
+        await runner.AwaitIdleFrame();
+
+        AssertThat(input.Text).IsEqual(accepted);
+        AssertThat(state.Draft).IsEqual(accepted);
+        AssertThat(LanConnectChatTextProtocol.CountUnicodeScalars(input.Text)).IsEqual(500);
+        AssertThat(input.GetCaretColumn()).IsEqual(250);
+        AssertThat(input.Text[^1].ToString()).IsEqual("a");
+    }
+
     private static LanConnectChatChannelState WithDeliveryStates()
     {
         LanConnectChatChannelState state = EnabledState();

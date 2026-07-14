@@ -320,6 +320,37 @@ public sealed class LanConnectDualChatStateTests
     }
 
     [Fact]
+    public void Showing_overlay_preserves_selected_server_and_hidden_room_unread()
+    {
+        LanConnectDualChatState state = EnterAndCloseOnce();
+        state.Select(LanConnectChatChannel.Server);
+        state.Server.SetDraft("keep server draft");
+        state.Room.AppendConfirmedForTests("room-only-unread", "A", "room", 30, false);
+
+        LanConnectChatChannel selected = state.ShowRoomOverlayPreservingSelection();
+
+        Assert.Equal(LanConnectChatChannel.Server, selected);
+        Assert.Equal(LanConnectChatChannel.Server, state.SelectedChannel);
+        Assert.Equal("keep server draft", state.Server.Draft);
+        Assert.Equal(1, state.Room.UnreadCount);
+        Assert.False(state.Room.IsVisible);
+        Assert.True(state.Server.IsVisible);
+    }
+
+    [Fact]
+    public void Showing_overlay_without_selectable_server_forces_room()
+    {
+        LanConnectDualChatState state = EnterAndCloseOnce();
+        state.Select(LanConnectChatChannel.Server);
+
+        LanConnectChatChannel selected = state.ShowRoomOverlayPreservingSelection(serverSelectable: false);
+
+        Assert.Equal(LanConnectChatChannel.Room, selected);
+        Assert.True(state.Room.IsVisible);
+        Assert.False(state.Server.IsVisible);
+    }
+
+    [Fact]
     public void ClearServerContextClearsOnlyServer()
     {
         LanConnectDualChatState state = CreateEnteredState();

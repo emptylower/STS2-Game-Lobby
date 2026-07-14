@@ -120,6 +120,7 @@ public sealed class LanConnectRoomChatFocusTests
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
         fixture.Overlay.SelectChannelForTests(LanConnectChatChannel.Server);
         fixture.Overlay.SetDraftForTests("keep server draft");
+        fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Room, sequence: 40);
         await fixture.Overlay.CloseForTests();
 
         fixture.Overlay.RouteKeyForTests(Key.F8, blockingModalVisible: true);
@@ -130,6 +131,7 @@ public sealed class LanConnectRoomChatFocusTests
         AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
         AssertThat(fixture.Overlay.TestState.Pinned).IsFalse();
         AssertChannelAndDraftPreserved(fixture.Overlay, "keep server draft");
+        AssertThat(fixture.Overlay.TestState.RoomUnread).IsEqual(1);
 
         fixture.Overlay.RouteKeyForTests(Key.F8);
         AssertThat(fixture.Overlay.TestState.Pinned).IsTrue();
@@ -145,6 +147,49 @@ public sealed class LanConnectRoomChatFocusTests
         AssertThat(fixture.Overlay.TestState.PanelOpen).IsFalse();
         AssertThat(fixture.Overlay.TestState.Pinned).IsFalse();
         AssertChannelAndDraftPreserved(fixture.Overlay, "keep server draft");
+    }
+
+    [TestCase]
+    public async Task Visible_registered_modal_blocks_real_viewport_f8_input()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        await fixture.Overlay.CloseForTests();
+        Control modal = new() { Visible = true };
+        modal.AddToGroup(LanConnectConstants.BlockingModalGroupName);
+        fixture.Overlay.GetViewport().AddChild(modal);
+        await fixture.Runner.AwaitIdleFrame();
+
+        PushKey(fixture.Overlay.GetViewport(), Key.F8);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsFalse();
+
+        modal.Visible = false;
+        PushKey(fixture.Overlay.GetViewport(), Key.F8);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Production_modal_roots_register_with_blocking_contract()
+    {
+        using LobbyOverlayFixture lobby = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready);
+        int dialogShellCount = 0;
+        foreach (Node node in lobby.Overlay.FindChildren("*", "Control", recursive: true, owned: false))
+        {
+            if (node.IsInGroup(LanConnectConstants.BlockingModalGroupName))
+            {
+                dialogShellCount++;
+            }
+        }
+
+        LanConnectServerSelectionDialog serverPicker = AutoFree(new LanConnectServerSelectionDialog())!;
+        LanConnectRoomManagementPanel roomManagement = AutoFree(new LanConnectRoomManagementPanel())!;
+
+        AssertThat(dialogShellCount).IsEqual(7);
+        AssertThat(serverPicker.IsInGroup(LanConnectConstants.BlockingModalGroupName)).IsTrue();
+        AssertThat(roomManagement.IsInGroup(LanConnectConstants.BlockingModalGroupName)).IsTrue();
     }
 
     [TestCase]
@@ -192,6 +237,12 @@ public sealed class LanConnectRoomChatFocusTests
             Pressed = false,
             Strength = 0f
         });
+    }
+
+    private static void PushKey(Viewport viewport, Key key)
+    {
+        viewport.PushInput(new InputEventKey { Keycode = key, Pressed = true, Echo = false });
+        viewport.PushInput(new InputEventKey { Keycode = key, Pressed = false, Echo = false });
     }
 
     private static void AssertChannelAndDraftPreserved(

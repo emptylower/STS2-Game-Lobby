@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Helpers;
@@ -19,6 +20,8 @@ internal readonly record struct LanConnectBasicChatPanelTestState(
 
 internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 {
+    private const int MaxDraftScalars = 500;
+
     private readonly record struct ChatBinding(
         long Generation,
         long ContextGeneration,
@@ -66,6 +69,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private long _boundContextGeneration;
     private long _scrollInteractionGeneration;
     private bool _suppressScrollChange;
+    private bool _suppressDraftTextChanged;
+    private string _acceptedDraftText = string.Empty;
     private string _operationStatus = string.Empty;
 
     internal LanConnectChatChannelState? State => _state;
@@ -388,8 +393,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
 
-        _draftInput.Text = _state.Draft;
-        MoveDraftCaretToEnd();
+        SetDraftTextFromState(_state.Draft, moveCaretToEnd: true);
         UpdateDraftHeight();
         _state.SetVisible(IsInsideTree() && IsVisibleInTree());
         Refresh();
@@ -488,8 +492,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         if (_draftInput.Text != state.Draft)
         {
-            _draftInput.Text = state.Draft;
-            MoveDraftCaretToEnd();
+            SetDraftTextFromState(state.Draft, moveCaretToEnd: true);
             UpdateDraftHeight();
         }
         UpdateAvailability();
@@ -618,8 +621,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 return;
             }
 
-            _draftInput.Text = binding.State.Draft;
-            MoveDraftCaretToEnd();
+            SetDraftTextFromState(binding.State.Draft, moveCaretToEnd: true);
             UpdateDraftHeight();
             _operationStatus = "已提交";
             _draftInput.GrabFocus();
@@ -773,14 +775,25 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             return;
         }
-
-        if (_draftInput.Text.Length > 500)
+        if (_suppressDraftTextChanged)
         {
-            _draftInput.Text = _draftInput.Text[..500];
-            _draftInput.SetCaretLine(_draftInput.GetLineCount() - 1);
-            _draftInput.SetCaretColumn(_draftInput.GetLine(_draftInput.GetLineCount() - 1).Length);
+            return;
         }
-        _state?.SetDraft(_draftInput.Text);
+
+        LanConnectChatDraftLimitResult limited = LanConnectChatDraftLimiter.Limit(
+            _acceptedDraftText,
+            _draftInput.Text,
+            GetDraftCaretUtf16Offset(),
+            MaxDraftScalars);
+        if (!string.Equals(_draftInput.Text, limited.Text, StringComparison.Ordinal))
+        {
+            _suppressDraftTextChanged = true;
+            _draftInput.Text = limited.Text;
+            _suppressDraftTextChanged = false;
+            SetDraftCaretUtf16Offset(limited.CaretUtf16Offset);
+        }
+        _acceptedDraftText = limited.Text;
+        _state?.SetDraft(limited.Text);
         UpdateDraftHeight();
     }
 
@@ -834,7 +847,121 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         int lastLine = Math.Max(0, _draftInput.GetLineCount() - 1);
         _draftInput.SetCaretLine(lastLine);
-        _draftInput.SetCaretColumn(_draftInput.GetLine(lastLine).Length);
+        _draftInput.SetCaretColumn(CountRunes(_draftInput.GetLine(lastLine)));
+    }
+
+    private void SetDraftTextFromState(string text, bool moveCaretToEnd)
+    {
+        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
+        {
+            return;
+        }
+
+        LanConnectChatDraftLimitResult limited = LanConnectChatDraftLimiter.Limit(
+            string.Empty,
+            text ?? string.Empty,
+            (text ?? string.Empty).Length,
+            MaxDraftScalars);
+        _suppressDraftTextChanged = true;
+        _draftInput.Text = limited.Text;
+        _suppressDraftTextChanged = false;
+        _acceptedDraftText = limited.Text;
+        if (_state != null && !string.Equals(_state.Draft, limited.Text, StringComparison.Ordinal))
+        {
+            _state.SetDraft(limited.Text);
+        }
+        if (moveCaretToEnd)
+        {
+            MoveDraftCaretToEnd();
+        }
+        else
+        {
+            SetDraftCaretUtf16Offset(limited.CaretUtf16Offset);
+        }
+    }
+
+    private int GetDraftCaretUtf16Offset()
+    {
+        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
+        {
+            return 0;
+        }
+
+        int caretLine = Math.Clamp(_draftInput.GetCaretLine(), 0, _draftInput.GetLineCount() - 1);
+        int offset = 0;
+        for (int line = 0; line < caretLine; line++)
+        {
+            offset += _draftInput.GetLine(line).Length + 1;
+        }
+        return offset + Utf16OffsetAtRuneIndex(
+            _draftInput.GetLine(caretLine),
+            _draftInput.GetCaretColumn());
+    }
+
+    private void SetDraftCaretUtf16Offset(int utf16Offset)
+    {
+        if (_draftInput == null || !GodotObject.IsInstanceValid(_draftInput))
+        {
+            return;
+        }
+
+        int remaining = Math.Clamp(utf16Offset, 0, _draftInput.Text.Length);
+        int lastLine = Math.Max(0, _draftInput.GetLineCount() - 1);
+        for (int line = 0; line <= lastLine; line++)
+        {
+            string lineText = _draftInput.GetLine(line);
+            if (remaining <= lineText.Length || line == lastLine)
+            {
+                _draftInput.SetCaretLine(line);
+                _draftInput.SetCaretColumn(RuneIndexAtUtf16Offset(lineText, remaining));
+                return;
+            }
+            remaining -= lineText.Length + 1;
+        }
+    }
+
+    private static int CountRunes(string text)
+    {
+        int count = 0;
+        foreach (System.Text.Rune _ in text.EnumerateRunes())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    private static int RuneIndexAtUtf16Offset(string text, int utf16Offset)
+    {
+        int clamped = Math.Clamp(utf16Offset, 0, text.Length);
+        int consumed = 0;
+        int count = 0;
+        foreach (System.Text.Rune rune in text.EnumerateRunes())
+        {
+            int next = consumed + rune.Utf16SequenceLength;
+            if (next > clamped)
+            {
+                break;
+            }
+            consumed = next;
+            count++;
+        }
+        return count;
+    }
+
+    private static int Utf16OffsetAtRuneIndex(string text, int runeIndex)
+    {
+        int target = Math.Max(0, runeIndex);
+        int offset = 0;
+        int count = 0;
+        foreach (System.Text.Rune rune in text.EnumerateRunes())
+        {
+            if (count++ >= target)
+            {
+                break;
+            }
+            offset += rune.Utf16SequenceLength;
+        }
+        return offset;
     }
 
     private void OnScrollChanged(double value)

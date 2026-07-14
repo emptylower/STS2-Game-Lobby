@@ -57,6 +57,7 @@ public partial class LanConnectServerSelectionDialog : Control
     {
         Name = "LanConnectServerSelectionDialog";
         MouseFilter = MouseFilterEnum.Stop;
+        LanConnectBlockingModal.Register(this);
         // Full-rect anchored — it covers the whole screen and dims the
         // background, which makes the centered panel feel modal.
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
