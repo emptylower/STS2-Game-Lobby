@@ -225,9 +225,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private LanConnectChatChannelState? _testServerChatState;
     private Func<string, Task>? _testServerChatSend;
     private Func<string, Task>? _testServerChatRetry;
-    private Func<string, Task>? _testServerSwitch;
+    private Func<string, Task<CancellationToken>>? _testServerSwitch;
     private string? _testDefaultServer;
     private string? _testAppliedServerOverride;
+    private bool _testAppliedServerOverrideInitialized;
+    private string? _failedServerOverride;
     private long _serverChatPresentationRevision = -1;
     private bool _testMode;
     private float? _uiScaleOverride;
@@ -268,7 +270,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Func<string, Task> send,
         Func<string, Task> retry,
         float? uiScale = null,
-        Func<string, Task>? switchServer = null,
+        Func<string, Task<CancellationToken>>? switchServer = null,
         string? defaultServer = null)
     {
         ArgumentNullException.ThrowIfNull(serverState);
@@ -351,7 +353,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             throw new InvalidOperationException("The server override input has not been built.");
         }
         _serverBaseUrlInput.Text = value;
-        UpdateServerOverrideButtons();
+        OnServerOverrideTextChanged(value);
     }
 
     internal void PersistSettingsForTests() => PersistSettings();
@@ -361,6 +363,25 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     internal Task ClearNetworkOverridesForTests() => ClearNetworkOverridesAsync();
 
     internal bool ServerOverrideApplyEnabledForTests => _applyServerOverrideButton?.Disabled == false;
+
+    internal bool DirectoryServerButtonEnabledForTests => _chooseDirectoryServerButton?.Disabled == false;
+
+    internal bool ClearNetworkOverridesEnabledForTests => _clearNetworkOverridesButton?.Disabled == false;
+
+    internal string LastStatusMessageForTests => _lastStatusMessage;
+
+    internal void SetPersistedServerOverrideForTests(string value)
+    {
+        _testAppliedServerOverride = value;
+        _testAppliedServerOverrideInitialized = true;
+        UpdateServerOverrideButtons();
+    }
+
+    internal void SetRefreshInFlightForTests(bool value)
+    {
+        _refreshInFlight = value;
+        UpdateServerOverrideButtons();
+    }
 
     public override void _Process(double delta)
     {
@@ -858,7 +879,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_serverBaseUrlInput != null)
         {
             _serverBaseUrlInput.Secret = true;
-            _serverBaseUrlInput.TextChanged += _ => UpdateServerOverrideButtons();
+            _serverBaseUrlInput.TextChanged += OnServerOverrideTextChanged;
         }
 
         if (_createRoomTokenInput != null)
@@ -2505,9 +2526,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return row;
     }
 
-    private async Task RefreshRoomsAsync(bool userInitiated = false)
+    private async Task RefreshRoomsAsync(
+        bool userInitiated = false,
+        bool allowActionInFlight = false,
+        CancellationToken cancellationToken = default)
     {
-        if (_refreshInFlight || _actionInFlight)
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_refreshInFlight || (_actionInFlight && !allowActionInFlight))
         {
             return;
         }
@@ -2528,9 +2553,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             List<LobbyRoomSummary> previousRooms = new(_rooms);
             string? selectedRoomId = GetSelectedRoom()?.RoomId ?? _selectedRoomId;
             using LobbyApiClient apiClient = LobbyApiClient.CreateConfigured();
-            Task<double?> probeTask = MeasureLobbyProbeRttSafeAsync(apiClient);
-            Task<(bool Success, IReadOnlyList<LobbyAnnouncementItem> Items)> announcementTask = FetchAnnouncementsSafeAsync(apiClient);
-            IReadOnlyList<LobbyRoomSummary> rooms = await apiClient.GetRoomsAsync();
+            Task<double?> probeTask = MeasureLobbyProbeRttSafeAsync(apiClient, cancellationToken);
+            Task<(bool Success, IReadOnlyList<LobbyAnnouncementItem> Items)> announcementTask = FetchAnnouncementsSafeAsync(apiClient, cancellationToken);
+            Task<IReadOnlyList<LobbyRoomSummary>> roomsTask = apiClient.GetRoomsAsync(cancellationToken);
+            await Task.WhenAll(probeTask, announcementTask, roomsTask);
+            IReadOnlyList<LobbyRoomSummary> rooms = await roomsTask;
             double? measuredProbeRtt = await probeTask;
             (bool announcementSuccess, IReadOnlyList<LobbyAnnouncementItem> announcementItems) = await announcementTask;
             _lastLobbyRttMs = measuredProbeRtt ?? -1d;
@@ -2573,6 +2600,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                 $"sts2_lan_connect overlay: refresh completed with {_rooms.Count} rooms, probeRttMs={(measuredProbeRtt.HasValue ? $"{measuredProbeRtt.Value:0}" : "<unavailable>")}");
             SetStatus(string.Empty);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (LobbyServiceException ex)
         {
             _consecutiveRefreshFailures++;
@@ -2613,12 +2644,18 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
     }
 
-    private async Task<(bool Success, IReadOnlyList<LobbyAnnouncementItem> Items)> FetchAnnouncementsSafeAsync(LobbyApiClient apiClient)
+    private async Task<(bool Success, IReadOnlyList<LobbyAnnouncementItem> Items)> FetchAnnouncementsSafeAsync(
+        LobbyApiClient apiClient,
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            IReadOnlyList<LobbyAnnouncementItem> items = await apiClient.GetAnnouncementsAsync();
+            IReadOnlyList<LobbyAnnouncementItem> items = await apiClient.GetAnnouncementsAsync(cancellationToken);
             return (true, items);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -4252,8 +4289,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private async Task ClearNetworkOverridesAsync()
     {
-        bool clearServerOverride = !string.IsNullOrWhiteSpace(
-            _testMode ? _testAppliedServerOverride : LanConnectConfig.LobbyServerBaseUrlOverride);
+        if (IsServerSwitchUiBusy)
+        {
+            return;
+        }
+
+        bool clearServerOverride = !string.IsNullOrWhiteSpace(GetPersistedServerOverride());
         if (_serverBaseUrlInput != null)
         {
             _serverBaseUrlInput.Text = string.Empty;
@@ -4275,7 +4316,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private async Task ApplyServerOverrideAsync()
     {
-        if (_actionInFlight || _serverBaseUrlInput == null)
+        if (IsServerSwitchUiBusy || _serverBaseUrlInput == null)
         {
             return;
         }
@@ -4299,35 +4340,48 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             UpdateActionButtons();
         }
-        bool switched = false;
+        LanConnectServerContextLease? serverContextLease = null;
         try
         {
             SetStatus("正在切换大厅服务器...");
+            CancellationToken serverContextToken;
             if (_testServerSwitch != null)
             {
-                await _testServerSwitch(targetServer);
+                serverContextToken = await _testServerSwitch(targetServer);
             }
             else
             {
                 LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance
                     ?? throw new InvalidOperationException("Lobby runtime is unavailable.");
-                await runtime.SwitchLobbyServerAsync(targetServer);
+                serverContextLease = await runtime.SwitchLobbyServerWithContextAsync(targetServer);
+                serverContextToken = serverContextLease.Token;
             }
 
-            switched = true;
+            serverContextToken.ThrowIfCancellationRequested();
             if (_testMode)
             {
                 _testAppliedServerOverride = requestedOverride;
+                _testAppliedServerOverrideInitialized = true;
             }
             else
             {
                 _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
             }
+            _failedServerOverride = null;
             UpdateNetworkSummary();
+            if (!_testMode)
+            {
+                await RefreshRoomsAsync(
+                    userInitiated: true,
+                    allowActionInFlight: true,
+                    cancellationToken: serverContextToken);
+                serverContextToken.ThrowIfCancellationRequested();
+            }
             SetStatus($"已切换到大厅服务：{targetServer}");
         }
         catch (OperationCanceledException)
         {
+            _failedServerOverride = null;
             if (!_testMode)
             {
                 _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
@@ -4336,14 +4390,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
         catch (Exception ex)
         {
-            if (!_testMode)
-            {
-                _serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
-            }
+            _serverBaseUrlInput.Text = requestedOverride;
+            _failedServerOverride = requestedOverride;
             SetStatus($"切换大厅服务器失败：{ex.Message}");
         }
         finally
         {
+            serverContextLease?.Dispose();
             _actionInFlight = false;
             UpdateServerOverrideButtons();
             if (!_testMode)
@@ -4352,10 +4405,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             }
         }
 
-        if (switched && !_testMode)
-        {
-            await RefreshRoomsAsync(userInitiated: true);
-        }
     }
 
     private void ToggleNetworkSettingsVisibility()
@@ -4376,22 +4425,48 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void UpdateServerOverrideButtons()
     {
+        if (_chooseDirectoryServerButton != null)
+        {
+            _chooseDirectoryServerButton.Disabled = IsServerSwitchUiBusy;
+        }
+
         if (_clearNetworkOverridesButton != null)
         {
             bool hasOverrideText = !string.IsNullOrWhiteSpace(_serverBaseUrlInput?.Text)
                 || !string.IsNullOrWhiteSpace(_createRoomTokenInput?.Text);
-            _clearNetworkOverridesButton.Disabled = _actionInFlight
+            _clearNetworkOverridesButton.Disabled = IsServerSwitchUiBusy
                 || !(LanConnectConfig.HasLobbyServerOverrides || hasOverrideText);
         }
 
         if (_applyServerOverrideButton != null)
         {
-            _applyServerOverrideButton.Disabled = _actionInFlight || string.Equals(
-                _serverBaseUrlInput?.Text.Trim(),
-                LanConnectConfig.LobbyServerBaseUrlOverride,
-                StringComparison.Ordinal);
+            string draft = _serverBaseUrlInput?.Text.Trim() ?? string.Empty;
+            bool retryingFailedTarget = string.Equals(draft, _failedServerOverride, StringComparison.Ordinal);
+            _applyServerOverrideButton.Disabled = IsServerSwitchUiBusy
+                || (!retryingFailedTarget && string.Equals(
+                    draft,
+                    GetPersistedServerOverride(),
+                    StringComparison.Ordinal));
         }
     }
+
+    private void OnServerOverrideTextChanged(string text)
+    {
+        string draft = text.Trim();
+        if (_failedServerOverride != null
+            && !string.Equals(draft, _failedServerOverride, StringComparison.Ordinal))
+        {
+            _failedServerOverride = null;
+        }
+        UpdateServerOverrideButtons();
+    }
+
+    private string GetPersistedServerOverride() =>
+        _testMode && _testAppliedServerOverrideInitialized
+            ? _testAppliedServerOverride ?? string.Empty
+            : LanConnectConfig.LobbyServerBaseUrlOverride;
+
+    private bool IsServerSwitchUiBusy => _refreshInFlight || _actionInFlight;
 
     private void ToggleSettingsVisibility()
     {
@@ -4700,11 +4775,17 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
     }
 
-    private static async Task<double?> MeasureLobbyProbeRttSafeAsync(LobbyApiClient apiClient)
+    private static async Task<double?> MeasureLobbyProbeRttSafeAsync(
+        LobbyApiClient apiClient,
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            return await apiClient.MeasureProbeRttAsync();
+            return await apiClient.MeasureProbeRttAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

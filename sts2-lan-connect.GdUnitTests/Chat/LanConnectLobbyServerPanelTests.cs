@@ -133,7 +133,7 @@ public sealed class LanConnectLobbyServerPanelTests
             server =>
             {
                 switches.Add(server);
-                return Task.CompletedTask;
+                return Task.FromResult(CancellationToken.None);
             },
             BundledDefaultServer);
 
@@ -162,6 +162,120 @@ public sealed class LanConnectLobbyServerPanelTests
 
         AssertThat(switches.Count).IsEqual(2);
         AssertThat(switches[1]).IsEqual(BundledDefaultServer);
+    }
+
+    [TestCase]
+    public async Task Server_switch_disables_all_switch_entrypoints_while_in_flight()
+    {
+        TaskCompletionSource<CancellationToken> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready,
+            _ => release.Task,
+            BundledDefaultServer);
+        fixture.Overlay.SetServerOverrideDraftForTests("https://busy.example");
+
+        Task apply = fixture.Overlay.ApplyServerOverrideForTests();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Overlay.ServerOverrideApplyEnabledForTests).IsFalse();
+        AssertThat(fixture.Overlay.DirectoryServerButtonEnabledForTests).IsFalse();
+
+        release.SetResult(CancellationToken.None);
+        await apply;
+
+        AssertThat(fixture.Overlay.DirectoryServerButtonEnabledForTests).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Superseded_switch_does_not_report_success_or_apply_the_override()
+    {
+        using CancellationTokenSource superseded = new();
+        superseded.Cancel();
+        int switches = 0;
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready,
+            _ =>
+            {
+                switches++;
+                return Task.FromResult(superseded.Token);
+            },
+            BundledDefaultServer);
+        fixture.Overlay.SetServerOverrideDraftForTests("https://superseded.example");
+
+        await fixture.Overlay.ApplyServerOverrideForTests();
+
+        AssertThat(fixture.Overlay.LastStatusMessageForTests).Contains("取消");
+        AssertThat(fixture.Overlay.ServerOverrideApplyEnabledForTests).IsTrue();
+        await fixture.Overlay.ClearNetworkOverridesForTests();
+        AssertThat(switches).IsEqual(1);
+    }
+
+    [TestCase]
+    public async Task Persisted_then_failed_switch_remains_retryable()
+    {
+        const string requestedServer = "https://retry.example";
+        int switches = 0;
+        LobbyOverlayFixture? fixture = null;
+        fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready,
+            _ =>
+            {
+                switches++;
+                if (switches == 1)
+                {
+                    fixture!.Overlay.SetPersistedServerOverrideForTests(requestedServer);
+                    throw new InvalidOperationException("connect failed");
+                }
+                return Task.FromResult(CancellationToken.None);
+            },
+            BundledDefaultServer);
+        using (fixture)
+        {
+            fixture.Overlay.SetServerOverrideDraftForTests(requestedServer);
+
+            await fixture.Overlay.ApplyServerOverrideForTests();
+
+            AssertThat(fixture.Overlay.ServerOverrideApplyEnabledForTests).IsTrue();
+            AssertThat(fixture.Overlay.LastStatusMessageForTests).Contains("失败");
+
+            await fixture.Overlay.ApplyServerOverrideForTests();
+
+            AssertThat(switches).IsEqual(2);
+            AssertThat(fixture.Overlay.LastStatusMessageForTests).Contains("已切换");
+        }
+    }
+
+    [TestCase]
+    public async Task Active_room_refresh_disables_every_server_switch_entrypoint()
+    {
+        int switches = 0;
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready,
+            _ =>
+            {
+                switches++;
+                return Task.FromResult(CancellationToken.None);
+            },
+            BundledDefaultServer);
+        fixture.Overlay.SetServerOverrideDraftForTests("https://after-refresh.example");
+
+        fixture.Overlay.SetRefreshInFlightForTests(true);
+
+        AssertThat(fixture.Overlay.ServerOverrideApplyEnabledForTests).IsFalse();
+        AssertThat(fixture.Overlay.ClearNetworkOverridesEnabledForTests).IsFalse();
+        AssertThat(fixture.Overlay.DirectoryServerButtonEnabledForTests).IsFalse();
+        await fixture.Overlay.ApplyServerOverrideForTests();
+        await fixture.Overlay.ClearNetworkOverridesForTests();
+        AssertThat(switches).IsEqual(0);
+
+        fixture.Overlay.SetRefreshInFlightForTests(false);
+
+        AssertThat(fixture.Overlay.ServerOverrideApplyEnabledForTests).IsTrue();
+        AssertThat(fixture.Overlay.DirectoryServerButtonEnabledForTests).IsTrue();
     }
 
     private static LanConnectChatChannelState ReadyState(string instanceId)
@@ -203,7 +317,7 @@ internal sealed class LobbyOverlayFixture : IDisposable
     internal static async Task<LobbyOverlayFixture> Create(
         Vector2I viewportSize,
         LanConnectServerChatPresentation presentation,
-        Func<string, Task>? switchServer = null,
+        Func<string, Task<CancellationToken>>? switchServer = null,
         string? defaultServer = null)
     {
         LanConnectChatChannelState serverState = new(LanConnectChatChannel.Server);

@@ -8,6 +8,10 @@ using MegaCrit.Sts2.Core.Logging;
 
 namespace Sts2LanConnect.Scripts;
 
+internal readonly record struct LanConnectPersistedLobbyServerAddress(
+    string ServerOverride,
+    string LastUsedServerAddress);
+
 internal sealed class LanConnectConfigData
 {
     public string LastEndpoint { get; set; } = string.Empty;
@@ -351,20 +355,37 @@ internal static class LanConnectConfig
 
     internal static void PersistLobbyServerAddress(string baseUrl)
     {
-        string normalized = NormalizeLobbyEndpointOverride(baseUrl);
-        string lastUsed = baseUrl?.Trim() ?? string.Empty;
+        LanConnectPersistedLobbyServerAddress persisted = NormalizePersistedLobbyServerAddress(
+            baseUrl,
+            LanConnectLobbyEndpointDefaults.GetDefaultBaseUrl());
         lock (Sync)
         {
-            if (string.Equals(_data.LobbyServerBaseUrl, normalized, StringComparison.Ordinal) &&
-                string.Equals(_data.LastUsedServerAddress, lastUsed, StringComparison.Ordinal))
+            if (string.Equals(_data.LobbyServerBaseUrl, persisted.ServerOverride, StringComparison.Ordinal) &&
+                string.Equals(_data.LastUsedServerAddress, persisted.LastUsedServerAddress, StringComparison.Ordinal))
             {
                 return;
             }
 
-            _data.LobbyServerBaseUrl = normalized;
-            _data.LastUsedServerAddress = lastUsed;
+            _data.LobbyServerBaseUrl = persisted.ServerOverride;
+            _data.LastUsedServerAddress = persisted.LastUsedServerAddress;
             SaveUnsafe();
         }
+    }
+
+    internal static LanConnectPersistedLobbyServerAddress NormalizePersistedLobbyServerAddress(
+        string? baseUrl,
+        string? bundledDefaultBaseUrl)
+    {
+        string lastUsed = baseUrl?.Trim() ?? string.Empty;
+        string bundled = bundledDefaultBaseUrl?.Trim() ?? string.Empty;
+        bool matchesBundledDefault = !string.IsNullOrWhiteSpace(bundled)
+            && string.Equals(
+                lastUsed.TrimEnd('/'),
+                bundled.TrimEnd('/'),
+                StringComparison.OrdinalIgnoreCase);
+        return new LanConnectPersistedLobbyServerAddress(
+            matchesBundledDefault ? string.Empty : NormalizeLobbyEndpointOverride(lastUsed),
+            lastUsed);
     }
 
     public static LanConnectSavedRoomBinding? TryGetSaveRoomBinding(string saveKey)
