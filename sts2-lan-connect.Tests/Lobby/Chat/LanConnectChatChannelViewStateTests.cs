@@ -146,6 +146,35 @@ public sealed class LanConnectChatChannelViewStateTests
     }
 
     [Fact]
+    public void ChannelOwnsOneRichDraftWhileTextCompatibilitySetterReusesIt()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        LanConnectRichDraft owned = state.RichDraft;
+
+        state.SetDraft("hello");
+        Assert.Same(owned, state.RichDraft);
+        Assert.Equal(new LanConnectDraftRun[] { new LanConnectTextRun("hello") }, owned.Runs);
+        Assert.Equal("hello", state.Draft);
+
+        long beforeRichEditGeneration = state.DraftGeneration;
+        long beforeRichEditRevision = state.Revision;
+        owned.SetCaret(new LanConnectDraftPosition(0, 5));
+        owned.InsertEntity(new LanConnectEmojiRun("heart"));
+        Assert.Equal("hello[Emoji]", state.Draft);
+        Assert.Equal(beforeRichEditGeneration + 1, state.DraftGeneration);
+        Assert.Equal(beforeRichEditRevision + 1, state.Revision);
+
+        state.SetDraft("replacement");
+        Assert.Same(owned, state.RichDraft);
+        Assert.Equal(new LanConnectDraftRun[] { new LanConnectTextRun("replacement") }, owned.Runs);
+
+        state.ClearForContextChange();
+        Assert.Same(owned, state.RichDraft);
+        Assert.True(owned.IsEmpty);
+        Assert.Equal(string.Empty, state.Draft);
+    }
+
+    [Fact]
     public void HiddenSnapshotReplacementDoesNotInflateUnread()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Server);

@@ -136,9 +136,10 @@ internal sealed class LanConnectChatChannelState
     private long _revision;
     private long _contextGeneration;
     private long _draftGeneration;
+    private bool _suppressDraftNotifications;
     private bool _chatEnabled;
     private ServerChatEnabledFeatures _enabledFeatures = new();
-    private string _draft = string.Empty;
+    private readonly LanConnectRichDraft _draft = new();
     private int _unreadCount;
     private long? _firstUnreadSequence;
     private double _scrollOffset;
@@ -160,6 +161,7 @@ internal sealed class LanConnectChatChannelState
         ArgumentNullException.ThrowIfNull(arrivalClock);
         Channel = channel;
         _arrivalClock = arrivalClock;
+        _draft.ContentChanged += OnDraftContentChanged;
         if (channel == LanConnectChatChannel.Room)
         {
             _chatEnabled = true;
@@ -276,10 +278,20 @@ internal sealed class LanConnectChatChannelState
         {
             lock (_mutationLock)
             {
+                return _draft.ToCompatibilityText();
+            }
+        }
+    }
+
+    internal LanConnectRichDraft RichDraft
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
                 return _draft;
             }
         }
-        private set => _draft = value;
     }
 
     internal int UnreadCount
@@ -359,14 +371,12 @@ internal sealed class LanConnectChatChannelState
         lock (_mutationLock)
         {
             string next = value ?? string.Empty;
-            if (_draft == next)
+            if (_draft.IsExactlyText(next))
             {
                 return;
             }
 
-            _draft = next;
-            _draftGeneration++;
-            Touch();
+            _draft.ReplaceAllWithText(next);
         }
     }
 
@@ -379,14 +389,12 @@ internal sealed class LanConnectChatChannelState
         {
             if (_contextGeneration != expectedContextGeneration ||
                 _draftGeneration != expectedDraftGeneration ||
-                !string.Equals(_draft, expectedDraft, StringComparison.Ordinal))
+                !string.Equals(_draft.ToCompatibilityText(), expectedDraft, StringComparison.Ordinal))
             {
                 return false;
             }
 
-            _draft = string.Empty;
-            _draftGeneration++;
-            Touch();
+            _draft.Clear();
             return true;
         }
     }
@@ -736,16 +744,37 @@ internal sealed class LanConnectChatChannelState
             _contextGeneration++;
             _messages.Clear();
             _snapshotAssembly = null;
-            if (_draft.Length > 0)
+            if (!_draft.IsEmpty)
             {
                 _draftGeneration++;
             }
-            _draft = string.Empty;
+            _suppressDraftNotifications = true;
+            try
+            {
+                _draft.Clear();
+            }
+            finally
+            {
+                _suppressDraftNotifications = false;
+            }
             ResetIncomingIndicators();
             _scrollOffset = 0;
             _isAtBottom = true;
             _isVisible = false;
             RebuildIndices();
+            Touch();
+        }
+    }
+
+    private void OnDraftContentChanged()
+    {
+        lock (_mutationLock)
+        {
+            if (_suppressDraftNotifications)
+            {
+                return;
+            }
+            _draftGeneration++;
             Touch();
         }
     }
