@@ -173,7 +173,11 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
             LobbyProbeResponse probe = await api.GetProbeAsync(cancellationToken);
             if (!probe.Ok || probe.Capabilities == null || !probe.Capabilities.SupportsTextServerChat)
             {
-                MarkPermanentStop();
+                MarkPermanentStop(
+                    LanConnectServerChatPresentation.Unsupported,
+                    "当前服务器未声明频道聊天协议 v1。",
+                    connectionOrdinal: null,
+                    generation);
                 throw new NotSupportedException("The selected lobby does not support server chat protocol version 1.");
             }
 
@@ -185,7 +189,11 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
             }, cancellationToken);
             if (ticket.ProtocolVersion != ProtocolVersion)
             {
-                MarkPermanentStop();
+                MarkPermanentStop(
+                    LanConnectServerChatPresentation.Unsupported,
+                    "服务器返回了不兼容的频道聊天 ticket。",
+                    connectionOrdinal: null,
+                    generation);
                 throw new NotSupportedException("The server chat ticket uses an unsupported protocol version.");
             }
             if (string.IsNullOrWhiteSpace(ticket.Ticket) ||
@@ -247,13 +255,29 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
         int generation = Interlocked.Increment(ref _lifecycleGeneration);
         using CancellationTokenSource connectCancellation =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCancellation.Token);
+        SetPresentation(LanConnectServerChatPresentation.Connecting);
         try
         {
             await ConnectAttemptAsync(generation, connectCancellation.Token);
         }
-        catch
+        catch (NotSupportedException ex)
         {
             Volatile.Write(ref _snapshotComplete, 0);
+            if (!IsPermanentlyStopped)
+            {
+                SetPresentation(LanConnectServerChatPresentation.TransportFailure, ex.Message);
+            }
+            throw;
+        }
+        catch (OperationCanceledException) when (connectCancellation.IsCancellationRequested)
+        {
+            Volatile.Write(ref _snapshotComplete, 0);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Volatile.Write(ref _snapshotComplete, 0);
+            SetPresentation(LanConnectServerChatPresentation.TransportFailure, ex.Message);
             throw;
         }
     }
@@ -457,19 +481,31 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
             }
             if (envelope.ProtocolVersion != ProtocolVersion)
             {
-                MarkPermanentStop(connectionOrdinal, generation);
+                MarkPermanentStop(
+                    LanConnectServerChatPresentation.TransportFailure,
+                    "服务器返回了意外的频道聊天协议版本。",
+                    connectionOrdinal,
+                    generation);
                 return;
             }
             if (envelope.Type == "chat_ready" &&
                 (envelope.Channel != LanConnectChatChannel.Server || envelope.ServerChatVersion != ProtocolVersion))
             {
-                MarkPermanentStop(connectionOrdinal, generation);
+                MarkPermanentStop(
+                    LanConnectServerChatPresentation.TransportFailure,
+                    "服务器返回了无效的频道聊天 ready。",
+                    connectionOrdinal,
+                    generation);
                 return;
             }
             if (envelope.Type == "chat_error" &&
                 string.Equals(envelope.Code, "protocol_mismatch", StringComparison.Ordinal))
             {
-                MarkPermanentStop(connectionOrdinal, generation);
+                MarkPermanentStop(
+                    LanConnectServerChatPresentation.Unsupported,
+                    "服务器拒绝了当前频道聊天协议。",
+                    connectionOrdinal,
+                    generation);
                 return;
             }
 
@@ -503,13 +539,30 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
                 {
                     Interlocked.Exchange(ref _activeSessionOrdinal, Interlocked.Read(ref _currentConnectionOrdinal));
                     Interlocked.Exchange(ref _backoffAttempt, 0);
+                    State.SetPresentation(
+                        State.ChatEnabled
+                            ? LanConnectServerChatPresentation.Ready
+                            : LanConnectServerChatPresentation.Disabled);
                 }
+            }
+            else if (envelope.Type == "chat_state" &&
+                     Volatile.Read(ref _readySeen) != 0 &&
+                     Volatile.Read(ref _snapshotComplete) != 0)
+            {
+                State.SetPresentation(
+                    State.ChatEnabled
+                        ? LanConnectServerChatPresentation.Ready
+                        : LanConnectServerChatPresentation.Disabled);
             }
             RaiseStateChangedIfNeeded(revision);
         }
         catch (JsonException)
         {
-            MarkPermanentStop(connectionOrdinal, generation);
+            MarkPermanentStop(
+                LanConnectServerChatPresentation.TransportFailure,
+                "服务器返回了无法解析的频道聊天协议消息。",
+                connectionOrdinal,
+                generation);
         }
     }
 
@@ -544,21 +597,25 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
     {
         if (exception is NotSupportedException)
         {
-            MarkPermanentStop(connectionOrdinal, generation);
+            MarkPermanentStop(
+                LanConnectServerChatPresentation.TransportFailure,
+                exception.Message,
+                connectionOrdinal,
+                generation);
             return;
         }
         if (!TryClaimCurrentConnection(connectionOrdinal, generation))
         {
             return;
         }
-        HandleUnexpectedDisconnect();
+        HandleUnexpectedDisconnect(exception.Message);
     }
 
     private void OnTransportClosed(long connectionOrdinal, int generation)
     {
         if (TryClaimCurrentConnection(connectionOrdinal, generation))
         {
-            HandleUnexpectedDisconnect();
+            HandleUnexpectedDisconnect("频道连接已断开。");
         }
     }
 
@@ -572,9 +629,10 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
         generation == Volatile.Read(ref _lifecycleGeneration) &&
         Interlocked.CompareExchange(ref _currentConnectionOrdinal, 0, connectionOrdinal) == connectionOrdinal;
 
-    private void HandleUnexpectedDisconnect()
+    private void HandleUnexpectedDisconnect(string? reason = null)
     {
         MarkDisconnected();
+        SetPresentation(LanConnectServerChatPresentation.TransportFailure, reason);
         ScheduleReconnect();
     }
 
@@ -588,12 +646,11 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
         RaiseStateChangedIfNeeded(revision);
     }
 
-    private void MarkPermanentStop() => MarkPermanentStopCore(null, 0);
-
-    private void MarkPermanentStop(long connectionOrdinal, int generation) =>
-        MarkPermanentStopCore(connectionOrdinal, generation);
-
-    private void MarkPermanentStopCore(long? connectionOrdinal, int generation)
+    private void MarkPermanentStop(
+        LanConnectServerChatPresentation presentation,
+        string reason,
+        long? connectionOrdinal,
+        int generation)
     {
         long revision;
         lock (_lifecycleLock)
@@ -619,6 +676,7 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
                 ChatEnabled = false,
                 EnabledFeatures = new ServerChatEnabledFeatures()
             });
+            State.SetPresentation(presentation, reason);
             _checkpoint?.Invoke(LanConnectServerChatClientCheckpoint.PermanentStopAfterCleanupOwnership);
         }
         RaiseStateChangedIfNeeded(revision);
@@ -664,6 +722,7 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
                    generation == Volatile.Read(ref _lifecycleGeneration) &&
                    !IsPermanentlyStopped)
             {
+                SetPresentation(LanConnectServerChatPresentation.Reconnecting);
                 _checkpoint?.Invoke(LanConnectServerChatClientCheckpoint.ReconnectBeforeDispose);
                 await DisposeCurrentResourcesAsync();
                 int attempt = Interlocked.Increment(ref _backoffAttempt) - 1;
@@ -699,13 +758,21 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
                 {
                     return;
                 }
-                catch (NotSupportedException)
+                catch (NotSupportedException ex)
                 {
-                    MarkPermanentStop();
+                    if (!IsPermanentlyStopped)
+                    {
+                        MarkPermanentStop(
+                            LanConnectServerChatPresentation.TransportFailure,
+                            ex.Message,
+                            connectionOrdinal: null,
+                            generation);
+                    }
                     return;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    SetPresentation(LanConnectServerChatPresentation.TransportFailure, ex.Message);
                     lock (_lifecycleLock)
                     {
                         _reconnectRequested = 0;
@@ -735,6 +802,15 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
             return;
         }
         StateChanged?.Invoke();
+    }
+
+    private void SetPresentation(
+        LanConnectServerChatPresentation presentation,
+        string? detail = null)
+    {
+        long revision = State.Revision;
+        State.SetPresentation(presentation, detail);
+        RaiseStateChangedIfNeeded(revision);
     }
 
     private void EnsureCanSend()

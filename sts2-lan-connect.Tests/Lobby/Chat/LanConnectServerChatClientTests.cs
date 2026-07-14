@@ -28,6 +28,53 @@ public sealed class LanConnectServerChatClientTests
         Assert.Equal(0, api.TicketCalls);
         Assert.Equal(0, transportCreations);
         Assert.True(client.IsPermanentlyStopped);
+        Assert.Equal(LanConnectServerChatPresentation.Unsupported, client.State.Presentation);
+    }
+
+    [Fact]
+    public async Task ConnectUnsupportedTicketVersionIsClassifiedAsUnsupported()
+    {
+        FakeApi api = new([]) { TicketVersion = 2 };
+        await using LanConnectServerChatClient client = CreateClient(api, () => new FakeTransport([]));
+
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None));
+
+        Assert.True(client.IsPermanentlyStopped);
+        Assert.Equal(LanConnectServerChatPresentation.Unsupported, client.State.Presentation);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InitialTransportFailureRemainsVisibleAndKeepsItsReason(bool notSupportedException)
+    {
+        FakeApi api = new([]);
+        Exception connectionError = notSupportedException
+            ? new NotSupportedException("transport API limitation")
+            : new InvalidOperationException("network down");
+        FakeTransport transport = new([])
+        {
+            DuringConnect = () => throw connectionError
+        };
+        await using LanConnectServerChatClient client = CreateClient(api, () => transport);
+
+        if (notSupportedException)
+        {
+            await Assert.ThrowsAsync<NotSupportedException>(() =>
+                client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None));
+        }
+        else
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None));
+        }
+
+        Assert.False(client.IsPermanentlyStopped);
+        Assert.Equal(LanConnectServerChatPresentation.TransportFailure, client.State.Presentation);
+        Assert.Equal(
+            notSupportedException ? "transport API limitation" : "network down",
+            client.State.PresentationDetail);
     }
 
     [Fact]
@@ -57,13 +104,44 @@ public sealed class LanConnectServerChatClientTests
         FakeTransport transport = new([]);
         await using LanConnectServerChatClient client = CreateClient(api, () => transport);
         await client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None);
+        Assert.Equal(LanConnectServerChatPresentation.Connecting, client.State.Presentation);
 
         transport.Emit(BuildReady());
         Assert.False(client.CanSend);
+        Assert.Equal(LanConnectServerChatPresentation.Connecting, client.State.Presentation);
         transport.Emit(BuildSnapshotBegin(totalMessages: 0));
         Assert.False(client.CanSend);
+        Assert.Equal(LanConnectServerChatPresentation.Connecting, client.State.Presentation);
         transport.Emit(BuildSnapshotEnd());
 
+        Assert.True(client.CanSend);
+        Assert.Equal(LanConnectServerChatPresentation.Ready, client.State.Presentation);
+    }
+
+    [Fact]
+    public async Task DynamicChatStateMapsReadyAndDisabledAfterSnapshot()
+    {
+        FakeApi api = new([]);
+        FakeTransport transport = new([]);
+        await using LanConnectServerChatClient client = CreateClient(api, () => transport);
+        await ConnectReadyAsync(client, transport);
+
+        transport.Emit(Serialize(new ServerChatStateEnvelope
+        {
+            ProtocolVersion = 1,
+            ChatEnabled = false,
+            HistoryEpoch = 1
+        }));
+        Assert.Equal(LanConnectServerChatPresentation.Disabled, client.State.Presentation);
+        Assert.False(client.CanSend);
+
+        transport.Emit(Serialize(new ServerChatStateEnvelope
+        {
+            ProtocolVersion = 1,
+            ChatEnabled = true,
+            HistoryEpoch = 1
+        }));
+        Assert.Equal(LanConnectServerChatPresentation.Ready, client.State.Presentation);
         Assert.True(client.CanSend);
     }
 
@@ -79,6 +157,23 @@ public sealed class LanConnectServerChatClientTests
 
         Assert.True(client.IsPermanentlyStopped);
         Assert.False(client.CanSend);
+        Assert.Equal(LanConnectServerChatPresentation.TransportFailure, client.State.Presentation);
+    }
+
+    [Theory]
+    [InlineData("{not-json")]
+    [InlineData("{\"type\":\"chat_ready\",\"protocolVersion\":1,\"channel\":\"room\",\"serverChatVersion\":1}")]
+    public async Task MalformedOrInvalidReadyPermanentlyStopsAsVisibleTransportFailure(string payload)
+    {
+        FakeApi api = new([]);
+        FakeTransport transport = new([]);
+        await using LanConnectServerChatClient client = CreateClient(api, () => transport);
+        await client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None);
+
+        transport.Emit(payload);
+
+        Assert.True(client.IsPermanentlyStopped);
+        Assert.Equal(LanConnectServerChatPresentation.TransportFailure, client.State.Presentation);
     }
 
     [Fact]
@@ -345,6 +440,11 @@ public sealed class LanConnectServerChatClientTests
         Assert.True(client.IsPermanentlyStopped);
         Assert.Empty(delay.Durations);
         Assert.Single(transports);
+        Assert.Equal(
+            source == "error"
+                ? LanConnectServerChatPresentation.Unsupported
+                : LanConnectServerChatPresentation.TransportFailure,
+            client.State.Presentation);
     }
 
     [Fact]
@@ -905,6 +1005,7 @@ public sealed class LanConnectServerChatClientTests
     {
         public List<string> Operations { get; } = operations;
         public int ProbeVersion { get; set; } = 1;
+        public int TicketVersion { get; set; } = 1;
         public int TicketCalls { get; private set; }
         public int DisposeCalls { get; private set; }
         public ServerChatTicketRequest? Request { get; private set; }
@@ -928,7 +1029,7 @@ public sealed class LanConnectServerChatClientTests
             {
                 Ticket = "one-time-secret",
                 WebSocketUrl = ChatUri.AbsoluteUri,
-                ProtocolVersion = 1
+                ProtocolVersion = TicketVersion
             });
         }
 

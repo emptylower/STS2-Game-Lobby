@@ -687,15 +687,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
 
-        bool editable = _state.ChatEnabled && !_busy;
+        bool ready = _state.Presentation == LanConnectServerChatPresentation.Ready && _state.ChatEnabled;
+        bool editable = ready && !_busy;
         _draftInput.Editable = editable;
         _sendButton.Disabled = !editable;
-        _statusLabel.Text = !string.IsNullOrEmpty(_operationStatus)
+        _statusLabel.Text = ready && !string.IsNullOrEmpty(_operationStatus)
             ? _operationStatus
-            : _state.ChatEnabled ? "频道可用" : "聊天暂不可用";
+            : PresentationText(_state);
         _statusLabel.AddThemeColorOverride(
             "font_color",
-            _state.ChatEnabled ? TextMutedColor : WarningColor);
+            ready ? TextMutedColor : WarningColor);
     }
 
     private void UpdateNewMessagesButton()
@@ -765,6 +766,20 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             ServerChatDeliveryState.DeliveryUnknown when message.DisconnectedAfterUnknown => "可能已发送，确认后重发",
             ServerChatDeliveryState.DeliveryUnknown => "投递状态未知",
             _ => string.Empty
+        };
+
+    private static string PresentationText(LanConnectChatChannelState state) =>
+        state.Presentation switch
+        {
+            LanConnectServerChatPresentation.Unsupported => "当前服务器不支持频道聊天",
+            LanConnectServerChatPresentation.Connecting => "正在连接频道...",
+            LanConnectServerChatPresentation.Reconnecting => "频道连接中断，正在重连...",
+            LanConnectServerChatPresentation.Ready => state.ChatEnabled ? "频道可用" : "聊天暂不可用",
+            LanConnectServerChatPresentation.Disabled => "频道已由服务器停用",
+            LanConnectServerChatPresentation.TransportFailure when !string.IsNullOrWhiteSpace(state.PresentationDetail) =>
+                $"频道连接失败：{state.PresentationDetail}",
+            LanConnectServerChatPresentation.TransportFailure => "频道连接失败",
+            _ => "聊天暂不可用"
         };
 
     private static string RetryNodeSuffix(ServerChatMessageState message, int index)

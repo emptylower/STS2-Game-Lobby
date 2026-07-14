@@ -58,6 +58,16 @@ internal sealed class ServerChatMessageState
 
 internal readonly record struct LanConnectChatApplyResult(bool ReconnectRequired);
 
+internal enum LanConnectServerChatPresentation
+{
+    Unsupported,
+    Connecting,
+    Reconnecting,
+    Ready,
+    Disabled,
+    TransportFailure
+}
+
 internal sealed class LanConnectChatArrivalSequenceClock
 {
     private long _current;
@@ -133,6 +143,8 @@ internal sealed class LanConnectChatChannelState
     private bool _isAtBottom = true;
     private int _newMessagesBelowCount;
     private bool _isVisible;
+    private LanConnectServerChatPresentation _presentation = LanConnectServerChatPresentation.Connecting;
+    private string _presentationDetail = string.Empty;
 
     internal LanConnectChatChannelState(LanConnectChatChannel channel)
         : this(channel, SharedArrivalClock)
@@ -182,6 +194,52 @@ internal sealed class LanConnectChatChannelState
             }
         }
     }
+
+    internal LanConnectServerChatPresentation Presentation
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _presentation;
+            }
+        }
+    }
+
+    internal string PresentationDetail
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _presentationDetail;
+            }
+        }
+    }
+
+    internal void SetPresentation(
+        LanConnectServerChatPresentation presentation,
+        string? detail = null)
+    {
+        lock (_mutationLock)
+        {
+            string normalizedDetail = detail?.Trim() ?? string.Empty;
+            if (_presentation == presentation &&
+                string.Equals(_presentationDetail, normalizedDetail, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _presentation = presentation;
+            _presentationDetail = normalizedDetail;
+            Touch();
+        }
+    }
+
+    internal void SetPresentationForTests(
+        LanConnectServerChatPresentation presentation,
+        string? detail = null) =>
+        SetPresentation(presentation, detail);
 
     internal string Draft
     {

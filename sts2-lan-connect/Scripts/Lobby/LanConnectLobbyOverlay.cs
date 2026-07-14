@@ -12,6 +12,18 @@ using MegaCrit.Sts2.Core.Saves;
 
 namespace Sts2LanConnect.Scripts;
 
+internal readonly record struct LanConnectLobbyOverlayTestState(
+    Rect2 RoomStageRect,
+    Rect2 SidebarRect,
+    Rect2 RoomDetailRect,
+    Rect2 ServerChatRect,
+    bool ServerPanelVisible,
+    string SelectedRoomId,
+    string SelectedRoomName,
+    bool CompactSidebarScrollVisible,
+    float RoomDetailMinimumHeight,
+    float ServerChatMinimumHeight);
+
 internal sealed partial class LanConnectLobbyOverlay : Control
 {
     private enum LobbyLayoutMode
@@ -74,6 +86,16 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Label? _heroSubtitleLabel;
     private Control? _roomStagePanel;
     private VBoxContainer? _sidebarContainer;
+    private Control? _roomDetailPanel;
+    private PanelContainer? _serverChatFrame;
+    private LanConnectBasicChatPanel? _serverChatPanel;
+    private ScrollContainer? _compactSidebarScroll;
+    private Label? _selectedRoomNameLabel;
+    private Label? _selectedRoomHostLabel;
+    private Label? _selectedRoomPlayersLabel;
+    private Label? _selectedRoomModeLabel;
+    private Label? _selectedRoomVersionLabel;
+    private Label? _selectedRoomAccessLabel;
     private LobbyAnnouncementCarousel? _announcementCarousel;
     private HSeparator? _settingsSeparator;
     private VBoxContainer? _settingsSection;
@@ -195,6 +217,26 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Control? _dialogReturnFocusTarget;
     private Control? _progressDialogReturnFocusTarget;
     private string? _pendingRoomCardFocusRestoreId;
+    private LanConnectChatChannelState? _testServerChatState;
+    private Func<string, Task>? _testServerChatSend;
+    private Func<string, Task>? _testServerChatRetry;
+    private long _serverChatPresentationRevision = -1;
+    private bool _testMode;
+
+    internal LanConnectLobbyOverlayTestState TestState => new(
+        RectForTests(_roomStagePanel),
+        RectForTests(_sidebarContainer),
+        RectForTests(_roomDetailPanel),
+        RectForTests(_serverChatFrame),
+        _serverChatFrame?.Visible == true && _serverChatPanel?.Visible == true,
+        _selectedRoomId ?? string.Empty,
+        GetSelectedRoom()?.RoomName ?? string.Empty,
+        _compactSidebarScroll?.Visible == true && _compactSidebarScroll.IsInsideTree(),
+        _roomDetailPanel?.CustomMinimumSize.Y ?? 0f,
+        _serverChatFrame?.CustomMinimumSize.Y ?? 0f);
+
+    internal LanConnectBasicChatPanel ServerChatPanelForTests =>
+        _serverChatPanel ?? throw new InvalidOperationException("The lobby server chat panel has not been built.");
 
     public void Initialize(NMultiplayerSubmenu submenu, NSubmenuButton templateButton, NSubmenuStack stack, Control loadingOverlay)
     {
@@ -206,12 +248,68 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         HideOverlay();
     }
 
+    internal void ConfigureForTests(
+        Vector2I viewportSize,
+        LanConnectChatChannelState serverState,
+        IReadOnlyList<LobbyRoomSummary> rooms,
+        Func<string, Task> send,
+        Func<string, Task> retry)
+    {
+        ArgumentNullException.ThrowIfNull(serverState);
+        ArgumentNullException.ThrowIfNull(rooms);
+        ArgumentNullException.ThrowIfNull(send);
+        ArgumentNullException.ThrowIfNull(retry);
+        _testServerChatState = serverState;
+        _testServerChatSend = send;
+        _testServerChatRetry = retry;
+        _testMode = true;
+        _rooms.Clear();
+        _rooms.AddRange(rooms);
+        _selectedRoomId = _rooms.FirstOrDefault()?.RoomId;
+        BuildUi();
+        Visible = true;
+        Size = viewportSize;
+        RebuildRoomStage();
+        RefreshSelectedRoomDetails();
+        RefreshServerChatPresentation(force: true);
+        SetProcess(true);
+    }
+
+    internal Task RefreshLayoutForTests(Vector2I viewportSize)
+    {
+        Size = viewportSize;
+        ApplyResponsiveLayout();
+        RefreshSelectedRoomDetails();
+        RefreshServerChatPresentation(force: true);
+        return Task.CompletedTask;
+    }
+
+    internal void SelectRoomForTests(string roomId)
+    {
+        LobbyRoomSummary? room = _rooms.Find(candidate =>
+            string.Equals(candidate.RoomId, roomId, StringComparison.Ordinal));
+        if (room == null)
+        {
+            throw new ArgumentException("The requested room does not exist.", nameof(roomId));
+        }
+        _selectedRoomId = room.RoomId;
+        RebuildRoomStage();
+        RefreshSelectedRoomDetails();
+    }
+
+    internal void RebindServerChatForTests(LanConnectChatChannelState serverState)
+    {
+        ArgumentNullException.ThrowIfNull(serverState);
+        _testServerChatState = serverState;
+    }
+
     public override void _Process(double delta)
     {
         AnimateProgressDialog(delta);
         AnimateHealthIndicator(delta);
+        RefreshServerChatPresentation();
 
-        if (!Visible || _refreshInFlight)
+        if (_testMode || !Visible || _refreshInFlight)
         {
             return;
         }
@@ -228,6 +326,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         GD.Print("sts2_lan_connect overlay: show requested");
         SetUnderlyingMenuVisible(false);
         Visible = true;
+        RefreshServerChatPresentation(force: true);
         SyncSettingsInputsFromConfig();
         ApplyResponsiveLayout();
         EnsureAnnouncementFallback();
@@ -440,6 +539,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         GD.Print("sts2_lan_connect overlay: hide requested");
         PersistSettings();
         Visible = false;
+        RefreshServerChatPresentation(force: true);
         ResetRoomListTouchTracking();
         SetUnderlyingMenuVisible(true);
 
@@ -884,8 +984,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _pageNextButton.CustomMinimumSize = new Vector2(40f, 40f);
         container.AddChild(_pageNextButton);
 
-        // Keep _roomPagerRow as a hidden dummy so existing visibility logic doesn't null-ref
-        _roomPagerRow = new HBoxContainer { Visible = false };
+        // Pagination now lives directly in this filter bar; there is no detached pager row.
+        _roomPagerRow = null;
 
         UpdateRoomFilterButtons();
         return barPanel;
@@ -1122,9 +1222,93 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         _sidebarContainer.AddThemeConstantOverride("separation", 12);
 
-        _sidebarContainer.AddChild(BuildStatusCard());
-        _sidebarContainer.AddChild(BuildActionCard());
+        _roomDetailPanel = BuildSelectedRoomDetailPanel();
+        _sidebarContainer.AddChild(_roomDetailPanel);
+
+        _serverChatFrame = CreatePixelBorderPanel(background: CardColor, padding: 12);
+        _serverChatFrame.Name = "LobbyServerChatFrame";
+        _serverChatFrame.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        _serverChatFrame.SizeFlagsVertical = SizeFlags.ExpandFill;
+        _serverChatPanel = new LanConnectBasicChatPanel
+        {
+            Name = "LobbyServerChatPanel",
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill
+        };
+        _serverChatFrame.AddChild(_serverChatPanel);
+        _sidebarContainer.AddChild(_serverChatFrame);
+
+        BindLobbyServerChatPanel();
+        ApplySidebarPanelSizing();
+        RefreshSelectedRoomDetails();
+        RefreshServerChatPresentation(force: true);
         return _sidebarContainer;
+    }
+
+    private Control BuildSelectedRoomDetailPanel()
+    {
+        VBoxContainer section = new()
+        {
+            Name = "LobbySelectedRoomDetails",
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ExpandFill
+        };
+        section.AddThemeConstantOverride("separation", 10);
+
+        PanelContainer card = CreatePixelBorderPanel(background: CardColor, padding: 16);
+        card.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        VBoxContainer body = new();
+        body.AddThemeConstantOverride("separation", 6);
+        card.AddChild(body);
+
+        HBoxContainer header = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        header.AddThemeConstantOverride("separation", 8);
+        header.AddChild(new GlyphIcon
+        {
+            Kind = GlyphIconKind.Users,
+            GlyphColor = AccentColor,
+            CustomMinimumSize = new Vector2(18f, 18f),
+            SizeFlagsVertical = SizeFlags.ShrinkCenter
+        });
+        Label title = CreateBodyLabel("ROOM DETAILS");
+        title.AddThemeColorOverride("font_color", TextStrongColor);
+        title.AddThemeFontSizeOverride("font_size", 16);
+        header.AddChild(title);
+        body.AddChild(header);
+
+        ColorRect separator = new()
+        {
+            Color = BorderColor,
+            CustomMinimumSize = new Vector2(0f, 2f),
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+        body.AddChild(separator);
+
+        _selectedRoomNameLabel = CreateRoomDetailValue(body, "房间", "未选择房间");
+        _selectedRoomHostLabel = CreateRoomDetailValue(body, "房主", "--");
+        _selectedRoomPlayersLabel = CreateRoomDetailValue(body, "人数", "--");
+        _selectedRoomModeLabel = CreateRoomDetailValue(body, "模式", "--");
+        _selectedRoomVersionLabel = CreateRoomDetailValue(body, "版本", "--");
+        _selectedRoomAccessLabel = CreateRoomDetailValue(body, "状态", "--");
+
+        _statusLabel = CreateBodyLabel(string.Empty);
+        _statusLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        _statusLabel.Visible = false;
+        body.AddChild(_statusLabel);
+        section.AddChild(card);
+        section.AddChild(BuildActionCard());
+        return section;
+    }
+
+    private Label CreateRoomDetailValue(VBoxContainer parent, string key, string value)
+    {
+        Label label = CreateBodyLabel($"{key}: {value}");
+        label.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        label.AddThemeFontSizeOverride("font_size", 14);
+        label.AddThemeColorOverride("font_color", TextMutedColor);
+        parent.AddChild(label);
+        return label;
     }
 
     private void RebuildMainContentLayout()
@@ -1152,12 +1336,21 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _mainContentHost.AddChild(layout);
 
             AttachChild(layout, _roomStagePanel);
-            AttachChild(layout, _sidebarContainer);
+            _compactSidebarScroll = new ScrollContainer
+            {
+                Name = "LobbyCompactSidebarScroll",
+                SizeFlagsHorizontal = SizeFlags.ExpandFill,
+                SizeFlagsVertical = SizeFlags.ExpandFill,
+                HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled
+            };
+            layout.AddChild(_compactSidebarScroll);
+            AttachChild(_compactSidebarScroll, _sidebarContainer);
             _roomStagePanel.SizeFlagsStretchRatio = 1f;
-            _sidebarContainer.SizeFlagsStretchRatio = 1f;
+            _compactSidebarScroll.SizeFlagsStretchRatio = 1f;
         }
         else
         {
+            _compactSidebarScroll = null;
             // Anchor-based proportional layout: use a plain Control wrapper
             // so the cleanup loop frees the wrapper, not the panels themselves.
             const float sidebarFraction = 0.25f;    // sidebar = 25% of width (3:1 ratio)
@@ -1197,6 +1390,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _sidebarContainer.OffsetTop = 0f;
             _sidebarContainer.OffsetBottom = 0f;
         }
+        ApplySidebarPanelSizing();
     }
 
     private void RebuildHeaderLayout()
@@ -1271,6 +1465,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _sidebarContainer.CustomMinimumSize = new Vector2(compact ? 0f : 200f, 0f);
             _sidebarContainer.SizeFlagsHorizontal = compact ? SizeFlags.ExpandFill : SizeFlags.Fill;
         }
+        ApplySidebarPanelSizing();
 
         if (_headerContentHost != null)
         {
@@ -1335,6 +1530,145 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _announcementCarousel?.SetCompactMode(compact);
     }
+
+    private void BindLobbyServerChatPanel()
+    {
+        if (_serverChatPanel == null)
+        {
+            return;
+        }
+
+        LanConnectChatChannelState? state = _testServerChatState;
+        Func<string, Task>? send = _testServerChatSend;
+        Func<string, Task>? retry = _testServerChatRetry;
+        if (state == null && LanConnectLobbyRuntime.Instance is { } runtime)
+        {
+            state = runtime.Chat.Server;
+            send = text => runtime.SendChatTextAsync(LanConnectChatChannel.Server, text);
+            retry = clientMessageId => runtime.RetryServerChatAsync(clientMessageId);
+        }
+
+        if (state == null || send == null || retry == null)
+        {
+            _serverChatFrame!.Visible = false;
+            _serverChatPanel.Visible = false;
+            return;
+        }
+
+        _serverChatPanel.Bind(state, send, retry);
+        _serverChatPresentationRevision = -1;
+    }
+
+    private void RefreshServerChatPresentation(bool force = false)
+    {
+        EnsureCurrentLobbyServerChatBinding();
+        if (_serverChatPanel?.State is not { } state ||
+            _serverChatFrame == null ||
+            !GodotObject.IsInstanceValid(_serverChatPanel) ||
+            !GodotObject.IsInstanceValid(_serverChatFrame))
+        {
+            return;
+        }
+
+        long revision = state.Revision;
+        if (!force && revision == _serverChatPresentationRevision)
+        {
+            return;
+        }
+
+        _serverChatPresentationRevision = revision;
+        bool visible = state.Presentation != LanConnectServerChatPresentation.Unsupported;
+        _serverChatFrame.Visible = visible;
+        _serverChatPanel.Visible = visible;
+        state.SetVisible(visible && IsInsideTree() && IsVisibleInTree());
+        ApplySidebarPanelSizing();
+    }
+
+    private void EnsureCurrentLobbyServerChatBinding()
+    {
+        if (_serverChatPanel == null)
+        {
+            return;
+        }
+
+        LanConnectChatChannelState? currentState = _testServerChatState;
+        if (currentState == null && LanConnectLobbyRuntime.Instance is { } runtime)
+        {
+            currentState = runtime.Chat.Server;
+        }
+        if (currentState != null && !ReferenceEquals(_serverChatPanel.State, currentState))
+        {
+            BindLobbyServerChatPanel();
+        }
+    }
+
+    private void ApplySidebarPanelSizing()
+    {
+        if (_roomDetailPanel == null || _serverChatFrame == null)
+        {
+            return;
+        }
+
+        bool compact = _layoutMode == LobbyLayoutMode.Compact;
+        _roomDetailPanel.CustomMinimumSize = new Vector2(0f, compact ? 390f : 330f);
+        _serverChatFrame.CustomMinimumSize = new Vector2(0f, compact ? 330f : 270f);
+        _roomDetailPanel.SizeFlagsVertical = compact ? SizeFlags.ShrinkBegin : SizeFlags.ExpandFill;
+        _serverChatFrame.SizeFlagsVertical = compact ? SizeFlags.ShrinkBegin : SizeFlags.ExpandFill;
+        _roomDetailPanel.SizeFlagsStretchRatio = 1f;
+        _serverChatFrame.SizeFlagsStretchRatio = 1.15f;
+    }
+
+    private void RefreshSelectedRoomDetails()
+    {
+        if (_selectedRoomNameLabel == null ||
+            _selectedRoomHostLabel == null ||
+            _selectedRoomPlayersLabel == null ||
+            _selectedRoomModeLabel == null ||
+            _selectedRoomVersionLabel == null ||
+            _selectedRoomAccessLabel == null)
+        {
+            return;
+        }
+
+        LobbyRoomSummary? room = GetSelectedRoom();
+        if (room == null)
+        {
+            _selectedRoomNameLabel.Text = "房间: 未选择房间";
+            _selectedRoomHostLabel.Text = "房主: --";
+            _selectedRoomPlayersLabel.Text = "人数: --";
+            _selectedRoomModeLabel.Text = "模式: --";
+            _selectedRoomVersionLabel.Text = "版本: --";
+            _selectedRoomAccessLabel.Text = "状态: 选择左侧房间查看详情";
+            return;
+        }
+
+        (string modeText, _, _) = GetRoomGameModePill(room.GameMode);
+        bool isOwnRoom = string.Equals(
+            LanConnectLobbyRuntime.Instance?.ActiveRoomId,
+            room.RoomId,
+            StringComparison.Ordinal);
+        string? disabledReason = null;
+        bool canJoin = !isOwnRoom && CanJoinRoom(room, out disabledReason);
+        string access = isOwnRoom
+            ? "自己的房间"
+            : canJoin
+                ? room.RequiresPassword ? "可加入，需要密码" : "可加入，公开"
+                : $"不可加入：{disabledReason ?? room.Status}";
+        _selectedRoomNameLabel.Text = $"房间: {room.RoomName}";
+        _selectedRoomHostLabel.Text = $"房主: {room.HostPlayerName}";
+        _selectedRoomPlayersLabel.Text = $"人数: {room.CurrentPlayers}/{room.MaxPlayers}";
+        _selectedRoomModeLabel.Text = $"模式: {modeText}";
+        string version = string.IsNullOrWhiteSpace(room.ModVersion)
+            ? room.Version
+            : $"{room.Version} · MOD {room.ModVersion}";
+        _selectedRoomVersionLabel.Text = $"版本: {version}";
+        _selectedRoomAccessLabel.Text = $"状态: {access}";
+    }
+
+    private static Rect2 RectForTests(Control? control) =>
+        control != null && GodotObject.IsInstanceValid(control) && control.IsInsideTree()
+            ? control.GetGlobalRect()
+            : default;
 
     private Label CreateMetricRow(VBoxContainer parent, string labelText, string valueText)
     {
@@ -2073,6 +2407,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             {
                 UpdateHealthIndicator();
                 UpdatePageControls(GetFilteredRooms().Count);
+                RefreshSelectedRoomDetails();
             }
 
             GD.Print(
@@ -2233,6 +2568,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             }
 
             UpdatePageControls(filteredRooms.Count);
+            RefreshSelectedRoomDetails();
             _pendingRoomCardFocusRestoreId = null;
             return;
         }
@@ -2242,6 +2578,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             _selectedRoomId = null;
             UpdatePageControls(filteredRooms.Count);
+            RefreshSelectedRoomDetails();
             _pendingRoomCardFocusRestoreId = null;
             return;
         }
@@ -2252,6 +2589,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         LobbyRoomSummary selectedRoom = pageRooms.Find(room => room.RoomId == _selectedRoomId) ?? pageRooms[0];
+        RefreshSelectedRoomDetails();
         bool selectedIsHostRoom = LanConnectLobbyRuntime.Instance?.ActiveRoomId == selectedRoom.RoomId;
 
         SetLabelText(_roomListSummaryLabel, $"房间 {_rooms.Count} → {filteredRooms.Count} · 筛选：{DescribeRoomFilterState()} · 已选：{FormatRoomName(selectedRoom.RoomName, 24)}");
@@ -2746,6 +3084,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (!string.Equals(_selectedRoomId, room.RoomId, StringComparison.Ordinal))
         {
             _selectedRoomId = room.RoomId;
+            RefreshSelectedRoomDetails();
             UpdateActionButtons();
             GD.Print($"sts2_lan_connect overlay: room card focused -> roomId={room.RoomId}");
         }
@@ -2922,6 +3261,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _selectedRoomId = room.RoomId;
         GD.Print($"sts2_lan_connect overlay: selected room roomId={room.RoomId}, roomName='{room.RoomName}'");
         RebuildRoomStage();
+        RefreshSelectedRoomDetails();
         UpdateActionButtons();
     }
 

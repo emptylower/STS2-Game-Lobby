@@ -11,6 +11,35 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 public sealed class LanConnectBasicChatPanelTests
 {
     [TestCase]
+    public async Task Connection_presentation_states_drive_status_and_editability_without_clearing_draft()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
+        state.Apply(new ServerChatInboundEnvelope
+        {
+            Type = "chat_ready",
+            InstanceId = "presentation-tests",
+            HistoryEpoch = 1,
+            ChatEnabled = true,
+            EnabledFeatures = new ServerChatEnabledFeatures()
+        });
+        state.SetDraft("keep this draft");
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        AssertPresentation(panel, state, LanConnectServerChatPresentation.Connecting, "正在连接频道...", editable: false);
+        AssertPresentation(panel, state, LanConnectServerChatPresentation.Reconnecting, "频道连接中断，正在重连...", editable: false);
+        AssertPresentation(panel, state, LanConnectServerChatPresentation.TransportFailure, "频道连接失败：network down", editable: false, "network down");
+        AssertPresentation(panel, state, LanConnectServerChatPresentation.Disabled, "频道已由服务器停用", editable: false);
+        AssertPresentation(panel, state, LanConnectServerChatPresentation.Unsupported, "当前服务器不支持频道聊天", editable: false);
+        AssertPresentation(panel, state, LanConnectServerChatPresentation.Ready, "频道可用", editable: true);
+
+        AssertThat(state.Draft).IsEqual("keep this draft");
+        AssertThat(FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName).Text).IsEqual("keep this draft");
+    }
+
+    [TestCase]
     public async Task Renders_pending_failed_unknown_and_confirmed_with_stable_nodes()
     {
         LanConnectChatChannelState state = WithDeliveryStates();
@@ -422,6 +451,7 @@ public sealed class LanConnectBasicChatPanelTests
             ChatEnabled = true,
             EnabledFeatures = new ServerChatEnabledFeatures()
         });
+        state.SetPresentationForTests(LanConnectServerChatPresentation.Ready);
         return state;
     }
 
@@ -466,6 +496,21 @@ public sealed class LanConnectBasicChatPanelTests
         LineEdit input = FindNode<LineEdit>(panel, LanConnectConstants.ChatDraftInputName);
         input.Text = text;
         input.EmitSignal(LineEdit.SignalName.TextChanged, text);
+    }
+
+    private static void AssertPresentation(
+        LanConnectBasicChatPanel panel,
+        LanConnectChatChannelState state,
+        LanConnectServerChatPresentation presentation,
+        string status,
+        bool editable,
+        string? detail = null)
+    {
+        state.SetPresentationForTests(presentation, detail);
+        panel.RefreshForTests().GetAwaiter().GetResult();
+        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text).IsEqual(status);
+        AssertThat(panel.TestState.InputEditable).IsEqual(editable);
+        AssertThat(state.Draft).IsEqual("keep this draft");
     }
 
     private static double BottomValue(ScrollBar bar) =>
