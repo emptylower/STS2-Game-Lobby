@@ -19,19 +19,23 @@ public sealed class LanConnectChatInputRouterTests
     }
 
     [Theory]
-    [InlineData(true, true, true, true, (int)LanConnectChatInputAction.ClosePopup)]
-    [InlineData(false, true, true, true, (int)LanConnectChatInputAction.ClosePreview)]
-    [InlineData(false, false, true, true, (int)LanConnectChatInputAction.ReleaseInputFocus)]
-    [InlineData(false, false, false, true, (int)LanConnectChatInputAction.CloseOverlay)]
-    [InlineData(false, false, false, false, (int)LanConnectChatInputAction.None)]
+    [InlineData(true, true, true, true, true, (int)LanConnectChatInputAction.CloseEmojiPicker)]
+    [InlineData(false, true, true, true, true, (int)LanConnectChatInputAction.ClosePopup)]
+    [InlineData(false, false, true, true, true, (int)LanConnectChatInputAction.ClosePreview)]
+    [InlineData(false, false, false, true, true, (int)LanConnectChatInputAction.ReleaseInputFocus)]
+    [InlineData(false, false, false, false, true, (int)LanConnectChatInputAction.CloseOverlay)]
+    [InlineData(false, false, false, false, false, (int)LanConnectChatInputAction.None)]
     public void Escape_closes_one_layer(
+        bool emojiPicker,
         bool popup,
         bool preview,
         bool input,
         bool overlayOpen,
         int expected)
     {
-        Assert.Equal((LanConnectChatInputAction)expected, LanConnectChatInputRouter.RouteEscape(popup, preview, input, overlayOpen));
+        Assert.Equal(
+            (LanConnectChatInputAction)expected,
+            LanConnectChatInputRouter.RouteEscape(emojiPicker, popup, preview, input, overlayOpen));
     }
 
     [Theory]

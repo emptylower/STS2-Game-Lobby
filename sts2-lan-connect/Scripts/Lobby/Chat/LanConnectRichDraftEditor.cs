@@ -229,6 +229,17 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         MutateDocument(() => _draft.InsertText("\n"));
     }
 
+    internal bool InsertEmoji(string id)
+    {
+        if (!_editable || _draft == null || !LanConnectChatEmojiSet.TryGet(id, out _))
+        {
+            return false;
+        }
+        long revision = _draft.ContentRevision;
+        MutateDocument(() => _draft.InsertEntity(new LanConnectEmojiRun(id)));
+        return _draft.ContentRevision != revision;
+    }
+
     internal void CopySelectionToClipboard()
     {
         if (_draft == null)

@@ -67,6 +67,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private VBoxContainer? _messagesList;
     private Button? _newMessagesButton;
     private LanConnectRichDraftEditor? _draftEditor;
+    private Button? _emojiButton;
+    private LanConnectEmojiPicker? _emojiPicker;
     private Button? _sendButton;
     private Label? _statusLabel;
     private ConfirmationDialog? _unknownConfirmation;
@@ -91,6 +93,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _draftEditor.HasEditorFocus;
 
     internal bool PopupVisible =>
+        EmojiPickerVisible || ConfirmationPopupVisible;
+
+    internal bool EmojiPickerVisible =>
+        _emojiPicker != null &&
+        GodotObject.IsInstanceValid(_emojiPicker) &&
+        _emojiPicker.Visible;
+
+    internal bool ConfirmationPopupVisible =>
         _unknownConfirmation != null &&
         GodotObject.IsInstanceValid(_unknownConfirmation) &&
         _unknownConfirmation.Visible;
@@ -285,10 +295,22 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     internal void ClosePopup()
     {
-        if (PopupVisible)
+        if (EmojiPickerVisible)
+        {
+            CloseEmojiPicker();
+        }
+        else if (ConfirmationPopupVisible)
         {
             _unknownConfirmation!.Hide();
             _pendingUnknownConfirmation = null;
+        }
+    }
+
+    internal void CloseEmojiPicker()
+    {
+        if (EmojiPickerVisible)
+        {
+            _emojiPicker!.ClosePicker();
         }
     }
 
@@ -320,6 +342,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             AddFocusable(controls, _newMessagesButton);
         }
         AddFocusable(controls, _draftEditor?.FocusTarget);
+        AddFocusable(controls, _emojiButton);
         AddFocusable(controls, _sendButton);
         if (_messagesList != null && GodotObject.IsInstanceValid(_messagesList))
         {
@@ -402,6 +425,19 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _draftEditor.DraftChanged += OnRichDraftChanged;
         inputRow.AddChild(_draftEditor);
 
+        _emojiButton = CreateButton(string.Empty, accent: false);
+        _emojiButton.Name = LanConnectEmojiPicker.ToggleButtonName;
+        _emojiButton.Icon = CreateTemporaryEmojiIcon("smile");
+        _emojiButton.ExpandIcon = true;
+        _emojiButton.TooltipText = "选择表情";
+        _emojiButton.AccessibilityName = "选择表情";
+        _emojiButton.CustomMinimumSize = new Vector2(38, 38);
+        _emojiButton.Visible = false;
+        _emojiButton.Connect(
+            Button.SignalName.Pressed,
+            Callable.From(() => _emojiPicker?.OpenPicker()));
+        inputRow.AddChild(_emojiButton);
+
         _sendButton = CreateButton("发送", accent: true);
         _sendButton.Name = LanConnectConstants.ChatSendButtonName;
         _sendButton.CustomMinimumSize = new Vector2(74, 38);
@@ -420,6 +456,25 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             ConfirmationDialog.SignalName.Confirmed,
             Callable.From(() => _ = SendConfirmedUnknownAsync()));
         AddChild(_unknownConfirmation);
+
+        _emojiPicker = new LanConnectEmojiPicker();
+        _emojiPicker.Bind(
+            _draftEditor,
+            LanConnectChatEmojiSet.Version1,
+            CreateTemporaryEmojiIcon,
+            TemporaryEmojiLabel);
+        _emojiPicker.FocusExitRequested += backwards =>
+        {
+            if (backwards)
+            {
+                _draftEditor?.FocusEditor();
+            }
+            else
+            {
+                _sendButton?.GrabFocus();
+            }
+        };
+        AddChild(_emojiPicker);
 
         Connect(CanvasItem.SignalName.VisibilityChanged, Callable.From(UpdateStateVisibility));
     }
@@ -930,6 +985,13 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 : "频道聊天";
         }
         _draftEditor.Editable = editable;
+        bool emojiAvailable = _state.EnabledRichFeatures.EmojiSetVersion >= 1;
+        if (_emojiButton != null && GodotObject.IsInstanceValid(_emojiButton))
+        {
+            _emojiButton.Visible = emojiAvailable;
+            _emojiButton.Disabled = !editable;
+        }
+        _emojiPicker?.SetAvailable(emojiAvailable && editable);
         _sendButton.Disabled = !editable ||
             (!CanSendCurrentDraft() && !IsBlankDraft());
         _statusLabel.Text = ready && !string.IsNullOrEmpty(_operationStatus)
@@ -1214,6 +1276,55 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         button.AddThemeColorOverride("font_color", TextStrongColor);
         return button;
     }
+
+    private static Texture2D CreateTemporaryEmojiIcon(string iconName)
+    {
+        Image image = Image.CreateEmpty(20, 20, false, Image.Format.Rgba8);
+        image.Fill(Colors.Transparent);
+        int seed = 0;
+        foreach (char character in iconName)
+        {
+            seed = (seed * 31 + character) & 0x7fffffff;
+        }
+        Color color = new(0.95f, 0.82f, 0.42f, 1f);
+        for (int pixel = 3; pixel < 17; pixel++)
+        {
+            image.SetPixel(pixel, 3, color);
+            image.SetPixel(pixel, 16, color);
+            image.SetPixel(3, pixel, color);
+            image.SetPixel(16, pixel, color);
+        }
+        image.SetPixel(6 + seed % 3, 8, color);
+        image.SetPixel(12 + seed % 3, 8, color);
+        for (int pixel = 7; pixel < 13; pixel++)
+        {
+            image.SetPixel(pixel, 12 + seed % 2, color);
+        }
+        return ImageTexture.CreateFromImage(image);
+    }
+
+    private static string TemporaryEmojiLabel(string key) => key switch
+    {
+        "chat.emoji.smile" => "微笑",
+        "chat.emoji.laugh" => "大笑",
+        "chat.emoji.heart" => "爱心",
+        "chat.emoji.thumbs-up" => "赞同",
+        "chat.emoji.thumbs-down" => "反对",
+        "chat.emoji.sparkles" => "闪光",
+        "chat.emoji.flame" => "火焰",
+        "chat.emoji.zap" => "闪电",
+        "chat.emoji.shield" => "护盾",
+        "chat.emoji.swords" => "双剑",
+        "chat.emoji.target" => "目标",
+        "chat.emoji.crown" => "皇冠",
+        "chat.emoji.skull" => "骷髅",
+        "chat.emoji.ghost" => "幽灵",
+        "chat.emoji.eye" => "眼睛",
+        "chat.emoji.message-circle" => "消息",
+        "chat.emoji.check" => "确认",
+        "chat.emoji.x" => "取消",
+        _ => "表情"
+    };
 
     private static void AddFocusable(List<Control> controls, Control? control)
     {

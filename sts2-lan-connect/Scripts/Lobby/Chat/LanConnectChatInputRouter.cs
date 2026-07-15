@@ -6,6 +6,7 @@ internal enum LanConnectChatInputAction
     OpenAndFocus,
     Send,
     InsertNewline,
+    CloseEmojiPicker,
     ClosePopup,
     ClosePreview,
     ReleaseInputFocus,
@@ -30,16 +31,18 @@ internal static class LanConnectChatInputRouter
         };
 
     internal static LanConnectChatInputAction RouteEscape(
+        bool emojiPickerVisible,
         bool popupVisible,
         bool previewVisible,
         bool inputFocused,
         bool overlayOpen) =>
-        (popupVisible, previewVisible, inputFocused, overlayOpen) switch
+        (emojiPickerVisible, popupVisible, previewVisible, inputFocused, overlayOpen) switch
         {
-            (true, _, _, _) => LanConnectChatInputAction.ClosePopup,
-            (false, true, _, _) => LanConnectChatInputAction.ClosePreview,
-            (false, false, true, _) => LanConnectChatInputAction.ReleaseInputFocus,
-            (false, false, false, true) => LanConnectChatInputAction.CloseOverlay,
+            (true, _, _, _, _) => LanConnectChatInputAction.CloseEmojiPicker,
+            (false, true, _, _, _) => LanConnectChatInputAction.ClosePopup,
+            (false, false, true, _, _) => LanConnectChatInputAction.ClosePreview,
+            (false, false, false, true, _) => LanConnectChatInputAction.ReleaseInputFocus,
+            (false, false, false, false, true) => LanConnectChatInputAction.CloseOverlay,
             _ => LanConnectChatInputAction.None
         };
 

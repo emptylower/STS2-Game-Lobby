@@ -18,11 +18,7 @@ internal static class LanConnectServerChatProtocol
     internal const string WorstCaseSentAt = "2026-07-12T12:00:00.123Z";
 
     private static readonly string[] EmojiIds =
-    [
-        "smile", "laugh", "heart", "thumbs-up", "thumbs-down", "sparkles",
-        "flame", "zap", "shield", "swords", "target", "crown",
-        "skull", "ghost", "eye", "message-circle", "check", "x"
-    ];
+        LanConnectChatEmojiSet.Version1.Select(emoji => emoji.Id).ToArray();
     private static readonly HashSet<string> EmojiIdSet = new(EmojiIds, StringComparer.Ordinal);
     private static readonly Regex ModelIdPattern = new(
         "^[A-Za-z0-9._-]{1,160}\\z",

@@ -660,7 +660,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 return;
             }
             action = LanConnectChatInputRouter.RouteEscape(
-                popupVisible: _chatPanel?.PopupVisible == true,
+                emojiPickerVisible: _chatPanel?.EmojiPickerVisible == true,
+                popupVisible: _chatPanel?.ConfirmationPopupVisible == true,
                 previewVisible: false,
                 inputFocused: _chatPanel?.DraftHasFocus == true,
                 overlayOpen);
@@ -715,6 +716,9 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 return true;
             case LanConnectChatInputAction.ClosePopup:
                 _chatPanel?.ClosePopup();
+                return true;
+            case LanConnectChatInputAction.CloseEmojiPicker:
+                _chatPanel?.CloseEmojiPicker();
                 return true;
             case LanConnectChatInputAction.ReleaseInputFocus:
                 _chatPanel?.ReleaseDraftFocus();
