@@ -28,7 +28,7 @@ internal sealed class LanConnectLucideIconLoader
     internal const int MaximumCacheEntries = 128;
 
     private static readonly Regex IconNamePattern = new(
-        "^[a-z0-9-]+$",
+        "\\A[a-z0-9-]+\\z",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
     private static readonly Regex CurrentColorToken = new(
         "(?<![A-Za-z0-9_-])currentColor(?![A-Za-z0-9_-])",

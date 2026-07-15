@@ -56,6 +56,9 @@ public sealed class LanConnectLucideIconLoaderTests
     [InlineData("pin.svg")]
     [InlineData("../pin")]
     [InlineData("pin icon")]
+    [InlineData("pin\n")]
+    [InlineData("pin\r\n")]
+    [InlineData("pin\r")]
     public void Invalid_icon_names_never_reach_the_resource_reader(string iconName)
     {
         FakeResources resources = new(ValidSvg);
@@ -69,6 +72,9 @@ public sealed class LanConnectLucideIconLoaderTests
         Assert.Equal(1, decoder.FallbackCount);
         Assert.NotNull(fallback);
         Assert.Equal((20, Colors.White), Assert.Single(decoder.FallbackRequests));
+        Assert.Equal(1, loader.CachedCount);
+        Assert.Same(fallback, loader.Get(iconName, 20, Colors.White));
+        Assert.Equal(1, decoder.FallbackCount);
     }
 
     [Fact]
