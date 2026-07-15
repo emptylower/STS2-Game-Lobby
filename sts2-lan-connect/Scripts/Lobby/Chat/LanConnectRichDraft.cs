@@ -20,6 +20,11 @@ internal readonly record struct LanConnectDraftSelection(
     LanConnectDraftPosition Anchor,
     LanConnectDraftPosition Active);
 
+internal readonly record struct LanConnectRichDraftSnapshot(
+    IReadOnlyList<LanConnectDraftRun> Runs,
+    LanConnectDraftSelection Selection,
+    long ContentRevision);
+
 internal readonly record struct LanConnectDraftMeasure(
     int TextScalars,
     int SegmentCount,
@@ -113,6 +118,57 @@ internal sealed class LanConnectRichDraft
         new([new LanConnectTextRun(text ?? string.Empty)]);
 
     internal static LanConnectRichDraft FromRuns(IEnumerable<LanConnectDraftRun> runs) => new(runs);
+
+    internal LanConnectRichDraftSnapshot CaptureSnapshot()
+    {
+        lock (_sync)
+        {
+            return new LanConnectRichDraftSnapshot(_runs.ToArray(), _selection, _contentRevision);
+        }
+    }
+
+    internal bool TryInsertEntityAtomic(
+        LanConnectDraftRun entity,
+        Func<bool> acceptMutation)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        ArgumentNullException.ThrowIfNull(acceptMutation);
+        if (entity is not (LanConnectEmojiRun or LanConnectItemRun))
+        {
+            throw new ArgumentException("Only Emoji and item runs are atomic draft entities.", nameof(entity));
+        }
+
+        long? revision;
+        bool accepted = false;
+        lock (_sync)
+        {
+            LanConnectDraftRun[] previousRuns = _runs.ToArray();
+            LanConnectDraftSelection previousSelection = _selection;
+            long previousRevision = _contentRevision;
+            try
+            {
+                revision = ReplaceSelectionCore([entity]);
+                accepted = revision.HasValue && acceptMutation();
+            }
+            catch
+            {
+                revision = null;
+            }
+
+            if (!accepted)
+            {
+                _runs.Clear();
+                _runs.AddRange(previousRuns);
+                _selection = previousSelection;
+                _contentRevision = previousRevision;
+            }
+        }
+        if (accepted)
+        {
+            NotifyContentChanged(revision);
+        }
+        return accepted;
+    }
 
     internal void SetCaret(LanConnectDraftPosition position)
     {

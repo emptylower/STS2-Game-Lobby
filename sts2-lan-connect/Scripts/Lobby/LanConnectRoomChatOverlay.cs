@@ -111,12 +111,16 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         SelectedState(ResolveChat()) ?? throw new InvalidOperationException("The room chat state is unavailable.");
 
     internal bool ItemLinkCaptureBlocked =>
-        _chatPanel?.PopupVisible == true || HasBlockingModalOutsideOverlay();
+        _chatPanel?.DraftHasFocus == true ||
+        _chatPanel?.PopupVisible == true ||
+        HasBlockingModalOutsideOverlay();
 
-    internal void OpenSelectedChannelAndFocusDraft()
+    internal bool TryInsertItemAndFocus(
+        LanConnectChatChannelState expectedState,
+        LanConnectItemRun run)
     {
         ShowPanelPreservingSelection();
-        _chatPanel?.RefreshDraftAndFocus();
+        return _chatPanel?.TryInsertItemAndFocus(expectedState, run) == true;
     }
 
     internal static void Install()

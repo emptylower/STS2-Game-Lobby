@@ -259,16 +259,20 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _serverChatPanel ?? throw new InvalidOperationException("The lobby server chat panel has not been built.");
 
     internal bool ItemLinkCaptureBlocked =>
-        IsAnyDialogVisible() || _serverChatPanel?.PopupVisible == true;
+        IsAnyDialogVisible() ||
+        _serverChatPanel?.DraftHasFocus == true ||
+        _serverChatPanel?.PopupVisible == true;
 
-    internal void OpenAndFocusServerChat()
+    internal bool TryInsertItemAndFocus(
+        LanConnectChatChannelState expectedState,
+        LanConnectItemRun run)
     {
         if (!Visible)
         {
             ShowOverlay();
         }
         RefreshServerChatPresentation(force: true);
-        _serverChatPanel?.RefreshDraftAndFocus();
+        return _serverChatPanel?.TryInsertItemAndFocus(expectedState, run) == true;
     }
 
     public void Initialize(NMultiplayerSubmenu submenu, NSubmenuButton templateButton, NSubmenuStack stack, Control loadingOverlay)

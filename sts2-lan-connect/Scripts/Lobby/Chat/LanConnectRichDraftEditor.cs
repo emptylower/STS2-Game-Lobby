@@ -240,6 +240,34 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         return _draft.ContentRevision != revision;
     }
 
+    internal bool InsertItem(LanConnectItemRun run, Action? afterMutation = null)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        if (!_editable || _draft == null)
+        {
+            return false;
+        }
+        bool inserted = _draft.TryInsertEntityAtomic(run, () =>
+        {
+            RefreshFromDraft(preserveFocus: false);
+            afterMutation?.Invoke();
+            FocusEditor();
+            return HasEditorFocus;
+        });
+        if (!inserted)
+        {
+            try
+            {
+                RefreshFromDraft(preserveFocus: false);
+            }
+            catch
+            {
+                // The document transaction has already rolled back.
+            }
+        }
+        return inserted;
+    }
+
     internal void CopySelectionToClipboard()
     {
         if (_draft == null)

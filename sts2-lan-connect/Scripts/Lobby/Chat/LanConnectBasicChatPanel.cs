@@ -85,6 +85,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private bool _suppressScrollChange;
     private bool _compactLayout;
     private string _operationStatus = string.Empty;
+    private Action? _itemLinkPostInsertForTests;
 
     internal LanConnectBasicChatPanel()
         : this(LanConnectChatUiComposition.Icons)
@@ -292,17 +293,27 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
     }
 
-    internal void RefreshDraftAndFocus()
+    internal bool TryInsertItemAndFocus(
+        LanConnectChatChannelState expectedState,
+        LanConnectItemRun run)
     {
-        if (!InteractionBlocked &&
-            _draftEditor != null &&
-            GodotObject.IsInstanceValid(_draftEditor) &&
-            _draftEditor.Editable)
+        ArgumentNullException.ThrowIfNull(expectedState);
+        ArgumentNullException.ThrowIfNull(run);
+        if (!IsInsideTree() ||
+            !ReferenceEquals(_state, expectedState) ||
+            InteractionBlocked ||
+            _draftEditor == null ||
+            !GodotObject.IsInstanceValid(_draftEditor) ||
+            !_draftEditor.Editable)
         {
-            _draftEditor.RefreshFromDraft(preserveFocus: false);
-            _draftEditor.FocusEditor();
+            return false;
         }
+
+        return _draftEditor.InsertItem(run, _itemLinkPostInsertForTests);
     }
+
+    internal void SetItemLinkPostInsertForTests(Action? callback) =>
+        _itemLinkPostInsertForTests = callback;
 
     internal void SetCompactLayout(bool compact)
     {

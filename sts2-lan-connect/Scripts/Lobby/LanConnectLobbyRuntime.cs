@@ -43,6 +43,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
     private long _lastRestartSubmenuOpenAtUnixMs;
     private LanConnectItemLinkCapture? _itemLinkCapture;
     private static bool _enableItemLinkCaptureOnInstall;
+    private bool _itemLinkCaptureRouteOnlyForTests;
 
     internal static LanConnectLobbyRuntime? Instance { get; private set; }
 
@@ -123,6 +124,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         _timeUntilRestartSubmenuAttempt = 0d;
         _lastRestartSubmenuOpenAtUnixMs = 0;
         Instance = this;
+        if (_itemLinkCaptureRouteOnlyForTests)
+        {
+            return;
+        }
         if (_enableItemLinkCaptureOnInstall)
         {
             _itemLinkCapture = new LanConnectItemLinkCapture(
@@ -166,7 +171,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         TaskHelper.RunSafely(SendHeartbeatAsync(_activeSession));
     }
 
-    public override void _UnhandledInput(InputEvent inputEvent)
+    public override void _Input(InputEvent inputEvent)
     {
         if (_itemLinkCapture == null)
         {
@@ -178,8 +183,22 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             () => GetViewport().SetInputAsHandled());
     }
 
+    internal void ConfigureItemLinkCaptureRouteForTests(ILanConnectItemLinkCapturePorts ports)
+    {
+        _itemLinkCaptureRouteOnlyForTests = true;
+        _itemLinkCapture = new LanConnectItemLinkCapture(ports);
+    }
+
     public override void _ExitTree()
     {
+        if (_itemLinkCaptureRouteOnlyForTests)
+        {
+            if (ReferenceEquals(Instance, this))
+            {
+                Instance = null;
+            }
+            return;
+        }
         SaveManager.Instance.Saved -= OnRunSaved;
         Instance = null;
         LanConnectServerSwitchCoordinator? serverSwitchCoordinator = _serverSwitchCoordinator;

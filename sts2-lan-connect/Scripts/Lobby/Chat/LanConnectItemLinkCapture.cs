@@ -201,27 +201,36 @@ internal sealed class LanConnectGodotItemLinkCapturePorts : ILanConnectItemLinkC
 
     public bool InsertAndFocus(LanConnectItemRun run)
     {
+        LanConnectChatChannelState expectedState = SelectedState;
         if (_runtime.HasActiveRoomSession)
         {
             LanConnectRoomChatOverlay? overlay = ResolveRoomOverlay();
-            if (overlay == null)
-            {
-                return false;
-            }
-            SelectedState.RichDraft.InsertEntity(run);
-            overlay.OpenSelectedChannelAndFocusDraft();
-            return true;
+            return TryInsertAndFocus(
+                roomActive: true,
+                expectedState,
+                run,
+                overlay,
+                lobbyOverlay: null);
         }
 
         LanConnectLobbyOverlay? lobby = ResolveLobbyOverlay();
-        if (lobby == null)
-        {
-            return false;
-        }
-        SelectedState.RichDraft.InsertEntity(run);
-        lobby.OpenAndFocusServerChat();
-        return true;
+        return TryInsertAndFocus(
+            roomActive: false,
+            expectedState,
+            run,
+            roomOverlay: null,
+            lobby);
     }
+
+    internal static bool TryInsertAndFocus(
+        bool roomActive,
+        LanConnectChatChannelState expectedState,
+        LanConnectItemRun run,
+        LanConnectRoomChatOverlay? roomOverlay,
+        LanConnectLobbyOverlay? lobbyOverlay) =>
+        roomActive
+            ? roomOverlay?.TryInsertItemAndFocus(expectedState, run) == true
+            : lobbyOverlay?.TryInsertItemAndFocus(expectedState, run) == true;
 
     private LanConnectChatChannelState SelectedState =>
         _runtime.HasActiveRoomSession && _runtime.Chat.SelectedChannel == LanConnectChatChannel.Room
