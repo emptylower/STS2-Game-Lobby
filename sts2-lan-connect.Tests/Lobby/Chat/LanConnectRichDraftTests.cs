@@ -456,6 +456,25 @@ public sealed class LanConnectRichDraftTests
         Assert.Equal(2, draft.ContentRevision);
     }
 
+    [Fact]
+    public void Throwing_content_subscriber_does_not_block_later_subscribers_or_commit()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText("a");
+        List<long> observed = [];
+        draft.ContentChanged += _ => throw new InvalidOperationException("observer failed");
+        draft.ContentChanged += revision => observed.Add(revision);
+
+        draft.InsertEntity(new LanConnectItemRun("card", "MegaCrit.Strike", 1));
+
+        Assert.Equal(new LanConnectDraftRun[]
+        {
+            new LanConnectTextRun("a"),
+            new LanConnectItemRun("card", "MegaCrit.Strike", 1)
+        }, draft.Runs);
+        Assert.Equal(1, draft.ContentRevision);
+        Assert.Equal(new long[] { 1 }, observed);
+    }
+
     private static string FindExactSenderName(LanConnectChatContent content, int target)
     {
         int baseline = LanConnectServerChatProtocol.MeasureWorstCaseInboundBytes(content, "S");

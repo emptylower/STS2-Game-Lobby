@@ -628,9 +628,20 @@ internal sealed class LanConnectRichDraft
 
     private void NotifyContentChanged(long? revision)
     {
-        if (revision.HasValue)
+        if (!revision.HasValue || ContentChanged == null)
         {
-            ContentChanged?.Invoke(revision.Value);
+            return;
+        }
+        foreach (Action<long> subscriber in ContentChanged.GetInvocationList().Cast<Action<long>>())
+        {
+            try
+            {
+                subscriber(revision.Value);
+            }
+            catch
+            {
+                // A committed document mutation must not be reported as failed by an observer.
+            }
         }
     }
 

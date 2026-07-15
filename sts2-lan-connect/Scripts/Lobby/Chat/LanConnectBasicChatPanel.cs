@@ -299,17 +299,23 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     {
         ArgumentNullException.ThrowIfNull(expectedState);
         ArgumentNullException.ThrowIfNull(run);
-        if (!IsInsideTree() ||
-            !ReferenceEquals(_state, expectedState) ||
-            InteractionBlocked ||
-            _draftEditor == null ||
-            !GodotObject.IsInstanceValid(_draftEditor) ||
-            !_draftEditor.Editable)
+        if (!CanInsertItem(expectedState))
         {
             return false;
         }
 
-        return _draftEditor.InsertItem(run, _itemLinkPostInsertForTests);
+        return _draftEditor!.InsertItem(run, _itemLinkPostInsertForTests);
+    }
+
+    internal bool CanInsertItem(LanConnectChatChannelState expectedState)
+    {
+        ArgumentNullException.ThrowIfNull(expectedState);
+        return IsInsideTree() &&
+               ReferenceEquals(_state, expectedState) &&
+               !InteractionBlocked &&
+               _draftEditor != null &&
+               GodotObject.IsInstanceValid(_draftEditor) &&
+               _draftEditor.Editable;
     }
 
     internal void SetItemLinkPostInsertForTests(Action? callback) =>

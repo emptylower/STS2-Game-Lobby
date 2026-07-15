@@ -267,12 +267,74 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         LanConnectChatChannelState expectedState,
         LanConnectItemRun run)
     {
-        if (!Visible)
+        if (_serverChatPanel?.CanInsertItem(expectedState) != true)
         {
-            ShowOverlay();
+            return false;
         }
-        RefreshServerChatPresentation(force: true);
-        return _serverChatPanel?.TryInsertItemAndFocus(expectedState, run) == true;
+
+        bool wasVisible = Visible;
+        Control? previousFocus = GetViewport().GuiGetFocusOwner();
+        bool openedForInsert = !Visible;
+        try
+        {
+            if (openedForInsert)
+            {
+                ShowOverlayCore(startConnectivity: false);
+            }
+            RefreshServerChatPresentation(force: true);
+            if (_serverChatPanel.TryInsertItemAndFocus(expectedState, run))
+            {
+                if (openedForInsert)
+                {
+                    try
+                    {
+                        CheckClipboardForInviteCode();
+                        TaskHelper.RunSafely(CheckConnectivityAndRefreshAsync());
+                    }
+                    catch
+                    {
+                        // The item is committed; background refresh startup cannot reverse it.
+                    }
+                }
+                return true;
+            }
+        }
+        catch
+        {
+            // Restore the prior UI state below and leave the click unconsumed.
+        }
+
+        RestoreItemInsertUi(wasVisible, previousFocus);
+        return false;
+    }
+
+    internal void HideForTests() => HideOverlayCore(persistSettings: false);
+
+    private void RestoreItemInsertUi(bool wasVisible, Control? previousFocus)
+    {
+        try
+        {
+            if (!wasVisible && Visible)
+            {
+                HideOverlayCore(persistSettings: false);
+            }
+        }
+        catch
+        {
+            // Focus restoration below is still useful if hiding itself fails.
+        }
+
+        if (previousFocus != null &&
+            GodotObject.IsInstanceValid(previousFocus) &&
+            previousFocus.IsInsideTree() &&
+            previousFocus.IsVisibleInTree())
+        {
+            previousFocus.GrabFocus();
+        }
+        else
+        {
+            GetViewport().GuiGetFocusOwner()?.ReleaseFocus();
+        }
     }
 
     public void Initialize(NMultiplayerSubmenu submenu, NSubmenuButton templateButton, NSubmenuStack stack, Control loadingOverlay)
@@ -411,6 +473,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     internal bool ServerPickerOpenForTests => _serverPickerOpen;
 
+    internal bool AnyDialogVisibleForTests => IsAnyDialogVisible();
+
+    internal bool HasPendingInviteForTests => _pendingInvitePayload != null;
+
     internal bool CreateRoomButtonEnabledForTests => _createButton?.Disabled == false;
 
     internal bool JoinRoomButtonEnabledForTests => _joinButton?.Disabled == false;
@@ -452,6 +518,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     public void ShowOverlay()
     {
+        ShowOverlayCore(startConnectivity: true);
+    }
+
+    private void ShowOverlayCore(bool startConnectivity)
+    {
         GD.Print("sts2_lan_connect overlay: show requested");
         SetUnderlyingMenuVisible(false);
         Visible = true;
@@ -462,8 +533,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         RebuildRoomStage();
         UpdateActionButtons();
         FocusInitialLobbyControl();
-        CheckClipboardForInviteCode();
-        TaskHelper.RunSafely(CheckConnectivityAndRefreshAsync());
+        if (startConnectivity)
+        {
+            CheckClipboardForInviteCode();
+            TaskHelper.RunSafely(CheckConnectivityAndRefreshAsync());
+        }
     }
 
     public override void _Input(InputEvent inputEvent)
@@ -665,8 +739,16 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void HideOverlay()
     {
+        HideOverlayCore(persistSettings: true);
+    }
+
+    private void HideOverlayCore(bool persistSettings)
+    {
         GD.Print("sts2_lan_connect overlay: hide requested");
-        PersistSettings();
+        if (persistSettings)
+        {
+            PersistSettings();
+        }
         Visible = false;
         RefreshServerChatPresentation(force: true);
         ResetRoomListTouchTracking();

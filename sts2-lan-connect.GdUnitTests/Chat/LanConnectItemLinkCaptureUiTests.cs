@@ -127,6 +127,41 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
             new LanConnectItemRun("potion", "MegaCrit.FirePotion"));
     }
 
+    [TestCase]
+    public async Task Throwing_draft_subscriber_keeps_capture_committed_handled_and_notifies_later_subscriber()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        fixture.Overlay.ChatPanelForTests.ReleaseDraftFocus();
+        LanConnectRichDraft draft = fixture.State.Room.RichDraft;
+        long beforeRevision = draft.ContentRevision;
+        int laterSubscriberCalls = 0;
+        draft.ContentChanged += _ => throw new InvalidOperationException("observer failed");
+        draft.ContentChanged += _ => laterSubscriberCalls++;
+        TestItemHolder holder = AutoFree(new TestItemHolder(
+            "card",
+            new LanConnectItemRun("card", "MegaCrit.Strike", 1)))!;
+        ProductionInsertCapturePorts ports = new(
+            holder,
+            run => LanConnectGodotItemLinkCapturePorts.TryInsertAndFocus(
+                roomActive: true,
+                fixture.State.Room,
+                run,
+                fixture.Overlay,
+                lobbyOverlay: null));
+        bool handled = false;
+
+        bool consumed = LanConnectItemLinkCaptureInputRoute.TryRoute(
+            AltLeftPress(),
+            new LanConnectItemLinkCapture(ports),
+            () => handled = true);
+
+        AssertThat(consumed).IsTrue();
+        AssertThat(handled).IsTrue();
+        AssertThat(draft.ContentRevision).IsEqual(beforeRevision + 1);
+        AssertThat(draft.Runs.OfType<LanConnectItemRun>().Count()).IsEqual(1);
+        AssertThat(laterSubscriberCalls).IsEqual(1);
+    }
+
     [TestCase("blocked")]
     [TestCase("uneditable")]
     [TestCase("binding_mismatch")]
@@ -138,7 +173,13 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         bound.RichDraft.ReplaceAllWithText("ab");
         bound.RichDraft.SetCaret(new LanConnectDraftPosition(0, 1));
         await fixture.Overlay.RefreshForTests();
+        await fixture.Overlay.CloseForTests();
         LanConnectBasicChatPanel panel = fixture.Overlay.ChatPanelForTests;
+        LanConnectChatChannel selectedBefore = fixture.State.SelectedChannel;
+        Button previousFocus = new() { Name = "OutsideItemCaptureFocus" };
+        fixture.Overlay.GetViewport().AddChild(previousFocus);
+        previousFocus.GrabFocus();
+        await fixture.Runner.AwaitIdleFrame();
         Control? modal = null;
         if (scenario == "blocked")
         {
@@ -172,6 +213,11 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         AssertThat(bound.RichDraft.Runs).ContainsExactly(before.Runs.ToArray());
         AssertThat(bound.RichDraft.Selection).IsEqual(before.Selection);
         AssertThat(bound.RichDraft.ContentRevision).IsEqual(before.ContentRevision);
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsFalse();
+        AssertThat(fixture.State.SelectedChannel).IsEqual(selectedBefore);
+        AssertThat(ReferenceEquals(
+            fixture.Overlay.GetViewport().GuiGetFocusOwner(),
+            previousFocus)).IsTrue();
         modal?.QueueFree();
     }
 
@@ -180,7 +226,7 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
     {
         LanConnectChatChannelState state = EnabledState(LanConnectChatChannel.Server);
         state.RichDraft.ReplaceAllWithText("keep");
-        LanConnectRoomChatOverlay overlay = AutoFree(new LanConnectRoomChatOverlay())!;
+        LanConnectRoomChatOverlay overlay = AutoFree(new LanConnectRoomChatOverlay { Visible = false })!;
         LanConnectRichDraftSnapshot before = state.RichDraft.CaptureSnapshot();
 
         bool inserted = LanConnectGodotItemLinkCapturePorts.TryInsertAndFocus(
@@ -194,6 +240,61 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         AssertThat(state.RichDraft.Runs).ContainsExactly(before.Runs.ToArray());
         AssertThat(state.RichDraft.Selection).IsEqual(before.Selection);
         AssertThat(state.RichDraft.ContentRevision).IsEqual(before.ContentRevision);
+        AssertThat(overlay.Visible).IsFalse();
+    }
+
+    [TestCase("uneditable")]
+    [TestCase("binding_mismatch")]
+    [TestCase("post_insert_throw")]
+    public async Task Hidden_lobby_failure_restores_visibility_focus_and_picker_state(string scenario)
+    {
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready);
+        fixture.ServerState.RichDraft.ReplaceAllWithText("lobby");
+        fixture.Overlay.HideForTests();
+        LanConnectBasicChatPanel panel = fixture.Overlay.ServerChatPanelForTests;
+        Button previousFocus = new() { Name = "OutsideLobbyItemCaptureFocus" };
+        fixture.Overlay.GetViewport().AddChild(previousFocus);
+        previousFocus.GrabFocus();
+        await fixture.Runner.AwaitIdleFrame();
+        if (scenario == "uneditable")
+        {
+            fixture.ServerState.SetChatEnabled(false);
+            await fixture.Overlay.RefreshLayoutForTests(new Vector2I(1920, 1080));
+        }
+        if (scenario == "post_insert_throw")
+        {
+            panel.SetItemLinkPostInsertForTests(() => throw new InvalidOperationException("boom"));
+        }
+        LanConnectChatChannelState expected = scenario == "binding_mismatch"
+            ? EnabledState(LanConnectChatChannel.Server)
+            : fixture.ServerState;
+        bool pickerBefore = fixture.Overlay.ServerPickerOpenForTests;
+        bool dialogBefore = fixture.Overlay.AnyDialogVisibleForTests;
+        bool pendingInviteBefore = fixture.Overlay.HasPendingInviteForTests;
+        LanConnectRichDraftSnapshot before = fixture.ServerState.RichDraft.CaptureSnapshot();
+
+        bool inserted = LanConnectGodotItemLinkCapturePorts.TryInsertAndFocus(
+            roomActive: false,
+            expected,
+            new LanConnectItemRun("relic", "MegaCrit.Anchor"),
+            roomOverlay: null,
+            fixture.Overlay);
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(inserted).IsFalse();
+        AssertThat(fixture.ServerState.RichDraft.Runs).ContainsExactly(before.Runs.ToArray());
+        AssertThat(fixture.ServerState.RichDraft.Selection).IsEqual(before.Selection);
+        AssertThat(fixture.ServerState.RichDraft.ContentRevision).IsEqual(before.ContentRevision);
+        AssertThat(fixture.Overlay.Visible).IsFalse();
+        AssertThat(fixture.Overlay.ServerPickerOpenForTests).IsEqual(pickerBefore);
+        AssertThat(fixture.Overlay.AnyDialogVisibleForTests).IsEqual(dialogBefore);
+        AssertThat(fixture.Overlay.HasPendingInviteForTests).IsEqual(pendingInviteBefore);
+        AssertThat(ReferenceEquals(
+            fixture.Overlay.GetViewport().GuiGetFocusOwner(),
+            previousFocus)).IsTrue();
     }
 
     [TestCase]
@@ -465,5 +566,47 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
             InsertCalls++;
             return true;
         }
+    }
+
+    private sealed class ProductionInsertCapturePorts(
+        TestItemHolder holder,
+        Func<LanConnectItemRun, bool> insert) : ILanConnectItemLinkCapturePorts
+    {
+        public bool IsChatInteractionBlocking => false;
+
+        public bool ItemRefsEnabledForSelectedChannel => true;
+
+        public object? GuiGetHoveredControl() => holder;
+
+        public object? GetParent(object node) => (node as Node)?.GetParent();
+
+        public bool IsCaptureBoundary(object node) => false;
+
+        public bool IsSupportedHolder(object node) => ReferenceEquals(node, holder);
+
+        public bool TryResolveCard(object node, out LanConnectItemRun run)
+        {
+            if (ReferenceEquals(node, holder))
+            {
+                run = holder.Item;
+                return true;
+            }
+            run = null!;
+            return false;
+        }
+
+        public bool TryResolveRelic(object node, out LanConnectItemRun run)
+        {
+            run = null!;
+            return false;
+        }
+
+        public bool TryResolvePotion(object node, out LanConnectItemRun run)
+        {
+            run = null!;
+            return false;
+        }
+
+        public bool InsertAndFocus(LanConnectItemRun run) => insert(run);
     }
 }

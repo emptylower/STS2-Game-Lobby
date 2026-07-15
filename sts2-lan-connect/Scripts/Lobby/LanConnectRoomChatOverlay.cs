@@ -119,8 +119,29 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         LanConnectChatChannelState expectedState,
         LanConnectItemRun run)
     {
-        ShowPanelPreservingSelection();
-        return _chatPanel?.TryInsertItemAndFocus(expectedState, run) == true;
+        if (_chatPanel?.CanInsertItem(expectedState) != true || ResolveChat() is not { } chat)
+        {
+            return false;
+        }
+
+        bool wasOpen = chat.RoomOverlayOpen;
+        LanConnectChatChannel selectedChannel = chat.SelectedChannel;
+        Control? previousFocus = GetViewport().GuiGetFocusOwner();
+        try
+        {
+            ShowPanelPreservingSelection();
+            if (_chatPanel.TryInsertItemAndFocus(expectedState, run))
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            // Restore the prior UI state below and leave the click unconsumed.
+        }
+
+        RestoreItemInsertUi(chat, wasOpen, selectedChannel, previousFocus);
+        return false;
     }
 
     internal static void Install()
@@ -529,6 +550,49 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         _chatPanel?.ReleaseDraftFocus();
         chat.CloseRoomOverlay();
         RefreshFromSource();
+    }
+
+    private void RestoreItemInsertUi(
+        LanConnectDualChatState chat,
+        bool wasOpen,
+        LanConnectChatChannel selectedChannel,
+        Control? previousFocus)
+    {
+        try
+        {
+            if (chat.SelectedChannel != selectedChannel)
+            {
+                chat.Select(selectedChannel);
+            }
+            if (wasOpen)
+            {
+                bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
+                chat.ShowRoomOverlayPreservingSelection(serverSelectable);
+            }
+            else
+            {
+                chat.CloseRoomOverlay();
+            }
+            RefreshFromSource();
+        }
+        catch
+        {
+            // Focus restoration below is still useful if UI refresh itself fails.
+        }
+        RestoreItemInsertFocus(previousFocus);
+    }
+
+    private void RestoreItemInsertFocus(Control? previousFocus)
+    {
+        if (previousFocus != null &&
+            GodotObject.IsInstanceValid(previousFocus) &&
+            previousFocus.IsInsideTree() &&
+            previousFocus.IsVisibleInTree())
+        {
+            previousFocus.GrabFocus();
+            return;
+        }
+        GetViewport().GuiGetFocusOwner()?.ReleaseFocus();
     }
 
     private void SelectChannel(LanConnectChatChannel channel)
