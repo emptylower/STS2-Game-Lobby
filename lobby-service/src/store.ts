@@ -94,6 +94,13 @@ export interface RoomSettings {
   chatEnabled: boolean;
 }
 
+export interface RoomChatContext {
+  readonly roomId: string;
+  readonly roomSessionId: string;
+  readonly chatEnabled: boolean;
+  readonly peerPlayerNetIds: ReadonlySet<string>;
+}
+
 export interface HostSession {
   roomId: string;
   roomSessionId: string;
@@ -172,7 +179,8 @@ export interface JoinRoomResult {
 }
 
 export interface LobbyStoreDependencies {
-  id(): string;
+  id?(): string;
+  peerPlayerNetIds?(roomId: string, roomSessionId: string): ReadonlySet<string>;
 }
 
 export interface ModMismatchDetails {
@@ -199,8 +207,9 @@ export class LobbyStore {
   private readonly hostSessions = new Map<string, HostSession>();
   private readonly config: Required<StoreConfig>;
   private readonly id: () => string;
+  private readonly peerPlayerNetIds: (roomId: string, roomSessionId: string) => ReadonlySet<string>;
 
-  constructor(config: StoreConfig, deps: LobbyStoreDependencies = { id: () => randomUUID() }) {
+  constructor(config: StoreConfig, deps: LobbyStoreDependencies = {}) {
     this.config = {
       heartbeatTimeoutMs: config.heartbeatTimeoutMs,
       ticketTtlMs: config.ticketTtlMs,
@@ -208,7 +217,8 @@ export class LobbyStore {
       strictModVersionCheck: config.strictModVersionCheck ?? true,
       connectionStrategy: config.connectionStrategy ?? "direct-first",
     };
-    this.id = deps.id;
+    this.id = deps.id ?? (() => randomUUID());
+    this.peerPlayerNetIds = deps.peerPlayerNetIds ?? (() => new Set<string>());
   }
 
   listRooms(now = new Date()): RoomSummary[] {
@@ -522,6 +532,23 @@ export class LobbyStore {
     }
 
     return { ...hostSession.roomSettings };
+  }
+
+  getRoomChatContext(roomId: string): RoomChatContext | undefined {
+    const room = this.rooms.get(roomId);
+    const hostSession = this.hostSessions.get(roomId);
+    if (!room || !hostSession) {
+      return undefined;
+    }
+
+    return {
+      roomId: hostSession.roomId,
+      roomSessionId: hostSession.roomSessionId,
+      chatEnabled: hostSession.roomSettings.chatEnabled,
+      peerPlayerNetIds: new Set(
+        this.peerPlayerNetIds(hostSession.roomId, hostSession.roomSessionId),
+      ),
+    };
   }
 
   private requireRoom(roomId: string) {

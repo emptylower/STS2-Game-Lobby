@@ -664,7 +664,7 @@ function openControlWebSocket(url: string): Promise<WebSocket> {
   });
 }
 
-test("control host and client hello establish room v2 rich and legacy routing", async () => {
+test("control host and client room_chat_ready uses Phase 1 generation for rich and legacy routing", async () => {
   const config = testConfig({ port: 0 });
   const service = await createLobbyService(config);
   const sockets: WebSocket[] = [];
@@ -690,6 +690,7 @@ test("control host and client hello establish room v2 rich and legacy routing", 
       roomSessionId: string;
       controlChannelId: string;
       hostToken: string;
+      room: object;
     };
     const join = async (playerName: string, playerNetId: string) => {
       const response = await fetch(`http://127.0.0.1:${address.port}/rooms/${created.roomId}/join`, {
@@ -704,10 +705,12 @@ test("control host and client hello establish room v2 rich and legacy routing", 
         }),
       });
       assert.equal(response.status, 200);
-      return response.json() as Promise<{ ticketId: string }>;
+      return response.json() as Promise<{ ticketId: string; roomSessionId: string; room: object }>;
     };
     const richJoin = await join("Rich", "net:rich");
     const oldJoin = await join("Old", "net:old");
+    assert.equal(richJoin.roomSessionId, created.roomSessionId);
+    assert.equal(Object.hasOwn(richJoin.room, "roomSessionId"), false);
     const baseUrl = `ws://127.0.0.1:${address.port}${config.wsPath}`;
     const host = await openControlWebSocket(
       `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
@@ -805,7 +808,7 @@ test("control host and client hello establish room v2 rich and legacy routing", 
       playerNetId: "net:old",
     }));
     old.send(JSON.stringify({ type: "ping" }));
-    const [hostReady, richReady] = await Promise.all([
+    const [hostReady, richReady, reconnectReady] = await Promise.all([
       waitForChatFrame(host, (frame) => frame.type === "room_chat_ready"),
       waitForChatFrame(rich, (frame) => frame.type === "room_chat_ready"),
       waitForChatFrame(mutatingHost, (frame) => frame.type === "room_chat_ready"),
@@ -813,6 +816,7 @@ test("control host and client hello establish room v2 rich and legacy routing", 
       waitForChatFrame(old, (frame) => frame.type === "pong"),
     ]);
     assert.equal(hostReady.roomSessionId, created.roomSessionId);
+    assert.equal(reconnectReady.roomSessionId, created.roomSessionId);
     assert.deepEqual(hostReady.enabledFeatures, {
       richContentVersion: 1,
       emojiSetVersion: 1,

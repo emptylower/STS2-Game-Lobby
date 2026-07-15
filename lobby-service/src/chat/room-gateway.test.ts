@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatFeatureVersions } from "./feature-resolver.js";
+import type { RoomChatContext } from "../store.js";
 import {
   RoomChatGateway,
   type RoomChatGatewayOptions,
@@ -98,16 +99,22 @@ function textContent(text: string) {
   return { formatVersion: 1, segments: [{ kind: "text", text }] };
 }
 
-function createGateway(options: RoomChatGatewayOptions & {
+function createGateway(options: Omit<RoomChatGatewayOptions, "getRoomChatContext"> & {
   chatEnabled?: () => boolean;
+  context?: (roomId: string) => RoomChatContext | undefined;
 } = {}) {
   let nextId = 0;
-  const { chatEnabled, ...gatewayOptions } = options;
+  const { chatEnabled, context, ...gatewayOptions } = options;
   return new RoomChatGateway({
     compiledFeatures: allVersions,
     configuredFeatures: allVersions,
     roomV2Enabled: true,
-    getChatEnabled: chatEnabled ?? (() => true),
+    getRoomChatContext: context ?? ((roomId) => ({
+      roomId,
+      roomSessionId: "session-1",
+      chatEnabled: chatEnabled?.() ?? true,
+      peerPlayerNetIds: new Set<string>(),
+    })),
     now: options.now ?? (() => Date.parse("2026-07-15T00:00:00.000Z")),
     randomUuid: () => `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`,
     connectionBurst: 1_000,
@@ -385,6 +392,186 @@ test("room v2 validates protocol room session and chat-enabled context", () => {
     roomSend("15151515-1515-4515-8515-151515151515", textContent("disabled")),
   );
   assert.equal(client.frames.at(-1)?.code, "chat_disabled");
+
+  gateway.handleControlEnvelope("context-client", roomSend(
+    "16161616-1616-4616-8616-161616161616",
+    {
+      formatVersion: 1,
+      segments: [{ kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike" }],
+    },
+  ));
+  assert.equal(client.frames.at(-1)?.code, "chat_disabled");
+});
+
+test("room_chat_ready rejects a deleted or replaced Phase 1 generation", () => {
+  for (const [label, context] of [
+    ["deleted", undefined],
+    ["replaced", {
+      roomId: "room-1",
+      roomSessionId: "session-2",
+      chatEnabled: true,
+      peerPlayerNetIds: new Set<string>(),
+    }],
+  ] as const) {
+    const gateway = createGateway({ context: () => context });
+    const client = peer(`stale-ready-${label}`);
+    gateway.registerPeer(client.registration);
+
+    gateway.handleControlEnvelope(client.registration.connectionSessionId, hello("Alice", "net:alice"));
+
+    assert.equal(client.frames.length, 1, label);
+    assert.equal(client.frames[0]?.type, "room_chat_error", label);
+    assert.equal(client.frames[0]?.code, "protocol_mismatch", label);
+    assert.deepEqual(client.closes, [{ code: 1002, reason: "protocol_mismatch" }], label);
+  }
+});
+
+test("roomSessionId send re-reads Phase 1 generation before canonicalize and commit", () => {
+  for (const staleAt of ["receive", "commit"] as const) {
+    let sending = false;
+    let sendReads = 0;
+    let generatedIds = 0;
+    const activeContext: RoomChatContext = {
+      roomId: "room-1",
+      roomSessionId: "session-1",
+      chatEnabled: true,
+      peerPlayerNetIds: new Set<string>(),
+    };
+    const gateway = createGateway({
+      connectionBurst: 1,
+      randomUuid: () => {
+        generatedIds += 1;
+        return `00000000-0000-4000-8000-${String(generatedIds).padStart(12, "0")}`;
+      },
+      context: () => {
+        if (!sending) return activeContext;
+        sendReads += 1;
+        if (staleAt === "receive" || sendReads === 2) return undefined;
+        return activeContext;
+      },
+    });
+    const sender = peer(`stale-${staleAt}-sender`);
+    const recipient = peer(`stale-${staleAt}-recipient`);
+    gateway.registerPeer(sender.registration);
+    gateway.registerPeer(recipient.registration);
+    gateway.handleControlEnvelope(sender.registration.connectionSessionId, hello("Alice", "net:alice"));
+    gateway.handleControlEnvelope(recipient.registration.connectionSessionId, hello("Bob", "net:bob"));
+    sender.frames.length = 0;
+    recipient.frames.length = 0;
+    sending = true;
+    const clientMessageId = staleAt === "receive"
+      ? "71717171-7171-4171-8171-717171717171"
+      : "72727272-7272-4272-8272-727272727272";
+
+    gateway.handleControlEnvelope(
+      sender.registration.connectionSessionId,
+      roomSend(
+        clientMessageId,
+        textContent("stale generation"),
+      ),
+    );
+
+    assert.equal(sender.frames.length, 1, staleAt);
+    assert.equal(sender.frames[0]?.type, "room_chat_error", staleAt);
+    assert.equal(sender.frames[0]?.code, "protocol_mismatch", staleAt);
+    assert.equal(recipient.frames.length, 0, staleAt);
+    assert.equal(generatedIds, 0, staleAt);
+
+    sending = false;
+    sender.frames.length = 0;
+    gateway.handleControlEnvelope(
+      sender.registration.connectionSessionId,
+      roomSend(clientMessageId, textContent("stale generation")),
+    );
+    assert.equal(sender.frames.some((frame) => frame.type === "room_chat_ack"), true, staleAt);
+    assert.equal(recipient.frames.some((frame) => frame.type === "room_chat_message"), true, staleAt);
+    assert.equal(generatedIds, 1, staleAt);
+  }
+});
+
+test("roomSessionId stale generation cannot cache disabled or invalid-content errors", () => {
+  for (const mode of ["disabled", "invalid"] as const) {
+    let sending = false;
+    let stale = true;
+    let sendReads = 0;
+    const activeContext: RoomChatContext = {
+      roomId: "room-1",
+      roomSessionId: "session-1",
+      chatEnabled: true,
+      peerPlayerNetIds: new Set<string>(),
+    };
+    const gateway = createGateway({
+      roomV2Enabled: mode !== "disabled",
+      context: () => {
+        if (!sending) return activeContext;
+        sendReads += 1;
+        if (stale && sendReads % 2 === 0) return undefined;
+        return activeContext;
+      },
+    });
+    const sender = peer(`stale-error-${mode}`);
+    gateway.registerPeer(sender.registration);
+    gateway.handleControlEnvelope(sender.registration.connectionSessionId, hello("Alice", "net:alice"));
+    sender.frames.length = 0;
+    sending = true;
+    const clientMessageId = mode === "disabled"
+      ? "73737373-7373-4373-8373-737373737373"
+      : "74747474-7474-4474-8474-747474747474";
+
+    gateway.handleControlEnvelope(
+      sender.registration.connectionSessionId,
+      roomSend(
+        clientMessageId,
+        mode === "invalid" ? { formatVersion: 1, segments: [] } : textContent("first"),
+      ),
+    );
+    assert.equal(sender.frames.at(-1)?.code, "protocol_mismatch", mode);
+
+    stale = false;
+    sender.frames.length = 0;
+    gateway.handleControlEnvelope(
+      sender.registration.connectionSessionId,
+      roomSend(clientMessageId, textContent("second")),
+    );
+    assert.equal(
+      sender.frames.at(-1)?.code,
+      mode === "disabled" ? "chat_disabled" : undefined,
+      mode,
+    );
+    assert.equal(sender.frames.some((frame) => frame.code === "duplicate_message"), false, mode);
+    if (mode === "invalid") {
+      assert.equal(sender.frames.some((frame) => frame.type === "room_chat_ack"), true, mode);
+    }
+  }
+});
+
+test("roomSessionId commit snapshot can re-enable rich content after receive", () => {
+  let sending = false;
+  let sendReads = 0;
+  const gateway = createGateway({
+    context: (roomId) => ({
+      roomId,
+      roomSessionId: "session-1",
+      chatEnabled: !sending || ++sendReads === 2,
+      peerPlayerNetIds: new Set<string>(),
+    }),
+  });
+  const sender = peer("chat-enabled-toctou");
+  gateway.registerPeer(sender.registration);
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, hello("Alice", "net:alice"));
+  sender.frames.length = 0;
+  sending = true;
+
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, roomSend(
+    "75757575-7575-4575-8575-757575757575",
+    {
+      formatVersion: 1,
+      segments: [{ kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike" }],
+    },
+  ));
+
+  assert.equal(sender.frames.some((frame) => frame.type === "room_chat_ack"), true);
+  assert.equal(sender.frames.some((frame) => frame.code === "feature_disabled"), false);
 });
 
 test("room v2 sends ACK and whole rich or exact legacy fallback per recipient", () => {

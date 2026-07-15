@@ -16,6 +16,7 @@ import {
   type ChatFeatureVersions,
 } from "./feature-resolver.js";
 import { RateLimitError, SlidingWindowLimiter, TokenBucketLimiter } from "./rate-limiter.js";
+import type { RoomChatContext } from "../store.js";
 
 export interface RoomChatPeerRegistration {
   connectionSessionId: string;
@@ -30,11 +31,11 @@ export interface RoomChatPeerRegistration {
 }
 
 export interface RoomChatGatewayOptions {
+  getRoomChatContext(roomId: string): RoomChatContext | undefined;
   compiledFeatures?: ChatFeatureVersions;
   configuredFeatures?: ChatFeatureVersions;
   adminFeatures?: Partial<ChatFeatureVersions>;
   roomV2Enabled?: boolean;
-  getChatEnabled?(roomId: string): boolean;
   now?: () => number;
   randomUuid?: () => string;
   maxPeersTotal?: number;
@@ -107,7 +108,7 @@ export class RoomChatGateway {
   private readonly configuredFeatures: ChatFeatureVersions;
   private readonly adminFeatures?: Partial<ChatFeatureVersions>;
   private readonly roomV2Enabled: boolean;
-  private readonly getChatEnabled: (roomId: string) => boolean;
+  private readonly getRoomChatContext: (roomId: string) => RoomChatContext | undefined;
   private readonly now: () => number;
   private readonly randomUuid: () => string;
   private readonly maxPeersTotal: number;
@@ -117,14 +118,14 @@ export class RoomChatGateway {
   private readonly peers = new Map<string, PeerState>();
   private readonly peersByRoom = new Map<string, Set<string>>();
 
-  constructor(options: RoomChatGatewayOptions = {}) {
+  constructor(options: RoomChatGatewayOptions) {
     this.compiledFeatures = { ...(options.compiledFeatures ?? PHASE_3_CHAT_FEATURES) };
     this.configuredFeatures = { ...(options.configuredFeatures ?? PHASE_3_CHAT_FEATURES) };
     if (options.adminFeatures !== undefined) {
       this.adminFeatures = { ...options.adminFeatures };
     }
     this.roomV2Enabled = options.roomV2Enabled ?? true;
-    this.getChatEnabled = options.getChatEnabled ?? (() => true);
+    this.getRoomChatContext = options.getRoomChatContext;
     this.now = options.now ?? Date.now;
     this.randomUuid = options.randomUuid ?? randomUUID;
     this.maxPeersTotal = options.maxPeersTotal ?? DEFAULT_MAX_PEERS_TOTAL;
@@ -302,7 +303,15 @@ export class RoomChatGateway {
         this.rejectHello(peer, true);
         return;
       }
-    } else {
+    }
+
+    const context = this.activeContext(peer);
+    if (!context) {
+      this.rejectHello(peer, true);
+      return;
+    }
+
+    if (!peer.identity) {
       peer.helloComplete = true;
       peer.identity = identity;
       peer.declaredFeatures = declaredFeatures;
@@ -313,8 +322,8 @@ export class RoomChatGateway {
       type: "room_chat_ready",
       protocolVersion: 1,
       roomId: peer.roomId,
-      roomSessionId: peer.roomSessionId,
-      enabledFeatures: this.resolveFeatures(peer, peer),
+      roomSessionId: context.roomSessionId,
+      enabledFeatures: this.resolveFeatures(peer, peer, context.chatEnabled),
     });
   }
 
@@ -395,7 +404,16 @@ export class RoomChatGateway {
       this.sendError(peer, "protocol_mismatch", envelope.clientMessageId);
       return;
     }
+    const receiveContext = this.activeContext(peer, envelope.roomSessionId);
+    if (!receiveContext) {
+      this.sendError(peer, "protocol_mismatch", envelope.clientMessageId);
+      return;
+    }
     if (!this.roomV2Enabled) {
+      if (!this.activeContext(peer, envelope.roomSessionId)) {
+        this.sendError(peer, "protocol_mismatch", envelope.clientMessageId);
+        return;
+      }
       const dedupeKey = fingerprintUnknown(envelope.content, rawEnvelope);
       if (!this.replayOrRejectConflict(peer, envelope.clientMessageId, dedupeKey)) {
         this.cacheAndSendError(peer, envelope.clientMessageId, dedupeKey, "chat_disabled");
@@ -415,6 +433,10 @@ export class RoomChatGateway {
       });
       canonicalJson = deterministicContentJson(content);
     } catch (error) {
+      if (!this.activeContext(peer, envelope.roomSessionId)) {
+        this.sendError(peer, "protocol_mismatch", envelope.clientMessageId);
+        return;
+      }
       const dedupeKey = fingerprintUnknown(envelope.content, rawEnvelope);
       if (!this.replayOrRejectConflict(peer, envelope.clientMessageId, dedupeKey)) {
         this.cacheAndSendError(
@@ -427,11 +449,17 @@ export class RoomChatGateway {
       return;
     }
 
+    const commitContext = this.activeContext(peer, envelope.roomSessionId);
+    if (!commitContext) {
+      this.sendError(peer, "protocol_mismatch", envelope.clientMessageId);
+      return;
+    }
+
     this.expireDedupe(peer);
     if (this.replayOrRejectConflict(peer, envelope.clientMessageId, canonicalJson)) {
       return;
     }
-    if (!this.getChatEnabled(peer.roomId)) {
+    if (!commitContext.chatEnabled) {
       this.cacheAndSendError(
         peer,
         envelope.clientMessageId,
@@ -483,7 +511,7 @@ export class RoomChatGateway {
       ) {
         continue;
       }
-      const recipientFeatures = this.resolveFeatures(peer, recipient);
+      const recipientFeatures = this.resolveFeatures(peer, recipient, commitContext.chatEnabled);
       if (recipient.roomV2Capable && supportsContent(content, recipientFeatures)) {
         recipient.send({
           type: "room_chat_message",
@@ -507,7 +535,7 @@ export class RoomChatGateway {
   private resolveFeatures(
     sender: PeerState,
     receiver: PeerState,
-    channelEnabled = this.getChatEnabled(sender.roomId),
+    channelEnabled: boolean,
   ): ChatFeatureVersions {
     return resolveEnabledFeatures({
       channel: "room",
@@ -519,6 +547,22 @@ export class RoomChatGateway {
       sender: sender.declaredFeatures,
       receiver: receiver.declaredFeatures,
     });
+  }
+
+  private activeContext(
+    peer: PeerState,
+    expectedRoomSessionId = peer.roomSessionId,
+  ): RoomChatContext | undefined {
+    const context = this.getRoomChatContext(peer.roomId);
+    if (
+      !context
+      || context.roomId !== peer.roomId
+      || context.roomSessionId !== peer.roomSessionId
+      || context.roomSessionId !== expectedRoomSessionId
+    ) {
+      return undefined;
+    }
+    return context;
   }
 
   private expireDedupe(peer: PeerState): void {

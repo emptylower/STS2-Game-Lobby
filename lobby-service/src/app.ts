@@ -159,6 +159,7 @@ export async function createLobbyService(
 ): Promise<LobbyService> {
   const env = config;
   const peerEnv = env.peer;
+  const roomPeers = new Map<string, Set<ControlPeer>>();
 
   const store = new LobbyStore({
     heartbeatTimeoutMs: env.heartbeatTimeoutMs,
@@ -166,6 +167,20 @@ export async function createLobbyService(
     strictGameVersionCheck: env.strictGameVersionCheck,
     strictModVersionCheck: env.strictModVersionCheck,
     connectionStrategy: env.connectionStrategy,
+  }, {
+    peerPlayerNetIds: (roomId, roomSessionId) => {
+      const playerNetIds = new Set<string>();
+      for (const peer of roomPeers.get(roomId) ?? []) {
+        if (
+          peer.roomSessionId === roomSessionId
+          && peer.socket.readyState === peer.socket.OPEN
+          && peer.playerNetId
+        ) {
+          playerNetIds.add(peer.playerNetId);
+        }
+      }
+      return playerNetIds;
+    },
   });
   const relayManager = new RoomRelayManager(
     {
@@ -221,9 +236,8 @@ export async function createLobbyService(
     compiledFeatures: { ...PHASE_3_CHAT_FEATURES },
     configuredFeatures: { ...PHASE_3_CHAT_FEATURES },
     roomV2Enabled: true,
-    getChatEnabled: (roomId) => store.getRoomSettings(roomId).chatEnabled,
+    getRoomChatContext: (roomId) => store.getRoomChatContext(roomId),
   });
-  const roomSessionIds = new Map<string, string>();
   const reservedChatTicketsByUpgrade = new WeakMap<IncomingMessage, ReservedChatTicket>();
   let peerStore: PeerStore | null = null;
   let gossipScheduler: GossipScheduler | null = null;
@@ -483,7 +497,6 @@ export async function createLobbyService(
       }
 
       const room = store.createRoom(roomInput, requestIp(req));
-      roomSessionIds.set(room.roomId, room.roomSessionId);
       createdRoom = {
         roomId: room.roomId,
         hostToken: room.hostToken,
@@ -507,7 +520,6 @@ export async function createLobbyService(
         }
         relayManager.removeRoom(createdRoom.roomId);
         closeRoomSockets(createdRoom.roomId, 4000, "room_create_failed");
-        roomSessionIds.delete(createdRoom.roomId);
       }
       next(error);
     }
@@ -527,7 +539,6 @@ export async function createLobbyService(
         desiredSavePlayerNetId: optionalBoundedString(body?.desiredSavePlayerNetId, "desiredSavePlayerNetId", MaxNetIdLength),
         playerNetId: optionalBoundedString(body?.playerNetId, "playerNetId", MaxNetIdLength),
       });
-      roomSessionIds.set(response.roomId, response.roomSessionId);
       const relayEndpoint = relayManager.getRoomEndpoint(req.params.id, resolveAdvertisedRelayHost(req));
       if (relayEndpoint) {
         response.connectionPlan.relayAllowed = true;
@@ -569,7 +580,6 @@ export async function createLobbyService(
       store.deleteRoom(req.params.id, hostToken);
       relayManager.removeRoom(req.params.id);
       closeRoomSockets(req.params.id, 4000, "room_deleted");
-      roomSessionIds.delete(req.params.id);
       console.log(`[lobby] room deleted roomId=${req.params.id}`);
       res.status(204).send();
     } catch (error) {
@@ -732,8 +742,6 @@ export async function createLobbyService(
     chatWss,
     authorizeChat: authorizeChatUpgrade,
   });
-  const roomPeers = new Map<string, Set<ControlPeer>>();
-
   chatWss.on("connection", (socket, req) => {
     socket.on("error", () => {
       // ws emits transport errors (including maxPayload) before the close event.
@@ -765,29 +773,25 @@ export async function createLobbyService(
         throw new InputError("role 必须为 host 或 client。");
       }
 
-      let roomSessionId: string;
       if (role === "host") {
-        const hostSession = store.validateHostControl(
+        store.validateHostControl(
           roomId,
           controlChannelId,
           requiredQuery(requestUrl, "token"),
         );
-        roomSessionId = hostSession.roomSessionId;
-        roomSessionIds.set(roomId, roomSessionId);
       } else {
         store.validateClientControl(roomId, controlChannelId, requiredQuery(requestUrl, "ticketId"));
-        const activeRoomSessionId = roomSessionIds.get(roomId);
-        if (!activeRoomSessionId) {
-          throw new InputError("房间会话不存在或已过期。");
-        }
-        roomSessionId = activeRoomSessionId;
+      }
+      const roomContext = store.getRoomChatContext(roomId);
+      if (!roomContext) {
+        throw new InputError("房间会话不存在或已过期。");
       }
 
       const peer: ControlPeer = {
         socket,
         connectionSessionId: randomUUID(),
         roomId,
-        roomSessionId,
+        roomSessionId: roomContext.roomSessionId,
         controlChannelId,
         role,
         lastSeenAt: Date.now(),
@@ -1327,9 +1331,6 @@ export async function createLobbyService(
       closeRoomSockets,
       log: (message) => console.log(message),
     }, now);
-    for (const roomId of deletedRoomIds) {
-      roomSessionIds.delete(roomId);
-    }
     return deletedRoomIds;
   }
 

@@ -65,7 +65,7 @@ test("validateHostControl reconnect preserves HostSession roomSessionId", () => 
   assert.equal(hostSession.roomSessionId, "room-session");
 });
 
-test("new HostSession receives a different roomSessionId", () => {
+test("republished room creates a new HostSession roomSessionId", () => {
   const store = new LobbyStore(baseConfig, {
     id: sequenceIds(
       "room-a",
@@ -77,10 +77,55 @@ test("new HostSession receives a different roomSessionId", () => {
     ),
   });
   const first = createBasicRoom(store);
+  store.deleteRoom(first.roomId, first.hostToken);
   const second = createBasicRoom(store);
   assert.equal(first.roomSessionId, "session-a");
   assert.equal(second.roomSessionId, "session-b");
   assert.notEqual(first.roomSessionId, second.roomSessionId);
+});
+
+test("room chat context is a defensive snapshot of Phase 1 authority", () => {
+  const peerPlayerNetIds = new Set(["net:host", "net:guest"]);
+  const store = new LobbyStore(baseConfig, {
+    id: sequenceIds("room", "control", "room-session"),
+    peerPlayerNetIds: (roomId, roomSessionId) => {
+      assert.equal(roomId, "room");
+      assert.equal(roomSessionId, "room-session");
+      return peerPlayerNetIds;
+    },
+  });
+  const created = createBasicRoom(store);
+  store.updateRoomSettings(created.roomId, created.hostToken, { chatEnabled: false });
+
+  const first = store.getRoomChatContext(created.roomId);
+  assert.ok(first);
+  assert.equal(first.roomId, created.roomId);
+  assert.equal(first.roomSessionId, created.roomSessionId);
+  assert.equal(first.chatEnabled, false);
+  assert.deepEqual([...first.peerPlayerNetIds], ["net:host", "net:guest"]);
+
+  (first.peerPlayerNetIds as Set<string>).add("net:forged");
+  const second = store.getRoomChatContext(created.roomId);
+  assert.ok(second);
+  assert.notEqual(second, first);
+  assert.notEqual(second.peerPlayerNetIds, first.peerPlayerNetIds);
+  assert.deepEqual([...second.peerPlayerNetIds], ["net:host", "net:guest"]);
+  assert.deepEqual([...peerPlayerNetIds], ["net:host", "net:guest"]);
+
+  store.deleteRoom(created.roomId, created.hostToken);
+  assert.equal(store.getRoomChatContext(created.roomId), undefined);
+});
+
+test("room chat context defaults to an empty peer snapshot without a registry dependency", () => {
+  const store = new LobbyStore(baseConfig, {
+    id: sequenceIds("room", "control", "room-session", "ticket"),
+  });
+  const created = createBasicRoom(store);
+  store.joinRoom(created.roomId, { ...basicJoinInput(), playerNetId: "net:guest" });
+
+  const context = store.getRoomChatContext(created.roomId);
+  assert.ok(context);
+  assert.deepEqual([...context.peerPlayerNetIds], []);
 });
 
 test("room list summaries do not expose roomSessionId", () => {
