@@ -1,4 +1,5 @@
 using Godot;
+using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
@@ -29,20 +30,114 @@ internal interface ILanConnectCardPreviewVisualFactory
     Control Create(object card);
 }
 
+internal interface ILanConnectCardPreviewNativePort
+{
+    Node? CreateCard(object card);
+
+    Control? CreateHolder(Node card);
+
+    void ConfigureHolder(Control holder);
+
+    void Release(Node node);
+}
+
+internal interface ILanConnectItemPreviewNodePort
+{
+    void Attach(Node parent, Node child);
+
+    void Release(Node node);
+}
+
 internal sealed class LanConnectProductionCardPreviewVisualFactory : ILanConnectCardPreviewVisualFactory
 {
+    private readonly ILanConnectCardPreviewNativePort _native;
+
+    internal LanConnectProductionCardPreviewVisualFactory()
+        : this(new LanConnectCardPreviewNativePort())
+    {
+    }
+
+    internal LanConnectProductionCardPreviewVisualFactory(ILanConnectCardPreviewNativePort native)
+    {
+        _native = native ?? throw new ArgumentNullException(nameof(native));
+    }
+
     public Control Create(object card)
     {
-        NCard cardNode = NCard.Create((CardModel)card) ??
-                         throw new InvalidOperationException("The local card visual is unavailable.");
-        NPreviewCardHolder holder = NPreviewCardHolder.Create(
-            cardNode,
-            showHoverTips: false,
-            scaleOnHover: false) ?? throw new InvalidOperationException(
-                "The local preview card holder is unavailable.");
-        holder.SetCardScale(Vector2.One * 0.72f);
-        holder.CustomMinimumSize = new Vector2(232, 332);
-        return holder;
+        Node cardNode = _native.CreateCard(card) ??
+                        throw new InvalidOperationException("The local card visual is unavailable.");
+        if (!GodotObject.IsInstanceValid(cardNode))
+        {
+            throw new InvalidOperationException("The local card visual is invalid.");
+        }
+        Control? holder = null;
+        try
+        {
+            holder = _native.CreateHolder(cardNode);
+            if (holder == null || !GodotObject.IsInstanceValid(holder))
+            {
+                throw new InvalidOperationException("The local preview card holder is unavailable.");
+            }
+            _native.ConfigureHolder(holder);
+            return holder;
+        }
+        catch
+        {
+            Node ownedRoot = holder != null && GodotObject.IsInstanceValid(holder)
+                ? holder
+                : cardNode.GetParent() is { } parent && GodotObject.IsInstanceValid(parent)
+                    ? parent
+                    : cardNode;
+            _native.Release(ownedRoot);
+            throw;
+        }
+    }
+}
+
+internal sealed class LanConnectCardPreviewNativePort : ILanConnectCardPreviewNativePort
+{
+    public Node? CreateCard(object card) => NCard.Create((CardModel)card);
+
+    public Control? CreateHolder(Node card) => NPreviewCardHolder.Create(
+        (NCard)card,
+        showHoverTips: false,
+        scaleOnHover: false);
+
+    public void ConfigureHolder(Control holder)
+    {
+        NPreviewCardHolder previewHolder = (NPreviewCardHolder)holder;
+        previewHolder.SetCardScale(Vector2.One * 0.72f);
+        previewHolder.CustomMinimumSize = LanConnectItemPreview.CardVisualMinimumSize;
+    }
+
+    public void Release(Node node) => LanConnectItemPreviewOwnership.Release(node);
+}
+
+internal sealed class LanConnectItemPreviewNodePort : ILanConnectItemPreviewNodePort
+{
+    public void Attach(Node parent, Node child) => parent.AddChild(child);
+
+    public void Release(Node node) => LanConnectItemPreviewOwnership.Release(node);
+}
+
+internal static class LanConnectItemPreviewOwnership
+{
+    internal static void Release(Node node)
+    {
+        if (!GodotObject.IsInstanceValid(node))
+        {
+            return;
+        }
+        if (node is NPreviewCardHolder holder &&
+            holder.CardNode is { } card &&
+            GodotObject.IsInstanceValid(card) &&
+            ReferenceEquals(card.GetParent(), holder) &&
+            !holder.IsInsideTree())
+        {
+            holder.RemoveChild(card);
+            card.QueueFreeSafely();
+        }
+        node.QueueFreeSafely();
     }
 }
 
@@ -52,13 +147,18 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
     internal const string SurfaceName = "ChatItemPreviewSurface";
     internal const string ContentName = "ChatItemPreviewContent";
 
-    private static readonly Vector2 CardPreferredSize = new(252, 352);
-    private static readonly Vector2 HoverTipPreferredSize = new(340, 184);
+    internal const int SurfaceMargin = 12;
+    internal static readonly Vector2 CardVisualMinimumSize = new(232, 332);
+    internal static readonly Vector2 CardSurfacePreferredSize =
+        CardVisualMinimumSize + new Vector2(SurfaceMargin * 2, SurfaceMargin * 2);
+    private static readonly Vector2 HoverTipSurfacePreferredSize = new(340, 184);
     private const float AnchorGap = 10f;
 
     private readonly ILanConnectCardPreviewVisualFactory _cardVisualFactory;
+    private readonly ILanConnectItemPreviewNodePort _nodePort;
     private MarginContainer? _surface;
     private VBoxContainer? _content;
+    private Control? _cardVisual;
     private string _itemType = string.Empty;
     private string _title = string.Empty;
     private string _description = string.Empty;
@@ -66,14 +166,24 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
     private bool _closing;
 
     internal LanConnectItemPreview()
-        : this(new LanConnectProductionCardPreviewVisualFactory())
+        : this(
+            new LanConnectProductionCardPreviewVisualFactory(),
+            new LanConnectItemPreviewNodePort())
     {
     }
 
     internal LanConnectItemPreview(ILanConnectCardPreviewVisualFactory cardVisualFactory)
+        : this(cardVisualFactory, new LanConnectItemPreviewNodePort())
+    {
+    }
+
+    internal LanConnectItemPreview(
+        ILanConnectCardPreviewVisualFactory cardVisualFactory,
+        ILanConnectItemPreviewNodePort nodePort)
     {
         _cardVisualFactory = cardVisualFactory ??
                              throw new ArgumentNullException(nameof(cardVisualFactory));
+        _nodePort = nodePort ?? throw new ArgumentNullException(nameof(nodePort));
     }
 
     internal LanConnectItemPreviewTestState TestState
@@ -82,7 +192,9 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         {
             int cardVisualCount = _content?.GetChildren()
                 .OfType<Control>()
-                .Count(control => control.HasMeta("lan_connect_card_preview")) ?? 0;
+                .Count(control =>
+                    !control.IsQueuedForDeletion() &&
+                    control.HasMeta("lan_connect_card_preview")) ?? 0;
             bool blocksCapture = Visible &&
                                  _surface != null &&
                                  GodotObject.IsInstanceValid(_surface) &&
@@ -95,11 +207,13 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
                 _description,
                 _hasLocalVisual,
                 cardVisualCount,
-                _content?.GetChildCount() ?? 0,
+                _content?.GetChildren().Count(child => !child.IsQueuedForDeletion()) ?? 0,
                 new Rect2(new Vector2(Position.X, Position.Y), new Vector2(Size.X, Size.Y)),
                 blocksCapture);
         }
     }
+
+    internal Vector2 CardPreferredSizeForTests => CardSurfacePreferredSize + PopupChromeSize;
 
     public override void _Ready()
     {
@@ -137,6 +251,16 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         Rect2 viewport)
     {
         ArgumentNullException.ThrowIfNull(item);
+        bool canShow = IsInsideTree() &&
+                       item.Status == LanConnectResolvedItemStatus.Resolved &&
+                       item.Preview is LanConnectCardPreviewData or LanConnectHoverTipPreviewData &&
+                       _content != null &&
+                       GodotObject.IsInstanceValid(_content);
+        if (!canShow)
+        {
+            ClosePreview();
+            return;
+        }
         if (Visible)
         {
             // Replacing an open popup must not schedule a native Hide whose delayed
@@ -148,15 +272,6 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         {
             ClosePreview();
         }
-        if (!IsInsideTree() ||
-            item.Status != LanConnectResolvedItemStatus.Resolved ||
-            item.Preview == null ||
-            _content == null ||
-            !GodotObject.IsInstanceValid(_content))
-        {
-            return;
-        }
-
         try
         {
             Vector2 preferredSize = item.Preview switch
@@ -167,11 +282,16 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
             };
             _itemType = item.ItemType;
             Rect2 bounds = ClampBounds(anchor, viewport, preferredSize);
+            ConstrainContentToBounds(bounds.Size);
+            Vector2 popupContentSize = new(
+                Math.Max(1f, bounds.Size.X - PopupChromeSize.X),
+                Math.Max(1f, bounds.Size.Y - PopupChromeSize.Y));
             Popup(new Rect2I(
                 Mathf.RoundToInt(bounds.Position.X),
                 Mathf.RoundToInt(bounds.Position.Y),
-                Mathf.RoundToInt(bounds.Size.X),
-                Mathf.RoundToInt(bounds.Size.Y)));
+                Mathf.RoundToInt(popupContentSize.X),
+                Mathf.RoundToInt(popupContentSize.Y)));
+            ClampActualPopupToViewport(bounds.Position, viewport);
         }
         catch
         {
@@ -214,10 +334,10 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
             Name = SurfaceName,
             MouseFilter = Control.MouseFilterEnum.Stop
         };
-        _surface.AddThemeConstantOverride("margin_left", 12);
-        _surface.AddThemeConstantOverride("margin_top", 12);
-        _surface.AddThemeConstantOverride("margin_right", 12);
-        _surface.AddThemeConstantOverride("margin_bottom", 12);
+        _surface.AddThemeConstantOverride("margin_left", SurfaceMargin);
+        _surface.AddThemeConstantOverride("margin_top", SurfaceMargin);
+        _surface.AddThemeConstantOverride("margin_right", SurfaceMargin);
+        _surface.AddThemeConstantOverride("margin_bottom", SurfaceMargin);
         _surface.AddToGroup(LanConnectGodotItemLinkCapturePorts.ItemPreviewGroupName);
         _surface.Connect(
             Control.SignalName.MouseExited,
@@ -236,15 +356,30 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
     private Vector2 BuildCard(LanConnectCardPreviewData preview)
     {
         Control visual = _cardVisualFactory.Create(preview.Card);
-        if (!GodotObject.IsInstanceValid(visual))
+        bool attached = false;
+        try
         {
-            throw new InvalidOperationException("The local card visual is invalid.");
+            if (!GodotObject.IsInstanceValid(visual))
+            {
+                throw new InvalidOperationException("The local card visual is invalid.");
+            }
+            visual.SetMeta("lan_connect_card_preview", true);
+            visual.MouseFilter = Control.MouseFilterEnum.Stop;
+            visual.CustomMinimumSize = CardVisualMinimumSize;
+            _nodePort.Attach(_content!, visual);
+            attached = true;
+            _cardVisual = visual;
+            _hasLocalVisual = true;
+            return CardSurfacePreferredSize + PopupChromeSize;
         }
-        visual.SetMeta("lan_connect_card_preview", true);
-        visual.MouseFilter = Control.MouseFilterEnum.Stop;
-        _content!.AddChild(visual);
-        _hasLocalVisual = true;
-        return CardPreferredSize;
+        catch
+        {
+            if (!attached && GodotObject.IsInstanceValid(visual))
+            {
+                _nodePort.Release(visual);
+            }
+            throw;
+        }
     }
 
     private Vector2 BuildHoverTip(LanConnectHoverTipPreviewData preview)
@@ -289,7 +424,7 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         _content.AddChild(description);
         _title = preview.Title;
         _description = preview.Description;
-        return HoverTipPreferredSize;
+        return HoverTipSurfacePreferredSize + PopupChromeSize;
     }
 
     private static Rect2 ClampBounds(Rect2 anchor, Rect2 viewport, Vector2 preferredSize)
@@ -309,6 +444,36 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         return new Rect2(new Vector2(x, y), new Vector2(width, height));
     }
 
+    private void ConstrainContentToBounds(Vector2 popupSize)
+    {
+        MinSize = Vector2I.Zero;
+        if (_cardVisual == null || !GodotObject.IsInstanceValid(_cardVisual))
+        {
+            return;
+        }
+        Vector2 available = new(
+            Math.Max(1f, popupSize.X - PopupChromeSize.X - SurfaceMargin * 2),
+            Math.Max(1f, popupSize.Y - PopupChromeSize.Y - SurfaceMargin * 2));
+        _cardVisual.CustomMinimumSize = new Vector2(
+            Math.Min(CardVisualMinimumSize.X, available.X),
+            Math.Min(CardVisualMinimumSize.Y, available.Y));
+    }
+
+    private Vector2 PopupChromeSize =>
+        GetThemeStylebox("panel")?.GetMinimumSize() ?? Vector2.Zero;
+
+    private void ClampActualPopupToViewport(Vector2 preferredPosition, Rect2 viewport)
+    {
+        Vector2 actualSize = new(Size.X, Size.Y);
+        float minX = Mathf.Ceil(viewport.Position.X);
+        float minY = Mathf.Ceil(viewport.Position.Y);
+        float maxX = Math.Max(minX, Mathf.Floor(viewport.End.X - actualSize.X));
+        float maxY = Math.Max(minY, Mathf.Floor(viewport.End.Y - actualSize.Y));
+        Position = new Vector2I(
+            Mathf.RoundToInt(Math.Clamp(preferredPosition.X, minX, maxX)),
+            Mathf.RoundToInt(Math.Clamp(preferredPosition.Y, minY, maxY)));
+    }
+
     private void ClearContent()
     {
         if (_content == null || !GodotObject.IsInstanceValid(_content))
@@ -317,8 +482,10 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         }
         foreach (Node child in _content.GetChildren())
         {
-            _content.RemoveChild(child);
-            child.Free();
+            if (!child.IsQueuedForDeletion())
+            {
+                _nodePort.Release(child);
+            }
         }
     }
 
@@ -328,6 +495,7 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         _title = string.Empty;
         _description = string.Empty;
         _hasLocalVisual = false;
+        _cardVisual = null;
     }
 
     private void OnPopupHide()
