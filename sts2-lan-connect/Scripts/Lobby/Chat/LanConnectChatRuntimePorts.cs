@@ -38,10 +38,16 @@ internal enum LanConnectLobbyRuntimeChatCoordinatorCheckpoint
 internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 {
     private const int LegacyRoomConfirmedMessageLimit = 60;
+    private static readonly TimeSpan RoomDeliveryTimeout = TimeSpan.FromSeconds(10);
     private readonly ILanConnectServerChatClient _client;
+    private readonly Func<DateTimeOffset> _clock;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly object _lifecycleLock = new();
     private readonly object _roomMutationLock = new();
+    private readonly object _roomTimeoutLock = new();
+    private readonly Dictionary<string, CancellationTokenSource> _roomDeliveryTimeouts =
+        new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly CancellationToken _lifetimeToken;
     private readonly TaskCompletionSource _lifetimeCancellationCompleted =
@@ -51,15 +57,20 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
     private TaskCompletionSource? _syncLeasesDrained;
     private Exception? _lifetimeCancellationError;
     private int _syncLeaseCount;
+    private long _roomSessionGeneration;
     private bool _disposed;
 
     internal LanConnectLobbyRuntimeChatCoordinator(
         ILanConnectServerChatClient client,
-        Action<LanConnectLobbyRuntimeChatCoordinatorCheckpoint>? checkpoint = null)
+        Action<LanConnectLobbyRuntimeChatCoordinatorCheckpoint>? checkpoint = null,
+        Func<DateTimeOffset>? clock = null,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _lifetimeToken = _lifetimeCancellation.Token;
         _checkpoint = checkpoint;
+        _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _delay = delay ?? Task.Delay;
         State = new LanConnectDualChatState(client.State);
         _client.StateChanged += OnClientStateChanged;
     }
@@ -98,16 +109,82 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
                 QueuedAt = sentAt
             }),
             LanConnectLobbyRuntimeChatCoordinatorCheckpoint.BeginAfterSyncLease);
+        StartRoomDeliveryTimeout(clientMessageId);
     }
 
-    internal void ApplyRoomAck(LanConnectRoomChatAckEnvelope envelope, string localSenderId) =>
+    internal void ApplyRoomAck(LanConnectRoomChatAckEnvelope envelope, string localSenderId)
+    {
         RunRoomMutation(() => State.Room.Apply(envelope, localSenderId));
+        CancelRoomDeliveryTimeoutIfCompleted(envelope.ClientMessageId);
+    }
 
     internal void ApplyRoomMessage(LanConnectRoomChatMessageEnvelope envelope, string localSenderId) =>
         RunRoomMutation(() => State.Room.Apply(envelope, localSenderId));
 
-    internal void ApplyRoomError(LanConnectRoomChatErrorEnvelope envelope) =>
+    internal void ApplyRoomError(LanConnectRoomChatErrorEnvelope envelope)
+    {
         RunRoomMutation(() => State.Room.Apply(envelope));
+        CancelRoomDeliveryTimeoutIfCompleted(envelope.ClientMessageId);
+    }
+
+    internal async Task RetryRoomAsync(
+        string clientMessageId,
+        Func<LanConnectChatContent, string, CancellationToken, Task> send,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(clientMessageId);
+        ArgumentNullException.ThrowIfNull(send);
+        ThrowIfDisposed();
+        long sessionGeneration = Interlocked.Read(ref _roomSessionGeneration);
+        ServerChatMessageState? message = null;
+        using CancellationTokenSource operationCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeToken);
+        RunRoomMutation(() =>
+        {
+            message = State.Room.Messages.FirstOrDefault(entry =>
+                string.Equals(entry.ClientMessageId, clientMessageId, StringComparison.Ordinal)) ??
+                throw new InvalidOperationException("The room chat message is not available for retry.");
+            if (message.Delivery != ServerChatDeliveryState.DeliveryUnknown ||
+                message.DisconnectedAfterUnknown)
+            {
+                throw new InvalidOperationException("The room chat message ID cannot be reused in this control session.");
+            }
+            State.Room.Queue(new ServerChatPendingMessage
+            {
+                ClientMessageId = clientMessageId,
+                SenderName = message.SenderName,
+                SenderNetId = message.SenderNetId,
+                Content = message.Content,
+                QueuedAt = _clock()
+            });
+            StartRoomDeliveryTimeout(clientMessageId);
+        });
+        if (sessionGeneration != Interlocked.Read(ref _roomSessionGeneration))
+        {
+            CancelRoomDeliveryTimeout(clientMessageId);
+            throw new InvalidOperationException("The room control session changed before retry.");
+        }
+        try
+        {
+            await send(message!.Content, clientMessageId, operationCancellation.Token);
+        }
+        catch (Exception exception)
+        {
+            FailRoomSend(clientMessageId, "send_failed", exception.Message);
+            throw;
+        }
+    }
+
+    internal void MarkRoomDisconnected()
+    {
+        Interlocked.Increment(ref _roomSessionGeneration);
+        CancelAllRoomDeliveryTimeouts();
+        RunRoomMutation(() =>
+        {
+            State.Room.MarkTimedOut(_clock() + RoomDeliveryTimeout);
+            State.Room.MarkDisconnected();
+        });
+    }
 
     internal void ConfirmRoomSend(string clientMessageId)
     {
@@ -116,7 +193,16 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 
     internal void FailRoomSend(string clientMessageId, string code, string message)
     {
-        RunRoomMutation(() => State.Room.MarkFailed(clientMessageId, code, message));
+        CancelRoomDeliveryTimeout(clientMessageId);
+        RunRoomMutation(() =>
+        {
+            ServerChatMessageState? current = State.Room.Messages.FirstOrDefault(entry =>
+                string.Equals(entry.ClientMessageId, clientMessageId, StringComparison.Ordinal));
+            if (current?.Delivery == ServerChatDeliveryState.Pending)
+            {
+                State.Room.MarkFailed(clientMessageId, code, message);
+            }
+        });
     }
 
     internal void AppendRoomConfirmed(
@@ -157,6 +243,8 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 
     internal void EnterRoom(string roomId)
     {
+        CancelAllRoomDeliveryTimeouts();
+        Interlocked.Increment(ref _roomSessionGeneration);
         RunRoomMutation(
             () => State.EnterRoom(roomId),
             LanConnectLobbyRuntimeChatCoordinatorCheckpoint.EnterBeforeRoomMutationLock);
@@ -164,6 +252,8 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 
     internal void LeaveRoom()
     {
+        CancelAllRoomDeliveryTimeouts();
+        Interlocked.Increment(ref _roomSessionGeneration);
         RunRoomMutation(State.LeaveRoom);
     }
 
@@ -240,6 +330,7 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 
         if (beginCancellation)
         {
+            CancelAllRoomDeliveryTimeouts();
             try
             {
                 _lifetimeCancellation.Cancel();
@@ -345,6 +436,91 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         finally
         {
             ReleaseSyncLease();
+        }
+    }
+
+    private void StartRoomDeliveryTimeout(string clientMessageId)
+    {
+        CancellationTokenSource timeout =
+            CancellationTokenSource.CreateLinkedTokenSource(_lifetimeToken);
+        lock (_roomTimeoutLock)
+        {
+            if (_roomDeliveryTimeouts.Remove(clientMessageId, out CancellationTokenSource? prior))
+            {
+                prior.Cancel();
+            }
+            _roomDeliveryTimeouts[clientMessageId] = timeout;
+        }
+        long sessionGeneration = Interlocked.Read(ref _roomSessionGeneration);
+        _ = ObserveRoomDeliveryTimeoutAsync(clientMessageId, sessionGeneration, timeout);
+    }
+
+    private async Task ObserveRoomDeliveryTimeoutAsync(
+        string clientMessageId,
+        long sessionGeneration,
+        CancellationTokenSource timeout)
+    {
+        try
+        {
+            await _delay(RoomDeliveryTimeout, timeout.Token);
+            timeout.Token.ThrowIfCancellationRequested();
+            if (sessionGeneration != Interlocked.Read(ref _roomSessionGeneration))
+            {
+                return;
+            }
+            RunRoomMutation(() => State.Room.MarkTimedOut(_clock()));
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        finally
+        {
+            lock (_roomTimeoutLock)
+            {
+                if (_roomDeliveryTimeouts.TryGetValue(clientMessageId, out CancellationTokenSource? current) &&
+                    ReferenceEquals(current, timeout))
+                {
+                    _roomDeliveryTimeouts.Remove(clientMessageId);
+                }
+            }
+            timeout.Dispose();
+        }
+    }
+
+    private void CancelRoomDeliveryTimeout(string clientMessageId)
+    {
+        CancellationTokenSource? timeout = null;
+        lock (_roomTimeoutLock)
+        {
+            _roomDeliveryTimeouts.Remove(clientMessageId, out timeout);
+        }
+        timeout?.Cancel();
+    }
+
+    private void CancelRoomDeliveryTimeoutIfCompleted(string clientMessageId)
+    {
+        ServerChatMessageState? message = State.Room.Messages.FirstOrDefault(entry =>
+            string.Equals(entry.ClientMessageId, clientMessageId, StringComparison.Ordinal));
+        if (message?.Delivery is ServerChatDeliveryState.Confirmed or ServerChatDeliveryState.Failed)
+        {
+            CancelRoomDeliveryTimeout(clientMessageId);
+        }
+    }
+
+    private void CancelAllRoomDeliveryTimeouts()
+    {
+        List<CancellationTokenSource> timeouts;
+        lock (_roomTimeoutLock)
+        {
+            timeouts = _roomDeliveryTimeouts.Values.ToList();
+            _roomDeliveryTimeouts.Clear();
+        }
+        foreach (CancellationTokenSource timeout in timeouts)
+        {
+            timeout.Cancel();
         }
     }
 

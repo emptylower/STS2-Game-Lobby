@@ -60,9 +60,13 @@ internal sealed class LobbyControlClient : IAsyncDisposable
 
     internal event Action<LanConnectRoomChatErrorEnvelope>? RoomChatErrorReceived;
 
+    internal event Action? Disconnected;
+
     internal LanConnectRoomChatReadyEnvelope? LatestRoomChatReady { get; private set; }
 
     internal void HandlePayloadForTests(string payload) => OnPayloadReceived(payload);
+
+    internal void HandleTransportClosedForTests() => OnTransportClosed();
 
     public async Task ConnectHostAsync(Uri controlUri, string roomId, string controlChannelId, string playerName, CancellationToken cancellationToken)
     {
@@ -375,13 +379,20 @@ internal sealed class LobbyControlClient : IAsyncDisposable
 
     private void OnTransportFaulted(Exception exception)
     {
-        Interlocked.Exchange(ref _lifecycleState, Terminal);
+        int previousState = Interlocked.Exchange(ref _lifecycleState, Terminal);
         TryWarn($"sts2_lan_connect lobby control channel receive loop stopped: {exception.Message}");
+        if (previousState == Connected)
+        {
+            Disconnected?.Invoke();
+        }
     }
 
     private void OnTransportClosed()
     {
-        Interlocked.Exchange(ref _lifecycleState, Terminal);
+        if (Interlocked.Exchange(ref _lifecycleState, Terminal) == Connected)
+        {
+            Disconnected?.Invoke();
+        }
     }
 
     private void TryWarn(string message)

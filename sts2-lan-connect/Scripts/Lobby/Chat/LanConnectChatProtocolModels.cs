@@ -618,6 +618,52 @@ internal sealed record LanConnectServerChatStateEnvelope
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record LanConnectServerChatSnapshotBeginEnvelope
+{
+    [JsonRequired]
+    public string Type { get; init; } = "chat_snapshot_begin";
+    [JsonRequired]
+    public int ProtocolVersion { get; init; } = 1;
+    [JsonRequired]
+    public string SnapshotId { get; init; } = string.Empty;
+    [JsonRequired]
+    public string InstanceId { get; init; } = string.Empty;
+    [JsonRequired]
+    public int HistoryEpoch { get; init; }
+    [JsonRequired]
+    public int TotalMessages { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record LanConnectServerChatSnapshotChunkEnvelope
+{
+    [JsonRequired]
+    public string Type { get; init; } = "chat_snapshot_chunk";
+    [JsonRequired]
+    public int ProtocolVersion { get; init; } = 1;
+    [JsonRequired]
+    public string SnapshotId { get; init; } = string.Empty;
+    [JsonRequired]
+    public int ChunkIndex { get; init; }
+    [JsonRequired]
+    public IReadOnlyList<LanConnectServerChatMessagePayload> Messages { get; init; } =
+        Array.Empty<LanConnectServerChatMessagePayload>();
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record LanConnectServerChatSnapshotEndEnvelope
+{
+    [JsonRequired]
+    public string Type { get; init; } = "chat_snapshot_end";
+    [JsonRequired]
+    public int ProtocolVersion { get; init; } = 1;
+    [JsonRequired]
+    public string SnapshotId { get; init; } = string.Empty;
+    [JsonRequired]
+    public int HistoryEpoch { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record LanConnectServerChatSendEnvelope
 {
     public string Type { get; init; } = "chat_send";

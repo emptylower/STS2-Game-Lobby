@@ -292,6 +292,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
                 GetChatCoordinator().ApplyRoomError(envelope);
             }
         };
+        BindRoomChatDisconnect(
+            session.ControlClient,
+            GetChatCoordinator(),
+            () => ReferenceEquals(_activeSession, session) && !session.IsClosing);
         _activeSession = session;
         EnterChatRoom(registration.RoomId);
         _timeUntilHeartbeat = 0d;
@@ -360,6 +364,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
                 GetChatCoordinator().ApplyRoomError(envelope);
             }
         };
+        BindRoomChatDisconnect(
+            session.ControlClient,
+            GetChatCoordinator(),
+            () => ReferenceEquals(_activeClientSession, session) && !session.IsClosing);
         _activeClientSession = session;
         EnterChatRoom(joinResponse.Room.RoomId);
         LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, joinResponse.Room.MaxPlayers, "attach_joined_client");
@@ -781,6 +789,78 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         string clientMessageId,
         CancellationToken cancellationToken = default) =>
         GetChatCoordinator().RetryServerAsync(clientMessageId, cancellationToken);
+
+    internal Task RetryRoomChatAsync(
+        string clientMessageId,
+        CancellationToken cancellationToken = default)
+    {
+        LanConnectLobbyRuntimeChatCoordinator coordinator = GetChatCoordinator();
+        LobbyControlClient controlClient = _activeSession?.ControlClient ??
+            _activeClientSession?.ControlClient ??
+            throw new InvalidOperationException("No active room control channel is available.");
+        string roomId = _activeSession?.RoomId ?? _activeClientSession?.RoomId ?? string.Empty;
+        string roomSessionId = _activeSession?.RoomSessionId ?? _activeClientSession?.RoomSessionId ?? string.Empty;
+        if (string.IsNullOrEmpty(roomSessionId))
+        {
+            roomSessionId = controlClient.LatestRoomChatReady?.RoomSessionId ?? string.Empty;
+        }
+        return RetryRoomChatAsync(
+            coordinator,
+            controlClient,
+            roomId,
+            roomSessionId,
+            clientMessageId,
+            cancellationToken);
+    }
+
+    internal static Task RetryRoomChatAsync(
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        LobbyControlClient controlClient,
+        string roomId,
+        string roomSessionId,
+        string clientMessageId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(controlClient);
+        LanConnectRoomChatReadyEnvelope ready = controlClient.LatestRoomChatReady ??
+            throw new InvalidOperationException("Room rich chat ready has not been received.");
+        if (!string.Equals(ready.RoomId, roomId, StringComparison.Ordinal) ||
+            !string.Equals(ready.RoomSessionId, roomSessionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Room rich chat ready does not match the active room session.");
+        }
+
+        return coordinator.RetryRoomAsync(
+            clientMessageId,
+            (content, retryClientMessageId, token) => controlClient.SendRoomChatV2Async(
+                new LanConnectRoomChatV2Envelope
+                {
+                    ClientMessageId = retryClientMessageId,
+                    RoomId = roomId,
+                    RoomSessionId = roomSessionId,
+                    Content = content
+                },
+                token),
+            cancellationToken);
+    }
+
+    internal static void BindRoomChatDisconnect(
+        LobbyControlClient controlClient,
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        Func<bool> shouldMarkDisconnected)
+    {
+        ArgumentNullException.ThrowIfNull(controlClient);
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(shouldMarkDisconnected);
+        controlClient.Disconnected += () =>
+        {
+            if (shouldMarkDisconnected())
+            {
+                coordinator.MarkRoomDisconnected();
+            }
+        };
+    }
 
     internal Task StopServerChatAsync(CancellationToken cancellationToken = default) =>
         GetChatCoordinator().StopServerAsync(cancellationToken);

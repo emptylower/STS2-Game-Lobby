@@ -62,6 +62,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private readonly LanConnectLucideIconLoader _icons;
     private readonly Func<LanConnectItemRun, LanConnectResolvedItem> _resolveItem;
+    private readonly Func<LanConnectItemResolverContext>? _resolverContextProvider;
+    private LanConnectItemResolverContext _resolverContext;
+    private bool _resolverContextInitialized;
     private LanConnectChatChannelState? _state;
     private Func<string, Task>? _send;
     private Func<LanConnectChatContent, string, Task>? _sendContent;
@@ -111,12 +114,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     internal LanConnectBasicChatPanel()
         : this(
             LanConnectChatUiComposition.Icons,
-            CreateProductionItemResolver())
+            new LanConnectItemModelResolver(),
+            CreateProductionResolverContextProvider())
     {
     }
 
     internal LanConnectBasicChatPanel(LanConnectLucideIconLoader icons)
-        : this(icons, CreateProductionItemResolver())
+        : this(
+            icons,
+            new LanConnectItemModelResolver(),
+            CreateProductionResolverContextProvider())
     {
     }
 
@@ -126,6 +133,21 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     {
         _icons = icons ?? throw new ArgumentNullException(nameof(icons));
         _resolveItem = resolveItem ?? throw new ArgumentNullException(nameof(resolveItem));
+    }
+
+    internal LanConnectBasicChatPanel(
+        LanConnectLucideIconLoader icons,
+        LanConnectItemModelResolver resolver,
+        Func<LanConnectItemResolverContext> resolverContextProvider)
+    {
+        _icons = icons ?? throw new ArgumentNullException(nameof(icons));
+        ArgumentNullException.ThrowIfNull(resolver);
+        _resolverContextProvider = resolverContextProvider ??
+            throw new ArgumentNullException(nameof(resolverContextProvider));
+        _resolveItem = run => resolver.Resolve(
+            run,
+            _resolverContext.Locale,
+            _resolverContext.ModFingerprint);
     }
 
     internal LanConnectChatChannelState? State => _state;
@@ -233,7 +255,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             ResetForContextChange();
         }
-        if (_state != null && _state.Revision != _renderedRevision)
+        bool resolverContextChanged = UpdateResolverContext();
+        if (_state != null &&
+            (resolverContextChanged || _state.Revision != _renderedRevision))
         {
             Refresh();
         }
@@ -606,6 +630,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             return;
         }
+
+        UpdateResolverContext();
 
         _draftEditor.Bind(
             _state.RichDraft,
@@ -1196,10 +1222,35 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         UpdateAvailability();
     }
 
-    private static Func<LanConnectItemRun, LanConnectResolvedItem> CreateProductionItemResolver()
+    private static Func<LanConnectItemResolverContext> CreateProductionResolverContextProvider()
     {
-        LanConnectItemModelResolver resolver = new();
-        return run => resolver.Resolve(run, locale: string.Empty, modFingerprint: string.Empty);
+        LanConnectProductionItemResolverContextProvider provider = new();
+        return () => provider.Current;
+    }
+
+    private bool UpdateResolverContext()
+    {
+        if (_resolverContextProvider == null)
+        {
+            return false;
+        }
+
+        LanConnectItemResolverContext next = _resolverContextProvider();
+        if (_resolverContextInitialized && next == _resolverContext)
+        {
+            return false;
+        }
+
+        bool changed = _resolverContextInitialized;
+        _resolverContext = next;
+        _resolverContextInitialized = true;
+        if (changed)
+        {
+            _itemPreview?.Invalidate(LanConnectItemPreviewInvalidation.ContextCleared);
+            _renderedRevision = -1;
+            _renderedMessageFingerprint = null;
+        }
+        return changed;
     }
 
     private static bool NeverBlocking() => false;
@@ -1534,6 +1585,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         IReadOnlyList<ServerChatMessageState> messages)
     {
         StringBuilder builder = new();
+        AppendFingerprint(builder, _resolverContext.Locale);
+        AppendFingerprint(builder, _resolverContext.ModFingerprint);
         for (int index = 0; index < messages.Count; index++)
         {
             ServerChatMessageState message = messages[index];

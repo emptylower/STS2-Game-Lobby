@@ -113,6 +113,46 @@ public sealed class LanConnectRichMessageRenderingTests
         AssertThat(room.RichDraft.Runs.Count).IsEqual(2);
     }
 
+    [TestCase]
+    public async Task Resolver_context_locale_and_mod_changes_miss_cache_rerender_and_close_preview()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.AppendConfirmedContentForTests(
+            "context-message",
+            "Silent",
+            new LanConnectChatContent(1,
+                [new LanConnectItemRefSegment("potion", "MegaCrit.FirePotion")]),
+            sequence: 1,
+            isLocal: false);
+        ContextModelDbPort port = new() { Title = "Potion EN" };
+        LanConnectItemModelResolver resolver = new(port);
+        LanConnectItemResolverContext context = new("en-US", "mods-a");
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+            LanConnectChatUiComposition.Icons,
+            resolver,
+            () => context))!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        AssertThat(RunText(FindNode<Control>(panel, "ChatMessageRun0"))).IsEqual("Potion EN");
+        FindNode<Control>(panel, "ChatMessageRun0").EmitSignal(Control.SignalName.MouseEntered);
+        await runner.AwaitIdleFrame();
+        AssertThat(panel.ItemPreviewForTests.TestState.Visible).IsTrue();
+
+        port.Title = "药水 CN";
+        context = new LanConnectItemResolverContext("zh-CN", "mods-a");
+        await runner.AwaitIdleFrame();
+        AssertThat(RunText(FindNode<Control>(panel, "ChatMessageRun0"))).IsEqual("药水 CN");
+        AssertThat(panel.ItemPreviewForTests.TestState.Visible).IsFalse();
+
+        port.Title = "Potion Mod B";
+        context = new LanConnectItemResolverContext("zh-CN", "mods-b");
+        await runner.AwaitIdleFrame();
+        AssertThat(RunText(FindNode<Control>(panel, "ChatMessageRun0"))).IsEqual("Potion Mod B");
+        AssertThat(port.PotionLookups).IsEqual(3);
+    }
+
     private static LanConnectChatContent Content() => new(1,
     [
         new LanConnectTextSegment("before "),
@@ -187,4 +227,26 @@ public sealed class LanConnectRichMessageRenderingTests
 
     private static T FindNode<T>(Node root, string name) where T : Node =>
         (T)root.FindChild(name, recursive: true, owned: false);
+
+    private sealed class ContextModelDbPort : ILanConnectModelDbPort
+    {
+        internal string Title { get; set; } = string.Empty;
+        internal int PotionLookups { get; private set; }
+        public object DeserializeModelId(string value) => value;
+        public bool TryGetCard(object id, out object model) { model = null!; return false; }
+        public bool TryGetRelic(object id, out object model) { model = null!; return false; }
+        public bool TryGetPotion(object id, out object model)
+        {
+            PotionLookups++;
+            model = id;
+            return true;
+        }
+        public string GetLocalizedTitle(object model) => Title;
+        public int GetSupportedCardUpgradeLevel(object card) => 0;
+        public object CreateCardPreviewCopy(object card, int upgradeLevel) => card;
+        public LanConnectHoverTipPreviewData CreateRelicPreviewData(object relic) =>
+            new("relic", Title, "Description", null);
+        public LanConnectHoverTipPreviewData CreatePotionPreviewData(object potion) =>
+            new("potion", Title, "Description", null);
+    }
 }

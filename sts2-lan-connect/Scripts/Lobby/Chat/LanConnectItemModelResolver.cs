@@ -2,8 +2,48 @@ using Godot;
 using MegaCrit.Sts2.Core.HoverTips;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Exceptions;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Sts2LanConnect.Scripts;
+
+internal readonly record struct LanConnectItemResolverContext(
+    string Locale,
+    string ModFingerprint);
+
+internal sealed class LanConnectProductionItemResolverContextProvider
+{
+    private readonly Func<string> _locale;
+    private readonly string _modFingerprint;
+
+    internal LanConnectProductionItemResolverContextProvider()
+        : this(
+            () => TranslationServer.GetLocale(),
+            () => LanConnectBuildInfo.GetModList())
+    {
+    }
+
+    internal LanConnectProductionItemResolverContextProvider(
+        Func<string> locale,
+        Func<IReadOnlyList<string>> loadedMods)
+    {
+        _locale = locale ?? throw new ArgumentNullException(nameof(locale));
+        ArgumentNullException.ThrowIfNull(loadedMods);
+        string stableModList = string.Join(
+            "\u001f",
+            loadedMods()
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .Select(static value => value.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(static value => value, StringComparer.Ordinal));
+        _modFingerprint = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(stableModList)));
+    }
+
+    internal LanConnectItemResolverContext Current => new(
+        _locale() ?? string.Empty,
+        _modFingerprint);
+}
 
 internal interface ILanConnectModelDbPort
 {

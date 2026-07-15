@@ -93,6 +93,376 @@ public sealed class LanConnectRichChannelSubmissionTests
     }
 
     [Fact]
+    public async Task Invalid_server_ack_does_not_cancel_delivery_timeout()
+    {
+        FakeApi api = new();
+        FakeTransport transport = new();
+        RoomDelay delay = new();
+        await using LanConnectServerChatClient client = new(
+            _ => api,
+            () => transport,
+            delay: delay.DelayAsync);
+        await ConnectReadyAsync(
+            client,
+            transport,
+            new LanConnectChatFeatureVersions(1, 1, 0, 0));
+        LanConnectChatContent emoji = new(1, [new LanConnectEmojiSegment("heart")]);
+        await client.SendAsync(emoji, "server-client-invalid-ack");
+        CancellationToken deliveryTimeout = Assert.Single(delay.Tokens);
+
+        transport.Emit(JsonSerializer.Serialize(new LanConnectServerChatAckEnvelope
+        {
+            ClientMessageId = "server-client-invalid-ack",
+            Message = ServerMessage(
+                "server-invalid-ack",
+                new LanConnectChatContent(1,
+                    [new LanConnectItemRefSegment("relic", "MegaCrit.Anchor")]))
+        }, LanConnectJson.Options));
+
+        Assert.Equal(ServerChatDeliveryState.Pending, Assert.Single(client.State.Messages).Delivery);
+        Assert.False(deliveryTimeout.IsCancellationRequested);
+
+        transport.Emit(JsonSerializer.Serialize(new LanConnectServerChatAckEnvelope
+        {
+            ClientMessageId = "server-client-invalid-ack",
+            Message = ServerMessage("server-valid-ack", emoji)
+        }, LanConnectJson.Options));
+        Assert.Equal(ServerChatDeliveryState.Confirmed, Assert.Single(client.State.Messages).Delivery);
+        Assert.True(deliveryTimeout.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task Rich_snapshot_chunk_preserves_ordered_content_and_server_payload_metadata()
+    {
+        FakeApi api = new();
+        FakeTransport transport = new();
+        await using LanConnectServerChatClient client = new(_ => api, () => transport);
+        await ConnectReadyAsync(client, transport);
+        transport.Emit("""{"type":"chat_snapshot_begin","protocolVersion":1,"snapshotId":"rich-snapshot","instanceId":"instance-2","historyEpoch":2,"totalMessages":1}""");
+        transport.Emit("""{"type":"chat_snapshot_chunk","protocolVersion":1,"snapshotId":"rich-snapshot","chunkIndex":0,"messages":[{"messageId":"snapshot-rich-1","senderId":"net-2","senderName":"Silent","content":{"formatVersion":1,"segments":[{"kind":"text","text":"before "},{"kind":"emoji","emojiId":"heart"},{"kind":"item_ref","itemType":"relic","modelId":"MegaCrit.Anchor"}]},"plainTextFallback":"before [Emoji][Relic]","sentAt":"2026-07-12T12:00:00Z"}]}""");
+        transport.Emit("""{"type":"chat_snapshot_end","protocolVersion":1,"snapshotId":"rich-snapshot","historyEpoch":2}""");
+
+        ServerChatMessageState message = Assert.Single(client.State.Messages);
+        Assert.Equal("snapshot-rich-1", message.MessageId);
+        Assert.Collection(
+            message.Content.Segments,
+            segment => Assert.Equal(new LanConnectTextSegment("before "), segment),
+            segment => Assert.Equal(new LanConnectEmojiSegment("heart"), segment),
+            segment => Assert.Equal(new LanConnectItemRefSegment("relic", "MegaCrit.Anchor"), segment));
+        Assert.NotNull(message.ServerPayload);
+        Assert.Equal("before [Emoji][Relic]", message.ServerPayload!.PlainTextFallback);
+    }
+
+    [Fact]
+    public async Task Unknown_snapshot_segment_rejects_only_active_snapshot_and_requires_reconnect()
+    {
+        FakeApi api = new();
+        FakeTransport transport = new();
+        await using LanConnectServerChatClient client = new(_ => api, () => transport);
+        await ConnectReadyAsync(client, transport);
+        transport.Emit(JsonSerializer.Serialize(new LanConnectServerChatMessageEnvelope
+        {
+            Message = ServerMessage(
+                "history-before-corruption",
+                new LanConnectChatContent(1, [new LanConnectTextSegment("retained")]))
+        }, LanConnectJson.Options));
+
+        transport.Emit("""{"type":"chat_snapshot_begin","protocolVersion":1,"snapshotId":"corrupt","instanceId":"instance-1","historyEpoch":1,"totalMessages":1}""");
+        transport.Emit("""{"type":"chat_snapshot_chunk","protocolVersion":1,"snapshotId":"corrupt","chunkIndex":0,"messages":[{"messageId":"bad","senderId":"net-2","senderName":"Silent","content":{"formatVersion":1,"segments":[{"kind":"future_kind"}]},"plainTextFallback":"bad","sentAt":"2026-07-12T12:00:00Z"}]}""");
+
+        ServerChatMessageState retained = Assert.Single(client.State.Messages);
+        Assert.Equal("history-before-corruption", retained.MessageId);
+        Assert.Equal("retained", retained.Text);
+        Assert.False(client.CanSend);
+    }
+
+    [Theory]
+    [InlineData("server")]
+    [InlineData("room")]
+    public void Negotiated_item_zero_rejects_item_inbound_without_mutation_but_accepts_emoji(string channelName)
+    {
+        LanConnectChatChannel channel = channelName == "server"
+            ? LanConnectChatChannel.Server
+            : LanConnectChatChannel.Room;
+        LanConnectChatChannelState state = new(channel);
+        state.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 0, 0));
+        long revision = state.Revision;
+        LanConnectChatContent itemContent = new(1,
+            [new LanConnectItemRefSegment("relic", "MegaCrit.Anchor")]);
+        if (channel == LanConnectChatChannel.Server)
+        {
+            state.Apply(new LanConnectServerChatMessageEnvelope
+            {
+                Message = ServerMessage("item-rejected", itemContent)
+            }, "local");
+        }
+        else
+        {
+            state.Apply(new LanConnectRoomChatMessageEnvelope
+            {
+                Message = RoomMessage("item-rejected", itemContent)
+            }, "local");
+        }
+
+        Assert.Equal(revision, state.Revision);
+        Assert.Empty(state.Messages);
+        LanConnectChatContent emojiContent = new(1, [new LanConnectEmojiSegment("heart")]);
+        if (channel == LanConnectChatChannel.Server)
+        {
+            state.Apply(new LanConnectServerChatMessageEnvelope
+            {
+                Message = ServerMessage("emoji-accepted", emojiContent)
+            }, "local");
+        }
+        else
+        {
+            state.Apply(new LanConnectRoomChatMessageEnvelope
+            {
+                Message = RoomMessage("emoji-accepted", emojiContent)
+            }, "local");
+        }
+        Assert.Equal("emoji-accepted", Assert.Single(state.Messages).MessageId);
+    }
+
+    [Fact]
+    public async Task Room_v2_timeout_retry_and_disconnect_preserve_session_scoped_content()
+    {
+        CoordinatorClient server = new();
+        MutableRoomClock clock = new();
+        RoomDelay delay = new();
+        await using LanConnectLobbyRuntimeChatCoordinator coordinator = new(
+            server,
+            clock: () => clock.Now,
+            delay: delay.DelayAsync);
+        coordinator.EnterRoom("room-1");
+        coordinator.SetRoomRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 0));
+        LanConnectChatContent content = RichContent();
+        coordinator.BeginRoomPending(
+            "room-client-1",
+            "Ironclad",
+            "net-1",
+            content,
+            clock.Now);
+
+        Assert.Equal([TimeSpan.FromSeconds(10)], delay.Durations);
+        clock.Now += TimeSpan.FromSeconds(10);
+        delay.CompleteNext();
+        await WaitUntilAsync(() => coordinator.State.Room.Messages.Single().Delivery ==
+            ServerChatDeliveryState.DeliveryUnknown);
+
+        List<(string Id, LanConnectChatContent Content)> retries = [];
+        await coordinator.RetryRoomAsync(
+            "room-client-1",
+            (retryContent, retryId, _) =>
+            {
+                retries.Add((retryId, retryContent));
+                return Task.CompletedTask;
+            });
+        Assert.Equal("room-client-1", Assert.Single(retries).Id);
+        AssertContentEqual(content, retries[0].Content);
+        Assert.Equal(ServerChatDeliveryState.Pending, coordinator.State.Room.Messages.Single().Delivery);
+
+        coordinator.MarkRoomDisconnected();
+        ServerChatMessageState disconnected = Assert.Single(coordinator.State.Room.Messages);
+        Assert.Equal(ServerChatDeliveryState.DeliveryUnknown, disconnected.Delivery);
+        Assert.True(disconnected.DisconnectedAfterUnknown);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.RetryRoomAsync(
+            "room-client-1",
+            (_, _, _) => Task.CompletedTask));
+    }
+
+    [Fact]
+    public async Task Room_disconnect_during_retry_failure_preserves_delivery_unknown_state()
+    {
+        CoordinatorClient server = new();
+        MutableRoomClock clock = new();
+        RoomDelay delay = new();
+        await using LanConnectLobbyRuntimeChatCoordinator coordinator = new(
+            server,
+            clock: () => clock.Now,
+            delay: delay.DelayAsync);
+        coordinator.EnterRoom("room-1");
+        coordinator.BeginRoomPending(
+            "disconnect-during-retry",
+            "Ironclad",
+            "net-1",
+            RichContent(),
+            clock.Now);
+        clock.Now += TimeSpan.FromSeconds(10);
+        delay.CompleteNext();
+        await WaitUntilAsync(() => coordinator.State.Room.Messages.Single().Delivery ==
+            ServerChatDeliveryState.DeliveryUnknown);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.RetryRoomAsync(
+            "disconnect-during-retry",
+            (_, _, _) =>
+            {
+                coordinator.MarkRoomDisconnected();
+                throw new InvalidOperationException("transport closed");
+            }));
+
+        ServerChatMessageState message = Assert.Single(coordinator.State.Room.Messages);
+        Assert.Equal(ServerChatDeliveryState.DeliveryUnknown, message.Delivery);
+        Assert.True(message.DisconnectedAfterUnknown);
+    }
+
+    [Fact]
+    public async Task Room_timeout_registry_cancels_only_on_terminal_evidence_leave_and_dispose()
+    {
+        CoordinatorClient server = new();
+        MutableRoomClock clock = new();
+        RoomDelay delay = new();
+        LanConnectLobbyRuntimeChatCoordinator coordinator = new(
+            server,
+            clock: () => clock.Now,
+            delay: delay.DelayAsync);
+        coordinator.EnterRoom("room-1");
+        coordinator.SetRoomRichFeatures(new LanConnectChatFeatureVersions(1, 1, 0, 0));
+        LanConnectChatContent emoji = new(1, [new LanConnectEmojiSegment("heart")]);
+
+        coordinator.BeginRoomPending("room-ack", "Ironclad", "net-1", emoji, clock.Now);
+        CancellationToken ackTimeout = delay.Tokens[^1];
+        coordinator.ApplyRoomAck(new LanConnectRoomChatAckEnvelope
+        {
+            ClientMessageId = "room-ack",
+            Message = RoomMessage(
+                "invalid-room-ack",
+                new LanConnectChatContent(1,
+                    [new LanConnectItemRefSegment("relic", "MegaCrit.Anchor")]))
+        }, "net-1");
+        Assert.Equal(ServerChatDeliveryState.Pending, coordinator.State.Room.Messages.Single().Delivery);
+        Assert.False(ackTimeout.IsCancellationRequested);
+        coordinator.ApplyRoomAck(new LanConnectRoomChatAckEnvelope
+        {
+            ClientMessageId = "room-ack",
+            Message = RoomMessage("valid-room-ack", emoji)
+        }, "net-1");
+        Assert.True(ackTimeout.IsCancellationRequested);
+
+        coordinator.BeginRoomPending("room-error", "Ironclad", "net-1", emoji, clock.Now);
+        CancellationToken errorTimeout = delay.Tokens[^1];
+        coordinator.ApplyRoomError(new LanConnectRoomChatErrorEnvelope
+        {
+            ClientMessageId = "room-error",
+            Code = "invalid_content",
+            Message = "rejected"
+        });
+        Assert.True(errorTimeout.IsCancellationRequested);
+
+        coordinator.BeginRoomPending("room-leave", "Ironclad", "net-1", emoji, clock.Now);
+        CancellationToken leaveTimeout = delay.Tokens[^1];
+        coordinator.LeaveRoom();
+        Assert.True(leaveTimeout.IsCancellationRequested);
+
+        coordinator.EnterRoom("room-2");
+        coordinator.BeginRoomPending("room-dispose", "Ironclad", "net-1", emoji, clock.Now);
+        CancellationToken disposeTimeout = delay.Tokens[^1];
+        await coordinator.DisposeAsync();
+        Assert.True(disposeTimeout.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task Runtime_room_retry_reuses_exact_session_id_and_content_and_native_close_marks_unknown()
+    {
+        CoordinatorClient server = new();
+        MutableRoomClock clock = new();
+        RoomDelay delay = new();
+        await using LanConnectLobbyRuntimeChatCoordinator coordinator = new(
+            server,
+            clock: () => clock.Now,
+            delay: delay.DelayAsync);
+        coordinator.EnterRoom("room-1");
+        LanConnectChatContent content = RichContent();
+        coordinator.BeginRoomPending("runtime-retry", "Ironclad", "net-1", content, clock.Now);
+        clock.Now += TimeSpan.FromSeconds(10);
+        delay.CompleteNext();
+        await WaitUntilAsync(() => coordinator.State.Room.Messages.Single().Delivery ==
+            ServerChatDeliveryState.DeliveryUnknown);
+
+        StubWebSocket socket = new();
+        await using LobbyControlClient control = new(socket);
+        await control.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            "session-1",
+            CancellationToken.None);
+        control.HandlePayloadForTests("""{"type":"room_chat_ready","protocolVersion":1,"roomId":"room-1","roomSessionId":"session-1","enabledFeatures":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":0}}""");
+        LanConnectLobbyRuntime.BindRoomChatDisconnect(control, coordinator, () => true);
+
+        await LanConnectLobbyRuntime.RetryRoomChatAsync(
+            coordinator,
+            control,
+            "room-1",
+            "session-1",
+            "runtime-retry");
+
+        LanConnectRoomChatV2Envelope retry = JsonSerializer.Deserialize<LanConnectRoomChatV2Envelope>(
+            socket.SentPayloads[^1],
+            LanConnectJson.Options)!;
+        Assert.Equal("runtime-retry", retry.ClientMessageId);
+        Assert.Equal("room-1", retry.RoomId);
+        Assert.Equal("session-1", retry.RoomSessionId);
+        AssertContentEqual(content, retry.Content);
+
+        control.HandleTransportClosedForTests();
+        ServerChatMessageState disconnected = Assert.Single(coordinator.State.Room.Messages);
+        Assert.Equal(ServerChatDeliveryState.DeliveryUnknown, disconnected.Delivery);
+        Assert.True(disconnected.DisconnectedAfterUnknown);
+        Assert.True(delay.Tokens[^1].IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task Room_self_broadcast_does_not_cancel_pending_timeout_without_ack()
+    {
+        CoordinatorClient server = new();
+        MutableRoomClock clock = new();
+        RoomDelay delay = new();
+        await using LanConnectLobbyRuntimeChatCoordinator coordinator = new(
+            server,
+            clock: () => clock.Now,
+            delay: delay.DelayAsync);
+        coordinator.EnterRoom("room-1");
+        LanConnectChatContent content = RichContent();
+        coordinator.BeginRoomPending("self-broadcast-client", "Ironclad", "net-1", content, clock.Now);
+        CancellationToken timeout = Assert.Single(delay.Tokens);
+
+        coordinator.ApplyRoomMessage(new LanConnectRoomChatMessageEnvelope
+        {
+            Message = RoomMessage("self-broadcast-server", content) with
+            {
+                SenderId = "net-1"
+            }
+        }, "net-1");
+
+        Assert.False(timeout.IsCancellationRequested);
+        Assert.Contains(coordinator.State.Room.Messages, message =>
+            message.ClientMessageId == "self-broadcast-client" &&
+            message.Delivery == ServerChatDeliveryState.Pending);
+    }
+
+    [Fact]
+    public void Production_resolver_context_tracks_locale_and_stabilizes_loaded_mod_fingerprint()
+    {
+        string locale = "en-US";
+        List<string> mods = ["Z Mod", "A Mod", "A Mod"];
+        LanConnectProductionItemResolverContextProvider provider = new(
+            () => locale,
+            () => mods);
+        LanConnectItemResolverContext first = provider.Current;
+
+        locale = "zh-CN";
+        mods.Add("Late Mod");
+        LanConnectItemResolverContext second = provider.Current;
+
+        Assert.Equal("en-US", first.Locale);
+        Assert.Equal("zh-CN", second.Locale);
+        Assert.Equal(first.ModFingerprint, second.ModFingerprint);
+        Assert.NotEmpty(first.ModFingerprint);
+    }
+
+    [Fact]
     public void Canonical_ack_and_self_broadcast_merge_one_structured_message()
     {
         LanConnectChatChannelState state = EnabledState(LanConnectChatChannel.Server);
@@ -271,6 +641,29 @@ public sealed class LanConnectRichChannelSubmissionTests
         SentAt = "2026-07-12T12:00:00Z"
     };
 
+    private static LanConnectRoomChatMessagePayload RoomMessage(
+        string messageId,
+        LanConnectChatContent content) => new()
+    {
+        RoomId = "room-1",
+        RoomSessionId = "session-1",
+        MessageId = messageId,
+        SenderId = "net-2",
+        SenderName = "Silent",
+        Content = content,
+        PlainTextFallback = LanConnectServerChatProtocol.RenderGenericFallback(content),
+        SentAt = "2026-07-12T12:00:00Z"
+    };
+
+    private static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(2));
+        while (!predicate())
+        {
+            await Task.Delay(1, timeout.Token);
+        }
+    }
+
     private static LanConnectChatChannelState EnabledState(LanConnectChatChannel channel)
     {
         LanConnectChatChannelState state = new(channel);
@@ -296,7 +689,8 @@ public sealed class LanConnectRichChannelSubmissionTests
 
     private static async Task ConnectReadyAsync(
         LanConnectServerChatClient client,
-        FakeTransport transport)
+        FakeTransport transport,
+        LanConnectChatFeatureVersions? features = null)
     {
         await client.ConnectAsync(BaseUri, "net-1", "Ironclad", CancellationToken.None);
         transport.Emit(JsonSerializer.Serialize(new LanConnectServerChatReadyEnvelope
@@ -306,7 +700,7 @@ public sealed class LanConnectRichChannelSubmissionTests
             HistoryEpoch = 1,
             ChatEnabled = true,
             ServerChatVersion = 1,
-            EnabledFeatures = new LanConnectChatFeatureVersions(1, 1, 1, 0)
+            EnabledFeatures = features ?? new LanConnectChatFeatureVersions(1, 1, 1, 0)
         }, LanConnectJson.Options));
         transport.Emit("""{"type":"chat_snapshot_begin","protocolVersion":1,"snapshotId":"snapshot-1","instanceId":"instance-1","historyEpoch":1,"totalMessages":0}""");
         transport.Emit("""{"type":"chat_snapshot_end","protocolVersion":1,"snapshotId":"snapshot-1","historyEpoch":1}""");
@@ -420,5 +814,41 @@ public sealed class LanConnectRichChannelSubmissionTests
             return ValueTask.CompletedTask;
         }
 
+    }
+
+    private sealed class CoordinatorClient : ILanConnectServerChatClient
+    {
+        public LanConnectChatChannelState State { get; } = new(LanConnectChatChannel.Server);
+        public event Action? StateChanged { add { } remove { } }
+        public Task ConnectAsync(Uri lobbyBaseUri, string playerNetId, string playerName, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SendTextAsync(string text, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SendAsync(LanConnectChatContent content, string clientMessageId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RetryAsync(string clientMessageId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class MutableRoomClock
+    {
+        internal DateTimeOffset Now { get; set; } = DateTimeOffset.Parse("2026-07-12T12:00:00Z");
+    }
+
+    private sealed class RoomDelay
+    {
+        private readonly Queue<TaskCompletionSource> _pending = new();
+        internal List<TimeSpan> Durations { get; } = [];
+        internal List<CancellationToken> Tokens { get; } = [];
+
+        internal Task DelayAsync(TimeSpan duration, CancellationToken cancellationToken)
+        {
+            Durations.Add(duration);
+            Tokens.Add(cancellationToken);
+            TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
+            _pending.Enqueue(completion);
+            return completion.Task;
+        }
+
+        internal void CompleteNext() => _pending.Dequeue().TrySetResult();
     }
 }

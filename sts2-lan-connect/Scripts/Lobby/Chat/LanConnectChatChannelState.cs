@@ -676,6 +676,48 @@ internal sealed class LanConnectChatChannelState
         });
     }
 
+    internal LanConnectChatApplyResult Apply(LanConnectServerChatSnapshotBeginEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        lock (_mutationLock)
+        {
+            return ApplySnapshotBegin(
+                envelope.SnapshotId,
+                envelope.InstanceId,
+                envelope.HistoryEpoch,
+                envelope.TotalMessages);
+        }
+    }
+
+    internal LanConnectChatApplyResult Apply(LanConnectServerChatSnapshotChunkEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        lock (_mutationLock)
+        {
+            return ApplySnapshotChunk(
+                envelope.SnapshotId,
+                envelope.ChunkIndex,
+                envelope.Messages.Select(message => new SnapshotCandidate(message, false, string.Empty)).ToArray());
+        }
+    }
+
+    internal LanConnectChatApplyResult Apply(LanConnectServerChatSnapshotEndEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        lock (_mutationLock)
+        {
+            return ApplySnapshotEnd(envelope.SnapshotId, envelope.HistoryEpoch);
+        }
+    }
+
+    internal LanConnectChatApplyResult RejectActiveSnapshot()
+    {
+        lock (_mutationLock)
+        {
+            return RejectSnapshot();
+        }
+    }
+
     internal LanConnectChatApplyResult Apply(
         LanConnectServerChatMessageEnvelope envelope,
         string localSenderId)
@@ -1327,11 +1369,18 @@ internal sealed class LanConnectChatChannelState
     }
 
     private LanConnectChatApplyResult ApplySnapshotBegin(ServerChatInboundEnvelope envelope)
+        => ApplySnapshotBegin(
+            envelope.SnapshotId ?? string.Empty,
+            envelope.InstanceId ?? string.Empty,
+            envelope.HistoryEpoch ?? -1,
+            envelope.TotalMessages ?? -1);
+
+    private LanConnectChatApplyResult ApplySnapshotBegin(
+        string snapshotId,
+        string instanceId,
+        int historyEpoch,
+        int totalMessages)
     {
-        string snapshotId = envelope.SnapshotId ?? string.Empty;
-        string instanceId = envelope.InstanceId ?? string.Empty;
-        int historyEpoch = envelope.HistoryEpoch ?? -1;
-        int totalMessages = envelope.TotalMessages ?? -1;
         if (_snapshotAssembly != null || string.IsNullOrEmpty(snapshotId) || string.IsNullOrEmpty(instanceId) ||
             historyEpoch < 0 || totalMessages < 0)
         {
@@ -1344,47 +1393,87 @@ internal sealed class LanConnectChatChannelState
 
     private LanConnectChatApplyResult ApplySnapshotChunk(ServerChatInboundEnvelope envelope)
     {
-        string snapshotId = envelope.SnapshotId ?? string.Empty;
+        List<ServerChatCanonicalMessage>? legacyMessages = envelope.Messages;
+        if (legacyMessages == null)
+        {
+            return RejectSnapshot();
+        }
+        SnapshotCandidate[] messages = legacyMessages.Select(message =>
+            new SnapshotCandidate(
+                new LanConnectServerChatMessagePayload
+                {
+                    MessageId = message.MessageId,
+                    SenderId = message.SenderId,
+                    SenderName = message.SenderName,
+                    Content = ContentFromLegacy(message.Content),
+                    PlainTextFallback = message.PlainTextFallback,
+                    SentAt = message.SentAt.ToString("O")
+                },
+                true,
+                ResolveDisplayText(message))).ToArray();
+        return ApplySnapshotChunk(
+            envelope.SnapshotId ?? string.Empty,
+            envelope.ChunkIndex ?? -1,
+            messages);
+    }
+
+    private LanConnectChatApplyResult ApplySnapshotChunk(
+        string snapshotId,
+        int chunkIndex,
+        IReadOnlyList<SnapshotCandidate> messages)
+    {
         if (_snapshotAssembly == null || _snapshotAssembly.SnapshotId != snapshotId)
         {
             return RejectSnapshot();
         }
 
-        int chunkIndex = envelope.ChunkIndex ?? -1;
         if (chunkIndex != _snapshotAssembly.Chunks.Count)
         {
             return RejectSnapshot();
         }
 
-        List<ServerChatCanonicalMessage>? messages = envelope.Messages;
-        if (messages == null || _snapshotAssembly.MessageCount + messages.Count > _snapshotAssembly.TotalMessages)
+        if (_snapshotAssembly.MessageCount + messages.Count > _snapshotAssembly.TotalMessages)
         {
             return RejectSnapshot();
         }
 
         HashSet<string> chunkIds = new(StringComparer.Ordinal);
-        foreach (ServerChatCanonicalMessage message in messages)
+        List<SnapshotCandidate> canonicalMessages = [];
+        foreach (SnapshotCandidate candidate in messages)
         {
+            LanConnectServerChatMessagePayload message = candidate.Payload;
             if (string.IsNullOrEmpty(message.MessageId) ||
                 _snapshotAssembly.MessageIds.Contains(message.MessageId) ||
                 !chunkIds.Add(message.MessageId))
             {
                 return RejectSnapshot();
             }
+            if (!TryCanonicalContent(message.Content, message.SenderName, out LanConnectChatContent content))
+            {
+                return RejectSnapshot();
+            }
+            canonicalMessages.Add(candidate with
+            {
+                Payload = message with { Content = content }
+            });
         }
 
         _snapshotAssembly.MessageIds.UnionWith(chunkIds);
         _snapshotAssembly.MessageCount += messages.Count;
-        _snapshotAssembly.Chunks.Add(messages);
+        _snapshotAssembly.Chunks.Add(canonicalMessages);
         return new LanConnectChatApplyResult(ReconnectRequired: false);
     }
 
     private LanConnectChatApplyResult ApplySnapshotEnd(ServerChatInboundEnvelope envelope)
+        => ApplySnapshotEnd(
+            envelope.SnapshotId ?? string.Empty,
+            envelope.HistoryEpoch ?? -1);
+
+    private LanConnectChatApplyResult ApplySnapshotEnd(string snapshotId, int historyEpoch)
     {
-        string snapshotId = envelope.SnapshotId ?? string.Empty;
         SnapshotAssembly? assembly = _snapshotAssembly;
         if (assembly == null || assembly.SnapshotId != snapshotId ||
-            envelope.HistoryEpoch != assembly.HistoryEpoch || assembly.MessageCount != assembly.TotalMessages)
+            historyEpoch != assembly.HistoryEpoch || assembly.MessageCount != assembly.TotalMessages)
         {
             return RejectSnapshot();
         }
@@ -1499,15 +1588,18 @@ internal sealed class LanConnectChatChannelState
     {
         ClearConfirmedKeepPendingAndUnknown();
         long sequence = 0;
-        foreach (List<ServerChatCanonicalMessage> chunk in assembly.Chunks)
+        foreach (List<SnapshotCandidate> chunk in assembly.Chunks)
         {
-            foreach (ServerChatCanonicalMessage message in chunk)
+            foreach (SnapshotCandidate candidate in chunk)
             {
+                LanConnectServerChatMessagePayload message = candidate.Payload;
                 if (string.IsNullOrEmpty(message.MessageId))
                 {
                     continue;
                 }
-                string text = ResolveDisplayText(message);
+                string text = candidate.UseDisplayTextOverride
+                    ? candidate.DisplayTextOverride
+                    : CompatibilityText(message.Content, message.PlainTextFallback);
                 if (string.IsNullOrEmpty(text))
                 {
                     continue;
@@ -1519,11 +1611,12 @@ internal sealed class LanConnectChatChannelState
                     SenderName = message.SenderName ?? string.Empty,
                     SenderNetId = message.SenderId,
                     Text = text,
-                    Content = ContentFromLegacy(message.Content),
+                    Content = message.Content,
+                    ServerPayload = message,
                     Sequence = sequence++,
                     IsLocal = false,
                     Delivery = ServerChatDeliveryState.Confirmed,
-                    SentAt = message.SentAt
+                    SentAt = ParseSentAt(message.SentAt, DateTimeOffset.UtcNow)
                 };
                 _messages.Add(entry);
                 _serverMessageIndex[message.MessageId] = _messages.Count - 1;
@@ -1798,7 +1891,7 @@ internal sealed class LanConnectChatChannelState
         SentAt = ParseSentAt(sentAt, existing?.SentAt ?? DateTimeOffset.UtcNow)
     };
 
-    private static bool TryCanonicalContent(
+    private bool TryCanonicalContent(
         LanConnectChatContent? content,
         string senderName,
         out LanConnectChatContent canonical)
@@ -1807,7 +1900,11 @@ internal sealed class LanConnectChatChannelState
         {
             canonical = LanConnectServerChatProtocol.Canonicalize(
                 content ?? throw new InvalidOperationException("content is required."),
-                new LanConnectChatFeatureVersions(1, 1, 1, 0));
+                new LanConnectChatFeatureVersions(
+                    _enabledFeatures.RichContentVersion,
+                    _enabledFeatures.EmojiSetVersion,
+                    _enabledFeatures.ItemRefVersion,
+                    0));
             LanConnectServerChatProtocol.AssertInboundBudget(canonical, senderName ?? string.Empty);
             return true;
         }
@@ -1927,6 +2024,11 @@ internal sealed class LanConnectChatChannelState
 
         public HashSet<string> MessageIds { get; } = new(StringComparer.Ordinal);
 
-        public List<List<ServerChatCanonicalMessage>> Chunks { get; } = new();
+        public List<List<SnapshotCandidate>> Chunks { get; } = new();
     }
+
+    private sealed record SnapshotCandidate(
+        LanConnectServerChatMessagePayload Payload,
+        bool UseDisplayTextOverride,
+        string DisplayTextOverride);
 }

@@ -646,7 +646,9 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
         if (channel == LanConnectChatChannel.Room)
         {
-            return Task.CompletedTask;
+            LanConnectLobbyRuntime roomRuntime = LanConnectLobbyRuntime.Instance ??
+                throw new InvalidOperationException("Lobby runtime is unavailable.");
+            return roomRuntime.RetryRoomChatAsync(clientMessageId);
         }
 
         LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance ??

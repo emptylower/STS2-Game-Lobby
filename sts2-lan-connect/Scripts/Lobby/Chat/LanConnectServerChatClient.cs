@@ -498,6 +498,52 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
 
         try
         {
+            using (JsonDocument discriminator = JsonDocument.Parse(payload))
+            {
+                JsonElement root = discriminator.RootElement;
+                string? declaredType = root.TryGetProperty("type", out JsonElement typeElement) &&
+                                       typeElement.ValueKind == JsonValueKind.String
+                    ? typeElement.GetString()
+                    : null;
+                if (declaredType is "chat_snapshot_begin" or "chat_snapshot_chunk" or "chat_snapshot_end")
+                {
+                    int declaredProtocol = root.TryGetProperty("protocolVersion", out JsonElement protocolElement) &&
+                                           protocolElement.ValueKind == JsonValueKind.Number &&
+                                           protocolElement.TryGetInt32(out int value)
+                        ? value
+                        : 0;
+                    if (declaredProtocol != ProtocolVersion)
+                    {
+                        MarkPermanentStop(
+                            LanConnectServerChatPresentation.TransportFailure,
+                            "服务器返回了意外的频道聊天协议版本。",
+                            connectionOrdinal,
+                            generation);
+                        return;
+                    }
+                    if (declaredType == "chat_snapshot_begin")
+                    {
+                        Volatile.Write(ref _snapshotComplete, 0);
+                    }
+                    long snapshotRevision = State.Revision;
+                    _ = TryApplyCanonicalEnvelope(
+                        payload,
+                        declaredType,
+                        out _,
+                        out bool snapshotReconnectRequired);
+                    if (snapshotReconnectRequired)
+                    {
+                        if (TryClaimCurrentConnection(connectionOrdinal, generation))
+                        {
+                            HandleUnexpectedDisconnect("Server chat snapshot was invalid.");
+                        }
+                        return;
+                    }
+                    RaiseStateChangedIfNeeded(snapshotRevision);
+                    return;
+                }
+            }
+
             ServerChatInboundEnvelope? envelope =
                 JsonSerializer.Deserialize<ServerChatInboundEnvelope>(payload, LanConnectJson.Options);
             if (envelope == null)
@@ -540,11 +586,23 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
             }
 
             long revision = State.Revision;
-            if (TryApplyCanonicalEnvelope(payload, envelope.Type, out string? completedClientMessageId))
+            if (TryApplyCanonicalEnvelope(
+                    payload,
+                    envelope.Type,
+                    out string? completedClientMessageId,
+                    out bool reconnectRequired))
             {
                 if (!string.IsNullOrEmpty(completedClientMessageId))
                 {
                     CancelDeliveryTimeout(completedClientMessageId);
+                }
+                if (reconnectRequired)
+                {
+                    if (TryClaimCurrentConnection(connectionOrdinal, generation))
+                    {
+                        HandleUnexpectedDisconnect("Server chat snapshot was invalid.");
+                    }
+                    return;
                 }
                 RaiseStateChangedIfNeeded(revision);
                 return;
@@ -626,13 +684,58 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
     private bool TryApplyCanonicalEnvelope(
         string payload,
         string type,
-        out string? completedClientMessageId)
+        out string? completedClientMessageId,
+        out bool reconnectRequired)
     {
         completedClientMessageId = null;
+        reconnectRequired = false;
         try
         {
             switch (type)
             {
+                case "chat_snapshot_begin":
+                    LanConnectServerChatSnapshotBeginEnvelope? begin =
+                        JsonSerializer.Deserialize<LanConnectServerChatSnapshotBeginEnvelope>(payload, LanConnectJson.Options);
+                    if (begin == null || begin.ProtocolVersion != ProtocolVersion)
+                    {
+                        reconnectRequired = true;
+                        return true;
+                    }
+                    reconnectRequired = State.Apply(begin).ReconnectRequired;
+                    return true;
+                case "chat_snapshot_chunk":
+                    LanConnectServerChatSnapshotChunkEnvelope? chunk =
+                        JsonSerializer.Deserialize<LanConnectServerChatSnapshotChunkEnvelope>(payload, LanConnectJson.Options);
+                    if (chunk == null || chunk.ProtocolVersion != ProtocolVersion)
+                    {
+                        reconnectRequired = true;
+                        return true;
+                    }
+                    reconnectRequired = State.Apply(chunk).ReconnectRequired;
+                    return true;
+                case "chat_snapshot_end":
+                    LanConnectServerChatSnapshotEndEnvelope? end =
+                        JsonSerializer.Deserialize<LanConnectServerChatSnapshotEndEnvelope>(payload, LanConnectJson.Options);
+                    if (end == null || end.ProtocolVersion != ProtocolVersion)
+                    {
+                        reconnectRequired = true;
+                        return true;
+                    }
+                    reconnectRequired = State.Apply(end).ReconnectRequired;
+                    if (!reconnectRequired)
+                    {
+                        Volatile.Write(ref _snapshotComplete, 1);
+                        if (Volatile.Read(ref _readySeen) != 0)
+                        {
+                            Interlocked.Exchange(ref _activeSessionOrdinal, Interlocked.Read(ref _currentConnectionOrdinal));
+                            Interlocked.Exchange(ref _backoffAttempt, 0);
+                            State.SetPresentation(
+                                State.ChatEnabled
+                                    ? LanConnectServerChatPresentation.Ready
+                                    : LanConnectServerChatPresentation.Disabled);
+                        }
+                    }
+                    return true;
                 case "chat_ready":
                     LanConnectServerChatReadyEnvelope? ready =
                         JsonSerializer.Deserialize<LanConnectServerChatReadyEnvelope>(payload, LanConnectJson.Options);
@@ -673,7 +776,10 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
                         return true;
                     }
                     State.Apply(ack, _playerNetId);
-                    completedClientMessageId = ack.ClientMessageId;
+                    if (IsClientMessageCompleted(ack.ClientMessageId))
+                    {
+                        completedClientMessageId = ack.ClientMessageId;
+                    }
                     return true;
                 case "chat_message":
                     LanConnectServerChatMessageEnvelope? message =
@@ -692,7 +798,10 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
                         return true;
                     }
                     State.Apply(error);
-                    completedClientMessageId = error.ClientMessageId;
+                    if (IsClientMessageCompleted(error.ClientMessageId))
+                    {
+                        completedClientMessageId = error.ClientMessageId;
+                    }
                     return true;
                 default:
                     return false;
@@ -700,8 +809,13 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
         }
         catch (JsonException)
         {
-            // A malformed rich envelope is isolated to that payload. The active
-            // channel state and connection remain usable for subsequent frames.
+            // A malformed non-snapshot rich envelope is isolated to that payload.
+            // Snapshot corruption rejects the active assembly and reconnects.
+            if (type is "chat_snapshot_begin" or "chat_snapshot_chunk" or "chat_snapshot_end")
+            {
+                State.RejectActiveSnapshot();
+                reconnectRequired = true;
+            }
             return true;
         }
     }
@@ -718,6 +832,13 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
         {
             timeout.Cancel();
         }
+    }
+
+    private bool IsClientMessageCompleted(string clientMessageId)
+    {
+        ServerChatMessageState? message = State.Messages.FirstOrDefault(entry =>
+            string.Equals(entry.ClientMessageId, clientMessageId, StringComparison.Ordinal));
+        return message?.Delivery is ServerChatDeliveryState.Confirmed or ServerChatDeliveryState.Failed;
     }
 
     private void OnTransportFaulted(long connectionOrdinal, int generation, Exception exception)
