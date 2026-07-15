@@ -712,10 +712,9 @@ test("control host and client room_chat_ready uses Phase 1 generation for rich a
     assert.equal(richJoin.roomSessionId, created.roomSessionId);
     assert.equal(Object.hasOwn(richJoin.room, "roomSessionId"), false);
     const baseUrl = `ws://127.0.0.1:${address.port}${config.wsPath}`;
-    const host = await openControlWebSocket(
-      `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
-      + `&role=host&token=${created.hostToken}`,
-    );
+    const hostUrl = `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=host&token=${created.hostToken}`;
+    const host = await openControlWebSocket(hostUrl);
     sockets.push(host);
     const mutatingHost = await openControlWebSocket(
       `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
@@ -824,6 +823,22 @@ test("control host and client room_chat_ready uses Phase 1 generation for rich a
       combatRefVersion: 0,
     });
     assert.deepEqual(richReady.enabledFeatures, hostReady.enabledFeatures);
+    const assertNoRoomDeliveryAfterPing = async (
+      candidates: WebSocket[],
+      label: string,
+    ) => {
+      const deliveryCount = (socket: WebSocket) => chatSocketState(socket).frames.filter(
+        (frame) => frame.type === "room_chat_message" || frame.type === "room_chat",
+      ).length;
+      const before = candidates.map(deliveryCount);
+      const barriers = candidates.map((socket) =>
+        waitForChatFrame(socket, (frame) => frame.type === "pong"));
+      for (const socket of candidates) {
+        socket.send(JSON.stringify({ type: "ping" }));
+      }
+      await Promise.all(barriers);
+      assert.deepEqual(candidates.map(deliveryCount), before, label);
+    };
 
     const mutationError = waitForChatFrame(
       mutatingHost,
@@ -854,37 +869,67 @@ test("control host and client room_chat_ready uses Phase 1 generation for rich a
     }));
     assert.deepEqual(await replayReady, hostReady);
 
-    const metadataId = "30303030-3030-4030-8030-303030303030";
-    const metadataError = waitForChatFrame(
-      host,
-      (frame) => frame.type === "room_chat_error" && frame.clientMessageId === metadataId,
+    const reservedMetadata: Array<[string, unknown]> = [
+      ["message", {}],
+      ["messageId", "sender-message"],
+      ["senderId", "net:mallory"],
+      ["senderName", "Mallory"],
+      ["sentAt", "2026-07-15T00:00:00.000Z"],
+      ["plainTextFallback", "sender fallback"],
+    ];
+    for (const [index, [field, value]] of reservedMetadata.entries()) {
+      const metadataId = `30303030-3030-4030-8030-${String(index).padStart(12, "0")}`;
+      const metadataError = waitForChatFrame(
+        host,
+        (frame) => frame.type === "room_chat_error" && frame.clientMessageId === metadataId,
+      );
+      host.send(JSON.stringify({
+        type: "room_chat_v2",
+        protocolVersion: 1,
+        clientMessageId: metadataId,
+        roomId: created.roomId,
+        roomSessionId: created.roomSessionId,
+        content: { formatVersion: 1, segments: [{ kind: "text", text: "spoof" }] },
+        [field]: value,
+      }));
+      const error = await metadataError;
+      assert.equal(error.code, "invalid_message", field);
+      assert.deepEqual(Object.keys(error).sort(), [
+        "clientMessageId", "code", "message", "protocolVersion", "type",
+      ], field);
+    }
+    await assertNoRoomDeliveryAfterPing(
+      [host, rich, legacyHost, old],
+      "reserved metadata must not broadcast",
     );
-    host.send(JSON.stringify({
-      type: "room_chat_v2",
-      protocolVersion: 1,
-      clientMessageId: metadataId,
-      roomId: created.roomId,
-      roomSessionId: created.roomSessionId,
-      senderName: "Mallory",
-      content: { formatVersion: 1, segments: [{ kind: "text", text: "spoof" }] },
-    }));
-    assert.equal((await metadataError).code, "invalid_message");
 
     const sendId = "32323232-3232-4232-8232-323232323232";
+    const sendContent = {
+      formatVersion: 1,
+      segments: [
+        { kind: "text", text: "look " },
+        { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike" },
+        { kind: "emoji", emojiId: "heart" },
+      ],
+    };
+    const hostDeliveryOrder: string[] = [];
+    const trackHostDelivery = (data: WebSocket.RawData) => {
+      const frame = JSON.parse(data.toString()) as ChatFrame;
+      if (
+        (frame.type === "room_chat_ack" && frame.clientMessageId === sendId)
+        || frame.type === "room_chat_message"
+      ) {
+        hostDeliveryOrder.push(frame.type);
+      }
+    };
+    host.on("message", trackHostDelivery);
     host.send(JSON.stringify({
       type: "room_chat_v2",
       protocolVersion: 1,
       clientMessageId: sendId,
       roomId: created.roomId,
       roomSessionId: created.roomSessionId,
-      content: {
-        formatVersion: 1,
-        segments: [
-          { kind: "text", text: "look " },
-          { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike" },
-          { kind: "emoji", emojiId: "heart" },
-        ],
-      },
+      content: sendContent,
     }));
     const [ack, selfBroadcast, richBroadcast, legacy, legacyHostFallback] = await Promise.all([
       waitForChatFrame(host, (frame) => frame.type === "room_chat_ack"),
@@ -894,6 +939,8 @@ test("control host and client room_chat_ready uses Phase 1 generation for rich a
       waitForChatFrame(legacyHost, (frame) => frame.type === "room_chat"),
     ]);
     const message = ack.message as Record<string, unknown>;
+    host.off("message", trackHostDelivery);
+    assert.deepEqual(hostDeliveryOrder, ["room_chat_ack", "room_chat_message"]);
     assert.deepEqual(selfBroadcast.message, message);
     assert.deepEqual(richBroadcast.message, message);
     assert.equal(message.senderName, "Host");
@@ -912,6 +959,54 @@ test("control host and client room_chat_ready uses Phase 1 generation for rich a
       );
     }
 
+    const canonicalReplayAck = waitForChatFrame(
+      host,
+      (frame) => frame.type === "room_chat_ack" && frame.clientMessageId === sendId,
+    );
+    host.send(JSON.stringify({
+      type: "room_chat_v2",
+      protocolVersion: 1,
+      clientMessageId: sendId,
+      roomId: created.roomId,
+      roomSessionId: created.roomSessionId,
+      content: {
+        segments: [
+          { text: "look", kind: "text" },
+          { kind: "text", text: " " },
+          { modelId: "MegaCrit.Strike", itemType: "card", kind: "item_ref" },
+          { emojiId: "heart", kind: "emoji" },
+        ],
+        formatVersion: 1,
+      },
+    }));
+    assert.deepEqual(await canonicalReplayAck, ack);
+    await assertNoRoomDeliveryAfterPing(
+      [host, rich, legacyHost, old],
+      "canonical replay must not rebroadcast",
+    );
+
+    const conflictPromise = waitForChatFrame(
+      host,
+      (frame) => frame.type === "room_chat_error" && frame.clientMessageId === sendId,
+    );
+    host.send(JSON.stringify({
+      type: "room_chat_v2",
+      protocolVersion: 1,
+      clientMessageId: sendId,
+      roomId: created.roomId,
+      roomSessionId: created.roomSessionId,
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "changed" }] },
+    }));
+    const conflict = await conflictPromise;
+    assert.equal(conflict.code, "duplicate_message");
+    assert.deepEqual(Object.keys(conflict).sort(), [
+      "clientMessageId", "code", "message", "protocolVersion", "type",
+    ]);
+    await assertNoRoomDeliveryAfterPing(
+      [host, rich, legacyHost, old],
+      "duplicate conflict must not broadcast",
+    );
+
     const kickedFrame = waitForChatFrame(old, (frame) => frame.type === "kicked");
     const kickedClose = waitForChatClose(old);
     host.send(JSON.stringify({
@@ -926,6 +1021,66 @@ test("control host and client room_chat_ready uses Phase 1 generation for rich a
       message: "你已被房主移出房间。",
     });
     assert.deepEqual(await kickedClose, { code: 4001, reason: "kicked" });
+
+    const hostClose = waitForChatClose(host);
+    host.close(1000, "reconnect_test");
+    await hostClose;
+    const reconnectedHost = await openControlWebSocket(hostUrl);
+    sockets.push(reconnectedHost);
+    await waitForChatFrame(reconnectedHost, (frame) => frame.type === "connected");
+    const reconnectDeliveryCount = () => chatSocketState(reconnectedHost).frames.filter(
+      (frame) => frame.type === "room_chat_ack" || frame.type === "room_chat_message",
+    ).length;
+    const deliveriesBeforeReady = reconnectDeliveryCount();
+    reconnectedHost.send(JSON.stringify({
+      type: "host_hello",
+      roomId: created.roomId,
+      controlChannelId: created.controlChannelId,
+      role: "host",
+      playerName: "Host",
+      playerNetId: "net:host",
+      roomChatVersions: versions,
+    }));
+    await waitForChatFrame(reconnectedHost, (frame) => frame.type === "room_chat_ready");
+    const reconnectBarrier = waitForChatFrame(
+      reconnectedHost,
+      (frame) => frame.type === "pong",
+    );
+    reconnectedHost.send(JSON.stringify({ type: "ping" }));
+    await reconnectBarrier;
+    assert.equal(reconnectDeliveryCount(), deliveriesBeforeReady);
+
+    const reconnectAckPromise = waitForChatFrame(
+      reconnectedHost,
+      (frame) => frame.type === "room_chat_ack" && frame.clientMessageId === sendId,
+    );
+    const reconnectSelfPromise = waitForChatFrame(
+      reconnectedHost,
+      (frame) => frame.type === "room_chat_message",
+    );
+    const reconnectRichPromise = waitForChatFrame(
+      rich,
+      (frame) => frame.type === "room_chat_message",
+    );
+    reconnectedHost.send(JSON.stringify({
+      type: "room_chat_v2",
+      protocolVersion: 1,
+      clientMessageId: sendId,
+      roomId: created.roomId,
+      roomSessionId: created.roomSessionId,
+      content: sendContent,
+    }));
+    const [reconnectAck, reconnectSelf, reconnectRich] = await Promise.all([
+      reconnectAckPromise,
+      reconnectSelfPromise,
+      reconnectRichPromise,
+    ]);
+    assert.deepEqual(reconnectSelf.message, reconnectAck.message);
+    assert.deepEqual(reconnectRich.message, reconnectAck.message);
+    assert.notEqual(
+      (reconnectAck.message as Record<string, unknown>).messageId,
+      message.messageId,
+    );
   } finally {
     for (const socket of sockets) socket.terminate();
     await service.close();

@@ -123,6 +123,12 @@ function createGateway(options: Omit<RoomChatGatewayOptions, "getRoomChatContext
   });
 }
 
+function enableCombatForTest(gateway: RoomChatGateway): void {
+  // Task 5 makes this result reachable through normal feature negotiation.
+  (gateway as unknown as { resolveFeatures: () => ChatFeatureVersions }).resolveFeatures =
+    () => allVersions;
+}
+
 function hasCode(code: string) {
   return (error: unknown) => {
     assert.equal((error as { code?: unknown }).code, code);
@@ -480,9 +486,7 @@ test("room wire failures precede disabled state and cache without limiter or UUI
   });
   sender.frames.length = 0;
 
-  // Task 5 will make this resolver result reachable through normal negotiation.
-  (gateway as unknown as { resolveFeatures: () => ChatFeatureVersions }).resolveFeatures =
-    () => allVersions;
+  enableCombatForTest(gateway);
 
   const boundaryContent = (firstAmount: number) => ({
     formatVersion: 1,
@@ -550,27 +554,40 @@ test("room_chat_ready rejects a deleted or replaced Phase 1 generation", () => {
   }
 });
 
-test("roomSessionId send re-reads Phase 1 generation before canonicalize and commit", () => {
+test("combat send re-reads Phase 1 generation before canonicalize and commit", () => {
   for (const staleAt of ["receive", "commit"] as const) {
     let sending = false;
     let sendReads = 0;
     let generatedIds = 0;
+    let trackRaceEffects = false;
+    let generatedDuringRace = 0;
+    let nowCallsDuringRace = 0;
     const activeContext: RoomChatContext = {
       roomId: "room-1",
       roomSessionId: "session-1",
       chatEnabled: true,
-      peerPlayerNetIds: new Set<string>(),
+      peerPlayerNetIds: new Set(["net:alice", "net:bob"]),
+    };
+    const replacedContext: RoomChatContext = {
+      ...activeContext,
+      roomSessionId: "session-2",
     };
     const gateway = createGateway({
-      connectionBurst: 1,
+      connectionBurst: 2,
+      ipMessagesPerMinute: 2,
+      now: () => {
+        if (trackRaceEffects) nowCallsDuringRace += 1;
+        return 0;
+      },
       randomUuid: () => {
         generatedIds += 1;
+        if (trackRaceEffects) generatedDuringRace += 1;
         return `00000000-0000-4000-8000-${String(generatedIds).padStart(12, "0")}`;
       },
       context: () => {
         if (!sending) return activeContext;
         sendReads += 1;
-        if (staleAt === "receive" || sendReads === 2) return undefined;
+        if (staleAt === "receive" || sendReads === 2) return replacedContext;
         return activeContext;
       },
     });
@@ -580,9 +597,25 @@ test("roomSessionId send re-reads Phase 1 generation before canonicalize and com
     gateway.registerPeer(recipient.registration);
     gateway.handleControlEnvelope(sender.registration.connectionSessionId, hello("Alice", "net:alice"));
     gateway.handleControlEnvelope(recipient.registration.connectionSessionId, hello("Bob", "net:bob"));
+    enableCombatForTest(gateway);
     sender.frames.length = 0;
     recipient.frames.length = 0;
+    const seededId = staleAt === "receive"
+      ? "69696969-6969-4969-8969-696969696969"
+      : "70707070-7070-4070-8070-707070707070";
+    const seededContent = textContent(`seeded ${staleAt} cache`);
+    gateway.handleControlEnvelope(
+      sender.registration.connectionSessionId,
+      roomSend(seededId, seededContent),
+    );
+    const seededAck = sender.frames.find((frame) => frame.type === "room_chat_ack");
+    assert.ok(seededAck, staleAt);
+    assert.equal(generatedIds, 1, staleAt);
+    sender.frames.length = 0;
+    recipient.frames.length = 0;
+
     sending = true;
+    trackRaceEffects = true;
     const clientMessageId = staleAt === "receive"
       ? "71717171-7171-4171-8171-717171717171"
       : "72727272-7272-4272-8272-727272727272";
@@ -590,8 +623,26 @@ test("roomSessionId send re-reads Phase 1 generation before canonicalize and com
     gateway.handleControlEnvelope(
       sender.registration.connectionSessionId,
       roomSend(
-        clientMessageId,
-        textContent("stale generation"),
+        seededId,
+        {
+          formatVersion: 1,
+          segments: [
+            {
+              kind: "power_state",
+              modelId: "MegaCrit.Strength",
+              amount: 2,
+              roomSessionId: "session-1",
+              ownerPlayerNetId: "net:alice",
+              applierPlayerNetId: "net:bob",
+            },
+            {
+              kind: "target_ref",
+              targetKind: "player",
+              targetKey: "net:bob",
+              roomSessionId: "session-1",
+            },
+          ],
+        },
       ),
     );
 
@@ -599,17 +650,46 @@ test("roomSessionId send re-reads Phase 1 generation before canonicalize and com
     assert.equal(sender.frames[0]?.type, "room_chat_error", staleAt);
     assert.equal(sender.frames[0]?.code, "protocol_mismatch", staleAt);
     assert.equal(recipient.frames.length, 0, staleAt);
-    assert.equal(generatedIds, 0, staleAt);
+    assert.equal(generatedDuringRace, 0, staleAt);
+    assert.equal(nowCallsDuringRace, 0, staleAt);
 
     sending = false;
+    trackRaceEffects = false;
     sender.frames.length = 0;
     gateway.handleControlEnvelope(
       sender.registration.connectionSessionId,
-      roomSend(clientMessageId, textContent("stale generation")),
+      roomSend(seededId, seededContent),
+    );
+    assert.deepEqual(sender.frames.at(-1), seededAck, staleAt);
+    assert.equal(recipient.frames.length, 0, staleAt);
+    assert.equal(generatedIds, 1, staleAt);
+
+    sender.frames.length = 0;
+    gateway.handleControlEnvelope(
+      sender.registration.connectionSessionId,
+      roomSend(clientMessageId, {
+        formatVersion: 1,
+        segments: [
+          {
+            kind: "power_state",
+            modelId: "MegaCrit.Strength",
+            amount: 2,
+            roomSessionId: "session-1",
+            ownerPlayerNetId: "net:alice",
+            applierPlayerNetId: "net:bob",
+          },
+          {
+            kind: "target_ref",
+            targetKind: "player",
+            targetKey: "net:bob",
+            roomSessionId: "session-1",
+          },
+        ],
+      }),
     );
     assert.equal(sender.frames.some((frame) => frame.type === "room_chat_ack"), true, staleAt);
     assert.equal(recipient.frames.some((frame) => frame.type === "room_chat_message"), true, staleAt);
-    assert.equal(generatedIds, 1, staleAt);
+    assert.equal(generatedIds, 2, staleAt);
   }
 });
 
@@ -756,6 +836,267 @@ test("room v2 sends ACK and whole rich or exact legacy fallback per recipient", 
   assert.equal(JSON.stringify(legacyRecipient.frames).includes("MegaCrit.Strike"), false);
   assert.equal(legacyRecipient.frames.some((frame) => frame.type === "room_chat_message"), false);
   assert.equal(notReady.frames.length, 0);
+});
+
+test("room_chat_ack carries canonical combat through existing per-session dedupe", () => {
+  let generatedIds = 0;
+  const gateway = createGateway({
+    context: (roomId) => ({
+      roomId,
+      roomSessionId: "session-1",
+      chatEnabled: true,
+      peerPlayerNetIds: new Set(["net:alice", "net:bob"]),
+    }),
+    randomUuid: () => {
+      generatedIds += 1;
+      return `00000000-0000-4000-8000-${String(generatedIds).padStart(12, "0")}`;
+    },
+  });
+  const sender = peer("combat-ack-sender");
+  const recipient = peer("combat-ack-recipient");
+  gateway.registerPeer(sender.registration);
+  gateway.registerPeer(recipient.registration);
+  gateway.handleControlEnvelope("combat-ack-sender", hello("Alice", "net:alice"));
+  gateway.handleControlEnvelope("combat-ack-recipient", hello("Bob", "net:bob"));
+  enableCombatForTest(gateway);
+  sender.frames.length = 0;
+  recipient.frames.length = 0;
+
+  const clientMessageId = "76767676-7676-4676-8676-767676767676";
+  const first = {
+    formatVersion: 1,
+    segments: [
+      { kind: "text", text: "  power " },
+      {
+        kind: "power_state",
+        modelId: "MegaCrit.Strength",
+        amount: 2,
+        roomSessionId: "session-1",
+        ownerPlayerNetId: "net:alice",
+        applierPlayerNetId: "net:bob",
+      },
+      {
+        kind: "target_ref",
+        targetKind: "player",
+        targetKey: "net:bob",
+        roomSessionId: "session-1",
+      },
+    ],
+  };
+  gateway.handleControlEnvelope("combat-ack-sender", roomSend(clientMessageId, first));
+
+  assert.deepEqual(sender.frames.map((frame) => frame.type), ["room_chat_ack", "room_chat_message"]);
+  const ack = sender.frames[0]!;
+  const message = ack.message as Record<string, unknown>;
+  assert.deepEqual(ack, {
+    type: "room_chat_ack",
+    protocolVersion: 1,
+    clientMessageId,
+    message,
+  });
+  assert.equal(sender.frames[1]?.message, ack.message);
+  assert.deepEqual(recipient.frames, [{
+    type: "room_chat_message",
+    protocolVersion: 1,
+    message,
+  }]);
+  assert.deepEqual(Object.keys(message).sort(), [
+    "content", "messageId", "plainTextFallback", "roomId", "roomSessionId",
+    "senderId", "senderName", "sentAt",
+  ]);
+  assert.equal(message.roomId, "room-1");
+  assert.equal(message.roomSessionId, "session-1");
+  assert.equal(message.messageId, "00000000-0000-4000-8000-000000000001");
+  assert.equal(message.senderId, "net:alice");
+  assert.equal(message.senderName, "Alice");
+  assert.deepEqual(message.content, {
+    formatVersion: 1,
+    segments: [
+      { kind: "text", text: "power " },
+      {
+        kind: "power_state",
+        modelId: "MegaCrit.Strength",
+        amount: 2,
+        roomSessionId: "session-1",
+        ownerPlayerNetId: "net:alice",
+        applierPlayerNetId: "net:bob",
+      },
+      {
+        kind: "target_ref",
+        targetKind: "player",
+        targetKey: "net:bob",
+        roomSessionId: "session-1",
+      },
+    ],
+  });
+  assert.equal(message.plainTextFallback, "power [Power][Player]");
+  assert.equal(message.sentAt, "2026-07-15T00:00:00.000Z");
+  assert.equal(generatedIds, 1);
+
+  const canonicalReplay = {
+    segments: [
+      { text: "power", kind: "text" },
+      { kind: "text", text: " " },
+      {
+        applierPlayerNetId: "net:bob",
+        roomSessionId: "session-1",
+        amount: 2,
+        modelId: "MegaCrit.Strength",
+        ownerPlayerNetId: "net:alice",
+        kind: "power_state",
+      },
+      {
+        targetKey: "net:bob",
+        roomSessionId: "session-1",
+        targetKind: "player",
+        kind: "target_ref",
+      },
+    ],
+    formatVersion: 1,
+  };
+  gateway.handleControlEnvelope("combat-ack-sender", roomSend(clientMessageId, canonicalReplay));
+  assert.deepEqual(sender.frames.at(-1), ack);
+  assert.equal(recipient.frames.length, 1);
+  assert.equal(generatedIds, 1);
+
+  gateway.handleControlEnvelope("combat-ack-sender", roomSend(clientMessageId, {
+    ...first,
+    segments: first.segments.map((segment) => (
+      segment.kind === "power_state" ? { ...segment, amount: 3 } : segment
+    )),
+  }));
+  assert.equal(sender.frames.at(-1)?.code, "duplicate_message");
+  assert.equal(recipient.frames.length, 1);
+  assert.equal(generatedIds, 1);
+
+  for (const [index, content] of [
+    {
+      formatVersion: 1,
+      segments: [{
+        kind: "power_state", modelId: "Power", amount: 1, roomSessionId: "session-2",
+      }],
+    },
+    {
+      formatVersion: 1,
+      segments: [{
+        kind: "target_ref", targetKind: "player", targetKey: "net:bob", roomSessionId: "session-2",
+      }],
+    },
+  ].entries()) {
+    gateway.handleControlEnvelope("combat-ack-sender", roomSend(
+      `77777777-7777-4777-8777-${String(index).padStart(12, "0")}`,
+      content,
+    ));
+    assert.equal(sender.frames.at(-1)?.code, "invalid_content");
+  }
+  gateway.handleControlEnvelope("combat-ack-sender", roomSend(
+    "78787878-7878-4878-8878-787878787878",
+    first,
+    { roomSessionId: "session-2" },
+  ));
+  assert.equal(sender.frames.at(-1)?.code, "protocol_mismatch");
+  assert.equal(generatedIds, 1);
+});
+
+test("room_chat_ack send failure caches the result and never broadcasts", () => {
+  let generatedIds = 0;
+  const gateway = createGateway({
+    randomUuid: () => {
+      generatedIds += 1;
+      return `00000000-0000-4000-8000-${String(generatedIds).padStart(12, "0")}`;
+    },
+  });
+  const sender = peer("ack-throw-sender");
+  const recipient = peer("ack-throw-recipient");
+  let throwAck = true;
+  sender.registration.send = (frame) => {
+    if (frame.type === "room_chat_ack" && throwAck) {
+      throwAck = false;
+      throw new Error("ack adapter failed");
+    }
+    sender.frames.push(frame);
+  };
+  gateway.registerPeer(sender.registration);
+  gateway.registerPeer(recipient.registration);
+  gateway.handleControlEnvelope("ack-throw-sender", hello("Alice", "net:alice"));
+  gateway.handleControlEnvelope("ack-throw-recipient", hello("Bob", "net:bob"));
+  sender.frames.length = 0;
+  recipient.frames.length = 0;
+  const clientMessageId = "79797979-7979-4979-8979-797979797979";
+
+  assert.throws(
+    () => gateway.handleControlEnvelope(
+      "ack-throw-sender",
+      roomSend(clientMessageId, textContent("cached before send")),
+    ),
+    /ack adapter failed/,
+  );
+  assert.equal(sender.frames.length, 0);
+  assert.equal(recipient.frames.length, 0);
+  assert.equal(generatedIds, 1);
+
+  gateway.handleControlEnvelope(
+    "ack-throw-sender",
+    roomSend(clientMessageId, textContent("cached before send")),
+  );
+  assert.deepEqual(sender.frames.map((frame) => frame.type), ["room_chat_ack"]);
+  assert.equal(recipient.frames.length, 0);
+  assert.equal(generatedIds, 1);
+
+  gateway.handleControlEnvelope(
+    "ack-throw-sender",
+    roomSend(clientMessageId, textContent("changed after cached ACK")),
+  );
+  assert.equal(sender.frames.at(-1)?.code, "duplicate_message");
+  assert.equal(recipient.frames.length, 0);
+  assert.equal(generatedIds, 1);
+});
+
+test("dedupe is isolated per control session and never auto-replays after reconnect", () => {
+  let generatedIds = 0;
+  const gateway = createGateway({
+    randomUuid: () => {
+      generatedIds += 1;
+      return `00000000-0000-4000-8000-${String(generatedIds).padStart(12, "0")}`;
+    },
+  });
+  const first = peer("dedupe-session-a");
+  const recipient = peer("dedupe-session-recipient");
+  gateway.registerPeer(first.registration);
+  gateway.registerPeer(recipient.registration);
+  gateway.handleControlEnvelope("dedupe-session-a", hello("Alice", "net:alice"));
+  gateway.handleControlEnvelope("dedupe-session-recipient", hello("Bob", "net:bob"));
+  first.frames.length = 0;
+  recipient.frames.length = 0;
+  const clientMessageId = "80808080-8080-4080-8080-808080808080";
+  const content = textContent("explicit resend after reconnect");
+
+  gateway.handleControlEnvelope("dedupe-session-a", roomSend(clientMessageId, content));
+  const firstMessage = first.frames[0]?.message as Record<string, unknown>;
+  assert.equal(recipient.frames.length, 1);
+
+  gateway.unregisterPeer("dedupe-session-a");
+  const second = peer("dedupe-session-b");
+  gateway.registerPeer(second.registration);
+  gateway.handleControlEnvelope("dedupe-session-b", hello("Alice", "net:alice"));
+  assert.equal(second.frames.some((frame) => frame.type === "room_chat_ack"), false);
+  second.frames.length = 0;
+
+  gateway.handleControlEnvelope("dedupe-session-b", roomSend(clientMessageId, content));
+  const secondMessage = second.frames[0]?.message as Record<string, unknown>;
+  assert.equal(second.frames[0]?.type, "room_chat_ack");
+  assert.notEqual(secondMessage.messageId, firstMessage.messageId);
+  assert.equal(recipient.frames.length, 2);
+  assert.equal(generatedIds, 2);
+
+  // A delayed close callback for the old connection is scoped to its old ID.
+  gateway.unregisterPeer("dedupe-session-a");
+  gateway.handleControlEnvelope("dedupe-session-b", roomSend(
+    "81818181-8181-4181-8181-818181818181",
+    textContent("new session remains registered"),
+  ));
+  assert.equal(second.frames.at(-2)?.type, "room_chat_ack");
+  assert.equal(generatedIds, 3);
 });
 
 test("room v2 dedupes canonical mixed content within one connection session", () => {
