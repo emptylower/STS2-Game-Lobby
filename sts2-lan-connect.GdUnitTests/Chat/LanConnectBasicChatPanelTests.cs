@@ -81,7 +81,7 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(budget.Text.Contains("字符 0/300 · 分段 1/32 · 实体 1/12", StringComparison.Ordinal))
             .IsTrue();
         AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
-            .IsEqual("当前发送通道尚未启用富内容发送");
+            .IsEqual("当前频道不支持草稿中的富内容");
 
         send.EmitSignal(Button.SignalName.Pressed);
 

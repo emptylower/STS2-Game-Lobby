@@ -33,6 +33,7 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
     private bool _explicitHideCompletionScheduled;
     private bool _openQueuedAfterExplicitHide;
     private long _explicitHideGeneration;
+    private int _lastFocusedIndex;
 
     internal event Action<string>? Inserted;
 
@@ -73,10 +74,7 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
         _emojis = emojis.ToArray();
         _icon = icon;
         _localize = localize;
-        if (_grid != null)
-        {
-            RebuildButtons();
-        }
+        RefreshLocalization();
         if (restoreFocus && editor.IsInsideTree())
         {
             editor.FocusEditor();
@@ -112,6 +110,50 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
                 InvalidateOpenIntent();
                 HideExplicitly();
             }
+        }
+    }
+
+    internal void RefreshLocalization()
+    {
+        if (_localize == null)
+        {
+            return;
+        }
+        int focusedIndex = TestState.FocusedIndex >= 0 ? TestState.FocusedIndex : _lastFocusedIndex;
+        bool restorePickerFocus = Visible && _openIntent && focusedIndex >= 0;
+        Title = _localize("chat.emoji.picker_title");
+        if (_grid != null)
+        {
+            bool canUpdateInPlace = _buttons.Count == _emojis.Count &&
+                                    _buttons.Select(button => button.Name.ToString()).SequenceEqual(
+                                        _emojis.Select(emoji => ButtonPrefix + emoji.Id),
+                                        StringComparer.Ordinal);
+            if (canUpdateInPlace)
+            {
+                for (int index = 0; index < _buttons.Count; index++)
+                {
+                    string label = _localize(_emojis[index].LabelKey);
+                    _buttons[index].TooltipText = label;
+                    _buttons[index].AccessibilityName = label;
+                }
+            }
+            else
+            {
+                RebuildButtons();
+            }
+        }
+        if (restorePickerFocus && focusedIndex < _buttons.Count)
+        {
+            Button focusTarget = _buttons[focusedIndex];
+            Callable.From(() =>
+            {
+                if (Visible && _openIntent &&
+                    GodotObject.IsInstanceValid(focusTarget) &&
+                    focusTarget.IsInsideTree())
+                {
+                    focusTarget.GrabFocus();
+                }
+            }).CallDeferred();
         }
     }
 
@@ -278,6 +320,9 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
                 MouseDefaultCursorShape = Control.CursorShape.PointingHand
             };
             button.SetMeta("emoji_index", index);
+            button.Connect(
+                Control.SignalName.FocusEntered,
+                Callable.From(() => _lastFocusedIndex = capturedIndex));
             button.Connect(Button.SignalName.Pressed, Callable.From(() => Insert(capturedIndex)));
             button.Connect(
                 Control.SignalName.GuiInput,

@@ -109,6 +109,7 @@ internal sealed class LanConnectItemModelResolver
     internal const int MaxCacheEntries = 256;
 
     private readonly ILanConnectModelDbPort _port;
+    private readonly LanConnectChatLocalizer _localizer;
     private readonly Dictionary<CacheKey, LinkedListNode<CacheEntry>> _cache = [];
     private readonly LinkedList<CacheEntry> _lru = [];
     private string? _locale;
@@ -120,8 +121,16 @@ internal sealed class LanConnectItemModelResolver
     }
 
     internal LanConnectItemModelResolver(ILanConnectModelDbPort port)
+        : this(port, LanConnectChatUiComposition.Localizer)
+    {
+    }
+
+    internal LanConnectItemModelResolver(
+        ILanConnectModelDbPort port,
+        LanConnectChatLocalizer localizer)
     {
         _port = port ?? throw new ArgumentNullException(nameof(port));
+        _localizer = localizer ?? throw new ArgumentNullException(nameof(localizer));
     }
 
     internal int CacheCountForTests => _cache.Count;
@@ -357,7 +366,7 @@ internal sealed class LanConnectItemModelResolver
         _ => "item"
     };
 
-    private static LanConnectResolvedItem Unknown(string itemType)
+    private LanConnectResolvedItem Unknown(string itemType)
     {
         string labelKey = itemType switch
         {
@@ -371,7 +380,7 @@ internal sealed class LanConnectItemModelResolver
             itemType,
             labelKey,
             LocalizedTitle: null,
-            AccessibleText: labelKey,
+            AccessibleText: _localizer.Get(_locale, labelKey),
             Preview: null);
     }
 }

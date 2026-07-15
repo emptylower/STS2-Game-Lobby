@@ -550,6 +550,46 @@ public sealed class LanConnectRichDraftEditorTests
     }
 
     [TestCase]
+    public async Task Localized_copy_placeholders_are_separate_from_chip_accessibility_labels()
+    {
+        LanConnectChatLocalizer localizer = LanConnectChatUiComposition.Localizer;
+        LanConnectRichDraft draft = LanConnectRichDraft.FromRuns(
+        [
+            new LanConnectItemRun("card", "MegaCrit.Strike", 1),
+            new LanConnectEmojiRun("heart")
+        ]);
+        draft.SetSelection(new LanConnectDraftSelection(
+            new LanConnectDraftPosition(0, 0),
+            new LanConnectDraftPosition(1, 1)));
+        LanConnectRichDraftEditor editor = AutoFree(new LanConnectRichDraftEditor(localizer, () => "en"))!;
+        editor.Bind(
+            draft,
+            new(1, 1, 1, 0),
+            "Ironclad",
+            run => run is LanConnectEmojiRun
+                ? localizer.Get("en", "chat.emoji.button")
+                : localizer.Get("en", "chat.item.card"),
+            run => run is LanConnectEmojiRun
+                ? localizer.Get("en", "chat.copy.emoji")
+                : localizer.Get("en", "chat.copy.card"));
+        using ISceneRunner runner = ISceneRunner.Load(editor, autoFree: true);
+        await runner.AwaitIdleFrame();
+
+        editor.CopySelectionToClipboard();
+
+        AssertThat(DisplayServer.ClipboardGet()).IsEqual("[Card][Emoji]");
+        Button[] chips = editor.FindChildren(
+                LanConnectConstants.ChatEntityChipPrefix + "*",
+                "Button",
+                true,
+                false)
+            .OfType<Button>()
+            .ToArray();
+        AssertThat(chips.Select(chip => chip.Text)).ContainsExactly("Card", "Emoji");
+        AssertThat(chips.Select(chip => chip.AccessibilityName)).ContainsExactly("Card", "Emoji");
+    }
+
+    [TestCase]
     public async Task Reconciliation_preserves_focus_and_each_command_raises_one_signal()
     {
         LanConnectRichDraft draft = LanConnectRichDraft.FromText("a");
@@ -778,6 +818,8 @@ public sealed class LanConnectRichDraftEditorTests
             (LanConnectDraftRun)new LanConnectEmojiRun("smile"))), new(1, 1, 1, 0), "Ironclad", "消息实体超过 12 个");
         AssertBlocked(LanConnectRichDraft.FromRuns([new LanConnectEmojiRun("unknown")]), new(1, 1, 1, 0), "Ironclad", "消息内容无效");
         AssertBlocked(LanConnectRichDraft.FromRuns([new LanConnectEmojiRun("heart")]), new(), "Ironclad", "当前频道不支持草稿中的富内容");
+        AssertBlocked(LanConnectRichDraft.FromRuns([new LanConnectEmojiRun("heart")]), new(1, 0, 1, 0), "Ironclad", "当前频道不支持表情");
+        AssertBlocked(LanConnectRichDraft.FromRuns([new LanConnectItemRun("relic", "MegaCrit.Anchor")]), new(1, 1, 0, 0), "Ironclad", "当前频道不支持物品链接");
 
         LanConnectRichDraft wireDraft = LanConnectRichDraft.FromText("hello");
         string senderAt8192 = FindExactSenderName(wireDraft.ToContent(), 8192);

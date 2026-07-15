@@ -22,6 +22,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         long DraftRevision,
         LanConnectChatFeatureVersions Enabled,
         string SenderName,
+        string Locale,
         LanConnectDraftMeasure Measure,
         bool IsBlank,
         string BlockingReason,
@@ -38,13 +39,16 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     private static readonly Color AccentColor = new(0.88f, 0.58f, 0.17f, 1f);
 
     private readonly object _bindingSync = new();
+    private readonly LanConnectChatLocalizer _localizer;
+    private readonly Func<string?> _localeProvider;
     private LanConnectRichDraft? _draft;
     private Action<long>? _draftContentChangedHandler;
     private bool _draftContentChangedSubscribed;
     private long _bindingGeneration;
     private LanConnectChatFeatureVersions _enabled = new();
     private string _senderName = string.Empty;
-    private Func<LanConnectDraftRun, string> _accessibleLabel = DefaultAccessibleLabel;
+    private Func<LanConnectDraftRun, string> _accessibleLabel;
+    private Func<LanConnectDraftRun, string> _copyLabel;
     private VBoxContainer? _stack;
     private HFlowContainer? _flow;
     private Label? _budgetLabel;
@@ -65,6 +69,24 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     private BudgetSnapshot _budgetSnapshot;
     private bool _budgetSnapshotValid;
     private int _budgetComputationCount;
+    private string _observedLocale = string.Empty;
+
+    internal LanConnectRichDraftEditor()
+        : this(
+            LanConnectChatUiComposition.Localizer,
+            () => TranslationServer.GetLocale())
+    {
+    }
+
+    internal LanConnectRichDraftEditor(
+        LanConnectChatLocalizer localizer,
+        Func<string?> localeProvider)
+    {
+        _localizer = localizer ?? throw new ArgumentNullException(nameof(localizer));
+        _localeProvider = localeProvider ?? throw new ArgumentNullException(nameof(localeProvider));
+        _accessibleLabel = DefaultAccessibleLabel;
+        _copyLabel = DefaultCopyLabel;
+    }
 
     internal event Action? SubmitRequested;
 
@@ -143,10 +165,21 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         string senderName,
         Func<LanConnectDraftRun, string> accessibleLabel)
     {
+        Bind(draft, enabled, senderName, accessibleLabel, accessibleLabel);
+    }
+
+    internal void Bind(
+        LanConnectRichDraft draft,
+        LanConnectChatFeatureVersions enabled,
+        string senderName,
+        Func<LanConnectDraftRun, string> accessibleLabel,
+        Func<LanConnectDraftRun, string> copyLabel)
+    {
         ArgumentNullException.ThrowIfNull(draft);
         ArgumentNullException.ThrowIfNull(enabled);
         ArgumentNullException.ThrowIfNull(senderName);
         ArgumentNullException.ThrowIfNull(accessibleLabel);
+        ArgumentNullException.ThrowIfNull(copyLabel);
         lock (_bindingSync)
         {
             UnsubscribeFromDraftLocked();
@@ -163,6 +196,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         _enabled = enabled;
         _senderName = senderName;
         _accessibleLabel = accessibleLabel;
+        _copyLabel = copyLabel;
         _pointerAnchor = null;
         _pointerDragging = false;
         _budgetSnapshotValid = false;
@@ -198,6 +232,18 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     internal void RefreshFromDraft(bool preserveFocus = true)
     {
+        ReconcileControls(preserveFocus);
+    }
+
+    internal void RefreshLocalization()
+    {
+        bool preserveFocus = HasEditorFocus;
+        if (!preserveFocus)
+        {
+            _restoreFocus = false;
+            CancelDeferredFocusRestore();
+        }
+        _budgetSnapshotValid = false;
         ReconcileControls(preserveFocus);
     }
 
@@ -274,7 +320,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         {
             return;
         }
-        DisplayServer.ClipboardSet(_draft.CopySelection(_accessibleLabel));
+        DisplayServer.ClipboardSet(_draft.CopySelection(_copyLabel));
     }
 
     internal void PastePlainText(string text)
@@ -288,6 +334,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     public override void _Ready()
     {
+        _observedLocale = CurrentLocale;
         BuildControls();
         ReconcileControls(preserveFocus: false);
         SetProcess(true);
@@ -309,6 +356,12 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     public override void _Process(double delta)
     {
         _ = delta;
+        string locale = CurrentLocale;
+        if (!string.Equals(_observedLocale, locale, StringComparison.Ordinal))
+        {
+            _observedLocale = locale;
+            RefreshLocalization();
+        }
         if (Interlocked.Exchange(ref _pendingDraftChange, 0) == 0)
         {
             return;
@@ -374,7 +427,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             ClipText = true,
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             MouseFilter = MouseFilterEnum.Ignore,
-            AccessibilityName = "消息预算"
+            AccessibilityName = Localize("chat.accessibility.message_budget")
         };
         _budgetLabel.AddThemeFontSizeOverride("font_size", 11);
         _stack.AddChild(_budgetLabel);
@@ -421,6 +474,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             {
                 _budgetLabel.Text = BudgetText;
                 _budgetLabel.TooltipText = BlockingReason;
+                _budgetLabel.AccessibilityName = Localize("chat.accessibility.message_budget");
             }
             ApplyEditableState();
             if (shouldRestoreFocus)
@@ -453,7 +507,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             ScrollFitContentHeight = false,
             TabInputMode = false,
             ContextMenuEnabled = false,
-            AccessibilityName = "消息文字"
+            AccessibilityName = Localize("chat.accessibility.message_text")
         };
         editor.SetMeta("run_index", runIndex);
         ApplyTextRunStyle(editor);
@@ -1198,17 +1252,20 @@ internal sealed partial class LanConnectRichDraftEditor : Control
                 -1,
                 _enabled,
                 _senderName,
+                CurrentLocale,
                 default,
                 IsBlank: true,
-                "请输入消息",
+                Localize("chat.budget.empty"),
                 FormatBudget(default));
         }
 
         long revision = _draft.ContentRevision;
+        string locale = CurrentLocale;
         if (_budgetSnapshotValid &&
             _budgetSnapshot.DraftRevision == revision &&
             Equals(_budgetSnapshot.Enabled, _enabled) &&
-            string.Equals(_budgetSnapshot.SenderName, _senderName, StringComparison.Ordinal))
+            string.Equals(_budgetSnapshot.SenderName, _senderName, StringComparison.Ordinal) &&
+            string.Equals(_budgetSnapshot.Locale, locale, StringComparison.Ordinal))
         {
             return _budgetSnapshot;
         }
@@ -1229,6 +1286,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             measuredRevision,
             _enabled,
             _senderName,
+            locale,
             measure,
             isBlank,
             BlockingReasonFor(measure, isBlank),
@@ -1238,43 +1296,67 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         return _budgetSnapshot;
     }
 
-    private static string BlockingReasonFor(LanConnectDraftMeasure measure, bool isBlank)
+    private string BlockingReasonFor(LanConnectDraftMeasure measure, bool isBlank)
     {
         if (isBlank)
         {
-            return "请输入消息";
+            return Localize("chat.budget.empty");
         }
         if (measure.TextScalars > LanConnectServerChatProtocol.MaxTextScalars)
         {
-            return "消息文字超过 300 字符";
+            return Localize("chat.budget.text_limit");
         }
         if (measure.SegmentCount > LanConnectServerChatProtocol.MaxSegments)
         {
-            return "消息分段超过 32 段";
+            return Localize("chat.budget.segment_limit");
         }
         if (measure.EntityCount > LanConnectServerChatProtocol.MaxEntities)
         {
-            return "消息实体超过 12 个";
+            return Localize("chat.budget.entity_limit");
         }
         if (measure.ContentValid &&
             measure.WorstCaseInboundBytes > LanConnectServerChatProtocol.MaxPayloadBytes)
         {
-            return "消息传输大小超过 8192 字节";
+            return Localize("chat.budget.wire_limit");
         }
         if (!measure.ContentValid)
         {
-            return "消息内容无效";
+            return Localize("chat.budget.invalid");
         }
         if (!measure.FeaturesSupported)
         {
-            return "当前频道不支持草稿中的富内容";
+            return FeatureBlockingReason();
         }
         return string.Empty;
     }
 
-    private static string FormatBudget(LanConnectDraftMeasure measure) =>
-        $"字符 {measure.TextScalars}/300 · 分段 {measure.SegmentCount}/32 · " +
-        $"实体 {measure.EntityCount}/12 · 字节 {measure.WorstCaseInboundBytes}/8192";
+    private string FormatBudget(LanConnectDraftMeasure measure) =>
+        _localizer.Format(
+            CurrentLocale,
+            "chat.budget.summary",
+            measure.TextScalars,
+            measure.SegmentCount,
+            measure.EntityCount,
+            measure.WorstCaseInboundBytes);
+
+    private string FeatureBlockingReason()
+    {
+        if (_enabled.RichContentVersion != 1)
+        {
+            return Localize("chat.rich_disabled");
+        }
+        IReadOnlyList<LanConnectDraftRun> runs = _draft?.Runs ?? Array.Empty<LanConnectDraftRun>();
+        if (_enabled.EmojiSetVersion != LanConnectChatEmojiSet.Version &&
+            runs.Any(run => run is LanConnectEmojiRun))
+        {
+            return Localize("chat.emoji_disabled");
+        }
+        if (_enabled.ItemRefVersion != 1 && runs.Any(run => run is LanConnectItemRun))
+        {
+            return Localize("chat.item_disabled");
+        }
+        return Localize("chat.rich_disabled");
+    }
 
     private static string RunKind(LanConnectDraftRun run) => run switch
     {
@@ -1284,14 +1366,27 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         _ => "unknown"
     };
 
-    private static string DefaultAccessibleLabel(LanConnectDraftRun run) => run switch
+    private string DefaultAccessibleLabel(LanConnectDraftRun run) => run switch
     {
-        LanConnectEmojiRun => "Emoji",
-        LanConnectItemRun { ItemType: "card" } => "卡牌",
-        LanConnectItemRun { ItemType: "relic" } => "遗物",
-        LanConnectItemRun { ItemType: "potion" } => "药水",
-        _ => "实体"
+        LanConnectEmojiRun => Localize("chat.emoji.button"),
+        LanConnectItemRun { ItemType: "card" } => Localize("chat.item.card"),
+        LanConnectItemRun { ItemType: "relic" } => Localize("chat.item.relic"),
+        LanConnectItemRun { ItemType: "potion" } => Localize("chat.item.potion"),
+        _ => Localize("chat.item.entity")
     };
+
+    private string DefaultCopyLabel(LanConnectDraftRun run) => run switch
+    {
+        LanConnectEmojiRun => Localize("chat.copy.emoji"),
+        LanConnectItemRun { ItemType: "card" } => Localize("chat.copy.card"),
+        LanConnectItemRun { ItemType: "relic" } => Localize("chat.copy.relic"),
+        LanConnectItemRun { ItemType: "potion" } => Localize("chat.copy.potion"),
+        _ => Localize("chat.copy.entity")
+    };
+
+    private string CurrentLocale => _localeProvider()?.Trim() ?? string.Empty;
+
+    private string Localize(string key) => _localizer.Get(CurrentLocale, key);
 
     private static void ApplyTextRunStyle(TextEdit input)
     {

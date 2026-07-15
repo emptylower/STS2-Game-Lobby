@@ -536,6 +536,65 @@ public sealed class LanConnectEmojiPickerTests
     }
 
     [TestCase]
+    public async Task Locale_change_refreshes_panel_editor_and_open_picker_without_losing_focus()
+    {
+        string previousLocale = TranslationServer.GetLocale();
+        try
+        {
+            TranslationServer.SetLocale("zh-CN");
+            LanConnectChatChannelState state = EnabledState(emojiVersion: 1);
+            state.RichDraft.ReplaceAllWithText("hello");
+            LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+                LanConnectChatUiComposition.Icons,
+                _ => throw new InvalidOperationException("No item resolution expected."),
+                LanConnectChatUiComposition.Localizer,
+                () => TranslationServer.GetLocale()))!;
+            using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+            panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+            await runner.AwaitIdleFrame();
+
+            Button toggle = FindNode<Button>(panel, LanConnectEmojiPicker.ToggleButtonName);
+            AssertThat(toggle.TooltipText).IsEqual("打开表情选择器");
+            toggle.EmitSignal(Button.SignalName.Pressed);
+            await runner.AwaitIdleFrame();
+            LanConnectEmojiPicker picker = FindNode<LanConnectEmojiPicker>(panel, LanConnectEmojiPicker.PickerName);
+            Button smile = EmojiButtons(picker)[0];
+            smile.GrabFocus();
+            await runner.AwaitIdleFrame();
+            AssertThat(picker.TestState.FocusedIndex).IsEqual(0);
+            AssertThat(smile.TooltipText).IsEqual("微笑");
+
+            TranslationServer.SetLocale("en");
+            await runner.AwaitIdleFrame();
+            await runner.AwaitIdleFrame();
+
+            AssertThat(FindNode<Label>(panel, "ChatChannelTitle").Text).IsEqual("Server chat");
+            AssertThat(toggle.TooltipText).IsEqual("Open emoji picker");
+            AssertThat(toggle.AccessibilityName).IsEqual("Emoji");
+            AssertThat(FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).Text).IsEqual("Send");
+            AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
+                .IsEqual("Server chat available");
+            Label budget = FindNode<Label>(panel, LanConnectConstants.ChatDraftBudgetName);
+            AssertThat(budget.Text.StartsWith("Characters ", StringComparison.Ordinal)).IsTrue();
+            AssertThat(budget.AccessibilityName).IsEqual("Message budget");
+            AssertThat(FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName).AccessibilityName)
+                .IsEqual("Message text");
+            AssertThat(smile.TooltipText).IsEqual("Smile");
+            AssertThat(smile.AccessibilityName).IsEqual("Smile");
+            AssertThat(panel.FindChildren("*", "Control", true, false)
+                .OfType<Control>()
+                .All(control => !control.TooltipText.StartsWith("chat.", StringComparison.Ordinal) &&
+                                !control.AccessibilityName.StartsWith("chat.", StringComparison.Ordinal)))
+                .IsTrue();
+            AssertThat(picker.TestState.FocusedIndex).IsEqual(0);
+        }
+        finally
+        {
+            TranslationServer.SetLocale(previousLocale);
+        }
+    }
+
+    [TestCase]
     public async Task Retry_and_room_pin_controls_use_shared_loader_textures()
     {
         LanConnectChatChannelState state = EnabledState(emojiVersion: 1);

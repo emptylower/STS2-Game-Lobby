@@ -180,6 +180,8 @@ internal sealed class LanConnectGodotLucideTextureDecoder : ILanConnectLucideTex
 internal static class LanConnectChatUiComposition
 {
     internal static LanConnectLucideIconLoader Icons { get; } = new();
+
+    internal static LanConnectChatLocalizer Localizer { get; } = new();
 }
 
 internal sealed class LanConnectEmbeddedLucideResources : ILanConnectLucideResources

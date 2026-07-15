@@ -63,8 +63,11 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private readonly LanConnectLucideIconLoader _icons;
     private readonly Func<LanConnectItemRun, LanConnectResolvedItem> _resolveItem;
     private readonly Func<LanConnectItemResolverContext>? _resolverContextProvider;
+    private readonly LanConnectChatLocalizer _localizer;
+    private readonly Func<string?> _localeProvider;
     private LanConnectItemResolverContext _resolverContext;
     private bool _resolverContextInitialized;
+    private string _observedLocale = string.Empty;
     private LanConnectChatChannelState? _state;
     private Func<string, Task>? _send;
     private Func<LanConnectChatContent, string, Task>? _sendContent;
@@ -92,7 +95,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private long _messageFocusRestoreGeneration;
     private bool _suppressScrollChange;
     private bool _compactLayout;
-    private string _operationStatus = string.Empty;
+    private string _operationStatusKey = string.Empty;
+    private string? _operationStatusArgument;
+    private string _operationStatusDirect = string.Empty;
     private Action? _itemLinkPostInsertForTests;
     private int _visibilityPublishSuppressionDepth;
     private bool _publishVisibilityWhenSuppressionEnds;
@@ -115,7 +120,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         : this(
             LanConnectChatUiComposition.Icons,
             new LanConnectItemModelResolver(),
-            CreateProductionResolverContextProvider())
+            CreateProductionResolverContextProvider(),
+            LanConnectChatUiComposition.Localizer)
     {
     }
 
@@ -123,27 +129,48 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         : this(
             icons,
             new LanConnectItemModelResolver(),
-            CreateProductionResolverContextProvider())
+            CreateProductionResolverContextProvider(),
+            LanConnectChatUiComposition.Localizer)
     {
     }
 
     internal LanConnectBasicChatPanel(
         LanConnectLucideIconLoader icons,
         Func<LanConnectItemRun, LanConnectResolvedItem> resolveItem)
+        : this(
+            icons,
+            resolveItem,
+            LanConnectChatUiComposition.Localizer,
+            () => TranslationServer.GetLocale())
+    {
+    }
+
+    internal LanConnectBasicChatPanel(
+        LanConnectLucideIconLoader icons,
+        Func<LanConnectItemRun, LanConnectResolvedItem> resolveItem,
+        LanConnectChatLocalizer localizer,
+        Func<string?> localeProvider)
     {
         _icons = icons ?? throw new ArgumentNullException(nameof(icons));
         _resolveItem = resolveItem ?? throw new ArgumentNullException(nameof(resolveItem));
+        _localizer = localizer ?? throw new ArgumentNullException(nameof(localizer));
+        _localeProvider = localeProvider ?? throw new ArgumentNullException(nameof(localeProvider));
     }
 
     internal LanConnectBasicChatPanel(
         LanConnectLucideIconLoader icons,
         LanConnectItemModelResolver resolver,
-        Func<LanConnectItemResolverContext> resolverContextProvider)
+        Func<LanConnectItemResolverContext> resolverContextProvider,
+        LanConnectChatLocalizer? localizer = null)
     {
         _icons = icons ?? throw new ArgumentNullException(nameof(icons));
         ArgumentNullException.ThrowIfNull(resolver);
         _resolverContextProvider = resolverContextProvider ??
             throw new ArgumentNullException(nameof(resolverContextProvider));
+        _localizer = localizer ?? LanConnectChatUiComposition.Localizer;
+        _localeProvider = () => _resolverContextInitialized
+            ? _resolverContext.Locale
+            : _resolverContextProvider().Locale;
         _resolveItem = run => resolver.Resolve(
             run,
             _resolverContext.Locale,
@@ -256,8 +283,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             ResetForContextChange();
         }
         bool resolverContextChanged = UpdateResolverContext();
+        bool localeChanged = UpdateLocalizedLocale();
         if (_state != null &&
-            (resolverContextChanged || _state.Revision != _renderedRevision))
+            (resolverContextChanged || localeChanged || _state.Revision != _renderedRevision))
         {
             Refresh();
         }
@@ -306,7 +334,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _blockingModalVisible = blockingModalVisible ?? NeverBlocking;
         _renderedRevision = -1;
         _renderedMessageFingerprint = null;
-        _operationStatus = string.Empty;
+        ClearOperationStatus();
         _pendingUnknownConfirmation = null;
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
         {
@@ -505,7 +533,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         titleRow.AddThemeConstantOverride("separation", 10);
         AddChild(titleRow);
 
-        _titleLabel = CreateLabel("频道聊天", 16, TextStrongColor);
+        _titleLabel = CreateLabel(Localize("chat.title.server"), 16, TextStrongColor);
         _titleLabel.Name = "ChatChannelTitle";
         _titleLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         titleRow.AddChild(_titleLabel);
@@ -553,7 +581,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         inputRow.AddThemeConstantOverride("separation", 8);
         AddChild(inputRow);
 
-        _draftEditor = new LanConnectRichDraftEditor
+        _draftEditor = new LanConnectRichDraftEditor(_localizer, () => CurrentLocale)
         {
             Name = LanConnectConstants.ChatRichDraftEditorName,
             SizeFlagsHorizontal = SizeFlags.ExpandFill
@@ -566,8 +594,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _emojiButton.Name = LanConnectEmojiPicker.ToggleButtonName;
         _emojiButton.Icon = _icons.Get("smile", 20, AccentColor);
         _emojiButton.ExpandIcon = true;
-        _emojiButton.TooltipText = "选择表情";
-        _emojiButton.AccessibilityName = "选择表情";
+        _emojiButton.TooltipText = Localize("chat.tooltip.emoji_picker");
+        _emojiButton.AccessibilityName = Localize("chat.emoji.button");
         _emojiButton.CustomMinimumSize = new Vector2(38, 38);
         _emojiButton.Visible = false;
         _emojiButton.Connect(
@@ -575,7 +603,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             Callable.From(() => _emojiPicker?.OpenPicker()));
         inputRow.AddChild(_emojiButton);
 
-        _sendButton = CreateButton("发送", accent: true);
+        _sendButton = CreateButton(Localize("chat.action.send"), accent: true);
+        _sendButton.AccessibilityName = Localize("chat.action.send");
         _sendButton.Name = LanConnectConstants.ChatSendButtonName;
         _sendButton.Icon = _icons.Get("send", 18, TextStrongColor);
         _sendButton.ExpandIcon = true;
@@ -586,10 +615,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _unknownConfirmation = new ConfirmationDialog
         {
             Name = "DisconnectedUnknownConfirmation",
-            Title = "确认重新发送",
-            DialogText = "这条消息可能已经发送。是否以新消息重新发送？",
-            OkButtonText = "重新发送",
-            CancelButtonText = "取消"
+            Title = Localize("chat.confirm.title"),
+            DialogText = Localize("chat.confirm.delivery_unknown"),
+            OkButtonText = Localize("chat.action.resend"),
+            CancelButtonText = Localize("chat.action.cancel")
         };
         _unknownConfirmation.Connect(
             ConfirmationDialog.SignalName.Confirmed,
@@ -602,7 +631,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             LanConnectChatEmojiSet.Version1,
             _icons,
             AccentColor,
-            TemporaryEmojiLabel);
+            Localize);
         _emojiPicker.FocusExitRequested += backwards =>
         {
             if (backwards)
@@ -632,12 +661,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
 
         UpdateResolverContext();
+        UpdateLocalizedLocale();
 
         _draftEditor.Bind(
             _state.RichDraft,
             _state.EnabledRichFeatures,
             LanConnectConfig.GetEffectivePlayerDisplayName(),
-            AccessibleDraftLabel);
+            AccessibleDraftLabel,
+            CopyDraftLabel);
         _draftEditor.SetCompactLayout(_compactLayout);
         PublishStateVisibility();
         Refresh();
@@ -663,7 +694,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _boundContextGeneration = currentContext;
         _renderedRevision = -1;
         _renderedMessageFingerprint = null;
-        _operationStatus = string.Empty;
+        ClearOperationStatus();
         _pendingUnknownConfirmation = null;
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
         {
@@ -724,7 +755,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
             if (messages.Count == 0)
             {
-                Label empty = CreateLabel("还没有消息", 13, TextMutedColor);
+                Label empty = CreateLabel(Localize("chat.empty"), 13, TextMutedColor);
                 empty.HorizontalAlignment = HorizontalAlignment.Center;
                 _messagesList.AddChild(empty);
             }
@@ -789,7 +820,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         body.AddChild(metadata);
 
         Label sender = CreateLabel(
-            string.IsNullOrWhiteSpace(message.SenderName) ? "未知玩家" : message.SenderName,
+            string.IsNullOrWhiteSpace(message.SenderName)
+                ? Localize("chat.unknown_player")
+                : message.SenderName,
             12,
             message.IsLocal ? AccentColor : TextStrongColor);
         sender.SizeFlagsHorizontal = SizeFlags.ExpandFill;
@@ -821,7 +854,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             if (message.Delivery is ServerChatDeliveryState.Failed or ServerChatDeliveryState.DeliveryUnknown)
             {
                 string stableKey = RetryStableKey(message, index);
-                Button retryButton = CreateButton("重试", accent: false);
+                Button retryButton = CreateButton(Localize("chat.action.retry"), accent: false);
+                retryButton.AccessibilityName = Localize("chat.action.retry");
                 retryButton.Name = LanConnectConstants.ChatRetryButtonPrefix + RetryNodeSuffix(message, index);
                 retryButton.Icon = _icons.Get("refresh-cw", 16, TextStrongColor);
                 retryButton.ExpandIcon = true;
@@ -877,7 +911,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             case LanConnectEmojiSegment emoji:
                 if (!LanConnectChatEmojiSet.TryGet(emoji.EmojiId, out LanConnectEmojiDescriptor descriptor))
                 {
-                    return UnknownItemChip("未知表情");
+                    return UnknownItemChip(Localize("chat.unknown_emoji"));
                 }
                 return new TextureRect
                 {
@@ -885,14 +919,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                     ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
                     StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
                     CustomMinimumSize = new Vector2(22, 22),
-                    TooltipText = descriptor.LabelKey,
-                    AccessibilityName = descriptor.LabelKey,
+                    TooltipText = Localize(descriptor.LabelKey),
+                    AccessibilityName = Localize(descriptor.LabelKey),
                     MouseFilter = MouseFilterEnum.Ignore
                 };
             case LanConnectItemRefSegment item:
                 return BuildItemRun(item);
             default:
-                return UnknownItemChip("未知内容");
+                return UnknownItemChip(Localize("chat.unknown_content"));
         }
     }
 
@@ -917,6 +951,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         PanelContainer chip = ItemChip(resolved.LocalizedTitle);
         chip.SetMeta("lan_connect_resolved_item", true);
         chip.AccessibilityName = resolved.AccessibleText;
+        chip.TooltipText = _localizer.Format(
+            CurrentLocale,
+            "chat.tooltip.item_preview",
+            resolved.LocalizedTitle);
         chip.MouseFilter = MouseFilterEnum.Stop;
         chip.MouseEntered += () => ShowItemPreview(chip, resolved);
         chip.MouseExited += () => _itemPreview?.Invalidate(LanConnectItemPreviewInvalidation.PointerExited);
@@ -935,11 +973,12 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _itemPreview.ShowResolved(item, owner.GetGlobalRect(), GetViewport().GetVisibleRect());
     }
 
-    private static PanelContainer UnknownItemChip(string label)
+    private PanelContainer UnknownItemChip(string label)
     {
         PanelContainer chip = ItemChip(label);
         chip.MouseFilter = MouseFilterEnum.Ignore;
         chip.AccessibilityName = label;
+        chip.TooltipText = Localize("chat.preview_unavailable");
         return chip;
     }
 
@@ -964,30 +1003,33 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         return chip;
     }
 
-    private static string UnknownItemLabel(LanConnectResolvedItem item) =>
-        !string.IsNullOrWhiteSpace(item.AccessibleText) &&
-        !item.AccessibleText.StartsWith("chat.unknown_", StringComparison.Ordinal)
-            ? item.AccessibleText
-            : item.ItemType switch
-            {
-                "card" => "未知卡牌",
-                "relic" => "未知遗物",
-                "potion" => "未知药水",
-                _ => "未知物品"
-            };
+    private string UnknownItemLabel(LanConnectResolvedItem item) =>
+        Localize(item.ItemType switch
+        {
+            "card" => "chat.unknown_card",
+            "relic" => "chat.unknown_relic",
+            "potion" => "chat.unknown_potion",
+            _ => "chat.unknown_item"
+        });
 
-    private static LanConnectResolvedItem UnknownResolvedItem(string itemType) => new(
+    private LanConnectResolvedItem UnknownResolvedItem(string itemType) => new(
         LanConnectResolvedItemStatus.Unknown,
         itemType,
-        "chat.unknown_item",
-        null,
         itemType switch
         {
-            "card" => "未知卡牌",
-            "relic" => "未知遗物",
-            "potion" => "未知药水",
-            _ => "未知物品"
+            "card" => "chat.unknown_card",
+            "relic" => "chat.unknown_relic",
+            "potion" => "chat.unknown_potion",
+            _ => "chat.unknown_item"
         },
+        null,
+        Localize(itemType switch
+        {
+            "card" => "chat.unknown_card",
+            "relic" => "chat.unknown_relic",
+            "potion" => "chat.unknown_potion",
+            _ => "chat.unknown_item"
+        }),
         null);
 
     private async Task SendDraftAsync()
@@ -1005,13 +1047,13 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         LanConnectChatContent content = binding.State.RichDraft.ToContent();
         if (!CanSendCurrentDraft())
         {
-            _operationStatus = CurrentDraftBlockingReason();
+            SetOperationStatusDirect(CurrentDraftBlockingReason());
             UpdateAvailability();
             return;
         }
         if (!binding.State.ChatEnabled)
         {
-            _operationStatus = "聊天暂不可用";
+            SetOperationStatus("chat.operation.unavailable");
             UpdateAvailability();
             return;
         }
@@ -1047,7 +1089,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 return;
             }
 
-            _operationStatus = "已提交";
+            SetOperationStatus("chat.operation.submitted");
             _draftEditor.RefreshFromDraft(preserveFocus: false);
             restoreFocus = true;
         }
@@ -1055,7 +1097,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             if (CanTouchControls(binding))
             {
-                _operationStatus = $"发送失败：{ex.Message}";
+                SetOperationStatus("chat.operation.send_failed", ex.Message);
                 _draftEditor.FocusEditor();
             }
         }
@@ -1137,14 +1179,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
             if (CanTouchControls(binding))
             {
-                _operationStatus = "已重试";
+                SetOperationStatus("chat.operation.retried");
             }
         }
         catch (Exception ex)
         {
             if (CanTouchControls(binding))
             {
-                _operationStatus = $"重试失败：{ex.Message}";
+                SetOperationStatus("chat.operation.retry_failed", ex.Message);
             }
         }
         finally
@@ -1200,14 +1242,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             }
             if (CanTouchControls(confirmation.Binding))
             {
-                _operationStatus = "已作为新消息发送";
+                SetOperationStatus("chat.operation.sent_as_new");
             }
         }
         catch (Exception ex)
         {
             if (CanTouchControls(confirmation.Binding))
             {
-                _operationStatus = $"重发失败：{ex.Message}";
+                SetOperationStatus("chat.operation.resend_failed", ex.Message);
             }
         }
         if (CanTouchControls(confirmation.Binding))
@@ -1218,8 +1260,44 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private void OnRichDraftChanged()
     {
-        _operationStatus = string.Empty;
+        ClearOperationStatus();
         UpdateAvailability();
+    }
+
+    private void SetOperationStatus(string key, string? argument = null)
+    {
+        _operationStatusKey = key;
+        _operationStatusArgument = argument;
+        _operationStatusDirect = string.Empty;
+    }
+
+    private void SetOperationStatusDirect(string value)
+    {
+        _operationStatusKey = string.Empty;
+        _operationStatusArgument = null;
+        _operationStatusDirect = value;
+    }
+
+    private void ClearOperationStatus()
+    {
+        _operationStatusKey = string.Empty;
+        _operationStatusArgument = null;
+        _operationStatusDirect = string.Empty;
+    }
+
+    private string OperationStatusText()
+    {
+        if (!string.IsNullOrEmpty(_operationStatusDirect))
+        {
+            return _operationStatusDirect;
+        }
+        if (string.IsNullOrEmpty(_operationStatusKey))
+        {
+            return string.Empty;
+        }
+        return _operationStatusArgument == null
+            ? Localize(_operationStatusKey)
+            : _localizer.Format(CurrentLocale, _operationStatusKey, _operationStatusArgument);
     }
 
     private static Func<LanConnectItemResolverContext> CreateProductionResolverContextProvider()
@@ -1252,6 +1330,66 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         return changed;
     }
+
+    private bool UpdateLocalizedLocale()
+    {
+        string next = CurrentLocale;
+        if (string.Equals(_observedLocale, next, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        bool changed = !string.IsNullOrEmpty(_observedLocale);
+        _observedLocale = next;
+        _operationStatusDirect = string.Empty;
+        _renderedRevision = -1;
+        _renderedMessageFingerprint = null;
+        if (changed)
+        {
+            _itemPreview?.Invalidate(LanConnectItemPreviewInvalidation.ContextCleared);
+        }
+        ApplyLocalizedControls();
+        return true;
+    }
+
+    private void ApplyLocalizedControls()
+    {
+        if (_titleLabel != null && GodotObject.IsInstanceValid(_titleLabel))
+        {
+            _titleLabel.Text = _state?.Channel == LanConnectChatChannel.Room
+                ? Localize("chat.title.room")
+                : Localize("chat.title.server");
+        }
+        if (_emojiButton != null && GodotObject.IsInstanceValid(_emojiButton))
+        {
+            _emojiButton.TooltipText = Localize("chat.tooltip.emoji_picker");
+            _emojiButton.AccessibilityName = Localize("chat.emoji.button");
+        }
+        if (_sendButton != null && GodotObject.IsInstanceValid(_sendButton))
+        {
+            _sendButton.Text = Localize("chat.action.send");
+            _sendButton.AccessibilityName = Localize("chat.action.send");
+        }
+        if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
+        {
+            _unknownConfirmation.Title = Localize("chat.confirm.title");
+            _unknownConfirmation.DialogText = Localize("chat.confirm.delivery_unknown");
+            _unknownConfirmation.OkButtonText = Localize("chat.action.resend");
+            _unknownConfirmation.CancelButtonText = Localize("chat.action.cancel");
+        }
+        _emojiPicker?.RefreshLocalization();
+        if (_draftEditor != null && GodotObject.IsInstanceValid(_draftEditor))
+        {
+            _draftEditor.RefreshLocalization();
+        }
+        UpdateNewMessagesButton();
+        UpdateAvailability();
+    }
+
+    private string CurrentLocale =>
+        (_resolverContextInitialized ? _resolverContext.Locale : _localeProvider())?.Trim() ?? string.Empty;
+
+    private string Localize(string key) => _localizer.Get(CurrentLocale, key);
 
     private static bool NeverBlocking() => false;
 
@@ -1344,8 +1482,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         if (_titleLabel != null && GodotObject.IsInstanceValid(_titleLabel))
         {
             _titleLabel.Text = _state.Channel == LanConnectChatChannel.Room
-                ? "房间聊天"
-                : "频道聊天";
+                ? Localize("chat.title.room")
+                : Localize("chat.title.server");
         }
         _draftEditor.Editable = editable;
         LanConnectChatFeatureVersions features = _state.EnabledRichFeatures;
@@ -1359,8 +1497,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _emojiPicker?.SetAvailable(emojiAvailable && editable);
         _sendButton.Disabled = !editable ||
             (!CanSendCurrentDraft() && !IsBlankDraft());
-        _statusLabel.Text = ready && !string.IsNullOrEmpty(_operationStatus)
-            ? _operationStatus
+        string operationStatus = OperationStatusText();
+        _statusLabel.Text = ready && !string.IsNullOrEmpty(operationStatus)
+            ? operationStatus
             : ready && !CanSendCurrentDraft()
                 ? CurrentDraftBlockingReason()
             : PresentationText(_state);
@@ -1380,7 +1519,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         int count = _state.NewMessagesBelowCount;
         _newMessagesButton.Visible = count > 0;
-        _newMessagesButton.Text = count > 0 ? $"有 {count} 条新消息" : string.Empty;
+        _newMessagesButton.Text = count > 0
+            ? _localizer.Format(CurrentLocale, "chat.new_messages", count)
+            : string.Empty;
     }
 
     private bool CanSendCurrentDraft() =>
@@ -1448,14 +1589,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     {
         if (_draftEditor == null)
         {
-            return "聊天暂不可用";
+            return Localize("chat.operation.unavailable");
         }
         if (!string.IsNullOrEmpty(_draftEditor.BlockingReason))
         {
             return _draftEditor.BlockingReason;
         }
         return _sendContent == null && _draftEditor.Budget.EntityCount > 0
-            ? "当前发送通道尚未启用富内容发送"
+            ? Localize("chat.rich_disabled")
             : string.Empty;
     }
 
@@ -1545,39 +1686,59 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         return null;
     }
 
-    private static string DeliveryText(ServerChatMessageState message) =>
+    private string DeliveryText(ServerChatMessageState message) =>
         message.Delivery switch
         {
-            ServerChatDeliveryState.Pending => "发送中",
-            ServerChatDeliveryState.Failed => $"发送失败：{message.ErrorMessage}",
-            ServerChatDeliveryState.DeliveryUnknown when message.DisconnectedAfterUnknown => "可能已发送，确认后重发",
-            ServerChatDeliveryState.DeliveryUnknown => "投递状态未知",
+            ServerChatDeliveryState.Pending => Localize("chat.delivery.pending"),
+            ServerChatDeliveryState.Failed => _localizer.Format(
+                CurrentLocale,
+                "chat.delivery.failed",
+                message.ErrorMessage ?? string.Empty),
+            ServerChatDeliveryState.DeliveryUnknown when message.DisconnectedAfterUnknown =>
+                Localize("chat.delivery.disconnected_unknown"),
+            ServerChatDeliveryState.DeliveryUnknown => Localize("chat.delivery.unknown"),
             _ => string.Empty
         };
 
-    private static string PresentationText(LanConnectChatChannelState state) =>
+    private string PresentationText(LanConnectChatChannelState state) =>
         state.Presentation switch
         {
-            LanConnectServerChatPresentation.Unsupported => "当前服务器不支持频道聊天",
-            LanConnectServerChatPresentation.Connecting => "正在连接频道...",
-            LanConnectServerChatPresentation.Reconnecting => "频道连接中断，正在重连...",
+            LanConnectServerChatPresentation.Unsupported => Localize("chat.presentation.unsupported"),
+            LanConnectServerChatPresentation.Connecting => Localize("chat.presentation.connecting"),
+            LanConnectServerChatPresentation.Reconnecting => Localize("chat.presentation.reconnecting"),
             LanConnectServerChatPresentation.Ready when state.Channel == LanConnectChatChannel.Room =>
-                state.ChatEnabled ? "房间聊天可用" : "房间聊天暂不可用",
-            LanConnectServerChatPresentation.Ready => state.ChatEnabled ? "频道可用" : "聊天暂不可用",
-            LanConnectServerChatPresentation.Disabled => "频道已由服务器停用",
+                state.ChatEnabled
+                    ? Localize("chat.presentation.room_ready")
+                    : Localize("chat.presentation.room_disabled"),
+            LanConnectServerChatPresentation.Ready => state.ChatEnabled
+                ? Localize("chat.presentation.server_ready")
+                : Localize("chat.presentation.chat_disabled"),
+            LanConnectServerChatPresentation.Disabled => Localize("chat.presentation.server_disabled"),
             LanConnectServerChatPresentation.TransportFailure when !string.IsNullOrWhiteSpace(state.PresentationDetail) =>
-                $"频道连接失败：{state.PresentationDetail}",
-            LanConnectServerChatPresentation.TransportFailure => "频道连接失败",
-            _ => "聊天暂不可用"
+                _localizer.Format(
+                    CurrentLocale,
+                    "chat.presentation.transport_failure_detail",
+                    state.PresentationDetail),
+            LanConnectServerChatPresentation.TransportFailure => Localize("chat.presentation.transport_failure"),
+            _ => Localize("chat.presentation.chat_disabled")
         };
 
-    private static string AccessibleDraftLabel(LanConnectDraftRun run) => run switch
+    private string AccessibleDraftLabel(LanConnectDraftRun run) => run switch
     {
-        LanConnectEmojiRun => "Emoji",
-        LanConnectItemRun { ItemType: "card" } => "卡牌",
-        LanConnectItemRun { ItemType: "relic" } => "遗物",
-        LanConnectItemRun { ItemType: "potion" } => "药水",
-        _ => "消息实体"
+        LanConnectEmojiRun => Localize("chat.emoji.button"),
+        LanConnectItemRun { ItemType: "card" } => Localize("chat.item.card"),
+        LanConnectItemRun { ItemType: "relic" } => Localize("chat.item.relic"),
+        LanConnectItemRun { ItemType: "potion" } => Localize("chat.item.potion"),
+        _ => Localize("chat.item.entity")
+    };
+
+    private string CopyDraftLabel(LanConnectDraftRun run) => run switch
+    {
+        LanConnectEmojiRun => Localize("chat.copy.emoji"),
+        LanConnectItemRun { ItemType: "card" } => Localize("chat.copy.card"),
+        LanConnectItemRun { ItemType: "relic" } => Localize("chat.copy.relic"),
+        LanConnectItemRun { ItemType: "potion" } => Localize("chat.copy.potion"),
+        _ => Localize("chat.copy.entity")
     };
 
     private string BuildMessageFingerprint(
@@ -1671,29 +1832,6 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         button.AddThemeColorOverride("font_color", TextStrongColor);
         return button;
     }
-
-    private static string TemporaryEmojiLabel(string key) => key switch
-    {
-        "chat.emoji.smile" => "微笑",
-        "chat.emoji.laugh" => "大笑",
-        "chat.emoji.heart" => "爱心",
-        "chat.emoji.thumbs-up" => "赞同",
-        "chat.emoji.thumbs-down" => "反对",
-        "chat.emoji.sparkles" => "闪光",
-        "chat.emoji.flame" => "火焰",
-        "chat.emoji.zap" => "闪电",
-        "chat.emoji.shield" => "护盾",
-        "chat.emoji.swords" => "双剑",
-        "chat.emoji.target" => "目标",
-        "chat.emoji.crown" => "皇冠",
-        "chat.emoji.skull" => "骷髅",
-        "chat.emoji.ghost" => "幽灵",
-        "chat.emoji.eye" => "眼睛",
-        "chat.emoji.message-circle" => "消息",
-        "chat.emoji.check" => "确认",
-        "chat.emoji.x" => "取消",
-        _ => "表情"
-    };
 
     private static void AddFocusable(List<Control> controls, Control? control)
     {
