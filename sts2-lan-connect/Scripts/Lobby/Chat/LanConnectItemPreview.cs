@@ -179,6 +179,7 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
     private bool _reopenQueued;
     private long _showGeneration;
     private long _internalHideGeneration;
+    private long _hideProtectionGeneration;
     private Rect2I _lastPopupContentRect;
     private Rect2 _lastViewport;
     private Vector2 _lastPreferredPosition;
@@ -233,6 +234,12 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
 
     internal Vector2 CardPreferredSizeForTests => CardSurfacePreferredSize + PopupChromeSize;
 
+    internal bool TrailingHideProtectionActiveForTests =>
+        _protectOpenFromTrailingInternalHide ||
+        _internalHideMayTrail ||
+        _pendingInternalHideSignals > 0 ||
+        _reopenQueued;
+
     public override void _Ready()
     {
         Name = PreviewName;
@@ -278,14 +285,8 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
             ClosePreview();
             return;
         }
-        long showGeneration = ++_showGeneration;
-        _protectOpenFromTrailingInternalHide = _internalHideMayTrail;
-        _internalHideMayTrail = false;
-        if (_protectOpenFromTrailingInternalHide)
-        {
-            _ = ClearTrailingHideProtectionAsync(showGeneration);
-        }
-        if (Visible)
+        bool wasVisible = Visible;
+        if (wasVisible)
         {
             // Replacing an open popup must not schedule a native Hide whose delayed
             // PopupHide signal could close the replacement in the same frame.
@@ -295,6 +296,16 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         else
         {
             ClosePreview();
+        }
+        long showGeneration = ++_showGeneration;
+        // PopupPanel may emit PopupHide after the Popup call that originally opened
+        // an already-visible window. Protect the replacement generation without
+        // issuing another Popup from the replacement path itself.
+        _protectOpenFromTrailingInternalHide = _internalHideMayTrail || wasVisible;
+        _internalHideMayTrail = false;
+        if (_protectOpenFromTrailingInternalHide)
+        {
+            ArmTrailingHideProtection(showGeneration);
         }
         try
         {
@@ -321,8 +332,15 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
             _lastViewport = viewport;
             _lastPreferredPosition = bounds.Position;
             _openIntent = true;
-            Popup(_lastPopupContentRect);
-            ClampActualPopupToViewport(bounds.Position, viewport);
+            if (wasVisible)
+            {
+                ResizeVisiblePopup(bounds, viewport);
+            }
+            else
+            {
+                Popup(_lastPopupContentRect);
+                ClampActualPopupToViewport(bounds.Position, viewport);
+            }
         }
         catch
         {
@@ -369,6 +387,7 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         _showGeneration++;
         _openIntent = false;
         _protectOpenFromTrailingInternalHide = false;
+        _hideProtectionGeneration++;
         base.Hide();
     }
 
@@ -586,6 +605,17 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
     private Vector2 PopupChromeSize =>
         GetThemeStylebox("panel")?.GetMinimumSize() ?? Vector2.Zero;
 
+    private void ResizeVisiblePopup(Rect2 bounds, Rect2 viewport)
+    {
+        Size = new Vector2I(
+            Math.Max(1, Mathf.RoundToInt(bounds.Size.X)),
+            Math.Max(1, Mathf.RoundToInt(bounds.Size.Y)));
+        Position = new Vector2I(
+            Mathf.RoundToInt(bounds.Position.X),
+            Mathf.RoundToInt(bounds.Position.Y));
+        ClampActualPopupToViewport(bounds.Position, viewport);
+    }
+
     private void ClampActualPopupToViewport(Vector2 preferredPosition, Rect2 viewport)
     {
         Vector2 actualSize = new(Size.X, Size.Y);
@@ -657,11 +687,22 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         ResetPresentationState();
     }
 
-    private async Task ClearTrailingHideProtectionAsync(long showGeneration)
+    private void ArmTrailingHideProtection(long showGeneration)
+    {
+        _protectOpenFromTrailingInternalHide = true;
+        long protectionGeneration = ++_hideProtectionGeneration;
+        _ = ClearTrailingHideProtectionAsync(showGeneration, protectionGeneration);
+    }
+
+    private async Task ClearTrailingHideProtectionAsync(
+        long showGeneration,
+        long protectionGeneration)
     {
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-        if (GodotObject.IsInstanceValid(this) && showGeneration == _showGeneration)
+        if (GodotObject.IsInstanceValid(this) &&
+            showGeneration == _showGeneration &&
+            protectionGeneration == _hideProtectionGeneration)
         {
             _protectOpenFromTrailingInternalHide = false;
         }
@@ -687,9 +728,9 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
             {
                 return;
             }
+            ArmTrailingHideProtection(showGeneration);
             Popup(_lastPopupContentRect);
             ClampActualPopupToViewport(_lastPreferredPosition, _lastViewport);
-            _protectOpenFromTrailingInternalHide = false;
         }).CallDeferred();
     }
 

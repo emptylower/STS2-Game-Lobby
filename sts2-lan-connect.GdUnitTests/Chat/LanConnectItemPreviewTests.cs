@@ -360,16 +360,18 @@ public sealed class LanConnectItemPreviewTests
         FakeCardVisualFactory factory = new();
         using PreviewFixture fixture = await PreviewFixture.Create(factory);
         fixture.ShowCard();
+        AssertThat(fixture.Preview.Visible).IsTrue();
         Control oldVisual = factory.LastVisual!;
         fixture.ShowCard();
 
         AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(1);
-        AssertThat(oldVisual.GetParent() == null).IsTrue();
-        AssertThat(oldVisual.IsInsideTree()).IsFalse();
+        AssertReleasedOrDetached(oldVisual);
         AssertThat(LanConnectGodotItemLinkCapturePorts.HasVisibleItemPreview(
             fixture.Preview.GetTree())).IsTrue();
         await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
 
+        AssertThat(fixture.Preview.Visible).IsTrue();
         AssertThat(fixture.Preview.TestState.CardVisualCount).IsEqual(1);
         AssertThat(fixture.Preview.TestState.ContentNodeCount).IsEqual(1);
         fixture.Preview.ClosePreview();
@@ -396,8 +398,7 @@ public sealed class LanConnectItemPreviewTests
         fixture.ShowCard();
 
         AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(1);
-        AssertThat(oldVisual.GetParent() == null).IsTrue();
-        AssertThat(oldVisual.IsInsideTree()).IsFalse();
+        AssertReleasedOrDetached(oldVisual);
         AssertThat(fixture.Preview.Visible).IsTrue();
         AssertThat(LanConnectGodotItemLinkCapturePorts.HasVisibleItemPreview(
             fixture.Preview.GetTree())).IsTrue();
@@ -481,6 +482,38 @@ public sealed class LanConnectItemPreviewTests
             fixture.Preview.GetTree())).IsFalse();
     }
 
+    [TestCase]
+    public async Task Native_hide_after_trailing_protection_expires_stays_closed_and_cleared()
+    {
+        using PreviewFixture fixture = await PreviewFixture.Create(new FakeCardVisualFactory());
+        fixture.ShowCard();
+
+        fixture.Preview.ShowResolved(
+            UnknownRelic(),
+            new Rect2(Vector2.Zero, new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)));
+        fixture.ShowCard();
+        for (int frame = 0;
+             frame < 10 && fixture.Preview.TrailingHideProtectionActiveForTests;
+             frame++)
+        {
+            await fixture.Runner.AwaitIdleFrame();
+        }
+        AssertThat(fixture.Preview.TrailingHideProtectionActiveForTests).IsFalse();
+        AssertThat(fixture.Preview.Visible).IsTrue();
+        AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(1);
+
+        ((PopupPanel)fixture.Preview).Hide();
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Preview.Visible).IsFalse();
+        AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(0);
+        AssertThat(fixture.Preview.TestState.ContentNodeCount).IsEqual(0);
+        AssertThat(LanConnectGodotItemLinkCapturePorts.HasVisibleItemPreview(
+            fixture.Preview.GetTree())).IsFalse();
+    }
+
     private static LanConnectResolvedItem ResolvedCard(int upgradeLevel) => new(
         LanConnectResolvedItemStatus.Resolved,
         "card",
@@ -512,6 +545,16 @@ public sealed class LanConnectItemPreviewTests
     private static VBoxContainer Content(LanConnectItemPreview preview) =>
         preview.GetNode<VBoxContainer>(
             $"{LanConnectItemPreview.SurfaceName}/{LanConnectItemPreview.ContentName}");
+
+    private static void AssertReleasedOrDetached(Control visual)
+    {
+        if (!GodotObject.IsInstanceValid(visual))
+        {
+            return;
+        }
+        AssertThat(visual.GetParent() == null).IsTrue();
+        AssertThat(visual.IsInsideTree()).IsFalse();
+    }
 
     private static void AssertDescendantsInsidePopup(LanConnectItemPreview preview)
     {
