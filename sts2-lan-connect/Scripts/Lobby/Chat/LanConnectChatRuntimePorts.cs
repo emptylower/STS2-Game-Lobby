@@ -32,7 +32,9 @@ internal enum LanConnectLobbyRuntimeChatCoordinatorCheckpoint
 {
     BeginAfterSyncLease,
     EnterBeforeRoomMutationLock,
-    AppendAfterContextValidation
+    AppendAfterContextValidation,
+    RoomTimeoutCancellationClaimed,
+    RoomTimeoutObserverFinalized
 }
 
 internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
@@ -46,7 +48,7 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
     private readonly object _lifecycleLock = new();
     private readonly object _roomMutationLock = new();
     private readonly object _roomTimeoutLock = new();
-    private readonly Dictionary<string, CancellationTokenSource> _roomDeliveryTimeouts =
+    private readonly Dictionary<string, RoomDeliveryTimeoutRegistration> _roomDeliveryTimeouts =
         new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly CancellationToken _lifetimeToken;
@@ -109,7 +111,9 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
                 QueuedAt = sentAt
             }),
             LanConnectLobbyRuntimeChatCoordinatorCheckpoint.BeginAfterSyncLease);
-        StartRoomDeliveryTimeout(clientMessageId);
+        _ = StartRoomDeliveryTimeout(
+            clientMessageId,
+            Interlocked.Read(ref _roomSessionGeneration));
     }
 
     internal void ApplyRoomAck(LanConnectRoomChatAckEnvelope envelope, string localSenderId)
@@ -157,11 +161,9 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
                 Content = message.Content,
                 QueuedAt = _clock()
             });
-            StartRoomDeliveryTimeout(clientMessageId);
         });
-        if (sessionGeneration != Interlocked.Read(ref _roomSessionGeneration))
+        if (!StartRoomDeliveryTimeout(clientMessageId, sessionGeneration))
         {
-            CancelRoomDeliveryTimeout(clientMessageId);
             throw new InvalidOperationException("The room control session changed before retry.");
         }
         try
@@ -439,38 +441,52 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         }
     }
 
-    private void StartRoomDeliveryTimeout(string clientMessageId)
+    private bool StartRoomDeliveryTimeout(string clientMessageId, long sessionGeneration)
     {
-        CancellationTokenSource timeout =
-            CancellationTokenSource.CreateLinkedTokenSource(_lifetimeToken);
+        RoomDeliveryTimeoutRegistration registration = new(
+            clientMessageId,
+            sessionGeneration,
+            CancellationTokenSource.CreateLinkedTokenSource(_lifetimeToken));
+        RoomDeliveryTimeoutRegistration? prior = null;
+        bool accepted;
         lock (_roomTimeoutLock)
         {
-            if (_roomDeliveryTimeouts.Remove(clientMessageId, out CancellationTokenSource? prior))
+            accepted = sessionGeneration == Interlocked.Read(ref _roomSessionGeneration);
+            if (accepted)
             {
-                prior.Cancel();
+                if (_roomDeliveryTimeouts.Remove(clientMessageId, out prior))
+                {
+                    prior.CancellationClaimed = true;
+                }
+                _roomDeliveryTimeouts[clientMessageId] = registration;
             }
-            _roomDeliveryTimeouts[clientMessageId] = timeout;
         }
-        long sessionGeneration = Interlocked.Read(ref _roomSessionGeneration);
-        _ = ObserveRoomDeliveryTimeoutAsync(clientMessageId, sessionGeneration, timeout);
+        if (!accepted)
+        {
+            registration.Source.Dispose();
+            return false;
+        }
+        _ = ObserveRoomDeliveryTimeoutAsync(registration);
+        if (prior != null)
+        {
+            CancelClaimedRoomDeliveryTimeout(prior);
+        }
+        return true;
     }
 
-    private async Task ObserveRoomDeliveryTimeoutAsync(
-        string clientMessageId,
-        long sessionGeneration,
-        CancellationTokenSource timeout)
+    private async Task ObserveRoomDeliveryTimeoutAsync(RoomDeliveryTimeoutRegistration registration)
     {
         try
         {
-            await _delay(RoomDeliveryTimeout, timeout.Token);
-            timeout.Token.ThrowIfCancellationRequested();
-            if (sessionGeneration != Interlocked.Read(ref _roomSessionGeneration))
+            await _delay(RoomDeliveryTimeout, registration.Source.Token);
+            registration.Source.Token.ThrowIfCancellationRequested();
+            if (registration.SessionGeneration != Interlocked.Read(ref _roomSessionGeneration))
             {
                 return;
             }
             RunRoomMutation(() => State.Room.MarkTimedOut(_clock()));
         }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        catch (OperationCanceledException) when (registration.Source.IsCancellationRequested)
         {
         }
         catch (ObjectDisposedException)
@@ -478,26 +494,47 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         }
         finally
         {
+            bool dispose = false;
             lock (_roomTimeoutLock)
             {
-                if (_roomDeliveryTimeouts.TryGetValue(clientMessageId, out CancellationTokenSource? current) &&
-                    ReferenceEquals(current, timeout))
+                if (_roomDeliveryTimeouts.TryGetValue(
+                        registration.ClientMessageId,
+                        out RoomDeliveryTimeoutRegistration? current) &&
+                    ReferenceEquals(current, registration))
                 {
-                    _roomDeliveryTimeouts.Remove(clientMessageId);
+                    _roomDeliveryTimeouts.Remove(registration.ClientMessageId);
+                }
+                registration.ObserverCompleted = true;
+                dispose = TryClaimRoomDeliveryTimeoutDisposal(registration);
+            }
+            try
+            {
+                _checkpoint?.Invoke(LanConnectLobbyRuntimeChatCoordinatorCheckpoint.RoomTimeoutObserverFinalized);
+            }
+            finally
+            {
+                if (dispose)
+                {
+                    registration.Source.Dispose();
                 }
             }
-            timeout.Dispose();
         }
     }
 
     private void CancelRoomDeliveryTimeout(string clientMessageId)
     {
-        CancellationTokenSource? timeout = null;
+        RoomDeliveryTimeoutRegistration? registration = null;
         lock (_roomTimeoutLock)
         {
-            _roomDeliveryTimeouts.Remove(clientMessageId, out timeout);
+            if (_roomDeliveryTimeouts.Remove(clientMessageId, out registration))
+            {
+                registration.CancellationClaimed = true;
+            }
         }
-        timeout?.Cancel();
+        if (registration != null)
+        {
+            CancelClaimedRoomDeliveryTimeout(registration);
+        }
     }
 
     private void CancelRoomDeliveryTimeoutIfCompleted(string clientMessageId)
@@ -512,16 +549,61 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 
     private void CancelAllRoomDeliveryTimeouts()
     {
-        List<CancellationTokenSource> timeouts;
+        List<RoomDeliveryTimeoutRegistration> registrations;
         lock (_roomTimeoutLock)
         {
-            timeouts = _roomDeliveryTimeouts.Values.ToList();
+            registrations = _roomDeliveryTimeouts.Values.ToList();
             _roomDeliveryTimeouts.Clear();
+            foreach (RoomDeliveryTimeoutRegistration registration in registrations)
+            {
+                registration.CancellationClaimed = true;
+            }
         }
-        foreach (CancellationTokenSource timeout in timeouts)
+        foreach (RoomDeliveryTimeoutRegistration registration in registrations)
         {
-            timeout.Cancel();
+            CancelClaimedRoomDeliveryTimeout(registration);
         }
+    }
+
+    private void CancelClaimedRoomDeliveryTimeout(RoomDeliveryTimeoutRegistration registration)
+    {
+        bool dispose;
+        try
+        {
+            _checkpoint?.Invoke(LanConnectLobbyRuntimeChatCoordinatorCheckpoint.RoomTimeoutCancellationClaimed);
+        }
+        finally
+        {
+            try
+            {
+                registration.Source.Cancel();
+            }
+            finally
+            {
+                lock (_roomTimeoutLock)
+                {
+                    registration.CancellationCompleted = true;
+                    dispose = TryClaimRoomDeliveryTimeoutDisposal(registration);
+                }
+                if (dispose)
+                {
+                    registration.Source.Dispose();
+                }
+            }
+        }
+    }
+
+    private static bool TryClaimRoomDeliveryTimeoutDisposal(
+        RoomDeliveryTimeoutRegistration registration)
+    {
+        if (registration.DisposalClaimed ||
+            !registration.ObserverCompleted ||
+            (registration.CancellationClaimed && !registration.CancellationCompleted))
+        {
+            return false;
+        }
+        registration.DisposalClaimed = true;
+        return true;
     }
 
     private void AcquireSyncLease()
@@ -580,6 +662,26 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
         }
+    }
+
+    private sealed class RoomDeliveryTimeoutRegistration(
+        string clientMessageId,
+        long sessionGeneration,
+        CancellationTokenSource source)
+    {
+        internal string ClientMessageId { get; } = clientMessageId;
+
+        internal long SessionGeneration { get; } = sessionGeneration;
+
+        internal CancellationTokenSource Source { get; } = source;
+
+        internal bool CancellationClaimed { get; set; }
+
+        internal bool CancellationCompleted { get; set; }
+
+        internal bool ObserverCompleted { get; set; }
+
+        internal bool DisposalClaimed { get; set; }
     }
 }
 

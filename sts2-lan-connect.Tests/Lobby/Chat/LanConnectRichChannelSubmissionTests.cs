@@ -362,6 +362,64 @@ public sealed class LanConnectRichChannelSubmissionTests
     }
 
     [Fact]
+    public async Task Room_timeout_single_cancel_cannot_race_observer_disposal()
+    {
+        CoordinatorClient server = new();
+        RoomDelay delay = new();
+        using RoomTimeoutRaceCheckpoints race = new();
+        await using LanConnectLobbyRuntimeChatCoordinator coordinator = new(
+            server,
+            checkpoint: race.OnCheckpoint,
+            delay: delay.DelayAsync);
+        coordinator.EnterRoom("room-1");
+        coordinator.SetRoomRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 0));
+        LanConnectChatContent content = new(1, [new LanConnectEmojiSegment("heart")]);
+        coordinator.BeginRoomPending("single-race", "Ironclad", "net-1", content, DateTimeOffset.UtcNow);
+
+        Task applyAck = Task.Run(() => coordinator.ApplyRoomAck(new LanConnectRoomChatAckEnvelope
+        {
+            ClientMessageId = "single-race",
+            Message = RoomMessage("single-race-server", content)
+        }, "net-1"));
+        race.WaitForCancellationClaim();
+        delay.CompleteNext();
+        race.WaitForObserverFinalize();
+        race.ReleaseCancellation();
+        await applyAck;
+
+        Assert.Equal(ServerChatDeliveryState.Confirmed, Assert.Single(coordinator.State.Room.Messages).Delivery);
+    }
+
+    [Fact]
+    public async Task Room_timeout_cancel_all_cannot_race_observer_disposal()
+    {
+        CoordinatorClient server = new();
+        RoomDelay delay = new();
+        using RoomTimeoutRaceCheckpoints race = new();
+        await using LanConnectLobbyRuntimeChatCoordinator coordinator = new(
+            server,
+            checkpoint: race.OnCheckpoint,
+            delay: delay.DelayAsync);
+        coordinator.EnterRoom("room-1");
+        coordinator.BeginRoomPending(
+            "cancel-all-race",
+            "Ironclad",
+            "net-1",
+            new LanConnectChatContent(1, [new LanConnectEmojiSegment("heart")]),
+            DateTimeOffset.UtcNow);
+
+        Task leaveRoom = Task.Run(coordinator.LeaveRoom);
+        race.WaitForCancellationClaim();
+        delay.CompleteNext();
+        race.WaitForObserverFinalize();
+        race.ReleaseCancellation();
+        await leaveRoom;
+
+        Assert.Null(coordinator.State.ActiveRoomId);
+        Assert.Empty(coordinator.State.Room.Messages);
+    }
+
+    [Fact]
     public async Task Runtime_room_retry_reuses_exact_session_id_and_content_and_native_close_marks_unknown()
     {
         CoordinatorClient server = new();
@@ -850,5 +908,44 @@ public sealed class LanConnectRichChannelSubmissionTests
         }
 
         internal void CompleteNext() => _pending.Dequeue().TrySetResult();
+    }
+
+    private sealed class RoomTimeoutRaceCheckpoints : IDisposable
+    {
+        private readonly ManualResetEventSlim _cancellationClaimed = new(false);
+        private readonly ManualResetEventSlim _observerFinalized = new(false);
+        private readonly ManualResetEventSlim _releaseCancellation = new(false);
+
+        internal void OnCheckpoint(LanConnectLobbyRuntimeChatCoordinatorCheckpoint checkpoint)
+        {
+            if (checkpoint == LanConnectLobbyRuntimeChatCoordinatorCheckpoint.RoomTimeoutCancellationClaimed)
+            {
+                _cancellationClaimed.Set();
+                if (!_releaseCancellation.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("The timeout cancellation race was not released.");
+                }
+            }
+            else if (checkpoint == LanConnectLobbyRuntimeChatCoordinatorCheckpoint.RoomTimeoutObserverFinalized)
+            {
+                _observerFinalized.Set();
+            }
+        }
+
+        internal void WaitForCancellationClaim() =>
+            Assert.True(_cancellationClaimed.Wait(TimeSpan.FromSeconds(2)));
+
+        internal void WaitForObserverFinalize() =>
+            Assert.True(_observerFinalized.Wait(TimeSpan.FromSeconds(2)));
+
+        internal void ReleaseCancellation() => _releaseCancellation.Set();
+
+        public void Dispose()
+        {
+            _releaseCancellation.Set();
+            _cancellationClaimed.Dispose();
+            _observerFinalized.Dispose();
+            _releaseCancellation.Dispose();
+        }
     }
 }
