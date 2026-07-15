@@ -292,20 +292,20 @@ test("close finishes promptly while an HTTP keep-alive connection is open", asyn
   }
 });
 
-const PHASE3_PROBE_CAPABILITIES = {
+const CURRENT_PROBE_CAPABILITIES = {
   serverChatVersion: 1,
   roomChatProtocolVersion: 1,
   richContentVersion: 1,
   emojiSetVersion: 1,
   itemRefVersion: 1,
-  combatRefVersion: 0,
+  combatRefVersion: 1,
   maxMessageChars: 300,
   maxSegments: 32,
   maxEntities: 12,
   historyLimit: 50,
 } as const;
 
-test("GET /probe returns exact phase-3 chat capabilities", async () => {
+test("GET /probe returns exact current chat capabilities", async () => {
   const config = testConfig({ port: 0 });
   const service = await createLobbyService(config);
   const address = await service.start();
@@ -315,7 +315,7 @@ test("GET /probe returns exact phase-3 chat capabilities", async () => {
     assert.equal(probe.status, 200);
     assert.deepEqual(await probe.json(), {
       ok: true,
-      capabilities: PHASE3_PROBE_CAPABILITIES,
+      capabilities: CURRENT_PROBE_CAPABILITIES,
     });
 
     const health = await fetch(`http://127.0.0.1:${address.port}/health`);
@@ -820,7 +820,7 @@ test("control host and client room_chat_ready uses Phase 1 generation for rich a
       richContentVersion: 1,
       emojiSetVersion: 1,
       itemRefVersion: 1,
-      combatRefVersion: 0,
+      combatRefVersion: 1,
     });
     assert.deepEqual(richReady.enabledFeatures, hostReady.enabledFeatures);
     const assertNoRoomDeliveryAfterPing = async (

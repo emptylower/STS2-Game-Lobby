@@ -32,6 +32,13 @@ export const PHASE_3_CHAT_FEATURES: Readonly<ChatFeatureVersions> = Object.freez
   combatRefVersion: 0,
 });
 
+export const PHASE_4_CHAT_FEATURES: Readonly<ChatFeatureVersions> = Object.freeze({
+  richContentVersion: 1,
+  emojiSetVersion: 1,
+  itemRefVersion: 1,
+  combatRefVersion: 1,
+});
+
 const ALL_DECLARED_VERSIONS: Readonly<ChatFeatureVersions> = Object.freeze({
   richContentVersion: 1,
   emojiSetVersion: 1,
@@ -65,8 +72,7 @@ export function resolveEnabledFeatures(input: ResolveFeatureInput): ChatFeatureV
     richContentVersion,
     emojiSetVersion: enabled("emojiSetVersion"),
     itemRefVersion: enabled("itemRefVersion"),
-    // Combat references are reserved for Phase 4 and never enabled by this resolver.
-    combatRefVersion: 0,
+    combatRefVersion: input.channel === "room" ? enabled("combatRefVersion") : 0,
   };
 }
 
@@ -75,14 +81,36 @@ export function supportsContent(
   features: ChatFeatureVersions,
 ): boolean {
   for (const segment of content.segments) {
-    if (segment.kind === "emoji") {
-      if (features.richContentVersion !== 1 || features.emojiSetVersion !== 1) {
+    switch (segment.kind) {
+      case "text":
+        break;
+      case "emoji":
+        if (features.richContentVersion !== 1 || features.emojiSetVersion !== 1) {
+          return false;
+        }
+        break;
+      case "item_ref":
+        if (features.richContentVersion !== 1 || features.itemRefVersion !== 1) {
+          return false;
+        }
+        break;
+      case "power_state":
+        if (features.richContentVersion !== 1 || features.combatRefVersion !== 1) {
+          return false;
+        }
+        break;
+      case "target_ref":
+        // Monster references stay on the exact legacy fallback until a stable ID exists.
+        if (
+          segment.targetKind !== "player"
+          || features.richContentVersion !== 1
+          || features.combatRefVersion !== 1
+        ) {
+          return false;
+        }
+        break;
+      default:
         return false;
-      }
-    } else if (segment.kind === "item_ref") {
-      if (features.richContentVersion !== 1 || features.itemRefVersion !== 1) {
-        return false;
-      }
     }
   }
   return true;

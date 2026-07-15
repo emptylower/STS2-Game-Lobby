@@ -40,7 +40,10 @@ import { bootstrapPeers } from "./peer/bootstrap.js";
 import { announceToBootstrappedPeers } from "./peer/auto-announce.js";
 import { mountMetrics } from "./peer/handlers/metrics.js";
 import { ChatPeerError, ChatPeerRegistry } from "./chat/peer-registry.js";
-import { PHASE_3_CHAT_FEATURES } from "./chat/feature-resolver.js";
+import {
+  PHASE_4_CHAT_FEATURES,
+  resolveEnabledFeatures,
+} from "./chat/feature-resolver.js";
 import { ServerChatGateway, type ServerChatGatewayOptions } from "./chat/gateway.js";
 import { RateLimitError, SlidingWindowLimiter } from "./chat/rate-limiter.js";
 import { RoomChatGateway } from "./chat/room-gateway.js";
@@ -223,6 +226,8 @@ export async function createLobbyService(
   const chatGateway = new ServerChatGateway({
     peerRegistry: chatPeerRegistry,
     chatEnabled: env.chat.enabled,
+    compiledFeatures: PHASE_4_CHAT_FEATURES,
+    configuredFeatures: PHASE_4_CHAT_FEATURES,
     maxPayloadBytes: env.chat.maxPayloadBytes,
     historyLimit: env.chat.historyLimit,
     historyTtlMs: env.chat.historyTtlMs,
@@ -232,9 +237,16 @@ export async function createLobbyService(
     ipMessagesPerMinute: env.chat.ipMessagesPerMinute,
     ...dependencies.chatGatewayOptions,
   });
+  const currentRoomChatFeatures = resolveEnabledFeatures({
+    channel: "room",
+    compiled: PHASE_4_CHAT_FEATURES,
+    configured: PHASE_4_CHAT_FEATURES,
+    channelEnabled: true,
+    roomV2Enabled: true,
+  });
   const roomChatGateway = new RoomChatGateway({
-    compiledFeatures: { ...PHASE_3_CHAT_FEATURES },
-    configuredFeatures: { ...PHASE_3_CHAT_FEATURES },
+    compiledFeatures: PHASE_4_CHAT_FEATURES,
+    configuredFeatures: PHASE_4_CHAT_FEATURES,
     roomV2Enabled: true,
     getRoomChatContext: (roomId) => store.getRoomChatContext(roomId),
   });
@@ -308,10 +320,10 @@ export async function createLobbyService(
       capabilities: {
         serverChatVersion: 1,
         roomChatProtocolVersion: 1,
-        richContentVersion: PHASE_3_CHAT_FEATURES.richContentVersion,
-        emojiSetVersion: PHASE_3_CHAT_FEATURES.emojiSetVersion,
-        itemRefVersion: PHASE_3_CHAT_FEATURES.itemRefVersion,
-        combatRefVersion: 0,
+        richContentVersion: currentRoomChatFeatures.richContentVersion,
+        emojiSetVersion: currentRoomChatFeatures.emojiSetVersion,
+        itemRefVersion: currentRoomChatFeatures.itemRefVersion,
+        combatRefVersion: currentRoomChatFeatures.combatRefVersion,
         maxMessageChars: ChatMaxMessageChars,
         maxSegments: ChatMaxSegments,
         maxEntities: ChatMaxEntitiesPhase3,

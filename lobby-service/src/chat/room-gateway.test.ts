@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ChatFeatureVersions } from "./feature-resolver.js";
+import {
+  PHASE_3_CHAT_FEATURES,
+  type ChatFeatureVersions,
+} from "./feature-resolver.js";
 import type { RoomChatContext } from "../store.js";
 import {
   RoomChatGateway,
@@ -19,6 +22,11 @@ const noItemVersions: ChatFeatureVersions = {
   ...allVersions,
   itemRefVersion: 0,
 };
+
+const combatGatewayOptions = {
+  compiledFeatures: allVersions,
+  configuredFeatures: allVersions,
+} as const;
 
 interface TestPeer {
   registration: RoomChatPeerRegistration;
@@ -106,8 +114,8 @@ function createGateway(options: Omit<RoomChatGatewayOptions, "getRoomChatContext
   let nextId = 0;
   const { chatEnabled, context, ...gatewayOptions } = options;
   return new RoomChatGateway({
-    compiledFeatures: allVersions,
-    configuredFeatures: allVersions,
+    compiledFeatures: PHASE_3_CHAT_FEATURES,
+    configuredFeatures: PHASE_3_CHAT_FEATURES,
     roomV2Enabled: true,
     getRoomChatContext: context ?? ((roomId) => ({
       roomId,
@@ -121,12 +129,6 @@ function createGateway(options: Omit<RoomChatGatewayOptions, "getRoomChatContext
     ipMessagesPerMinute: 1_000,
     ...gatewayOptions,
   });
-}
-
-function enableCombatForTest(gateway: RoomChatGateway): void {
-  // Task 5 makes this result reachable through normal feature negotiation.
-  (gateway as unknown as { resolveFeatures: () => ChatFeatureVersions }).resolveFeatures =
-    () => allVersions;
 }
 
 function hasCode(code: string) {
@@ -466,6 +468,7 @@ test("room wire failures precede disabled state and cache without limiter or UUI
   let chatEnabled = false;
   let generatedIds = 0;
   const gateway = createGateway({
+    ...combatGatewayOptions,
     connectionBurst: 1,
     randomUuid: () => {
       generatedIds += 1;
@@ -485,8 +488,6 @@ test("room wire failures precede disabled state and cache without limiter or UUI
     roomId,
   });
   sender.frames.length = 0;
-
-  enableCombatForTest(gateway);
 
   const boundaryContent = (firstAmount: number) => ({
     formatVersion: 1,
@@ -573,6 +574,7 @@ test("combat send re-reads Phase 1 generation before canonicalize and commit", (
       roomSessionId: "session-2",
     };
     const gateway = createGateway({
+      ...combatGatewayOptions,
       connectionBurst: 2,
       ipMessagesPerMinute: 2,
       now: () => {
@@ -597,7 +599,6 @@ test("combat send re-reads Phase 1 generation before canonicalize and commit", (
     gateway.registerPeer(recipient.registration);
     gateway.handleControlEnvelope(sender.registration.connectionSessionId, hello("Alice", "net:alice"));
     gateway.handleControlEnvelope(recipient.registration.connectionSessionId, hello("Bob", "net:bob"));
-    enableCombatForTest(gateway);
     sender.frames.length = 0;
     recipient.frames.length = 0;
     const seededId = staleAt === "receive"
@@ -838,9 +839,48 @@ test("room v2 sends ACK and whole rich or exact legacy fallback per recipient", 
   assert.equal(notReady.frames.length, 0);
 });
 
+test("one failed recipient adapter does not block later room deliveries", () => {
+  const gateway = createGateway();
+  const sender = peer("isolated-sender");
+  const failed = peer("isolated-failed");
+  const recipient = peer("isolated-recipient");
+  let failDelivery = false;
+  failed.registration.send = (frame) => {
+    if (failDelivery) throw new Error("recipient adapter failed");
+    failed.frames.push(frame);
+  };
+  for (const candidate of [sender, failed, recipient]) {
+    gateway.registerPeer(candidate.registration);
+  }
+  gateway.handleControlEnvelope("isolated-sender", hello("Alice", "net:alice"));
+  gateway.handleControlEnvelope("isolated-failed", hello("Bob", "net:bob", noItemVersions));
+  gateway.handleControlEnvelope("isolated-recipient", hello("Carol", "net:carol"));
+  sender.frames.length = 0;
+  failed.frames.length = 0;
+  recipient.frames.length = 0;
+  failDelivery = true;
+
+  gateway.handleControlEnvelope("isolated-sender", roomSend(
+    "67676767-6767-4767-8767-676767676767",
+    {
+      formatVersion: 1,
+      segments: [{ kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike" }],
+    },
+  ));
+
+  assert.deepEqual(sender.frames.map((frame) => frame.type), ["room_chat_ack", "room_chat_message"]);
+  assert.equal(failed.frames.length, 0);
+  assert.deepEqual(recipient.frames, [{
+    type: "room_chat_message",
+    protocolVersion: 1,
+    message: sender.frames[0]?.message,
+  }]);
+});
+
 test("room_chat_ack carries canonical combat through existing per-session dedupe", () => {
   let generatedIds = 0;
   const gateway = createGateway({
+    ...combatGatewayOptions,
     context: (roomId) => ({
       roomId,
       roomSessionId: "session-1",
@@ -858,7 +898,6 @@ test("room_chat_ack carries canonical combat through existing per-session dedupe
   gateway.registerPeer(recipient.registration);
   gateway.handleControlEnvelope("combat-ack-sender", hello("Alice", "net:alice"));
   gateway.handleControlEnvelope("combat-ack-recipient", hello("Bob", "net:bob"));
-  enableCombatForTest(gateway);
   sender.frames.length = 0;
   recipient.frames.length = 0;
 

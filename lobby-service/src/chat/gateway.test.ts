@@ -73,7 +73,7 @@ const richFeatures: ChatFeatureVersions = {
   richContentVersion: 1,
   emojiSetVersion: 1,
   itemRefVersion: 1,
-  combatRefVersion: 0,
+  combatRefVersion: 1,
 };
 
 function frames(socket: FakeSocket): Array<Record<string, unknown>> {

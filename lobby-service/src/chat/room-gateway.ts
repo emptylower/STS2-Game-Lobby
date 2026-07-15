@@ -547,22 +547,25 @@ export class RoomChatGateway {
         continue;
       }
       const recipientFeatures = this.resolveFeatures(peer, recipient, commitContext.chatEnabled);
-      if (recipient.roomV2Capable && supportsContent(content, recipientFeatures)) {
-        recipient.send({
-          type: "room_chat_message",
-          protocolVersion: 1,
-          message,
-        });
-      } else {
-        recipient.send({
-          type: "room_chat",
-          roomId: peer.roomId,
-          playerName: peer.identity.playerName,
-          playerNetId: peer.identity.playerNetId,
-          messageId: message.messageId,
-          messageText: renderLegacyRoomFallback(content),
-          sentAtUnixMs: now,
-        });
+      const frame = recipient.roomV2Capable && supportsContent(content, recipientFeatures)
+        ? {
+            type: "room_chat_message",
+            protocolVersion: 1,
+            message,
+          }
+        : {
+            type: "room_chat",
+            roomId: peer.roomId,
+            playerName: peer.identity.playerName,
+            playerNetId: peer.identity.playerNetId,
+            messageId: message.messageId,
+            messageText: renderLegacyRoomFallback(content),
+            sentAtUnixMs: now,
+          };
+      try {
+        recipient.send(frame);
+      } catch {
+        // A failed socket adapter must not prevent delivery to the remaining room peers.
       }
     }
   }

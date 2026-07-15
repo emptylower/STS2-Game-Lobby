@@ -79,7 +79,7 @@ test("channel and room-v2 gates disable every rich feature", () => {
   assert.deepEqual(resolve({ channel: "room", roomV2Enabled: false }), allOff);
 });
 
-test("server never enables combat and room intersects both peers", () => {
+test("server never enables combat and room enables it through the full feature intersection", () => {
   assert.deepEqual(resolve(), {
     richContentVersion: 1,
     emojiSetVersion: 1,
@@ -94,14 +94,24 @@ test("server never enables combat and room intersects both peers", () => {
     richContentVersion: 1,
     emojiSetVersion: 1,
     itemRefVersion: 0,
-    combatRefVersion: 0,
+    combatRefVersion: 1,
   });
   assert.deepEqual(resolve({
     channel: "room",
     sender: { ...allVersions, richContentVersion: 0 },
     receiver: allVersions,
   }), allOff);
-  assert.equal(resolve({ channel: "room" }).combatRefVersion, 0);
+  assert.equal(resolve({ channel: "room" }).combatRefVersion, 1);
+
+  for (const [label, overrides] of [
+    ["compiled", { compiled: { ...allVersions, combatRefVersion: 0 } }],
+    ["configured", { configured: { ...allVersions, combatRefVersion: 0 }, admin: {} }],
+    ["admin", { admin: { combatRefVersion: 0 } }],
+    ["sender", { sender: { ...allVersions, combatRefVersion: 0 } }],
+    ["receiver", { receiver: { ...allVersions, combatRefVersion: 0 } }],
+  ] as const) {
+    assert.equal(resolve({ channel: "room", ...overrides }).combatRefVersion, 0, label);
+  }
 });
 
 test("supportsContent checks the whole message without stripping segments", () => {
@@ -128,4 +138,76 @@ test("supportsContent checks the whole message without stripping segments", () =
   }, allOff), true);
   assert.equal(JSON.stringify(content), before);
   assert.equal(content.segments.length, 3);
+});
+
+test("supportsContent routes power and player targets by combat while monster stays disabled", () => {
+  const power: ChatContent = {
+    formatVersion: 1,
+    segments: [{
+      kind: "power_state",
+      modelId: "MegaCrit.Strength",
+      amount: 2,
+      roomSessionId: "session-1",
+      ownerPlayerNetId: "net:alice",
+    }],
+  };
+  const player: ChatContent = {
+    formatVersion: 1,
+    segments: [{
+      kind: "target_ref",
+      targetKind: "player",
+      targetKey: "net:bob",
+      roomSessionId: "session-1",
+    }],
+  };
+  const monster: ChatContent = {
+    formatVersion: 1,
+    segments: [{
+      kind: "target_ref",
+      targetKind: "monster",
+      targetKey: "unstable-monster-id",
+      roomSessionId: "session-1",
+    }],
+  };
+  const combatEnabled = resolve({ channel: "room" });
+  const combatDisabled = { ...combatEnabled, combatRefVersion: 0 as const };
+
+  assert.equal(supportsContent(power, combatEnabled), true);
+  assert.equal(supportsContent(player, combatEnabled), true);
+  assert.equal(supportsContent(power, combatDisabled), false);
+  assert.equal(supportsContent(player, combatDisabled), false);
+  assert.equal(supportsContent(power, { ...combatEnabled, richContentVersion: 0 }), false);
+  assert.equal(supportsContent(monster, combatEnabled), false);
+});
+
+test("supportsContent requires every capability used by a mixed message without mutation", () => {
+  const content: ChatContent = {
+    formatVersion: 1,
+    segments: [
+      { kind: "text", text: "card power " },
+      { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike" },
+      {
+        kind: "power_state",
+        modelId: "MegaCrit.Strength",
+        amount: 1,
+        roomSessionId: "session-1",
+      },
+    ],
+  };
+  const before = structuredClone(content);
+  const enabled = resolve({ channel: "room" });
+
+  assert.equal(supportsContent(content, enabled), true);
+  assert.equal(supportsContent(content, { ...enabled, itemRefVersion: 0 }), false);
+  assert.equal(supportsContent(content, { ...enabled, combatRefVersion: 0 }), false);
+  assert.deepEqual(content, before);
+});
+
+test("supportsContent rejects unknown runtime segment kinds", () => {
+  const content = {
+    formatVersion: 1,
+    segments: [{ kind: "future_ref", opaqueId: "future-1" }],
+  } as unknown as ChatContent;
+
+  assert.equal(supportsContent(content, resolve({ channel: "room" })), false);
 });

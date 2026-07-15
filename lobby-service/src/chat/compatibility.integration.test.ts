@@ -826,3 +826,131 @@ test("new server preserves 0.4.0 and 0.2.2 legacy lobby/control compatibility", 
     });
   }
 });
+
+test("passworded continue-game rooms remain coherent across delete and join races", async () => {
+  let service: Awaited<ReturnType<typeof createLobbyService>> | undefined;
+  const sockets: WebSocket[] = [];
+  const tempDir = mkdtempSync(join(tmpdir(), "sts2-lobby-continue-compat-"));
+
+  await withCompatibilityCleanup(
+    async () => {
+      const config = compatibilityConfig(tempDir);
+      service = await createLobbyService(config);
+      const address = await service.start();
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+      const createResponse = await fetch(`${baseUrl}/rooms`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          roomName: "continue-compat",
+          password: "secret",
+          hostPlayerName: "Host",
+          gameMode: "standard",
+          version: "1.0.0",
+          modVersion: "0.4.0",
+          modList: ["sts2_lan_connect"],
+          maxPlayers: 4,
+          hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+          savedRun: {
+            saveKey: "save-compat",
+            slots: [
+              { netId: "1", characterId: "IRONCLAD", isHost: true },
+              { netId: "222", characterId: "SILENT", isHost: false },
+              { netId: "333", characterId: "DEFECT", isHost: false },
+            ],
+            connectedPlayerNetIds: ["1"],
+          },
+        }),
+      });
+      const createResult = await createResponse.json() as CreatedRoom & { code?: string; message?: string };
+      assert.equal(createResponse.status, 201, JSON.stringify(createResult));
+      const created = createResult;
+      assert.ok(created.relayEndpoint.port > 0, "continue room must retain Relay allocation");
+
+      const joinBody = (password: string, desiredSavePlayerNetId: string, playerName: string) => ({
+        playerName,
+        playerNetId: `live:${playerName}`,
+        password,
+        version: "1.0.0",
+        modVersion: "0.4.0",
+        modList: ["sts2_lan_connect"],
+        desiredSavePlayerNetId,
+      });
+      const wrongPassword = await fetch(`${baseUrl}/rooms/${created.roomId}/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(joinBody("wrong", "222", "Wrong")),
+      });
+      assert.equal(wrongPassword.status, 401);
+      assert.equal((await wrongPassword.json() as { code?: string }).code, "invalid_password");
+
+      const heartbeat = await fetch(`${baseUrl}/rooms/${created.roomId}/heartbeat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          hostToken: created.hostToken,
+          currentPlayers: 1,
+          status: "starting",
+          connectedPlayerNetIds: ["1"],
+        }),
+      });
+      assert.equal(heartbeat.status, 200);
+
+      const continueResponse = await fetch(`${baseUrl}/rooms/${created.roomId}/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(joinBody("secret", "222", "Continue")),
+      });
+      assert.equal(continueResponse.status, 200);
+      const continued = await continueResponse.json() as JoinedRoom & {
+        room: JoinedRoom["room"] & { status: string; savedRun?: { saveKey: string } };
+      };
+      assert.equal(continued.room.status, "open");
+      assert.equal(continued.room.savedRun?.saveKey, "save-compat");
+      assert.equal(continued.roomSessionId, created.roomSessionId);
+      assert.deepEqual(continued.connectionPlan.relayEndpoint, created.relayEndpoint);
+
+      const query =
+        `roomId=${encodeURIComponent(created.roomId)}`
+        + `&controlChannelId=${encodeURIComponent(created.controlChannelId)}`
+        + `&role=client&ticketId=${encodeURIComponent(continued.ticketId)}`;
+      const opened = await openControlWebSocket(
+        `ws://127.0.0.1:${address.port}${config.wsPath}?${query}`,
+      );
+      sockets.push(opened.socket);
+      const deletedClose = waitForClose(opened.socket);
+
+      const [deleteResponse, racingJoin] = await Promise.all([
+        fetch(`${baseUrl}/rooms/${created.roomId}`, {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ hostToken: created.hostToken }),
+        }),
+        fetch(`${baseUrl}/rooms/${created.roomId}/join`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(joinBody("secret", "333", "Racer")),
+        }),
+      ]);
+      assert.equal(deleteResponse.status, 204);
+      assert.equal([200, 404].includes(racingJoin.status), true, "join may linearize before or after delete");
+      assert.deepEqual(await deletedClose, { code: 4000, reason: "room_deleted" });
+
+      const afterDelete = await fetch(`${baseUrl}/rooms/${created.roomId}/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(joinBody("secret", "333", "AfterDelete")),
+      });
+      assert.equal(afterDelete.status, 404);
+    },
+    [
+      () => {
+        for (const socket of sockets) socket.terminate();
+      },
+      async () => {
+        await service?.close();
+      },
+      () => cleanupTempDir(tempDir),
+    ],
+  );
+});
