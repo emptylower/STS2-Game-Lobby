@@ -10,6 +10,28 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 public sealed class LanConnectEmojiPickerTests
 {
     [TestCase]
+    public void Production_loader_decodes_catalog_and_visible_deterministic_fallbacks()
+    {
+        LanConnectLucideIconLoader loader = new();
+        foreach (string iconName in LanConnectChatEmojiSet.Version1
+                     .Select(emoji => emoji.LucideIcon)
+                     .Concat(["send", "refresh-cw", "pin"]))
+        {
+            Texture2D icon = loader.Get(iconName, 20, Colors.White);
+            AssertThat(icon.GetWidth()).IsEqual(20);
+            AssertThat(icon.GetHeight()).IsEqual(20);
+        }
+
+        Texture2D missing = loader.Get("missing-icon", 20, Colors.Black);
+        AssertThat(ReferenceEquals(missing, loader.Get("missing-icon", 20, Colors.Black))).IsTrue();
+        AssertThat(HasVisiblePixel(missing.GetImage())).IsTrue();
+
+        LanConnectLucideIconLoader malformedLoader = new(new MalformedLucideResources());
+        Texture2D malformed = malformedLoader.Get("malformed", 20, Colors.Black);
+        AssertThat(HasVisiblePixel(malformed.GetImage())).IsTrue();
+    }
+
+    [TestCase]
     public async Task Picker_builds_stable_six_by_three_icon_only_accessible_grid()
     {
         using PickerFixture fixture = await PickerFixture.Create();
@@ -492,6 +514,9 @@ public sealed class LanConnectEmojiPickerTests
         await runner.AwaitIdleFrame();
         toggle = FindNode<Button>(panel, LanConnectEmojiPicker.ToggleButtonName);
         AssertThat(toggle.Visible).IsTrue();
+        AssertThat(toggle.Icon?.GetWidth() ?? 0).IsEqual(20);
+        AssertThat(FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).Icon?.GetWidth() ?? 0)
+            .IsEqual(18);
         AssertThat(panel.GetFocusChainControls().Select(control => control.Name.ToString()).Take(4))
             .ContainsExactly(
                 LanConnectConstants.ChatMessagesScrollName,
@@ -508,6 +533,26 @@ public sealed class LanConnectEmojiPickerTests
             new LanConnectEmojiRun("smile"),
             new LanConnectTextRun("b"));
         AssertThat(sends).IsEqual(0);
+    }
+
+    [TestCase]
+    public async Task Retry_and_room_pin_controls_use_shared_loader_textures()
+    {
+        LanConnectChatChannelState state = EnabledState(emojiVersion: 1);
+        state.BeginPendingText("icon-retry", "Me", "retry this");
+        state.MarkFailed("icon-retry", "offline", "offline");
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner panelRunner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await panelRunner.AwaitIdleFrame();
+        Button retry = FindNode<Button>(
+            panel,
+            LanConnectConstants.ChatRetryButtonPrefix + "icon-retry");
+        AssertThat(retry.Icon?.GetWidth() ?? 0).IsEqual(16);
+
+        using RoomChatFixture room = await RoomChatFixture.OpenWithServerSupport();
+        Button pin = FindNode<Button>(room.Overlay, "ChatPinButton");
+        AssertThat(pin.Icon?.GetWidth() ?? 0).IsEqual(18);
     }
 
     private static LanConnectChatChannelState EnabledState(int emojiVersion, int? richVersion = null)
@@ -631,6 +676,21 @@ public sealed class LanConnectEmojiPickerTests
         runner.SimulateMouseMove(position).SimulateMouseButtonPressed(MouseButton.Left);
     }
 
+    private static bool HasVisiblePixel(Image image)
+    {
+        for (int y = 0; y < image.GetHeight(); y++)
+        {
+            for (int x = 0; x < image.GetWidth(); x++)
+            {
+                if (image.GetPixel(x, y).A > 0f)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static T FindNode<T>(Node root, string name) where T : Node =>
         root.FindChild(name, recursive: true, owned: false) as T ??
         throw new InvalidOperationException($"Node '{name}' was not found.");
@@ -737,6 +797,15 @@ public sealed class LanConnectEmojiPickerTests
             }
             InputMap.ActionAddEvent(actionName, input);
             _bindings.Add((actionName, input));
+        }
+    }
+
+    private sealed class MalformedLucideResources : ILanConnectLucideResources
+    {
+        public bool TryReadSvg(string iconName, out string svg)
+        {
+            svg = "<svg><path></svg>";
+            return true;
         }
     }
 }

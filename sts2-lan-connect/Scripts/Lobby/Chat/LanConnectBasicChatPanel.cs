@@ -58,6 +58,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private static readonly Color DangerColor = new(0.94f, 0.38f, 0.34f, 1f);
     private static readonly Color WarningColor = new(0.94f, 0.7f, 0.26f, 1f);
 
+    private readonly LanConnectLucideIconLoader _icons;
     private LanConnectChatChannelState? _state;
     private Func<string, Task>? _send;
     private Func<string, Task>? _retry;
@@ -84,6 +85,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private bool _suppressScrollChange;
     private bool _compactLayout;
     private string _operationStatus = string.Empty;
+
+    internal LanConnectBasicChatPanel()
+        : this(LanConnectChatUiComposition.Icons)
+    {
+    }
+
+    internal LanConnectBasicChatPanel(LanConnectLucideIconLoader icons)
+    {
+        _icons = icons ?? throw new ArgumentNullException(nameof(icons));
+    }
 
     internal LanConnectChatChannelState? State => _state;
 
@@ -433,7 +444,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         _emojiButton = CreateButton(string.Empty, accent: false);
         _emojiButton.Name = LanConnectEmojiPicker.ToggleButtonName;
-        _emojiButton.Icon = CreateTemporaryEmojiIcon("smile");
+        _emojiButton.Icon = _icons.Get("smile", 20, AccentColor);
         _emojiButton.ExpandIcon = true;
         _emojiButton.TooltipText = "选择表情";
         _emojiButton.AccessibilityName = "选择表情";
@@ -446,6 +457,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         _sendButton = CreateButton("发送", accent: true);
         _sendButton.Name = LanConnectConstants.ChatSendButtonName;
+        _sendButton.Icon = _icons.Get("send", 18, TextStrongColor);
+        _sendButton.ExpandIcon = true;
         _sendButton.CustomMinimumSize = new Vector2(74, 38);
         _sendButton.Connect(Button.SignalName.Pressed, Callable.From(() => _ = SendDraftAsync()));
         inputRow.AddChild(_sendButton);
@@ -467,7 +480,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _emojiPicker.Bind(
             _draftEditor,
             LanConnectChatEmojiSet.Version1,
-            CreateTemporaryEmojiIcon,
+            _icons,
+            AccentColor,
             TemporaryEmojiLabel);
         _emojiPicker.FocusExitRequested += backwards =>
         {
@@ -685,6 +699,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 string stableKey = RetryStableKey(message, index);
                 Button retryButton = CreateButton("重试", accent: false);
                 retryButton.Name = LanConnectConstants.ChatRetryButtonPrefix + RetryNodeSuffix(message, index);
+                retryButton.Icon = _icons.Get("refresh-cw", 16, TextStrongColor);
+                retryButton.ExpandIcon = true;
                 retryButton.FocusMode = FocusModeEnum.All;
                 retryButton.CustomMinimumSize = new Vector2(64, 34);
                 retryButton.Disabled = _retryInFlight.Contains(
@@ -1289,32 +1305,6 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         button.AddThemeStyleboxOverride("pressed", CreateButtonStyle(background.Darkened(0.06f), AccentColor));
         button.AddThemeColorOverride("font_color", TextStrongColor);
         return button;
-    }
-
-    private static Texture2D CreateTemporaryEmojiIcon(string iconName)
-    {
-        Image image = Image.CreateEmpty(20, 20, false, Image.Format.Rgba8);
-        image.Fill(Colors.Transparent);
-        int seed = 0;
-        foreach (char character in iconName)
-        {
-            seed = (seed * 31 + character) & 0x7fffffff;
-        }
-        Color color = new(0.95f, 0.82f, 0.42f, 1f);
-        for (int pixel = 3; pixel < 17; pixel++)
-        {
-            image.SetPixel(pixel, 3, color);
-            image.SetPixel(pixel, 16, color);
-            image.SetPixel(3, pixel, color);
-            image.SetPixel(16, pixel, color);
-        }
-        image.SetPixel(6 + seed % 3, 8, color);
-        image.SetPixel(12 + seed % 3, 8, color);
-        for (int pixel = 7; pixel < 13; pixel++)
-        {
-            image.SetPixel(pixel, 12 + seed % 2, color);
-        }
-        return ImageTexture.CreateFromImage(image);
     }
 
     private static string TemporaryEmojiLabel(string key) => key switch

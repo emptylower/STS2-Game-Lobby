@@ -83,6 +83,17 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
         }
     }
 
+    internal void Bind(
+        LanConnectRichDraftEditor editor,
+        IReadOnlyList<LanConnectEmojiDescriptor> emojis,
+        LanConnectLucideIconLoader icons,
+        Color iconColor,
+        Func<string, string> localize)
+    {
+        ArgumentNullException.ThrowIfNull(icons);
+        Bind(editor, emojis, name => icons.Get(name, 20, iconColor), localize);
+    }
+
     internal void SetAvailable(bool available)
     {
         if (_available == available)
