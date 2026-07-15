@@ -340,6 +340,8 @@ internal sealed class LobbyControlEnvelope
 
     public string? PlayerName { get; set; }
 
+    public LanConnectChatFeatureVersions? RoomChatVersions { get; set; }
+
     public List<LobbyPlayerNameEntry>? PlayerNames { get; set; }
 
     public string? MessageId { get; set; }

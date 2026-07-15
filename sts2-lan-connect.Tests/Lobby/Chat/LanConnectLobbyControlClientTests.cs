@@ -150,6 +150,80 @@ public sealed class LanConnectLobbyControlClientTests
     }
 
     [Fact]
+    public async Task HostHelloWithRoomSessionDeclaresExactPhaseThreeVersionsAndIdentity()
+    {
+        FakeWebSocket socket = new();
+        await using LobbyControlClient client = new(socket);
+
+        await client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            "net:host",
+            "session-1",
+            CancellationToken.None);
+
+        Assert.Equal(
+            """{"type":"host_hello","roomId":"room-1","controlChannelId":"control-1","role":"host","playerNetId":"net:host","playerName":"Host","roomChatVersions":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":0}}""",
+            Assert.Single(socket.SentPayloads));
+    }
+
+    [Fact]
+    public async Task ClientHelloWithRoomSessionDeclaresExactPhaseThreeVersionsWithoutLegacyTicketField()
+    {
+        FakeWebSocket socket = new();
+        await using LobbyControlClient client = new(socket);
+
+        await client.ConnectClientAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "ticket-1",
+            "Guest",
+            "net-1",
+            "session-1",
+            CancellationToken.None);
+
+        Assert.Equal(
+            """{"type":"client_hello","roomId":"room-1","controlChannelId":"control-1","role":"client","playerNetId":"net-1","playerName":"Guest","roomChatVersions":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":0}}""",
+            Assert.Single(socket.SentPayloads));
+    }
+
+    [Fact]
+    public async Task MissingRoomSessionKeepsProductionOverloadsOnExactLegacyHello()
+    {
+        FakeWebSocket hostSocket = new();
+        await using LobbyControlClient host = new(hostSocket);
+        await host.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            "net:host",
+            roomSessionId: null,
+            CancellationToken.None);
+        Assert.Equal(
+            """{"type":"host_hello","roomId":"room-1","controlChannelId":"control-1","role":"host","playerName":"Host"}""",
+            Assert.Single(hostSocket.SentPayloads));
+
+        FakeWebSocket clientSocket = new();
+        await using LobbyControlClient client = new(clientSocket);
+        await client.ConnectClientAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "ticket-1",
+            "Guest",
+            "net-1",
+            roomSessionId: null,
+            CancellationToken.None);
+        Assert.Equal(
+            """{"type":"client_hello","roomId":"room-1","controlChannelId":"control-1","role":"client","ticketId":"ticket-1","playerNetId":"net-1","playerName":"Guest"}""",
+            Assert.Single(clientSocket.SentPayloads));
+    }
+
+    [Fact]
     public async Task DisposePreservesLegacyCloseAndDisposesSocketOnce()
     {
         FakeWebSocket socket = new();

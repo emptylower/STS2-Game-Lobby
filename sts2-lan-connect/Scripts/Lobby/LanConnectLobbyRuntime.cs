@@ -475,6 +475,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
                 session.RoomId,
                 session.ControlChannelId,
                 LanConnectConfig.GetEffectivePlayerDisplayName(),
+                session.NetService.NetId.ToString(),
                 session.RoomSessionId,
                 CancellationToken.None);
             GD.Print($"sts2_lan_connect lobby runtime: host control channel connected roomId={session.RoomId}");

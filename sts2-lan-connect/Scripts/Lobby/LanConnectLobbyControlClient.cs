@@ -12,6 +12,8 @@ internal sealed class LobbyControlClient : IAsyncDisposable
     private const int NotConnected = 0;
     private const int Connected = 1;
     private const int Terminal = 2;
+    private static readonly LanConnectChatFeatureVersions PhaseThreeRoomChatVersions =
+        new(1, 1, 1, 0);
 
     private readonly LanConnectWebSocketTransport _transport;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
@@ -68,47 +70,90 @@ internal sealed class LobbyControlClient : IAsyncDisposable
 
     internal void HandleTransportClosedForTests() => OnTransportClosed();
 
-    public async Task ConnectHostAsync(Uri controlUri, string roomId, string controlChannelId, string playerName, CancellationToken cancellationToken)
-    {
-        await ConnectHostAsync(
+    public Task ConnectHostAsync(
+        Uri controlUri,
+        string roomId,
+        string controlChannelId,
+        string playerName,
+        CancellationToken cancellationToken) =>
+        ConnectHostCoreAsync(
             controlUri,
             roomId,
             controlChannelId,
             playerName,
+            playerNetId: null,
             roomSessionId: null,
+            declareRich: false,
             cancellationToken);
-    }
 
-    internal async Task ConnectHostAsync(
+    internal Task ConnectHostAsync(
         Uri controlUri,
         string roomId,
         string controlChannelId,
         string playerName,
         string? roomSessionId,
+        CancellationToken cancellationToken) =>
+        ConnectHostCoreAsync(
+            controlUri,
+            roomId,
+            controlChannelId,
+            playerName,
+            playerNetId: null,
+            roomSessionId,
+            declareRich: false,
+            cancellationToken);
+
+    internal Task ConnectHostAsync(
+        Uri controlUri,
+        string roomId,
+        string controlChannelId,
+        string playerName,
+        string playerNetId,
+        string? roomSessionId,
+        CancellationToken cancellationToken) =>
+        ConnectHostCoreAsync(
+            controlUri,
+            roomId,
+            controlChannelId,
+            playerName,
+            playerNetId,
+            roomSessionId,
+            declareRich: !string.IsNullOrWhiteSpace(roomSessionId),
+            cancellationToken);
+
+    private Task ConnectHostCoreAsync(
+        Uri controlUri,
+        string roomId,
+        string controlChannelId,
+        string playerName,
+        string? playerNetId,
+        string? roomSessionId,
+        bool declareRich,
         CancellationToken cancellationToken)
     {
         _role = "host";
         SetActiveRoom(roomId, roomSessionId);
-        await ConnectAsync(controlUri, new LobbyControlEnvelope
+        return ConnectAsync(controlUri, new LobbyControlEnvelope
         {
             Type = "host_hello",
             RoomId = roomId,
             ControlChannelId = controlChannelId,
             Role = "host",
-            PlayerName = playerName
+            PlayerNetId = declareRich ? playerNetId : null,
+            PlayerName = playerName,
+            RoomChatVersions = declareRich ? PhaseThreeRoomChatVersions : null
         }, cancellationToken);
     }
 
-    public async Task ConnectClientAsync(
+    public Task ConnectClientAsync(
         Uri controlUri,
         string roomId,
         string controlChannelId,
         string ticketId,
         string playerName,
         string playerNetId,
-        CancellationToken cancellationToken)
-    {
-        await ConnectClientAsync(
+        CancellationToken cancellationToken) =>
+        ConnectClientCoreAsync(
             controlUri,
             roomId,
             controlChannelId,
@@ -116,10 +161,10 @@ internal sealed class LobbyControlClient : IAsyncDisposable
             playerName,
             playerNetId,
             roomSessionId: null,
+            declareRich: false,
             cancellationToken);
-    }
 
-    internal async Task ConnectClientAsync(
+    internal Task ConnectClientAsync(
         Uri controlUri,
         string roomId,
         string controlChannelId,
@@ -127,19 +172,41 @@ internal sealed class LobbyControlClient : IAsyncDisposable
         string playerName,
         string playerNetId,
         string? roomSessionId,
+        CancellationToken cancellationToken) =>
+        ConnectClientCoreAsync(
+            controlUri,
+            roomId,
+            controlChannelId,
+            ticketId,
+            playerName,
+            playerNetId,
+            roomSessionId,
+            declareRich: !string.IsNullOrWhiteSpace(roomSessionId),
+            cancellationToken);
+
+    private Task ConnectClientCoreAsync(
+        Uri controlUri,
+        string roomId,
+        string controlChannelId,
+        string ticketId,
+        string playerName,
+        string playerNetId,
+        string? roomSessionId,
+        bool declareRich,
         CancellationToken cancellationToken)
     {
         _role = "client";
         SetActiveRoom(roomId, roomSessionId);
-        await ConnectAsync(controlUri, new LobbyControlEnvelope
+        return ConnectAsync(controlUri, new LobbyControlEnvelope
         {
             Type = "client_hello",
             RoomId = roomId,
             ControlChannelId = controlChannelId,
             Role = "client",
-            TicketId = ticketId,
+            TicketId = declareRich ? null : ticketId,
             PlayerName = playerName,
-            PlayerNetId = playerNetId
+            PlayerNetId = playerNetId,
+            RoomChatVersions = declareRich ? PhaseThreeRoomChatVersions : null
         }, cancellationToken);
     }
 
