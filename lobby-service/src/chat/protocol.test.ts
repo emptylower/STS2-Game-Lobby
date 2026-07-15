@@ -829,6 +829,40 @@ test("renderPlainTextFallback uses generic rich placeholders without leaking sen
   assert.equal(fallback.includes("Anchor"), false);
 });
 
+test("reserved combat models serialize deterministically with generic fallback", () => {
+  const content: ChatContent = {
+    formatVersion: 1,
+    segments: [
+      {
+        kind: "power_state",
+        modelId: "Secret.ModStrength",
+        amount: -2,
+        roomSessionId: "session-1",
+        ownerPlayerNetId: "net:owner",
+        applierPlayerNetId: "net:applier",
+      },
+      {
+        kind: "target_ref",
+        targetKind: "player",
+        targetKey: "net:target",
+        roomSessionId: "session-1",
+      },
+      {
+        kind: "target_ref",
+        targetKind: "monster",
+        targetKey: "monster-1",
+        roomSessionId: "session-1",
+      },
+    ],
+  };
+
+  assert.equal(renderPlainTextFallback(content), "[Power][Player][Monster]");
+  assert.equal(
+    deterministicContentJson(content),
+    '{"formatVersion":1,"segments":[{"kind":"power_state","modelId":"Secret.ModStrength","amount":-2,"roomSessionId":"session-1","ownerPlayerNetId":"net:owner","applierPlayerNetId":"net:applier"},{"kind":"target_ref","targetKind":"player","targetKey":"net:target","roomSessionId":"session-1"},{"kind":"target_ref","targetKind":"monster","targetKey":"monster-1","roomSessionId":"session-1"}]}',
+  );
+});
+
 test("deterministicContentJson uses fixed field order", () => {
   const content = canonicalizeServerContent({
     formatVersion: 1,

@@ -10,7 +10,26 @@ export type EmojiSegment = { kind: "emoji"; emojiId: EmojiId };
 export type ItemRefSegment =
   | { kind: "item_ref"; itemType: "card"; modelId: string; upgradeLevel?: number }
   | { kind: "item_ref"; itemType: "relic" | "potion"; modelId: string };
-export type ChatSegment = TextSegment | EmojiSegment | ItemRefSegment;
+export type PowerStateSegment = {
+  kind: "power_state";
+  modelId: string;
+  amount: number;
+  roomSessionId: string;
+  ownerPlayerNetId?: string;
+  applierPlayerNetId?: string;
+};
+export type TargetRefSegment = {
+  kind: "target_ref";
+  targetKind: "player" | "monster";
+  targetKey: string;
+  roomSessionId: string;
+};
+export type ChatSegment =
+  | TextSegment
+  | EmojiSegment
+  | ItemRefSegment
+  | PowerStateSegment
+  | TargetRefSegment;
 export type ChatContent = { formatVersion: 1; segments: ChatSegment[] };
 
 export interface EnabledRichFeatures {
@@ -416,8 +435,12 @@ export function renderPlainTextFallback(content: ChatContent): string {
   return content.segments.map((segment) => {
     if (segment.kind === "text") return segment.text;
     if (segment.kind === "emoji") return "[Emoji]";
-    return segment.itemType === "card" ? "[Card]"
-      : segment.itemType === "relic" ? "[Relic]" : "[Potion]";
+    if (segment.kind === "item_ref") {
+      return segment.itemType === "card" ? "[Card]"
+        : segment.itemType === "relic" ? "[Relic]" : "[Potion]";
+    }
+    if (segment.kind === "power_state") return "[Power]";
+    return segment.targetKind === "player" ? "[Player]" : "[Monster]";
   }).join("");
 }
 
@@ -431,6 +454,28 @@ export function deterministicContentJson(content: ChatContent): string {
       }
       if (segment.kind === "emoji") {
         return { kind: "emoji", emojiId: segment.emojiId };
+      }
+      if (segment.kind === "power_state") {
+        return {
+          kind: "power_state",
+          modelId: segment.modelId,
+          amount: segment.amount,
+          roomSessionId: segment.roomSessionId,
+          ...(segment.ownerPlayerNetId === undefined
+            ? {}
+            : { ownerPlayerNetId: segment.ownerPlayerNetId }),
+          ...(segment.applierPlayerNetId === undefined
+            ? {}
+            : { applierPlayerNetId: segment.applierPlayerNetId }),
+        };
+      }
+      if (segment.kind === "target_ref") {
+        return {
+          kind: "target_ref",
+          targetKind: segment.targetKind,
+          targetKey: segment.targetKey,
+          roomSessionId: segment.roomSessionId,
+        };
       }
       if (segment.itemType === "card" && segment.upgradeLevel !== undefined) {
         return {

@@ -143,6 +143,27 @@ function waitForFrame(
   });
 }
 
+function waitForClose(
+  socket: WebSocket,
+  timeoutMs = 2_000,
+): Promise<{ code: number; reason: string }> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("control websocket close timeout"));
+    }, timeoutMs);
+    const onClose = (code: number, reason: Buffer) => {
+      cleanup();
+      resolve({ code, reason: reason.toString("utf8") });
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off("close", onClose);
+    };
+    socket.once("close", onClose);
+  });
+}
+
 function openControlWebSocket(
   url: string,
 ): Promise<{ socket: WebSocket; connected: JsonFrame }> {
@@ -395,6 +416,9 @@ test("real room gateway routes rich and exact legacy fallback per recipient and 
       const openedHost = await openControlWebSocket(`${wsBase}${config.wsPath}?${hostQuery}`);
       const host = openedHost.socket;
       sockets.push(host);
+      const openedMutatingHost = await openControlWebSocket(`${wsBase}${config.wsPath}?${hostQuery}`);
+      const mutatingHost = openedMutatingHost.socket;
+      sockets.push(mutatingHost);
       const rich = await openJoinedPeer(wsBase, config.wsPath, created, richJoined);
       const legacy = await openJoinedPeer(wsBase, config.wsPath, created, legacyJoined);
       const disabled = await openJoinedPeer(wsBase, config.wsPath, created, disabledJoined);
@@ -413,6 +437,21 @@ test("real room gateway routes rich and exact legacy fallback per recipient and 
       }));
       const hostReady = await hostReadyPromise;
       assert.deepEqual(hostReady.enabledFeatures, phaseThreeVersions);
+
+      const mutatingReadyPromise = waitForFrame(
+        mutatingHost,
+        (frame) => frame.type === "room_chat_ready",
+      );
+      mutatingHost.send(JSON.stringify({
+        type: "host_hello",
+        roomId: created.roomId,
+        controlChannelId: created.controlChannelId,
+        role: "host",
+        playerName: "Mutation Probe",
+        playerNetId: "net:mutation-probe",
+        roomChatVersions: phaseThreeVersions,
+      }));
+      await mutatingReadyPromise;
 
       const richReadyPromise = waitForFrame(rich.socket, (frame) => frame.type === "room_chat_ready");
       rich.socket.send(JSON.stringify({
@@ -540,10 +579,11 @@ test("real room gateway routes rich and exact legacy fallback per recipient and 
       assert.equal(richBroadcasts.length, 1, "same-connection dedupe must not rebroadcast");
 
       const identityErrorPromise = waitForFrame(
-        host,
+        mutatingHost,
         (frame) => frame.type === "room_chat_error" && frame.code === "protocol_mismatch",
       );
-      host.send(JSON.stringify({
+      const identityClosePromise = waitForClose(mutatingHost);
+      mutatingHost.send(JSON.stringify({
         type: "host_hello",
         roomId: created.roomId,
         controlChannelId: created.controlChannelId,
@@ -553,6 +593,7 @@ test("real room gateway routes rich and exact legacy fallback per recipient and 
         roomChatVersions: phaseThreeVersions,
       }));
       assert.equal((await identityErrorPromise).clientMessageId, "");
+      assert.deepEqual(await identityClosePromise, { code: 1002, reason: "protocol_mismatch" });
 
       const afterLockId = "32323232-3232-4232-8232-323232323232";
       const afterLockAckPromise = waitForFrame(

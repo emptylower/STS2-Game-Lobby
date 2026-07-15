@@ -22,6 +22,7 @@ const noItemVersions: ChatFeatureVersions = {
 interface TestPeer {
   registration: RoomChatPeerRegistration;
   frames: Array<Record<string, unknown>>;
+  closes: Array<{ code: number; reason: string }>;
 }
 
 function peer(
@@ -30,6 +31,7 @@ function peer(
   overrides: Partial<RoomChatPeerRegistration> = {},
 ): TestPeer {
   const frames: Array<Record<string, unknown>> = [];
+  const closes: Array<{ code: number; reason: string }> = [];
   return {
     registration: {
       connectionSessionId,
@@ -38,10 +40,13 @@ function peer(
       roomSessionId: "session-1",
       controlChannelId: "control-1",
       role,
+      ...(role === "client" ? { authenticatedTicketId: `ticket-${connectionSessionId}` } : {}),
       send: (frame) => frames.push(frame),
+      close: (code, reason) => closes.push({ code, reason }),
       ...overrides,
     },
     frames,
+    closes,
   };
 }
 
@@ -167,6 +172,194 @@ test("room v2 rejects sends before hello then locks normalized client and host i
     playerName: "Host",
     playerNetId: "net:host",
   });
+});
+
+test("rich hello defensively locks registration authority and capability scalars", () => {
+  const gateway = createGateway();
+  const declared = { ...allVersions };
+  const client = peer("copy-lock", "client", { authenticatedTicketId: "ticket-1" });
+  gateway.registerPeer(client.registration);
+
+  client.registration.roomId = "mutated-room";
+  client.registration.roomSessionId = "mutated-session";
+  client.registration.controlChannelId = "mutated-control";
+  client.registration.role = "host";
+  delete client.registration.authenticatedTicketId;
+  gateway.handleControlEnvelope("copy-lock", hello(" Alice ", " net:alice ", declared));
+  assert.deepEqual(client.frames.at(-1), {
+    type: "room_chat_ready",
+    protocolVersion: 1,
+    roomId: "room-1",
+    roomSessionId: "session-1",
+    enabledFeatures: {
+      richContentVersion: 1,
+      emojiSetVersion: 1,
+      itemRefVersion: 1,
+      combatRefVersion: 0,
+    },
+  });
+
+  declared.richContentVersion = 0;
+  declared.emojiSetVersion = 0;
+  declared.itemRefVersion = 0;
+  declared.combatRefVersion = 0;
+  client.frames.length = 0;
+  gateway.handleControlEnvelope("copy-lock", hello("Alice", "net:alice", { ...allVersions }));
+  assert.equal(client.frames.at(-1)?.type, "room_chat_ready");
+  assert.deepEqual(client.closes, []);
+});
+
+test("rich hello mutation returns protocol mismatch then closes 1002", () => {
+  const mutations: Array<[string, (candidate: Record<string, unknown>) => void]> = [
+    ["playerName", (candidate) => { candidate.playerName = "Mallory"; }],
+    ["playerNetId", (candidate) => { candidate.playerNetId = "net:mallory"; }],
+    ["roomId", (candidate) => { candidate.roomId = "room-2"; }],
+    ["controlChannelId", (candidate) => { candidate.controlChannelId = "control-2"; }],
+    ["role", (candidate) => { candidate.role = "host"; }],
+    ["type", (candidate) => { candidate.type = "host_hello"; }],
+    ["richContentVersion", (candidate) => {
+      (candidate.roomChatVersions as Record<string, unknown>).richContentVersion = 0;
+    }],
+    ["emojiSetVersion", (candidate) => {
+      (candidate.roomChatVersions as Record<string, unknown>).emojiSetVersion = 0;
+    }],
+    ["itemRefVersion", (candidate) => {
+      (candidate.roomChatVersions as Record<string, unknown>).itemRefVersion = 0;
+    }],
+    ["combatRefVersion", (candidate) => {
+      (candidate.roomChatVersions as Record<string, unknown>).combatRefVersion = 0;
+    }],
+    ["ticketId", (candidate) => { candidate.ticketId = "body-ticket-is-not-authority"; }],
+  ];
+
+  for (const [label, mutate] of mutations) {
+    const gateway = createGateway();
+    const client = peer(`hello-mutation-${label}`, "client", {
+      authenticatedTicketId: `ticket-${label}`,
+    });
+    const recipient = peer(`hello-mutation-recipient-${label}`);
+    gateway.registerPeer(client.registration);
+    gateway.registerPeer(recipient.registration);
+    gateway.handleControlEnvelope(client.registration.connectionSessionId, hello("Alice", "net:alice"));
+    gateway.handleControlEnvelope(recipient.registration.connectionSessionId, hello("Bob", "net:bob"));
+    client.frames.length = 0;
+    recipient.frames.length = 0;
+
+    const candidate = hello("Alice", "net:alice", { ...allVersions }) as Record<string, unknown>;
+    mutate(candidate);
+    gateway.handleControlEnvelope(client.registration.connectionSessionId, candidate);
+
+    assert.equal(client.frames.length, 1, label);
+    assert.equal(client.frames[0]?.type, "room_chat_error", label);
+    assert.equal(client.frames[0]?.code, "protocol_mismatch", label);
+    assert.deepEqual(client.closes, [{ code: 1002, reason: "protocol_mismatch" }], label);
+
+    gateway.handleControlEnvelope(client.registration.connectionSessionId, hello("Alice", "net:alice"));
+    gateway.handleControlEnvelope(
+      client.registration.connectionSessionId,
+      roomSend("99999999-9999-4999-8999-999999999999", textContent("must be ignored")),
+    );
+    assert.equal(gateway.handleControlEnvelope(client.registration.connectionSessionId, {
+      type: "room_chat",
+      messageText: "must also be ignored",
+    }), true);
+    assert.equal(client.frames.length, 1, `${label} terminal frames`);
+    assert.deepEqual(
+      client.closes,
+      [{ code: 1002, reason: "protocol_mismatch" }],
+      `${label} terminal closes`,
+    );
+    assert.equal(recipient.frames.length, 0, `${label} terminal delivery`);
+  }
+});
+
+test("invalid first rich hello is terminal and closes exactly once", () => {
+  const gateway = createGateway();
+  const client = peer("invalid-first-rich");
+  gateway.registerPeer(client.registration);
+
+  gateway.handleControlEnvelope("invalid-first-rich", {
+    ...hello("Alice", "net:alice"),
+    ticketId: "body-ticket-is-not-authority",
+  });
+  gateway.handleControlEnvelope("invalid-first-rich", hello("Alice", "net:alice"));
+
+  assert.equal(client.frames.length, 1);
+  assert.equal(client.frames[0]?.type, "room_chat_error");
+  assert.equal(client.frames[0]?.code, "protocol_mismatch");
+  assert.deepEqual(client.closes, [{ code: 1002, reason: "protocol_mismatch" }]);
+  assert.equal(gateway.getLockedIdentity("invalid-first-rich"), null);
+});
+
+test("fatal rich hello contains send and close adapter failures", () => {
+  const gateway = createGateway();
+  let sendCalls = 0;
+  let closeCalls = 0;
+  const client = peer("failing-fatal-adapters", "client", {
+    send: () => {
+      sendCalls += 1;
+      throw new Error("send failed");
+    },
+    close: () => {
+      closeCalls += 1;
+      throw new Error("close failed");
+    },
+  });
+  gateway.registerPeer(client.registration);
+
+  assert.doesNotThrow(() => gateway.handleControlEnvelope("failing-fatal-adapters", {
+    ...hello("Alice", "net:alice"),
+    ticketId: "body-ticket-is-not-authority",
+  }));
+  assert.equal(sendCalls, 1);
+  assert.equal(closeCalls, 1);
+
+  assert.equal(gateway.handleControlEnvelope(
+    "failing-fatal-adapters",
+    roomSend("88888888-8888-4888-8888-888888888888", textContent("ignored")),
+  ), true);
+  assert.equal(sendCalls, 1);
+  assert.equal(closeCalls, 1);
+});
+
+test("room v2 rejects client-writable identity and message metadata without delivery", () => {
+  const reservedFields: Array<[string, unknown]> = [
+    ["senderId", "spoof-sender"],
+    ["senderName", "Spoof"],
+    ["playerNetId", "spoof-player"],
+    ["playerName", "Spoof"],
+    ["messageId", "spoof-message"],
+    ["sentAt", "2026-07-15T00:00:00.000Z"],
+    ["plainTextFallback", "spoof fallback"],
+    ["ticketId", "spoof-ticket"],
+    ["controlChannelId", "spoof-control"],
+    ["role", "host"],
+    ["metadata", {}],
+  ];
+
+  for (const [index, [field, value]] of reservedFields.entries()) {
+    const gateway = createGateway();
+    const sender = peer(`metadata-sender-${index}`);
+    const recipient = peer(`metadata-recipient-${index}`);
+    gateway.registerPeer(sender.registration);
+    gateway.registerPeer(recipient.registration);
+    gateway.handleControlEnvelope(sender.registration.connectionSessionId, hello("Alice", "net:alice"));
+    gateway.handleControlEnvelope(recipient.registration.connectionSessionId, hello("Bob", "net:bob"));
+    sender.frames.length = 0;
+    recipient.frames.length = 0;
+
+    gateway.handleControlEnvelope(sender.registration.connectionSessionId, roomSend(
+      `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      textContent("hello"),
+      { [field]: value },
+    ));
+
+    assert.equal(sender.frames.length, 1, field);
+    assert.equal(sender.frames[0]?.type, "room_chat_error", field);
+    assert.equal(sender.frames[0]?.code, "invalid_message", field);
+    assert.equal(recipient.frames.length, 0, field);
+    assert.deepEqual(sender.closes, [], field);
+  }
 });
 
 test("room v2 validates protocol room session and chat-enabled context", () => {
@@ -775,23 +968,30 @@ test("legacy fallback stays within 60 UTF-16 units without splitting entities or
 
 test("room envelopes require own context fields and ignore inherited feature versions", () => {
   const gateway = createGateway();
-  const client = peer("own-fields");
-  gateway.registerPeer(client.registration);
 
   for (const missing of ["roomId", "controlChannelId", "role"] as const) {
+    const invalid = peer(`own-fields-missing-${missing}`);
+    gateway.registerPeer(invalid.registration);
     const candidate = hello("Alice", "net:alice") as Record<string, unknown>;
     delete candidate[missing];
-    gateway.handleControlEnvelope("own-fields", candidate);
-    assert.equal(client.frames.at(-1)?.code, "protocol_mismatch");
-    assert.equal(gateway.getLockedIdentity("own-fields"), null);
+    gateway.handleControlEnvelope(invalid.registration.connectionSessionId, candidate);
+    assert.equal(invalid.frames.at(-1)?.code, "protocol_mismatch");
+    assert.deepEqual(invalid.closes, [{ code: 1002, reason: "protocol_mismatch" }]);
+    assert.equal(gateway.getLockedIdentity(invalid.registration.connectionSessionId), null);
   }
 
-  gateway.handleControlEnvelope("own-fields", {
+  const invalidVersions = peer("own-fields-invalid-versions");
+  gateway.registerPeer(invalidVersions.registration);
+  gateway.handleControlEnvelope(invalidVersions.registration.connectionSessionId, {
     ...hello("Alice", "net:alice"),
     roomChatVersions: undefined,
   });
-  assert.equal(client.frames.at(-1)?.code, "protocol_mismatch");
-  assert.equal(gateway.getLockedIdentity("own-fields"), null);
+  assert.equal(invalidVersions.frames.at(-1)?.code, "protocol_mismatch");
+  assert.deepEqual(invalidVersions.closes, [{ code: 1002, reason: "protocol_mismatch" }]);
+  assert.equal(gateway.getLockedIdentity(invalidVersions.registration.connectionSessionId), null);
+
+  const client = peer("own-fields");
+  gateway.registerPeer(client.registration);
 
   withPollutedObjectPrototype({
     richContentVersion: 1,

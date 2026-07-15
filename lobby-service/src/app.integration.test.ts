@@ -714,6 +714,11 @@ test("control host and client hello establish room v2 rich and legacy routing", 
       + `&role=host&token=${created.hostToken}`,
     );
     sockets.push(host);
+    const mutatingHost = await openControlWebSocket(
+      `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=host&token=${created.hostToken}`,
+    );
+    sockets.push(mutatingHost);
     const legacyHost = await openControlWebSocket(
       `${baseUrl}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
       + `&role=host&token=${created.hostToken}`,
@@ -731,6 +736,7 @@ test("control host and client hello establish room v2 rich and legacy routing", 
     sockets.push(old);
     await Promise.all([
       waitForChatFrame(host, (frame) => frame.type === "connected"),
+      waitForChatFrame(mutatingHost, (frame) => frame.type === "connected"),
       waitForChatFrame(legacyHost, (frame) => frame.type === "connected"),
       waitForChatFrame(rich, (frame) => frame.type === "connected"),
       waitForChatFrame(old, (frame) => frame.type === "connected"),
@@ -768,9 +774,17 @@ test("control host and client hello establish room v2 rich and legacy routing", 
       roomId: created.roomId,
       controlChannelId: created.controlChannelId,
       role: "client",
-      ticketId: richJoin.ticketId,
       playerName: "Rich",
       playerNetId: "net:rich",
+      roomChatVersions: versions,
+    }));
+    mutatingHost.send(JSON.stringify({
+      type: "host_hello",
+      roomId: created.roomId,
+      controlChannelId: created.controlChannelId,
+      role: "host",
+      playerName: "Mutation Probe",
+      playerNetId: "net:mutation-probe",
       roomChatVersions: versions,
     }));
     legacyHost.send(JSON.stringify({
@@ -794,6 +808,7 @@ test("control host and client hello establish room v2 rich and legacy routing", 
     const [hostReady, richReady] = await Promise.all([
       waitForChatFrame(host, (frame) => frame.type === "room_chat_ready"),
       waitForChatFrame(rich, (frame) => frame.type === "room_chat_ready"),
+      waitForChatFrame(mutatingHost, (frame) => frame.type === "room_chat_ready"),
       waitForChatFrame(legacyHost, (frame) => frame.type === "pong"),
       waitForChatFrame(old, (frame) => frame.type === "pong"),
     ]);
@@ -806,7 +821,12 @@ test("control host and client hello establish room v2 rich and legacy routing", 
     });
     assert.deepEqual(richReady.enabledFeatures, hostReady.enabledFeatures);
 
-    host.send(JSON.stringify({
+    const mutationError = waitForChatFrame(
+      mutatingHost,
+      (frame) => frame.type === "room_chat_error" && frame.code === "protocol_mismatch",
+    );
+    const mutationClose = waitForChatClose(mutatingHost);
+    mutatingHost.send(JSON.stringify({
       type: "host_hello",
       roomId: created.roomId,
       controlChannelId: created.controlChannelId,
@@ -815,8 +835,36 @@ test("control host and client hello establish room v2 rich and legacy routing", 
       playerNetId: "net:mallory",
       roomChatVersions: versions,
     }));
-    const rewrite = await waitForChatFrame(host, (frame) => frame.type === "room_chat_error");
-    assert.equal(rewrite.code, "protocol_mismatch");
+    assert.equal((await mutationError).clientMessageId, "");
+    assert.deepEqual(await mutationClose, { code: 1002, reason: "protocol_mismatch" });
+
+    const replayReady = waitForChatFrame(host, (frame) => frame.type === "room_chat_ready");
+    host.send(JSON.stringify({
+      type: "host_hello",
+      roomId: created.roomId,
+      controlChannelId: created.controlChannelId,
+      role: "host",
+      playerName: "Host",
+      playerNetId: "net:host",
+      roomChatVersions: { ...versions },
+    }));
+    assert.deepEqual(await replayReady, hostReady);
+
+    const metadataId = "30303030-3030-4030-8030-303030303030";
+    const metadataError = waitForChatFrame(
+      host,
+      (frame) => frame.type === "room_chat_error" && frame.clientMessageId === metadataId,
+    );
+    host.send(JSON.stringify({
+      type: "room_chat_v2",
+      protocolVersion: 1,
+      clientMessageId: metadataId,
+      roomId: created.roomId,
+      roomSessionId: created.roomSessionId,
+      senderName: "Mallory",
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "spoof" }] },
+    }));
+    assert.equal((await metadataError).code, "invalid_message");
 
     const sendId = "32323232-3232-4232-8232-323232323232";
     host.send(JSON.stringify({

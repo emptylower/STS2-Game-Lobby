@@ -801,7 +801,11 @@ export async function createLobbyService(
         roomSessionId: peer.roomSessionId,
         controlChannelId: peer.controlChannelId,
         role: peer.role,
+        ...(peer.ticketId === undefined
+          ? {}
+          : { authenticatedTicketId: peer.ticketId }),
         send: (frame) => sendJson(peer.socket, frame),
+        close: (code, reason) => peer.socket.close(code, reason),
       });
       addPeer(peer);
       sendJson(socket, {

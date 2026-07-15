@@ -24,7 +24,9 @@ export interface RoomChatPeerRegistration {
   roomSessionId: string;
   controlChannelId: string;
   role: "host" | "client";
+  authenticatedTicketId?: string;
   send(frame: Record<string, unknown>): void;
+  close(code: number, reason: string): void;
 }
 
 export interface RoomChatGatewayOptions {
@@ -72,6 +74,7 @@ interface DedupeEntry {
 }
 
 interface PeerState extends RoomChatPeerRegistration {
+  terminal: boolean;
   helloComplete: boolean;
   identity: LockedRoomChatIdentity | null;
   declaredFeatures: ChatFeatureVersions;
@@ -160,7 +163,18 @@ export class RoomChatGateway {
       this.peersByRoom.set(registration.roomId, roomPeers);
     }
     this.peers.set(registration.connectionSessionId, {
-      ...registration,
+      connectionSessionId: registration.connectionSessionId,
+      clientIp: registration.clientIp,
+      roomId: registration.roomId,
+      roomSessionId: registration.roomSessionId,
+      controlChannelId: registration.controlChannelId,
+      role: registration.role,
+      ...(registration.authenticatedTicketId === undefined
+        ? {}
+        : { authenticatedTicketId: registration.authenticatedTicketId }),
+      send: registration.send,
+      close: registration.close,
+      terminal: false,
       helloComplete: false,
       identity: null,
       declaredFeatures: { ...NO_CHAT_FEATURES },
@@ -200,7 +214,13 @@ export class RoomChatGateway {
     rawEnvelope?: string,
   ): boolean {
     const peer = this.peers.get(connectionSessionId);
-    if (!peer || !isRecord(envelope) || typeof envelope.type !== "string") {
+    if (!peer) {
+      return false;
+    }
+    if (peer.terminal) {
+      return true;
+    }
+    if (!isRecord(envelope) || typeof envelope.type !== "string") {
       return false;
     }
     if (envelope.type === "host_hello" || envelope.type === "client_hello") {
@@ -226,6 +246,15 @@ export class RoomChatGateway {
     let identity: LockedRoomChatIdentity;
     let declaredFeatures: ChatFeatureVersions;
     try {
+      assertAllowedKeys(envelope, [
+        "type",
+        "roomId",
+        "controlChannelId",
+        "role",
+        "playerName",
+        "playerNetId",
+        "roomChatVersions",
+      ]);
       assertOwnKeys(envelope, [
         "type",
         "roomId",
@@ -235,6 +264,9 @@ export class RoomChatGateway {
         "playerNetId",
       ]);
       const expectedType = peer.role === "host" ? "host_hello" : "client_hello";
+      if (peer.role === "client" && peer.authenticatedTicketId === undefined) {
+        throw new RoomEnvelopeError("protocol_mismatch", "client authority is not authenticated");
+      }
       if (envelope.type !== expectedType) {
         throw new RoomEnvelopeError("protocol_mismatch", "hello role does not match connection");
       }
@@ -253,12 +285,12 @@ export class RoomChatGateway {
       };
       declaredFeatures = parseDeclaredFeatures(envelope.roomChatVersions);
     } catch {
-      this.sendError(peer, "protocol_mismatch", "");
+      this.rejectHello(peer, true);
       return;
     }
 
     if (peer.helloComplete && !peer.roomV2Capable) {
-      this.sendError(peer, "protocol_mismatch", "");
+      this.rejectHello(peer, true);
       return;
     }
     if (peer.identity) {
@@ -267,7 +299,7 @@ export class RoomChatGateway {
         || peer.identity.playerNetId !== identity.playerNetId
         || !sameFeatures(peer.declaredFeatures, declaredFeatures)
       ) {
-        this.sendError(peer, "protocol_mismatch", "");
+        this.rejectHello(peer, true);
         return;
       }
     } else {
@@ -289,7 +321,7 @@ export class RoomChatGateway {
   private handleLegacyHello(peer: PeerState, envelope: Record<string, unknown>): void {
     if (peer.helloComplete) {
       if (peer.roomV2Capable) {
-        this.sendError(peer, "protocol_mismatch", "");
+        this.rejectHello(peer, true);
       }
       return;
     }
@@ -575,6 +607,26 @@ export class RoomChatGateway {
   ): void {
     peer.send(createErrorFrame(code, clientMessageId));
   }
+
+  private rejectHello(peer: PeerState, close: boolean): void {
+    if (peer.terminal) return;
+    if (!close) {
+      this.sendError(peer, "protocol_mismatch", "");
+      return;
+    }
+
+    peer.terminal = true;
+    try {
+      this.sendError(peer, "protocol_mismatch", "");
+    } catch {
+      // Protocol errors are best effort; the terminal close must still run once.
+    }
+    try {
+      peer.close(1002, "protocol_mismatch");
+    } catch {
+      // The socket adapter owns transport cleanup after a failed close attempt.
+    }
+  }
 }
 
 class RoomEnvelopeError extends Error {
@@ -720,11 +772,15 @@ function renderLegacyFallback(content: ChatContent): string {
     if (segment.kind === "text") continue;
     const token = segment.kind === "emoji"
       ? "[Emoji]"
-      : segment.itemType === "card"
-        ? "[Card]"
-        : segment.itemType === "relic"
-          ? "[Relic]"
-          : "[Potion]";
+      : segment.kind === "power_state"
+        ? "[Power]"
+        : segment.kind === "target_ref"
+          ? segment.targetKind === "player" ? "[Player]" : "[Monster]"
+          : segment.itemType === "card"
+            ? "[Card]"
+            : segment.itemType === "relic"
+              ? "[Relic]"
+              : "[Potion]";
     if (token.length <= remaining) {
       selectedEntities.set(index, token);
       remaining -= token.length;
@@ -762,6 +818,13 @@ function assertOwnKeys(input: Record<string, unknown>, keys: readonly string[]):
     if (!Object.hasOwn(input, key)) {
       throw new RoomEnvelopeError("invalid_message", `missing required field: ${key}`);
     }
+  }
+}
+
+function assertAllowedKeys(input: Record<string, unknown>, keys: readonly string[]): void {
+  const allowed = new Set(keys);
+  if (Object.keys(input).some((key) => !allowed.has(key))) {
+    throw new RoomEnvelopeError("protocol_mismatch", "hello has unknown fields");
   }
 }
 
