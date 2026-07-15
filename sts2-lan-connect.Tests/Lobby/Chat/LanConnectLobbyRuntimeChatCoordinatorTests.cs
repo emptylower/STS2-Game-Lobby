@@ -573,6 +573,11 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
             return Task.CompletedTask;
         }
 
+        public Task SendAsync(
+            LanConnectChatContent content,
+            string clientMessageId,
+            CancellationToken cancellationToken = default) => Task.CompletedTask;
+
         public Task RetryAsync(string clientMessageId, CancellationToken cancellationToken = default)
         {
             RetryCall = (clientMessageId, cancellationToken);

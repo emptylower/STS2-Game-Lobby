@@ -505,11 +505,22 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             return;
         }
 
-        _chatPanel.Bind(
-            state,
-            text => SendAsync(channel, text),
-            clientMessageId => RetryAsync(channel, clientMessageId),
-            HasBlockingModalOutsideOverlay);
+        if (_testSend != null)
+        {
+            _chatPanel.Bind(
+                state,
+                text => SendAsync(channel, text),
+                clientMessageId => RetryAsync(channel, clientMessageId),
+                HasBlockingModalOutsideOverlay);
+        }
+        else
+        {
+            _chatPanel.BindStructured(
+                state,
+                (content, clientMessageId) => SendAsync(channel, content, clientMessageId),
+                clientMessageId => RetryAsync(channel, clientMessageId),
+                HasBlockingModalOutsideOverlay);
+        }
         _boundChat = chat;
         _boundChannelState = state;
         ConfigureFocusChain();
@@ -615,6 +626,16 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance ??
             throw new InvalidOperationException("Lobby runtime is unavailable.");
         return runtime.SendChatTextAsync(channel, text);
+    }
+
+    private static Task SendAsync(
+        LanConnectChatChannel channel,
+        LanConnectChatContent content,
+        string clientMessageId)
+    {
+        LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance ??
+            throw new InvalidOperationException("Lobby runtime is unavailable.");
+        return runtime.SendChatAsync(channel, content, clientMessageId);
     }
 
     private Task RetryAsync(LanConnectChatChannel channel, string clientMessageId)

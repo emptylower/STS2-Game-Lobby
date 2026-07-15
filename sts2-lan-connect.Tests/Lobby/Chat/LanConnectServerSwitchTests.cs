@@ -642,6 +642,11 @@ public sealed class LanConnectServerSwitchTests
         public Task SendTextAsync(string text, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
 
+        public Task SendAsync(
+            LanConnectChatContent content,
+            string clientMessageId,
+            CancellationToken cancellationToken = default) => Task.CompletedTask;
+
         public Task RetryAsync(string clientMessageId, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
 

@@ -19,6 +19,8 @@ internal sealed class LobbyControlClient : IAsyncDisposable
     private readonly Action<string> _warningSink;
     private readonly TimeSpan _closeTimeout;
     private string _role = "host";
+    private string _activeRoomId = string.Empty;
+    private string _activeRoomSessionId = string.Empty;
     private Task? _disposeTask;
     private int _lifecycleState;
 
@@ -50,9 +52,39 @@ internal sealed class LobbyControlClient : IAsyncDisposable
 
     public event Action<LobbyControlEnvelope>? EnvelopeReceived;
 
+    internal event Action<LanConnectRoomChatAckEnvelope>? RoomChatAckReceived;
+
+    internal event Action<LanConnectRoomChatReadyEnvelope>? RoomChatReadyReceived;
+
+    internal event Action<LanConnectRoomChatMessageEnvelope>? RoomChatMessageReceived;
+
+    internal event Action<LanConnectRoomChatErrorEnvelope>? RoomChatErrorReceived;
+
+    internal LanConnectRoomChatReadyEnvelope? LatestRoomChatReady { get; private set; }
+
+    internal void HandlePayloadForTests(string payload) => OnPayloadReceived(payload);
+
     public async Task ConnectHostAsync(Uri controlUri, string roomId, string controlChannelId, string playerName, CancellationToken cancellationToken)
     {
+        await ConnectHostAsync(
+            controlUri,
+            roomId,
+            controlChannelId,
+            playerName,
+            roomSessionId: null,
+            cancellationToken);
+    }
+
+    internal async Task ConnectHostAsync(
+        Uri controlUri,
+        string roomId,
+        string controlChannelId,
+        string playerName,
+        string? roomSessionId,
+        CancellationToken cancellationToken)
+    {
         _role = "host";
+        SetActiveRoom(roomId, roomSessionId);
         await ConnectAsync(controlUri, new LobbyControlEnvelope
         {
             Type = "host_hello",
@@ -72,7 +104,29 @@ internal sealed class LobbyControlClient : IAsyncDisposable
         string playerNetId,
         CancellationToken cancellationToken)
     {
+        await ConnectClientAsync(
+            controlUri,
+            roomId,
+            controlChannelId,
+            ticketId,
+            playerName,
+            playerNetId,
+            roomSessionId: null,
+            cancellationToken);
+    }
+
+    internal async Task ConnectClientAsync(
+        Uri controlUri,
+        string roomId,
+        string controlChannelId,
+        string ticketId,
+        string playerName,
+        string playerNetId,
+        string? roomSessionId,
+        CancellationToken cancellationToken)
+    {
         _role = "client";
+        SetActiveRoom(roomId, roomSessionId);
         await ConnectAsync(controlUri, new LobbyControlEnvelope
         {
             Type = "client_hello",
@@ -96,6 +150,19 @@ internal sealed class LobbyControlClient : IAsyncDisposable
 
     public Task SendAsync(LobbyControlEnvelope envelope, CancellationToken cancellationToken = default)
     {
+        string payload = JsonSerializer.Serialize(envelope, LanConnectJson.Options);
+        return _transport.SendAsync(payload, cancellationToken);
+    }
+
+    internal Task SendRoomChatV2Async(
+        LanConnectRoomChatV2Envelope envelope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (!MatchesActiveRoom(envelope.RoomId, envelope.RoomSessionId))
+        {
+            throw new InvalidOperationException("The rich room chat envelope does not match the active room session.");
+        }
         string payload = JsonSerializer.Serialize(envelope, LanConnectJson.Options);
         return _transport.SendAsync(payload, cancellationToken);
     }
@@ -181,6 +248,10 @@ internal sealed class LobbyControlClient : IAsyncDisposable
 
         try
         {
+            if (TryHandleRichRoomPayload(payload))
+            {
+                return;
+            }
             LobbyControlEnvelope? envelope =
                 JsonSerializer.Deserialize<LobbyControlEnvelope>(payload, LanConnectJson.Options);
             if (envelope == null)
@@ -211,6 +282,81 @@ internal sealed class LobbyControlClient : IAsyncDisposable
             TryWarn($"sts2_lan_connect failed to parse control payload: {ex.Message}");
         }
     }
+
+    private bool TryHandleRichRoomPayload(string payload)
+    {
+        using JsonDocument document = JsonDocument.Parse(payload);
+        if (!document.RootElement.TryGetProperty("type", out JsonElement typeElement) ||
+            typeElement.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+        string? type = typeElement.GetString();
+        try
+        {
+            switch (type)
+            {
+                case "room_chat_ready":
+                    LanConnectRoomChatReadyEnvelope? ready =
+                        JsonSerializer.Deserialize<LanConnectRoomChatReadyEnvelope>(payload, LanConnectJson.Options);
+                    if (ready?.ProtocolVersion != 1 ||
+                        !string.Equals(ready.RoomId, _activeRoomId, StringComparison.Ordinal) ||
+                        !MatchesActiveRoom(ready.RoomId, ready.RoomSessionId))
+                    {
+                        return true;
+                    }
+                    _activeRoomSessionId = ready.RoomSessionId;
+                    LatestRoomChatReady = ready;
+                    RoomChatReadyReceived?.Invoke(ready);
+                    return true;
+                case "room_chat_ack":
+                    LanConnectRoomChatAckEnvelope? ack =
+                        JsonSerializer.Deserialize<LanConnectRoomChatAckEnvelope>(payload, LanConnectJson.Options);
+                    if (ack?.ProtocolVersion == 1 &&
+                        MatchesActiveRoom(ack.Message.RoomId, ack.Message.RoomSessionId))
+                    {
+                        RoomChatAckReceived?.Invoke(ack);
+                    }
+                    return true;
+                case "room_chat_message":
+                    LanConnectRoomChatMessageEnvelope? message =
+                        JsonSerializer.Deserialize<LanConnectRoomChatMessageEnvelope>(payload, LanConnectJson.Options);
+                    if (message?.ProtocolVersion == 1 &&
+                        MatchesActiveRoom(message.Message.RoomId, message.Message.RoomSessionId))
+                    {
+                        RoomChatMessageReceived?.Invoke(message);
+                    }
+                    return true;
+                case "room_chat_error":
+                    LanConnectRoomChatErrorEnvelope? error =
+                        JsonSerializer.Deserialize<LanConnectRoomChatErrorEnvelope>(payload, LanConnectJson.Options);
+                    if (error?.ProtocolVersion == 1 && LatestRoomChatReady != null)
+                    {
+                        RoomChatErrorReceived?.Invoke(error);
+                    }
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        catch (JsonException exception)
+        {
+            TryWarn($"sts2_lan_connect ignored invalid rich room chat payload: {exception.Message}");
+            return true;
+        }
+    }
+
+    private void SetActiveRoom(string roomId, string? roomSessionId)
+    {
+        _activeRoomId = roomId ?? string.Empty;
+        _activeRoomSessionId = roomSessionId ?? string.Empty;
+        LatestRoomChatReady = null;
+    }
+
+    private bool MatchesActiveRoom(string roomId, string roomSessionId) =>
+        string.Equals(roomId, _activeRoomId, StringComparison.Ordinal) &&
+        (string.IsNullOrEmpty(_activeRoomSessionId) ||
+         string.Equals(roomSessionId, _activeRoomSessionId, StringComparison.Ordinal));
 
     private async Task ObservePongSendAsync(Task send)
     {

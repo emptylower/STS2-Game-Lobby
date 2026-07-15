@@ -26,6 +26,8 @@ internal sealed class ServerChatPendingMessage
 
     public string Text { get; set; } = string.Empty;
 
+    public LanConnectChatContent? Content { get; set; }
+
     public DateTimeOffset QueuedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -40,6 +42,12 @@ internal sealed class ServerChatMessageState
     public string? SenderNetId { get; init; }
 
     public string Text { get; init; } = string.Empty;
+
+    public LanConnectChatContent Content { get; init; } = new();
+
+    public LanConnectServerChatMessagePayload? ServerPayload { get; init; }
+
+    public LanConnectRoomChatMessagePayload? RoomPayload { get; init; }
 
     public long Sequence { get; init; }
 
@@ -314,6 +322,26 @@ internal sealed class LanConnectChatChannelState
         }
     }
 
+    internal void SetEnabledRichFeatures(LanConnectChatFeatureVersions features)
+    {
+        ArgumentNullException.ThrowIfNull(features);
+        lock (_mutationLock)
+        {
+            ServerChatEnabledFeatures next = new()
+            {
+                RichContentVersion = features.RichContentVersion,
+                EmojiSetVersion = features.EmojiSetVersion,
+                ItemRefVersion = features.ItemRefVersion
+            };
+            if (FeaturesEqual(_enabledFeatures, next))
+            {
+                return;
+            }
+            _enabledFeatures = next;
+            Touch();
+        }
+    }
+
     internal int UnreadCount
     {
         get
@@ -530,12 +558,14 @@ internal sealed class LanConnectChatChannelState
             }
 
             DateTimeOffset queuedAt = message.QueuedAt == default ? DateTimeOffset.UtcNow : message.QueuedAt;
+            LanConnectChatContent content = message.Content ?? ContentFromText(message.Text);
             ServerChatMessageState entry = new()
             {
                 ClientMessageId = message.ClientMessageId,
                 SenderName = message.SenderName ?? string.Empty,
                 SenderNetId = message.SenderNetId,
-                Text = message.Text ?? string.Empty,
+                Text = CompatibilityText(content, message.Text),
+                Content = content,
                 Delivery = ServerChatDeliveryState.Pending,
                 IsLocal = true,
                 SentAt = queuedAt
@@ -568,6 +598,7 @@ internal sealed class LanConnectChatChannelState
             SenderName = senderName,
             SenderNetId = senderNetId,
             Text = text,
+            Content = ContentFromText(text),
             QueuedAt = queuedAt == default ? DateTimeOffset.UtcNow : queuedAt
         });
     }
@@ -591,6 +622,105 @@ internal sealed class LanConnectChatChannelState
                 _ => new LanConnectChatApplyResult(ReconnectRequired: false)
             };
         }
+    }
+
+    internal LanConnectChatApplyResult Apply(
+        LanConnectServerChatAckEnvelope envelope,
+        string localSenderId)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        lock (_mutationLock)
+        {
+            return ApplyCanonicalAck(envelope.ClientMessageId, envelope.Message, null, localSenderId);
+        }
+    }
+
+    internal LanConnectChatApplyResult Apply(LanConnectServerChatReadyEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        return Apply(new ServerChatInboundEnvelope
+        {
+            Type = envelope.Type,
+            ProtocolVersion = envelope.ProtocolVersion,
+            Channel = envelope.Channel,
+            SessionId = envelope.SessionId,
+            SenderId = envelope.SenderId,
+            InstanceId = envelope.InstanceId,
+            HistoryEpoch = envelope.HistoryEpoch,
+            ChatEnabled = envelope.ChatEnabled,
+            ServerChatVersion = envelope.ServerChatVersion,
+            EnabledFeatures = new ServerChatEnabledFeatures
+            {
+                RichContentVersion = envelope.EnabledFeatures.RichContentVersion,
+                EmojiSetVersion = envelope.EnabledFeatures.EmojiSetVersion,
+                ItemRefVersion = envelope.EnabledFeatures.ItemRefVersion
+            }
+        });
+    }
+
+    internal LanConnectChatApplyResult Apply(LanConnectServerChatStateEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        return Apply(new ServerChatInboundEnvelope
+        {
+            Type = envelope.Type,
+            ProtocolVersion = envelope.ProtocolVersion,
+            ChatEnabled = envelope.ChatEnabled,
+            HistoryEpoch = envelope.HistoryEpoch,
+            EnabledFeatures = new ServerChatEnabledFeatures
+            {
+                RichContentVersion = envelope.EnabledFeatures.RichContentVersion,
+                EmojiSetVersion = envelope.EnabledFeatures.EmojiSetVersion,
+                ItemRefVersion = envelope.EnabledFeatures.ItemRefVersion
+            }
+        });
+    }
+
+    internal LanConnectChatApplyResult Apply(
+        LanConnectServerChatMessageEnvelope envelope,
+        string localSenderId)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        lock (_mutationLock)
+        {
+            return ApplyCanonicalMessage(envelope.Message, null, localSenderId);
+        }
+    }
+
+    internal LanConnectChatApplyResult Apply(LanConnectServerChatErrorEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        MarkFailed(envelope.ClientMessageId, envelope.Code, envelope.Message);
+        return new LanConnectChatApplyResult(ReconnectRequired: false);
+    }
+
+    internal LanConnectChatApplyResult Apply(
+        LanConnectRoomChatAckEnvelope envelope,
+        string localSenderId)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        lock (_mutationLock)
+        {
+            return ApplyCanonicalAck(envelope.ClientMessageId, null, envelope.Message, localSenderId);
+        }
+    }
+
+    internal LanConnectChatApplyResult Apply(
+        LanConnectRoomChatMessageEnvelope envelope,
+        string localSenderId)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        lock (_mutationLock)
+        {
+            return ApplyCanonicalMessage(null, envelope.Message, localSenderId);
+        }
+    }
+
+    internal LanConnectChatApplyResult Apply(LanConnectRoomChatErrorEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        MarkFailed(envelope.ClientMessageId, envelope.Code, envelope.Message);
+        return new LanConnectChatApplyResult(ReconnectRequired: false);
     }
 
     internal void MarkLegacySendConfirmed(string clientMessageId, int confirmedMessageLimit = int.MaxValue)
@@ -643,6 +773,9 @@ internal sealed class LanConnectChatChannelState
                     SenderName = existing.SenderName,
                     SenderNetId = existing.SenderNetId,
                     Text = existing.Text,
+                    Content = existing.Content,
+                    ServerPayload = existing.ServerPayload,
+                    RoomPayload = existing.RoomPayload,
                     Sequence = existing.Sequence,
                     IsLocal = existing.IsLocal,
                     Delivery = ServerChatDeliveryState.Failed,
@@ -673,6 +806,43 @@ internal sealed class LanConnectChatChannelState
                 MessageId = messageId,
                 SenderName = senderName ?? string.Empty,
                 Text = text ?? string.Empty,
+                Content = ContentFromText(text),
+                Sequence = sequence,
+                IsLocal = isLocal,
+                Delivery = ServerChatDeliveryState.Confirmed,
+                SentAt = DateTimeOffset.UtcNow
+            };
+            _messages.Add(entry);
+            if (!string.IsNullOrEmpty(messageId))
+            {
+                _serverMessageIndex[messageId] = _messages.Count - 1;
+            }
+            TrackIncoming(messageId, sequence, isLocal);
+            Touch();
+        }
+    }
+
+    internal void AppendConfirmedContentForTests(
+        string messageId,
+        string senderName,
+        LanConnectChatContent content,
+        long sequence,
+        bool isLocal)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        lock (_mutationLock)
+        {
+            if (!string.IsNullOrEmpty(messageId) && _serverMessageIndex.ContainsKey(messageId))
+            {
+                return;
+            }
+            _arrivalClock.Observe(sequence);
+            ServerChatMessageState entry = new()
+            {
+                MessageId = messageId,
+                SenderName = senderName ?? string.Empty,
+                Text = CompatibilityText(content, string.Empty),
+                Content = content,
                 Sequence = sequence,
                 IsLocal = isLocal,
                 Delivery = ServerChatDeliveryState.Confirmed,
@@ -716,6 +886,7 @@ internal sealed class LanConnectChatChannelState
                 SenderName = senderName ?? string.Empty,
                 SenderNetId = senderNetId,
                 Text = text ?? string.Empty,
+                Content = ContentFromText(text),
                 Sequence = sequence,
                 IsLocal = isLocal,
                 Delivery = ServerChatDeliveryState.Confirmed,
@@ -793,6 +964,7 @@ internal sealed class LanConnectChatChannelState
             _contextGeneration++;
             _messages.Clear();
             _snapshotAssembly = null;
+            _enabledFeatures = new ServerChatEnabledFeatures();
             if (!_draft.IsEmpty)
             {
                 _draftGeneration++;
@@ -846,6 +1018,147 @@ internal sealed class LanConnectChatChannelState
 
         _draftGeneration += revisionDelta;
         _revision += revisionDelta;
+    }
+
+    private LanConnectChatApplyResult ApplyCanonicalAck(
+        string clientMessageId,
+        LanConnectServerChatMessagePayload? serverMessage,
+        LanConnectRoomChatMessagePayload? roomMessage,
+        string localSenderId)
+    {
+        string messageId = serverMessage?.MessageId ?? roomMessage?.MessageId ?? string.Empty;
+        string senderName = serverMessage?.SenderName ?? roomMessage?.SenderName ?? string.Empty;
+        string senderId = serverMessage?.SenderId ?? roomMessage?.SenderId ?? string.Empty;
+        LanConnectChatContent? rawContent = serverMessage?.Content ?? roomMessage?.Content;
+        string fallback = serverMessage?.PlainTextFallback ?? roomMessage?.PlainTextFallback ?? string.Empty;
+        string sentAt = serverMessage?.SentAt ?? roomMessage?.SentAt ?? string.Empty;
+        if (string.IsNullOrEmpty(clientMessageId) ||
+            string.IsNullOrEmpty(messageId) ||
+            !TryCanonicalContent(rawContent, senderName, out LanConnectChatContent content))
+        {
+            return new LanConnectChatApplyResult(ReconnectRequired: false);
+        }
+
+        bool hasClientEntry = _clientPendingIndex.TryGetValue(clientMessageId, out int clientIndex) &&
+                              clientIndex < _messages.Count &&
+                              _messages[clientIndex].ClientMessageId == clientMessageId;
+        bool hasServerEntry = _serverMessageIndex.TryGetValue(messageId, out int serverIndex) &&
+                              serverIndex < _messages.Count &&
+                              _messages[serverIndex].MessageId == messageId;
+        if (hasClientEntry)
+        {
+            bool removedDuplicate = hasServerEntry && serverIndex != clientIndex;
+            if (removedDuplicate)
+            {
+                RollBackIncoming(messageId);
+                _messages.RemoveAt(serverIndex);
+                if (serverIndex < clientIndex)
+                {
+                    clientIndex--;
+                }
+            }
+            ServerChatMessageState existing = _messages[clientIndex];
+            ServerChatMessageState updated = CreateCanonicalState(
+                existing,
+                messageId,
+                clientMessageId,
+                senderName,
+                senderId,
+                content,
+                fallback,
+                sentAt,
+                isLocal: true,
+                serverMessage,
+                roomMessage);
+            if (removedDuplicate || !MessagesEqual(existing, updated))
+            {
+                _messages[clientIndex] = updated;
+                _pendingQueueTimes.Remove(clientMessageId);
+                RebuildIndices();
+                Touch();
+            }
+            return new LanConnectChatApplyResult(ReconnectRequired: false);
+        }
+
+        if (hasServerEntry)
+        {
+            ServerChatMessageState existing = _messages[serverIndex];
+            ServerChatMessageState updated = CreateCanonicalState(
+                existing,
+                messageId,
+                clientMessageId,
+                senderName,
+                senderId,
+                content,
+                fallback,
+                sentAt,
+                isLocal: true,
+                serverMessage,
+                roomMessage);
+            if (!MessagesEqual(existing, updated))
+            {
+                RollBackIncoming(messageId);
+                _messages[serverIndex] = updated;
+                RebuildIndices();
+                Touch();
+            }
+            return new LanConnectChatApplyResult(ReconnectRequired: false);
+        }
+
+        _messages.Add(CreateCanonicalState(
+            existing: null,
+            messageId,
+            clientMessageId,
+            senderName,
+            senderId,
+            content,
+            fallback,
+            sentAt,
+            isLocal: true,
+            serverMessage,
+            roomMessage));
+        RebuildIndices();
+        Touch();
+        return new LanConnectChatApplyResult(ReconnectRequired: false);
+    }
+
+    private LanConnectChatApplyResult ApplyCanonicalMessage(
+        LanConnectServerChatMessagePayload? serverMessage,
+        LanConnectRoomChatMessagePayload? roomMessage,
+        string localSenderId)
+    {
+        string messageId = serverMessage?.MessageId ?? roomMessage?.MessageId ?? string.Empty;
+        string senderName = serverMessage?.SenderName ?? roomMessage?.SenderName ?? string.Empty;
+        string senderId = serverMessage?.SenderId ?? roomMessage?.SenderId ?? string.Empty;
+        LanConnectChatContent? rawContent = serverMessage?.Content ?? roomMessage?.Content;
+        string fallback = serverMessage?.PlainTextFallback ?? roomMessage?.PlainTextFallback ?? string.Empty;
+        string sentAt = serverMessage?.SentAt ?? roomMessage?.SentAt ?? string.Empty;
+        if (string.IsNullOrEmpty(messageId) ||
+            _serverMessageIndex.ContainsKey(messageId) ||
+            !TryCanonicalContent(rawContent, senderName, out LanConnectChatContent content))
+        {
+            return new LanConnectChatApplyResult(ReconnectRequired: false);
+        }
+        bool isLocal = !string.IsNullOrEmpty(localSenderId) &&
+                       string.Equals(senderId, localSenderId, StringComparison.Ordinal);
+        ServerChatMessageState entry = CreateCanonicalState(
+            existing: null,
+            messageId,
+            clientMessageId: null,
+            senderName,
+            senderId,
+            content,
+            fallback,
+            sentAt,
+            isLocal,
+            serverMessage,
+            roomMessage,
+            sequenceOverride: _arrivalClock.Next());
+        _messages.Add(entry);
+        _serverMessageIndex[messageId] = _messages.Count - 1;
+        TrackIncoming(messageId, entry.Sequence, isLocal);
+        Touch();
+        return new LanConnectChatApplyResult(ReconnectRequired: false);
     }
 
     private LanConnectChatApplyResult ApplyAck(ServerChatInboundEnvelope envelope)
@@ -920,6 +1233,7 @@ internal sealed class LanConnectChatChannelState
             SenderName = canonical.SenderName ?? string.Empty,
             SenderNetId = canonical.SenderId,
             Text = text,
+            Content = ContentFromLegacy(canonical.Content),
             IsLocal = true,
             Delivery = ServerChatDeliveryState.Confirmed,
             SentAt = canonical.SentAt == default ? DateTimeOffset.UtcNow : canonical.SentAt
@@ -956,6 +1270,9 @@ internal sealed class LanConnectChatChannelState
                 SenderName = existing.SenderName,
                 SenderNetId = existing.SenderNetId,
                 Text = existing.Text,
+                Content = existing.Content,
+                ServerPayload = existing.ServerPayload,
+                RoomPayload = existing.RoomPayload,
                 Sequence = existing.Sequence,
                 IsLocal = existing.IsLocal,
                 Delivery = ServerChatDeliveryState.Failed,
@@ -996,6 +1313,7 @@ internal sealed class LanConnectChatChannelState
             SenderName = canonical.SenderName ?? string.Empty,
             SenderNetId = canonical.SenderId,
             Text = text,
+            Content = ContentFromLegacy(canonical.Content),
             Sequence = _arrivalClock.Next(),
             IsLocal = false,
             Delivery = ServerChatDeliveryState.Confirmed,
@@ -1201,6 +1519,7 @@ internal sealed class LanConnectChatChannelState
                     SenderName = message.SenderName ?? string.Empty,
                     SenderNetId = message.SenderId,
                     Text = text,
+                    Content = ContentFromLegacy(message.Content),
                     Sequence = sequence++,
                     IsLocal = false,
                     Delivery = ServerChatDeliveryState.Confirmed,
@@ -1380,6 +1699,9 @@ internal sealed class LanConnectChatChannelState
             SenderName = string.IsNullOrEmpty(canonical.SenderName) ? existing.SenderName : canonical.SenderName,
             SenderNetId = string.IsNullOrEmpty(canonical.SenderId) ? existing.SenderNetId : canonical.SenderId,
             Text = text,
+            Content = ContentFromLegacy(canonical.Content),
+            ServerPayload = existing.ServerPayload,
+            RoomPayload = existing.RoomPayload,
             Sequence = existing.Sequence,
             IsLocal = true,
             Delivery = ServerChatDeliveryState.Confirmed,
@@ -1398,6 +1720,7 @@ internal sealed class LanConnectChatChannelState
         string.Equals(left.SenderName, right.SenderName, StringComparison.Ordinal) &&
         string.Equals(left.SenderNetId, right.SenderNetId, StringComparison.Ordinal) &&
         string.Equals(left.Text, right.Text, StringComparison.Ordinal) &&
+        ContentEqual(left.Content, right.Content) &&
         left.Sequence == right.Sequence &&
         left.IsLocal == right.IsLocal &&
         left.Delivery == right.Delivery &&
@@ -1414,6 +1737,9 @@ internal sealed class LanConnectChatChannelState
             SenderName = source.SenderName,
             SenderNetId = source.SenderNetId,
             Text = source.Text,
+            Content = source.Content,
+            ServerPayload = source.ServerPayload,
+            RoomPayload = source.RoomPayload,
             Sequence = source.Sequence,
             IsLocal = source.IsLocal,
             Delivery = delivery,
@@ -1431,6 +1757,9 @@ internal sealed class LanConnectChatChannelState
             SenderName = source.SenderName,
             SenderNetId = source.SenderNetId,
             Text = source.Text,
+            Content = source.Content,
+            ServerPayload = source.ServerPayload,
+            RoomPayload = source.RoomPayload,
             Sequence = source.Sequence,
             IsLocal = source.IsLocal,
             Delivery = source.Delivery,
@@ -1439,6 +1768,106 @@ internal sealed class LanConnectChatChannelState
             ErrorMessage = source.ErrorMessage,
             SentAt = source.SentAt
         };
+
+    private static ServerChatMessageState CreateCanonicalState(
+        ServerChatMessageState? existing,
+        string messageId,
+        string? clientMessageId,
+        string senderName,
+        string senderId,
+        LanConnectChatContent content,
+        string fallback,
+        string sentAt,
+        bool isLocal,
+        LanConnectServerChatMessagePayload? serverMessage,
+        LanConnectRoomChatMessagePayload? roomMessage,
+        long? sequenceOverride = null) => new()
+    {
+        MessageId = messageId,
+        ClientMessageId = clientMessageId,
+        SenderName = string.IsNullOrEmpty(senderName) ? existing?.SenderName ?? string.Empty : senderName,
+        SenderNetId = string.IsNullOrEmpty(senderId) ? existing?.SenderNetId : senderId,
+        Text = CompatibilityText(content, fallback),
+        Content = content,
+        ServerPayload = serverMessage,
+        RoomPayload = roomMessage,
+        Sequence = sequenceOverride ?? existing?.Sequence ?? 0,
+        IsLocal = isLocal,
+        Delivery = ServerChatDeliveryState.Confirmed,
+        DisconnectedAfterUnknown = existing?.DisconnectedAfterUnknown ?? false,
+        SentAt = ParseSentAt(sentAt, existing?.SentAt ?? DateTimeOffset.UtcNow)
+    };
+
+    private static bool TryCanonicalContent(
+        LanConnectChatContent? content,
+        string senderName,
+        out LanConnectChatContent canonical)
+    {
+        try
+        {
+            canonical = LanConnectServerChatProtocol.Canonicalize(
+                content ?? throw new InvalidOperationException("content is required."),
+                new LanConnectChatFeatureVersions(1, 1, 1, 0));
+            LanConnectServerChatProtocol.AssertInboundBudget(canonical, senderName ?? string.Empty);
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or ArgumentException or JsonException)
+        {
+            canonical = new LanConnectChatContent();
+            return false;
+        }
+    }
+
+    private static LanConnectChatContent ContentFromText(string? text) =>
+        string.IsNullOrEmpty(text)
+            ? new LanConnectChatContent(1, Array.Empty<LanConnectChatSegment>())
+            : new LanConnectChatContent(1, [new LanConnectTextSegment(text)]);
+
+    private static LanConnectChatContent ContentFromLegacy(ServerChatContent? content)
+    {
+        if (content?.Segments == null)
+        {
+            return new LanConnectChatContent(1, Array.Empty<LanConnectChatSegment>());
+        }
+        return new LanConnectChatContent(
+            content.FormatVersion,
+            content.Segments
+                .Where(segment => segment != null)
+                .Select(segment => (LanConnectChatSegment)new LanConnectTextSegment(segment.Text ?? string.Empty))
+                .ToArray());
+    }
+
+    private static string CompatibilityText(LanConnectChatContent content, string? fallback)
+    {
+        if (content.FormatVersion == 1 &&
+            content.Segments is { Count: 1 } &&
+            content.Segments[0] is LanConnectTextSegment text)
+        {
+            return text.Text;
+        }
+        if (!string.IsNullOrEmpty(fallback))
+        {
+            return fallback;
+        }
+        try
+        {
+            return LanConnectServerChatProtocol.RenderGenericFallback(content);
+        }
+        catch (InvalidOperationException)
+        {
+            return string.Empty;
+        }
+    }
+
+    private static DateTimeOffset ParseSentAt(string? value, DateTimeOffset fallback) =>
+        DateTimeOffset.TryParse(value, out DateTimeOffset parsed) ? parsed : fallback;
+
+    private static bool ContentEqual(LanConnectChatContent left, LanConnectChatContent right) =>
+        string.Equals(
+            LanConnectServerChatProtocol.DeterministicContentJson(left),
+            LanConnectServerChatProtocol.DeterministicContentJson(right),
+            StringComparison.Ordinal);
 
     private static string ResolveDisplayText(ServerChatCanonicalMessage message)
     {

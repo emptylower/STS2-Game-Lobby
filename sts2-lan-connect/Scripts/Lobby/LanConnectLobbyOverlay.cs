@@ -1825,21 +1825,36 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         LanConnectChatChannelState? state = _testServerChatState;
         Func<string, Task>? send = _testServerChatSend;
         Func<string, Task>? retry = _testServerChatRetry;
+        LanConnectLobbyRuntime? productionRuntime = null;
         if (state == null && LanConnectLobbyRuntime.Instance is { } runtime)
         {
+            productionRuntime = runtime;
             state = runtime.Chat.Server;
-            send = text => runtime.SendChatTextAsync(LanConnectChatChannel.Server, text);
             retry = clientMessageId => runtime.RetryServerChatAsync(clientMessageId);
         }
 
-        if (state == null || send == null || retry == null)
+        if (state == null || retry == null || (send == null && productionRuntime == null))
         {
             _serverChatFrame!.Visible = false;
             _serverChatPanel.Visible = false;
             return;
         }
 
-        _serverChatPanel.Bind(state, send, retry, IsAnyDialogVisible);
+        if (productionRuntime != null)
+        {
+            _serverChatPanel.BindStructured(
+                state,
+                (content, clientMessageId) => productionRuntime.SendChatAsync(
+                    LanConnectChatChannel.Server,
+                    content,
+                    clientMessageId),
+                retry,
+                IsAnyDialogVisible);
+        }
+        else
+        {
+            _serverChatPanel.Bind(state, send!, retry, IsAnyDialogVisible);
+        }
         _serverChatPresentationRevision = -1;
     }
 

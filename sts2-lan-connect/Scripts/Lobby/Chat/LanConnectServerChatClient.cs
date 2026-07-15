@@ -81,6 +81,7 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
     private int _snapshotComplete;
     private int _permanentlyStopped;
     private int _disposed;
+    private LanConnectChatFeatureVersions _enabledFeatures = new();
     private long _connectionOrdinal;
     private long _currentConnectionOrdinal;
     private long _activeSessionOrdinal;
@@ -148,6 +149,12 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
 
     Task ILanConnectServerChatClient.SendTextAsync(string text, CancellationToken cancellationToken) =>
         SendTextAsync(text, cancellationToken);
+
+    Task ILanConnectServerChatClient.SendAsync(
+        LanConnectChatContent content,
+        string clientMessageId,
+        CancellationToken cancellationToken) =>
+        SendAsync(content, clientMessageId, cancellationToken);
 
     Task ILanConnectServerChatClient.RetryAsync(string clientMessageId, CancellationToken cancellationToken) =>
         RetryAsync(clientMessageId, cancellationToken);
@@ -285,10 +292,25 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
     internal async Task SendTextAsync(string text, CancellationToken cancellationToken = default)
     {
         EnsureCanSend();
-        ServerChatContent content = LanConnectChatTextProtocol.CanonicalizeText(text);
-        LanConnectChatTextProtocol.AssertSendBudget(content, _playerName);
+        LanConnectChatContent content = LanConnectServerChatProtocol.Canonicalize(
+            new LanConnectChatContent(1, [new LanConnectTextSegment(text)]),
+            _enabledFeatures);
+        LanConnectServerChatProtocol.AssertInboundBudget(content, _playerName);
         string clientMessageId = _uuidFactory().ToString("D");
-        await SendContentAsync(clientMessageId, content, rememberText: true, cancellationToken);
+        await SendContentAsync(clientMessageId, content, rememberContent: true, cancellationToken);
+    }
+
+    internal async Task SendAsync(
+        LanConnectChatContent content,
+        string clientMessageId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentException.ThrowIfNullOrEmpty(clientMessageId);
+        EnsureCanSend();
+        LanConnectChatContent canonical = LanConnectServerChatProtocol.Canonicalize(content, _enabledFeatures);
+        LanConnectServerChatProtocol.AssertInboundBudget(canonical, _playerName);
+        await SendContentAsync(clientMessageId, canonical, rememberContent: true, cancellationToken);
     }
 
     internal Task RetryAsync(string clientMessageId, CancellationToken cancellationToken = default)
@@ -316,10 +338,12 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
             throw new InvalidOperationException("A message ID cannot be reused across server chat sessions.");
         }
 
-        ServerChatContent content = LanConnectChatTextProtocol.CanonicalizeText(stored.Text);
-        LanConnectChatTextProtocol.AssertSendBudget(content, _playerName);
+        LanConnectChatContent content = LanConnectServerChatProtocol.Canonicalize(
+            stored.Content,
+            _enabledFeatures);
+        LanConnectServerChatProtocol.AssertInboundBudget(content, _playerName);
         string retryId = startNewSession ? _uuidFactory().ToString("D") : clientMessageId;
-        await SendContentAsync(retryId, content, rememberText: true, cancellationToken);
+        await SendContentAsync(retryId, content, rememberContent: true, cancellationToken);
     }
 
     internal Task StopAsync(CancellationToken cancellationToken = default)
@@ -359,8 +383,8 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
 
     private async Task SendContentAsync(
         string clientMessageId,
-        ServerChatContent content,
-        bool rememberText,
+        LanConnectChatContent content,
+        bool rememberContent,
         CancellationToken cancellationToken)
     {
         if (!CanSend)
@@ -368,7 +392,7 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
             throw new InvalidOperationException("Server chat is not ready for sending.");
         }
 
-        string text = content.Segments.Single().Text;
+        string text = LanConnectServerChatProtocol.RenderGenericFallback(content);
         long revision = State.Revision;
         State.Queue(new ServerChatPendingMessage
         {
@@ -376,21 +400,22 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
             SenderName = _playerName,
             SenderNetId = _playerNetId,
             Text = text,
+            Content = content,
             QueuedAt = _clock()
         });
         RaiseStateChangedIfNeeded(revision);
-        if (rememberText)
+        if (rememberContent)
         {
             lock (_timeoutLock)
             {
                 _messagesById[clientMessageId] = new StoredMessage(
-                    text,
+                    content,
                     Volatile.Read(ref _activeSessionOrdinal));
             }
         }
 
         StartDeliveryTimeout(clientMessageId);
-        string payload = JsonSerializer.Serialize(new ServerChatSendEnvelope
+        string payload = JsonSerializer.Serialize(new LanConnectServerChatSendEnvelope
         {
             ProtocolVersion = ProtocolVersion,
             Channel = LanConnectChatChannel.Server,
@@ -509,16 +534,21 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
                 return;
             }
 
-            if (envelope.Type is "chat_ack" or "chat_error" && !string.IsNullOrEmpty(envelope.ClientMessageId))
-            {
-                CancelDeliveryTimeout(envelope.ClientMessageId);
-            }
             if (envelope.Type == "chat_snapshot_begin")
             {
                 Volatile.Write(ref _snapshotComplete, 0);
             }
 
             long revision = State.Revision;
+            if (TryApplyCanonicalEnvelope(payload, envelope.Type, out string? completedClientMessageId))
+            {
+                if (!string.IsNullOrEmpty(completedClientMessageId))
+                {
+                    CancelDeliveryTimeout(completedClientMessageId);
+                }
+                RaiseStateChangedIfNeeded(revision);
+                return;
+            }
             LanConnectChatApplyResult result = State.Apply(envelope);
             if (result.ReconnectRequired)
             {
@@ -530,6 +560,13 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
             }
             if (envelope.Type == "chat_ready")
             {
+                _enabledFeatures = envelope.EnabledFeatures == null
+                    ? new LanConnectChatFeatureVersions()
+                    : new LanConnectChatFeatureVersions(
+                        envelope.EnabledFeatures.RichContentVersion,
+                        envelope.EnabledFeatures.EmojiSetVersion,
+                        envelope.EnabledFeatures.ItemRefVersion,
+                        0);
                 Volatile.Write(ref _readySeen, 1);
             }
             else if (envelope.Type == "chat_snapshot_end")
@@ -549,6 +586,13 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
                      Volatile.Read(ref _readySeen) != 0 &&
                      Volatile.Read(ref _snapshotComplete) != 0)
             {
+                _enabledFeatures = envelope.EnabledFeatures == null
+                    ? new LanConnectChatFeatureVersions()
+                    : new LanConnectChatFeatureVersions(
+                        envelope.EnabledFeatures.RichContentVersion,
+                        envelope.EnabledFeatures.EmojiSetVersion,
+                        envelope.EnabledFeatures.ItemRefVersion,
+                        0);
                 State.SetPresentation(
                     State.ChatEnabled
                         ? LanConnectServerChatPresentation.Ready
@@ -577,6 +621,89 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
             }
         }
         timeoutCancellation?.Cancel();
+    }
+
+    private bool TryApplyCanonicalEnvelope(
+        string payload,
+        string type,
+        out string? completedClientMessageId)
+    {
+        completedClientMessageId = null;
+        try
+        {
+            switch (type)
+            {
+                case "chat_ready":
+                    LanConnectServerChatReadyEnvelope? ready =
+                        JsonSerializer.Deserialize<LanConnectServerChatReadyEnvelope>(payload, LanConnectJson.Options);
+                    if (ready == null ||
+                        ready.ProtocolVersion != ProtocolVersion ||
+                        ready.Channel != LanConnectChatChannel.Server ||
+                        ready.ServerChatVersion != ProtocolVersion)
+                    {
+                        return true;
+                    }
+                    _enabledFeatures = ready.EnabledFeatures;
+                    State.Apply(ready);
+                    Volatile.Write(ref _readySeen, 1);
+                    return true;
+                case "chat_state":
+                    LanConnectServerChatStateEnvelope? state =
+                        JsonSerializer.Deserialize<LanConnectServerChatStateEnvelope>(payload, LanConnectJson.Options);
+                    if (state == null || state.ProtocolVersion != ProtocolVersion)
+                    {
+                        return true;
+                    }
+                    _enabledFeatures = state.EnabledFeatures;
+                    State.Apply(state);
+                    if (Volatile.Read(ref _readySeen) != 0 &&
+                        Volatile.Read(ref _snapshotComplete) != 0)
+                    {
+                        State.SetPresentation(
+                            State.ChatEnabled
+                                ? LanConnectServerChatPresentation.Ready
+                                : LanConnectServerChatPresentation.Disabled);
+                    }
+                    return true;
+                case "chat_ack":
+                    LanConnectServerChatAckEnvelope? ack =
+                        JsonSerializer.Deserialize<LanConnectServerChatAckEnvelope>(payload, LanConnectJson.Options);
+                    if (ack == null || ack.ProtocolVersion != ProtocolVersion)
+                    {
+                        return true;
+                    }
+                    State.Apply(ack, _playerNetId);
+                    completedClientMessageId = ack.ClientMessageId;
+                    return true;
+                case "chat_message":
+                    LanConnectServerChatMessageEnvelope? message =
+                        JsonSerializer.Deserialize<LanConnectServerChatMessageEnvelope>(payload, LanConnectJson.Options);
+                    if (message == null || message.ProtocolVersion != ProtocolVersion)
+                    {
+                        return true;
+                    }
+                    State.Apply(message, _playerNetId);
+                    return true;
+                case "chat_error":
+                    LanConnectServerChatErrorEnvelope? error =
+                        JsonSerializer.Deserialize<LanConnectServerChatErrorEnvelope>(payload, LanConnectJson.Options);
+                    if (error == null || error.ProtocolVersion != ProtocolVersion)
+                    {
+                        return true;
+                    }
+                    State.Apply(error);
+                    completedClientMessageId = error.ClientMessageId;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        catch (JsonException)
+        {
+            // A malformed rich envelope is isolated to that payload. The active
+            // channel state and connection remain usable for subsequent frames.
+            return true;
+        }
     }
 
     private void CancelAllDeliveryTimeouts()
@@ -907,7 +1034,7 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
         await DisposeCurrentResourcesAsync();
     }
 
-    private readonly record struct StoredMessage(string Text, long SessionOrdinal);
+    private readonly record struct StoredMessage(LanConnectChatContent Content, long SessionOrdinal);
 
     private sealed class ServerChatApiAdapter(LobbyApiClient inner) : ILanConnectServerChatApi
     {

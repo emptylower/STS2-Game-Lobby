@@ -18,6 +18,11 @@ internal interface ILanConnectServerChatClient : IAsyncDisposable
 
     Task SendTextAsync(string text, CancellationToken cancellationToken = default);
 
+    Task SendAsync(
+        LanConnectChatContent content,
+        string clientMessageId,
+        CancellationToken cancellationToken = default);
+
     Task RetryAsync(string clientMessageId, CancellationToken cancellationToken = default);
 
     Task StopAsync(CancellationToken cancellationToken = default);
@@ -74,6 +79,35 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
             () => State.Room.BeginPendingText(clientMessageId, senderName, text, senderNetId, sentAt),
             LanConnectLobbyRuntimeChatCoordinatorCheckpoint.BeginAfterSyncLease);
     }
+
+    internal void BeginRoomPending(
+        string clientMessageId,
+        string senderName,
+        string? senderNetId,
+        LanConnectChatContent content,
+        DateTimeOffset sentAt)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        RunRoomMutation(
+            () => State.Room.Queue(new ServerChatPendingMessage
+            {
+                ClientMessageId = clientMessageId,
+                SenderName = senderName,
+                SenderNetId = senderNetId,
+                Content = content,
+                QueuedAt = sentAt
+            }),
+            LanConnectLobbyRuntimeChatCoordinatorCheckpoint.BeginAfterSyncLease);
+    }
+
+    internal void ApplyRoomAck(LanConnectRoomChatAckEnvelope envelope, string localSenderId) =>
+        RunRoomMutation(() => State.Room.Apply(envelope, localSenderId));
+
+    internal void ApplyRoomMessage(LanConnectRoomChatMessageEnvelope envelope, string localSenderId) =>
+        RunRoomMutation(() => State.Room.Apply(envelope, localSenderId));
+
+    internal void ApplyRoomError(LanConnectRoomChatErrorEnvelope envelope) =>
+        RunRoomMutation(() => State.Room.Apply(envelope));
 
     internal void ConfirmRoomSend(string clientMessageId)
     {
@@ -138,6 +172,12 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
         RunRoomMutation(() => State.Room.SetChatEnabled(enabled));
     }
 
+    internal void SetRoomRichFeatures(LanConnectChatFeatureVersions features)
+    {
+        ArgumentNullException.ThrowIfNull(features);
+        RunRoomMutation(() => State.Room.SetEnabledRichFeatures(features));
+    }
+
     internal Task ConnectServerAsync(
         Uri lobbyBaseUri,
         string playerNetId,
@@ -149,6 +189,14 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 
     internal Task SendServerAsync(string text, CancellationToken cancellationToken = default) =>
         RunClientOperationAsync(token => _client.SendTextAsync(text, token), cancellationToken);
+
+    internal Task SendServerAsync(
+        LanConnectChatContent content,
+        string clientMessageId,
+        CancellationToken cancellationToken = default) =>
+        RunClientOperationAsync(
+            token => _client.SendAsync(content, clientMessageId, token),
+            cancellationToken);
 
     internal Task RetryServerAsync(string clientMessageId, CancellationToken cancellationToken = default) =>
         RunClientOperationAsync(token => _client.RetryAsync(clientMessageId, token), cancellationToken);

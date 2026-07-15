@@ -18,6 +18,12 @@ using MegaCrit.Sts2.Core.Saves;
 
 namespace Sts2LanConnect.Scripts;
 
+internal readonly record struct LanConnectRoomChatSendDecision(
+    bool Enabled,
+    bool UseV2,
+    string LegacyText,
+    string DisabledReason);
+
 internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLifecycle
 {
     private const string RuntimeName = "Sts2LanConnectLobbyRuntime";
@@ -258,6 +264,34 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
 
         HostedRoomSession session = new(netService, apiClient, registration, metadata);
         session.SetEnvelopeHandler(envelope => OnHostedControlEnvelope(session, envelope));
+        session.ControlClient.RoomChatReadyReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeSession, session))
+            {
+                GetChatCoordinator().SetRoomRichFeatures(envelope.EnabledFeatures);
+            }
+        };
+        session.ControlClient.RoomChatAckReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeSession, session))
+            {
+                GetChatCoordinator().ApplyRoomAck(envelope, session.NetService.NetId.ToString());
+            }
+        };
+        session.ControlClient.RoomChatMessageReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeSession, session))
+            {
+                GetChatCoordinator().ApplyRoomMessage(envelope, session.NetService.NetId.ToString());
+            }
+        };
+        session.ControlClient.RoomChatErrorReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeSession, session))
+            {
+                GetChatCoordinator().ApplyRoomError(envelope);
+            }
+        };
         _activeSession = session;
         EnterChatRoom(registration.RoomId);
         _timeUntilHeartbeat = 0d;
@@ -295,8 +329,37 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             joinResponse.Room.RoomId,
             controlChannelId,
             joinResponse.TicketId,
-            netService.NetId.ToString());
+            netService.NetId.ToString(),
+            joinResponse.RoomSessionId);
         session.SetEnvelopeHandler(envelope => OnJoinedClientControlEnvelope(session, envelope));
+        session.ControlClient.RoomChatReadyReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeClientSession, session))
+            {
+                GetChatCoordinator().SetRoomRichFeatures(envelope.EnabledFeatures);
+            }
+        };
+        session.ControlClient.RoomChatAckReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeClientSession, session))
+            {
+                GetChatCoordinator().ApplyRoomAck(envelope, session.PlayerNetId);
+            }
+        };
+        session.ControlClient.RoomChatMessageReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeClientSession, session))
+            {
+                GetChatCoordinator().ApplyRoomMessage(envelope, session.PlayerNetId);
+            }
+        };
+        session.ControlClient.RoomChatErrorReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeClientSession, session))
+            {
+                GetChatCoordinator().ApplyRoomError(envelope);
+            }
+        };
         _activeClientSession = session;
         EnterChatRoom(joinResponse.Room.RoomId);
         LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, joinResponse.Room.MaxPlayers, "attach_joined_client");
@@ -399,7 +462,13 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         {
             Uri uri = session.ApiClient.BuildHostControlUri(session.ControlChannelId, session.RoomId, session.HostToken);
             GD.Print($"sts2_lan_connect lobby runtime: connecting host control channel roomId={session.RoomId}");
-            await session.ControlClient.ConnectHostAsync(uri, session.RoomId, session.ControlChannelId, LanConnectConfig.GetEffectivePlayerDisplayName(), CancellationToken.None);
+            await session.ControlClient.ConnectHostAsync(
+                uri,
+                session.RoomId,
+                session.ControlChannelId,
+                LanConnectConfig.GetEffectivePlayerDisplayName(),
+                session.RoomSessionId,
+                CancellationToken.None);
             GD.Print($"sts2_lan_connect lobby runtime: host control channel connected roomId={session.RoomId}");
         }
         catch (Exception ex)
@@ -421,6 +490,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
                 session.TicketId,
                 LanConnectConfig.GetEffectivePlayerDisplayName(),
                 session.PlayerNetId,
+                session.RoomSessionId,
                 CancellationToken.None);
             await session.ControlClient.SendAsync(BuildPlayerNameSyncEnvelope(session.RoomId, session.PlayerNetId), CancellationToken.None);
             GD.Print($"sts2_lan_connect lobby runtime: client control channel connected roomId={session.RoomId}");
@@ -525,10 +595,94 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         return SendRoomChatTextCoreAsync(coordinator, messageText, cancellationToken);
     }
 
+    internal Task SendChatAsync(
+        LanConnectChatChannel channel,
+        LanConnectChatContent content,
+        CancellationToken cancellationToken = default) =>
+        SendChatAsync(channel, content, Guid.NewGuid().ToString("D"), cancellationToken);
+
+    internal Task SendChatAsync(
+        LanConnectChatChannel channel,
+        LanConnectChatContent content,
+        string clientMessageId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentException.ThrowIfNullOrEmpty(clientMessageId);
+        LanConnectLobbyRuntimeChatCoordinator coordinator = GetChatCoordinator();
+        if (channel == LanConnectChatChannel.Server)
+        {
+            return coordinator.SendServerAsync(content, clientMessageId, cancellationToken);
+        }
+        if (!_chatEnabled || !coordinator.State.Room.ChatEnabled)
+        {
+            throw new InvalidOperationException("Room chat is disabled.");
+        }
+        return SendRoomChatContentCoreAsync(coordinator, content, clientMessageId, cancellationToken);
+    }
+
+    internal static LanConnectRoomChatSendDecision DecideRoomChatSend(
+        LanConnectChatContent content,
+        LanConnectRoomChatReadyEnvelope? ready,
+        string roomId,
+        string roomSessionId)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        LanConnectChatContent canonical;
+        try
+        {
+            canonical = LanConnectServerChatProtocol.Canonicalize(
+                content,
+                new LanConnectChatFeatureVersions(1, 1, 1, 0));
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        {
+            return new LanConnectRoomChatSendDecision(false, false, string.Empty, exception.Message);
+        }
+        bool pureText = canonical.Segments.Count == 1 &&
+                        canonical.Segments[0] is LanConnectTextSegment;
+        if (ready == null)
+        {
+            return pureText
+                ? new LanConnectRoomChatSendDecision(
+                    true,
+                    false,
+                    ((LanConnectTextSegment)canonical.Segments[0]).Text,
+                    string.Empty)
+                : new LanConnectRoomChatSendDecision(
+                    false,
+                    false,
+                    string.Empty,
+                    "Room rich chat ready has not been received.");
+        }
+        if (!string.Equals(ready.RoomId, roomId, StringComparison.Ordinal) ||
+            !string.Equals(ready.RoomSessionId, roomSessionId, StringComparison.Ordinal))
+        {
+            return new LanConnectRoomChatSendDecision(
+                false,
+                false,
+                string.Empty,
+                "Room rich chat ready does not match the active room session.");
+        }
+        try
+        {
+            canonical = LanConnectServerChatProtocol.Canonicalize(content, ready.EnabledFeatures);
+            LanConnectServerChatProtocol.AssertInboundBudget(
+                canonical,
+                LanConnectConfig.GetEffectivePlayerDisplayName());
+            return new LanConnectRoomChatSendDecision(true, true, string.Empty, string.Empty);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        {
+            return new LanConnectRoomChatSendDecision(false, false, string.Empty, exception.Message);
+        }
+    }
+
     private async Task SendRoomChatTextCoreAsync(
         LanConnectLobbyRuntimeChatCoordinator coordinator,
         string messageText,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? clientMessageId = null)
     {
         string normalizedMessage = NormalizeChatMessage(messageText);
         if (string.IsNullOrWhiteSpace(normalizedMessage))
@@ -539,7 +693,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         string senderName = LanConnectConfig.GetEffectivePlayerDisplayName();
         string? senderNetId = _activeSession?.NetService.NetId.ToString() ?? _activeClientSession?.PlayerNetId;
         DateTimeOffset sentAt = DateTimeOffset.UtcNow;
-        string messageId = Guid.NewGuid().ToString("N");
+        string messageId = clientMessageId ?? Guid.NewGuid().ToString("N");
         coordinator.BeginRoomPending(messageId, senderName, senderNetId, normalizedMessage, sentAt);
         try
         {
@@ -554,6 +708,64 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         catch (Exception ex)
         {
             coordinator.FailRoomSend(messageId, "send_failed", ex.Message);
+            throw;
+        }
+    }
+
+    private async Task SendRoomChatContentCoreAsync(
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        LanConnectChatContent content,
+        string clientMessageId,
+        CancellationToken cancellationToken)
+    {
+        LobbyControlClient controlClient = _activeSession?.ControlClient ??
+            _activeClientSession?.ControlClient ??
+            throw new InvalidOperationException("No active room control channel is available.");
+        string roomId = _activeSession?.RoomId ?? _activeClientSession?.RoomId ?? string.Empty;
+        string roomSessionId = _activeSession?.RoomSessionId ?? _activeClientSession?.RoomSessionId ?? string.Empty;
+        if (string.IsNullOrEmpty(roomSessionId))
+        {
+            roomSessionId = controlClient.LatestRoomChatReady?.RoomSessionId ?? string.Empty;
+        }
+        LanConnectRoomChatSendDecision decision = DecideRoomChatSend(
+            content,
+            controlClient.LatestRoomChatReady,
+            roomId,
+            roomSessionId);
+        if (!decision.Enabled)
+        {
+            throw new InvalidOperationException(decision.DisabledReason);
+        }
+        if (!decision.UseV2)
+        {
+            await SendRoomChatTextCoreAsync(
+                coordinator,
+                decision.LegacyText,
+                cancellationToken,
+                clientMessageId);
+            return;
+        }
+
+        LanConnectChatContent canonical = LanConnectServerChatProtocol.Canonicalize(
+            content,
+            controlClient.LatestRoomChatReady!.EnabledFeatures);
+        string senderName = LanConnectConfig.GetEffectivePlayerDisplayName();
+        string? senderNetId = _activeSession?.NetService.NetId.ToString() ?? _activeClientSession?.PlayerNetId;
+        DateTimeOffset sentAt = DateTimeOffset.UtcNow;
+        coordinator.BeginRoomPending(clientMessageId, senderName, senderNetId, canonical, sentAt);
+        try
+        {
+            await controlClient.SendRoomChatV2Async(new LanConnectRoomChatV2Envelope
+            {
+                ClientMessageId = clientMessageId,
+                RoomId = roomId,
+                RoomSessionId = roomSessionId,
+                Content = canonical
+            }, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            coordinator.FailRoomSend(clientMessageId, "send_failed", exception.Message);
             throw;
         }
     }
@@ -1446,6 +1658,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
 
         public string ControlChannelId => Registration.ControlChannelId;
 
+        public string RoomSessionId => Registration.RoomSessionId ?? string.Empty;
+
         public bool IsClosing { get; set; }
 
         public int HeartbeatIntervalSeconds => Registration.HeartbeatIntervalSeconds > 0
@@ -1542,7 +1756,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             string roomId,
             string controlChannelId,
             string ticketId,
-            string playerNetId)
+            string playerNetId,
+            string? roomSessionId)
         {
             NetService = netService;
             ApiClient = apiClient;
@@ -1550,6 +1765,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             ControlChannelId = controlChannelId;
             TicketId = ticketId;
             PlayerNetId = playerNetId;
+            RoomSessionId = roomSessionId ?? string.Empty;
             ControlClient = new LobbyControlClient();
             _disconnectedHandler = OnDisconnected;
         }
@@ -1567,6 +1783,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         public string TicketId { get; }
 
         public string PlayerNetId { get; }
+
+        public string RoomSessionId { get; }
 
         public bool IsClosing { get; set; }
 
