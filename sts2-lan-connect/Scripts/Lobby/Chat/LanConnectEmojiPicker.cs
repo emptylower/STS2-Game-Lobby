@@ -26,6 +26,9 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
     private GridContainer? _grid;
     private Control? _previousFocus;
     private bool _available = true;
+    private bool _openIntent;
+    private long _bindingGeneration;
+    private long _focusIntentGeneration;
 
     internal event Action<string>? Inserted;
 
@@ -61,6 +64,7 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
         ArgumentNullException.ThrowIfNull(emojis);
         ArgumentNullException.ThrowIfNull(icon);
         ArgumentNullException.ThrowIfNull(localize);
+        bool restoreFocus = InvalidateBinding();
         _editor = editor;
         _emojis = emojis.ToArray();
         _icon = icon;
@@ -69,15 +73,42 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
         {
             RebuildButtons();
         }
+        if (restoreFocus && editor.IsInsideTree())
+        {
+            editor.FocusEditor();
+        }
     }
 
     internal void SetAvailable(bool available)
     {
+        if (_available == available)
+        {
+            return;
+        }
         _available = available;
         if (!available)
         {
-            Hide();
+            if (_openIntent || Visible || PickerOwnsFocus())
+            {
+                ClosePicker();
+            }
+            else
+            {
+                _focusIntentGeneration++;
+                Hide();
+            }
         }
+    }
+
+    internal bool InvalidateBinding()
+    {
+        bool wasActive = _openIntent || Visible || PickerOwnsFocus();
+        _bindingGeneration++;
+        _focusIntentGeneration++;
+        _openIntent = false;
+        _previousFocus = null;
+        Hide();
+        return wasActive;
     }
 
     internal void OpenPicker()
@@ -90,37 +121,78 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
         _previousFocus = current != null && _editor.IsAncestorOf(current)
             ? current
             : _editor.FocusTarget;
+        Control? focusAtOpen = current;
+        LanConnectRichDraftEditor editor = _editor;
+        long bindingGeneration = _bindingGeneration;
+        long focusIntentGeneration = ++_focusIntentGeneration;
+        _openIntent = true;
         PopupCentered(new Vector2I(Columns * 42 + 20, 3 * 42 + 20));
-        Callable.From(() =>
+        _ = CompleteOpenIntentAfterFrameAsync(
+            editor,
+            focusAtOpen,
+            bindingGeneration,
+            focusIntentGeneration);
+    }
+
+    private async Task CompleteOpenIntentAfterFrameAsync(
+        LanConnectRichDraftEditor editor,
+        Control? focusAtOpen,
+        long bindingGeneration,
+        long focusIntentGeneration)
+    {
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        if (!GodotObject.IsInstanceValid(this) || !IsInsideTree() ||
+            focusIntentGeneration != _focusIntentGeneration ||
+            bindingGeneration != _bindingGeneration ||
+            !ReferenceEquals(_editor, editor) ||
+            !_openIntent || !_available ||
+            _buttons.Count == 0 || !GodotObject.IsInstanceValid(_buttons[0]))
         {
-            if (Visible && _buttons.Count > 0 && GodotObject.IsInstanceValid(_buttons[0]))
-            {
-                _buttons[0].GrabFocus();
-            }
-        }).CallDeferred();
+            return;
+        }
+        Control? currentFocus = GetViewport().GuiGetFocusOwner();
+        if (currentFocus != null &&
+            !ReferenceEquals(currentFocus, focusAtOpen) &&
+            !IsPickerControl(currentFocus))
+        {
+            return;
+        }
+        if (!Visible)
+        {
+            PopupCentered(new Vector2I(Columns * 42 + 20, 3 * 42 + 20));
+        }
+        if (Visible)
+        {
+            _buttons[0].GrabFocus();
+        }
     }
 
     internal void ClosePicker(bool restoreDraftFocus = true)
     {
+        LanConnectRichDraftEditor? editor = _editor;
+        Control? restoreFocus = _previousFocus;
+        _focusIntentGeneration++;
+        _openIntent = false;
+        _previousFocus = null;
         Hide();
-        if (!restoreDraftFocus || _editor == null)
+        if (!restoreDraftFocus || editor == null ||
+            !GodotObject.IsInstanceValid(editor) ||
+            editor.IsQueuedForDeletion() || !editor.IsInsideTree())
         {
             return;
         }
-        Callable.From(() =>
+        if (restoreFocus != null &&
+            GodotObject.IsInstanceValid(restoreFocus) &&
+            !restoreFocus.IsQueuedForDeletion() &&
+            restoreFocus.IsInsideTree() &&
+            editor.IsAncestorOf(restoreFocus))
         {
-            if (_previousFocus != null &&
-                GodotObject.IsInstanceValid(_previousFocus) &&
-                !_previousFocus.IsQueuedForDeletion() &&
-                _previousFocus.IsInsideTree())
-            {
-                _previousFocus.GrabFocus();
-            }
-            else
-            {
-                _editor.FocusEditor();
-            }
-        }).CallDeferred();
+            restoreFocus.GrabFocus();
+        }
+        else
+        {
+            editor.FocusEditor();
+        }
     }
 
     public override void _Ready()
@@ -129,6 +201,13 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
         Unresizable = true;
         BuildGrid();
         Hide();
+    }
+
+    public override void _ExitTree()
+    {
+        _focusIntentGeneration++;
+        _openIntent = false;
+        _previousFocus = null;
     }
 
     private void BuildGrid()
@@ -154,7 +233,11 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
         {
             if (GodotObject.IsInstanceValid(button))
             {
-                button.QueueFree();
+                if (ReferenceEquals(button.GetParent(), _grid))
+                {
+                    _grid.RemoveChild(button);
+                }
+                button.Free();
             }
         }
         _buttons.Clear();
@@ -187,8 +270,12 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
 
     private void OnButtonGuiInput(Button button, int index, InputEvent inputEvent)
     {
-        if (inputEvent is InputEventKey { Pressed: true, Echo: false } key)
+        if (inputEvent is InputEventKey key)
         {
+            if (!key.Pressed || key.Echo)
+            {
+                return;
+            }
             switch (key.Keycode)
             {
                 case Key.Left:
@@ -223,33 +310,40 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
                     return;
             }
         }
-        if (inputEvent is not InputEventAction { Pressed: true } action)
+        if (inputEvent.IsActionPressed("ui_left"))
         {
+            FocusWrapped(index, rowDelta: 0, columnDelta: -1);
+            button.AcceptEvent();
             return;
         }
-        string name = action.Action.ToString();
-        switch (name)
+        if (inputEvent.IsActionPressed("ui_right"))
         {
-            case "ui_left":
-                FocusWrapped(index, rowDelta: 0, columnDelta: -1);
-                button.AcceptEvent();
-                break;
-            case "ui_right":
-                FocusWrapped(index, rowDelta: 0, columnDelta: 1);
-                button.AcceptEvent();
-                break;
-            case "ui_up":
-                FocusWrapped(index, rowDelta: -1, columnDelta: 0);
-                button.AcceptEvent();
-                break;
-            case "ui_down":
-                FocusWrapped(index, rowDelta: 1, columnDelta: 0);
-                button.AcceptEvent();
-                break;
-            case "ui_accept":
-                Insert(index);
-                button.AcceptEvent();
-                break;
+            FocusWrapped(index, rowDelta: 0, columnDelta: 1);
+            button.AcceptEvent();
+            return;
+        }
+        if (inputEvent.IsActionPressed("ui_up"))
+        {
+            FocusWrapped(index, rowDelta: -1, columnDelta: 0);
+            button.AcceptEvent();
+            return;
+        }
+        if (inputEvent.IsActionPressed("ui_down"))
+        {
+            FocusWrapped(index, rowDelta: 1, columnDelta: 0);
+            button.AcceptEvent();
+            return;
+        }
+        if (inputEvent.IsActionPressed("ui_accept"))
+        {
+            Insert(index);
+            button.AcceptEvent();
+            return;
+        }
+        if (inputEvent.IsActionPressed("ui_cancel"))
+        {
+            ClosePicker();
+            button.AcceptEvent();
         }
     }
 
@@ -292,6 +386,9 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
 
     private void ExitForTab(bool backwards)
     {
+        _focusIntentGeneration++;
+        _openIntent = false;
+        _previousFocus = null;
         Hide();
         if (FocusExitRequested != null)
         {
@@ -302,4 +399,10 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
             _editor?.FocusEditor();
         }
     }
+
+    private bool PickerOwnsFocus() =>
+        IsInsideTree() && IsPickerControl(GetViewport().GuiGetFocusOwner());
+
+    private bool IsPickerControl(Control? control) =>
+        control != null && _buttons.Any(button => ReferenceEquals(button, control));
 }

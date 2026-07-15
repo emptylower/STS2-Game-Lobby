@@ -382,6 +382,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
         if (!hasRoom || chat == null)
         {
+            _chatPanel?.CloseEmojiPicker(restoreDraftFocus: false);
             _chatPanel?.ReleaseDraftFocus();
             if (_panelFrame != null)
             {
@@ -409,6 +410,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
         if (!chat.RoomOverlayOpen)
         {
+            _chatPanel?.CloseEmojiPicker(restoreDraftFocus: false);
             _chatPanel?.ReleaseDraftFocus();
         }
         BindSelectedChannel(chat);
@@ -517,6 +519,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
 
         CaptureCurrentViewState(chat);
+        _chatPanel?.CloseEmojiPicker(restoreDraftFocus: false);
         _chatPanel?.ReleaseDraftFocus();
         chat.CloseRoomOverlay();
         RefreshFromSource();

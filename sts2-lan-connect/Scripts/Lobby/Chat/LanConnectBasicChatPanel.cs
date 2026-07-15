@@ -213,6 +213,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         ArgumentNullException.ThrowIfNull(send);
         ArgumentNullException.ThrowIfNull(retry);
 
+        bool restoreDraftFocus = _emojiPicker?.InvalidateBinding() == true;
+
         if (_state != null && !ReferenceEquals(_state, state))
         {
             CaptureCurrentViewState();
@@ -237,6 +239,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         if (_draftEditor != null)
         {
             ApplyBoundState();
+            if (restoreDraftFocus)
+            {
+                _draftEditor.FocusEditor();
+            }
         }
     }
 
@@ -306,11 +312,11 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
     }
 
-    internal void CloseEmojiPicker()
+    internal void CloseEmojiPicker(bool restoreDraftFocus = true)
     {
         if (EmojiPickerVisible)
         {
-            _emojiPicker!.ClosePicker();
+            _emojiPicker!.ClosePicker(restoreDraftFocus);
         }
     }
 
@@ -505,6 +511,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
 
+        bool restoreDraftFocus = _emojiPicker?.InvalidateBinding() == true;
+
         _bindingGeneration++;
         _messageFocusRestoreGeneration++;
         long currentContext = _state.ContextGeneration;
@@ -522,6 +530,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             _unknownConfirmation.Hide();
         }
         ApplyBoundState();
+        if (restoreDraftFocus)
+        {
+            _draftEditor?.FocusEditor();
+        }
     }
 
     private void CaptureCurrentViewState()
@@ -985,7 +997,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 : "频道聊天";
         }
         _draftEditor.Editable = editable;
-        bool emojiAvailable = _state.EnabledRichFeatures.EmojiSetVersion >= 1;
+        LanConnectChatFeatureVersions features = _state.EnabledRichFeatures;
+        bool emojiAvailable = features.RichContentVersion == 1 &&
+                              features.EmojiSetVersion == LanConnectChatEmojiSet.Version;
         if (_emojiButton != null && GodotObject.IsInstanceValid(_emojiButton))
         {
             _emojiButton.Visible = emojiAvailable;
