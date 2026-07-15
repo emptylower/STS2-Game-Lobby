@@ -65,6 +65,80 @@ public sealed class LanConnectChatResolutionTests
             {
                 throw new InvalidOperationException($"{context} overlapping controls: {string.Join(", ", overlaps)}");
             }
+
+            await fixture.ShowRichMatrix();
+            try
+            {
+                Control[] messageRuns = fixture.RichMessageRuns();
+                AssertThat(messageRuns.Length).IsEqual(13);
+                AssertThat(messageRuns.Count(run => run is not Label)).IsEqual(12);
+                foreach (Control run in messageRuns)
+                {
+                    AssertRectInside(run.GetGlobalRect(), fixture.ViewportRect, $"{context} rich message run");
+                    if (run is not Label)
+                    {
+                        AssertThat(run.AccessibilityName.ToString().Length).IsGreater(0);
+                    }
+                }
+                AssertNoPairwiseOverlap(messageRuns, $"{context} rich message runs");
+                AssertThat(fixture.RichResolvedItemCount).IsGreaterEqual(6);
+                AssertThat(fixture.RichUnknownItemCount).IsGreaterEqual(3);
+                AssertThat(fixture.RichVisibleText.Contains("PrivateMod.", StringComparison.Ordinal)).IsFalse();
+
+                Control[] editorRuns = fixture.RichEditorRuns();
+                AssertThat(editorRuns.Length).IsGreaterEqual(4);
+                AssertThat(editorRuns.Count(run =>
+                    run.Name.ToString().StartsWith(
+                        LanConnectConstants.ChatEntityChipPrefix,
+                        StringComparison.Ordinal))).IsEqual(3);
+                foreach (Control run in editorRuns)
+                {
+                    AssertRectInside(run.GetGlobalRect(), fixture.ViewportRect, $"{context} editor run");
+                }
+                AssertNoPairwiseOverlap(editorRuns, $"{context} editor runs");
+
+                Button[] pickerButtons = await fixture.OpenRichEmojiPicker();
+                AssertThat(pickerButtons.Length).IsEqual(18);
+                foreach (Button button in pickerButtons)
+                {
+                    AssertRectInside(button.GetGlobalRect(), fixture.ViewportRect, $"{context} picker {button.Name}");
+                    AssertThat(button.TooltipText.Length).IsGreater(0);
+                    AssertThat(button.AccessibilityName.ToString().Length).IsGreater(0);
+                }
+                AssertNoPairwiseOverlap(pickerButtons, $"{context} picker buttons");
+                await fixture.CloseRichEmojiPicker();
+
+                foreach (string itemType in new[] { "card", "relic", "potion" })
+                {
+                    LanConnectItemPreviewTestState preview = await fixture.ShowPreview(itemType);
+                    AssertThat(preview.Visible).IsTrue();
+                    AssertThat(preview.ItemType).IsEqual(itemType);
+                    AssertRectInside(preview.Bounds, fixture.ViewportRect, $"{context} {itemType} preview");
+                    await fixture.ClosePreview();
+                }
+
+                foreach (Control control in fixture.AccessibilityStateControls())
+                {
+                    bool hasNonColorState =
+                        (control is Button button && !string.IsNullOrWhiteSpace(button.Text)) ||
+                        !string.IsNullOrWhiteSpace(control.AccessibilityName.ToString()) ||
+                        !string.IsNullOrWhiteSpace(control.TooltipText);
+                    AssertThat(hasNonColorState).IsTrue();
+                }
+                foreach (Label longLabel in fixture.LongNameLabels())
+                {
+                    AssertThat(longLabel.ClipText ||
+                               longLabel.AutowrapMode != TextServer.AutowrapMode.Off).IsTrue();
+                    AssertThat(longLabel.Size.X).IsLessEqual(fixture.ViewportRect.Size.X);
+                    AssertThat(longLabel.Size.Y).IsGreater(0f);
+                }
+            }
+            finally
+            {
+                await fixture.CloseRichSurfaces();
+            }
+
+            await fixture.AssertRealTabFocusOrder(context);
         }
     }
 
@@ -223,6 +297,25 @@ public sealed class LanConnectChatResolutionTests
             throw new InvalidOperationException($"{name}: rect {rect} is outside viewport {viewport}");
         }
     }
+
+    private static void AssertNoPairwiseOverlap(
+        IReadOnlyList<Control> controls,
+        string context)
+    {
+        for (int first = 0; first < controls.Count; first++)
+        {
+            for (int second = first + 1; second < controls.Count; second++)
+            {
+                Rect2 left = controls[first].GetGlobalRect();
+                Rect2 right = controls[second].GetGlobalRect();
+                if (left.Intersects(right, includeBorders: false))
+                {
+                    throw new InvalidOperationException(
+                        $"{context}: {controls[first].Name}/{controls[second].Name} overlap");
+                }
+            }
+        }
+    }
 }
 
 internal sealed class ChatUiFixture : IDisposable
@@ -230,6 +323,7 @@ internal sealed class ChatUiFixture : IDisposable
     private static readonly string LongNickname = new('N', 32);
     private readonly SubViewport _root;
     private readonly ISceneRunner _runner;
+    private readonly Control _richSurface;
 
     private ChatUiFixture(
         SubViewport root,
@@ -237,14 +331,22 @@ internal sealed class ChatUiFixture : IDisposable
         LanConnectLobbyOverlay lobby,
         LanConnectRoomChatOverlay room,
         LanConnectChatChannelState lobbyServerState,
-        LanConnectChatChannelState roomServerState)
+        LanConnectChatChannelState roomServerState,
+        Control richSurface,
+        LanConnectBasicChatPanel richPanel,
+        LanConnectChatChannelState richState,
+        LanConnectItemPreview matrixPreview)
     {
         _root = root;
         _runner = runner;
+        _richSurface = richSurface;
         Lobby = lobby;
         Room = room;
         ServerState = lobbyServerState;
         RoomServerState = roomServerState;
+        RichPanel = richPanel;
+        RichState = richState;
+        MatrixPreview = matrixPreview;
     }
 
     internal LanConnectLobbyOverlay Lobby { get; }
@@ -255,7 +357,25 @@ internal sealed class ChatUiFixture : IDisposable
 
     internal LanConnectChatChannelState RoomServerState { get; }
 
+    internal LanConnectBasicChatPanel RichPanel { get; }
+
+    internal LanConnectChatChannelState RichState { get; }
+
+    internal LanConnectItemPreview MatrixPreview { get; }
+
     internal Rect2 ViewportRect => new(Vector2.Zero, _root.Size);
+
+    internal int RichResolvedItemCount => RichMessageRuns()
+        .Count(run => run.HasMeta("lan_connect_resolved_item"));
+
+    internal int RichUnknownItemCount => RichMessageRuns()
+        .Count(run => run is PanelContainer && !run.HasMeta("lan_connect_resolved_item"));
+
+    internal string RichVisibleText => string.Join(
+        "\n",
+        RichPanel.FindChildren("*", "Label", recursive: true, owned: false)
+            .OfType<Label>()
+            .Select(label => label.Text));
 
     internal string RoomUnreadBadgeText => Find<Label>(Room, "RoomUnreadBadge").Text;
 
@@ -288,6 +408,25 @@ internal sealed class ChatUiFixture : IDisposable
         root.AddChild(lobby);
         LanConnectRoomChatOverlay room = new();
         root.AddChild(room);
+        Control richSurface = new()
+        {
+            Name = "RichCompatibilitySurface",
+            Visible = false,
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        root.AddChild(richSurface);
+        richSurface.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+        LanConnectChatChannelState richState = RichMatrixState();
+        LanConnectBasicChatPanel richPanel = new(
+            LanConnectChatUiComposition.Icons,
+            ResolveMatrixItem)
+        {
+            Name = "RichCompatibilityPanel"
+        };
+        richSurface.AddChild(richPanel);
+        LanConnectItemPreview matrixPreview = new(new MatrixCardVisualFactory());
+        richSurface.AddChild(matrixPreview);
+        SizeRichPanel(richPanel, logicalSize);
         ISceneRunner runner = ISceneRunner.Load(root, autoFree: true);
         await runner.AwaitIdleFrame();
 
@@ -302,6 +441,10 @@ internal sealed class ChatUiFixture : IDisposable
             dual,
             (_, _) => Task.CompletedTask,
             (_, _) => Task.CompletedTask);
+        richPanel.BindStructured(
+            richState,
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask);
         await room.OpenForTests();
         room.SelectChannelForTests(LanConnectChatChannel.Server);
 
@@ -326,13 +469,24 @@ internal sealed class ChatUiFixture : IDisposable
         lobby.ScrollCompactSidebarToChatForTests();
         await runner.AwaitIdleFrame();
         await runner.AwaitIdleFrame();
-        return new ChatUiFixture(root, runner, lobby, room, lobbyServer, roomServer);
+        return new ChatUiFixture(
+            root,
+            runner,
+            lobby,
+            room,
+            lobbyServer,
+            roomServer,
+            richSurface,
+            richPanel,
+            richState,
+            matrixPreview);
     }
 
     internal async Task Resize(Vector2I physicalSize, float uiScale)
     {
         Vector2I logicalSize = LogicalSize(physicalSize, uiScale);
         _root.Size = logicalSize;
+        SizeRichPanel(RichPanel, logicalSize);
         await AwaitTwoFrames();
     }
 
@@ -340,9 +494,185 @@ internal sealed class ChatUiFixture : IDisposable
     {
         Vector2I target = LogicalSize(physicalSize, uiScale);
         _root.Size = target + Vector2I.One;
+        SizeRichPanel(RichPanel, target + Vector2I.One);
         await AwaitTwoFrames();
         _root.Size = target;
+        SizeRichPanel(RichPanel, target);
         await AwaitTwoFrames();
+    }
+
+    internal async Task ShowRichMatrix()
+    {
+        _richSurface.Visible = true;
+        await RichPanel.RefreshForTests();
+        await AwaitTwoFrames();
+    }
+
+    internal Control[] RichMessageRuns() => RichPanel
+        .FindChildren("ChatMessageRun*", "Control", recursive: true, owned: false)
+        .OfType<Control>()
+        .ToArray();
+
+    internal Control[] RichEditorRuns() => RichPanel
+        .FindChildren("*", "Control", recursive: true, owned: false)
+        .OfType<Control>()
+        .Where(control =>
+            control.Name == LanConnectConstants.ChatDraftInputName ||
+            control.Name.ToString().StartsWith(LanConnectConstants.ChatDraftRunPrefix, StringComparison.Ordinal) ||
+            control.Name.ToString().StartsWith(LanConnectConstants.ChatEntityChipPrefix, StringComparison.Ordinal))
+        .ToArray();
+
+    internal async Task<Button[]> OpenRichEmojiPicker()
+    {
+        RichPanel.FocusDraft();
+        await AwaitTwoFrames();
+        Find<Button>(RichPanel, LanConnectEmojiPicker.ToggleButtonName)
+            .EmitSignal(Button.SignalName.Pressed);
+        await AwaitTwoFrames();
+        return RichPanel.FindChildren(
+                LanConnectEmojiPicker.ButtonPrefix + "*",
+                "Button",
+                recursive: true,
+                owned: false)
+            .OfType<Button>()
+            .ToArray();
+    }
+
+    internal async Task CloseRichEmojiPicker()
+    {
+        RichPanel.CloseEmojiPicker(restoreDraftFocus: false);
+        await AwaitTwoFrames();
+    }
+
+    internal async Task<LanConnectItemPreviewTestState> ShowPreview(string itemType)
+    {
+        LanConnectItemPreviewData preview = itemType == "card"
+            ? new LanConnectCardPreviewData(new object(), 1)
+            : new LanConnectHoverTipPreviewData(
+                itemType,
+                itemType == "relic" ? "Anchor" : "Fire Potion",
+                "A deliberately long preview description that must wrap inside the viewport.",
+                null);
+        MatrixPreview.ShowResolved(
+            new LanConnectResolvedItem(
+                LanConnectResolvedItemStatus.Resolved,
+                itemType,
+                "chat.item." + itemType,
+                itemType,
+                itemType,
+                preview),
+            new Rect2(ViewportRect.End - new Vector2(36, 36), new Vector2(24, 24)),
+            ViewportRect);
+        await AwaitTwoFrames();
+        return MatrixPreview.TestState;
+    }
+
+    internal async Task ClosePreview()
+    {
+        MatrixPreview.ClosePreview();
+        await AwaitTwoFrames();
+    }
+
+    internal IReadOnlyList<Control> AccessibilityStateControls()
+    {
+        List<Control> controls = RichMessageRuns()
+            .Where(run => run is not Label)
+            .ToList();
+        controls.AddRange(RichPanel.FindChildren("*", "Button", recursive: true, owned: false)
+            .OfType<Button>()
+            .Where(button => button.Disabled));
+        controls.AddRange(Room.FindChildren("RoomChatTab", "Button", recursive: true, owned: false)
+            .OfType<Button>());
+        return controls;
+    }
+
+    internal Label[] LongNameLabels() => new Node[]
+        {
+            Lobby.ServerChatPanelForTests,
+            Room.ChatPanelForTests,
+            RichPanel
+        }
+        .SelectMany(root => root.FindChildren("*", "Label", recursive: true, owned: false)
+            .OfType<Label>())
+        .Where(label => label.Text.Contains(LongNickname, StringComparison.Ordinal))
+        .ToArray();
+
+    internal async Task CloseRichSurfaces()
+    {
+        RichPanel.CloseEmojiPicker(restoreDraftFocus: false);
+        MatrixPreview.ClosePreview();
+        _richSurface.Visible = false;
+        await AwaitTwoFrames();
+    }
+
+    internal async Task AssertRealTabFocusOrder(string context)
+    {
+        bool lobbyVisible = Lobby.Visible;
+        Lobby.Visible = false;
+        try
+        {
+            LanConnectChatChannelState focusServer = PopulatedState(
+                LanConnectChatChannel.Server,
+                "focus-server",
+                confirmedCount: 0);
+            LanConnectDualChatState focus = new(focusServer);
+            focus.EnterRoom("focus-room");
+            focus.Room.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 0));
+            focus.Room.SetDraft("focus message");
+            focus.Room.BeginPendingText("focus-retry", LongNickname, "failed focus message");
+            focus.Room.MarkFailed("focus-retry", "send_failed", "offline");
+            Room.ConfigureForTests(
+                focus,
+                (_, _) => Task.CompletedTask,
+                (_, _) => Task.CompletedTask);
+            await Room.OpenForTests();
+            Room.SelectChannelForTests(LanConnectChatChannel.Room);
+            await AwaitTwoFrames();
+            Room.FocusFirstForTests();
+            await AwaitTwoFrames();
+            Control roomTab = Find<Control>(Room, "RoomChatTab");
+            Control focusNext = roomTab.GetNodeOrNull<Control>(roomTab.FocusNext) ??
+                                throw new InvalidOperationException(
+                                    $"{context} RoomChatTab.FocusNext does not resolve: {roomTab.FocusNext}");
+            if (focusNext.Name != "ServerChatTab")
+            {
+                throw new InvalidOperationException(
+                    $"{context} RoomChatTab.FocusNext resolved to {focusNext.GetPath()}");
+            }
+
+            string[] expected =
+            {
+                "RoomChatTab",
+                "ServerChatTab",
+                LanConnectConstants.ChatMessagesScrollName,
+                LanConnectConstants.ChatDraftInputName,
+                LanConnectEmojiPicker.ToggleButtonName,
+                LanConnectConstants.ChatSendButtonName,
+                LanConnectConstants.ChatRetryButtonPrefix + "focus-retry",
+                "ChatPinButton"
+            };
+            foreach (string name in expected)
+            {
+                string actual = Room.TestState.FocusOwnerName;
+                if (!string.Equals(actual, name, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"{context} tab order expected {name} but focused {actual} " +
+                        $"at {_root.GuiGetFocusOwner()?.GetPath()}");
+                }
+                Control focused = _root.GuiGetFocusOwner() as Control ??
+                                  throw new InvalidOperationException($"{context} has no focus owner");
+                Rect2 rectBefore = focused.GetGlobalRect();
+                AssertRectInsideMatrix(rectBefore, ViewportRect, $"{context} focus {name}");
+                PushTab(_root);
+                await AwaitTwoFrames();
+            }
+        }
+        finally
+        {
+            Lobby.Visible = lobbyVisible;
+            await AwaitTwoFrames();
+        }
     }
 
     internal async Task AwaitTwoFrames()
@@ -376,6 +706,117 @@ internal sealed class ChatUiFixture : IDisposable
     internal Control FindLobbyControl(string name) => Find<Control>(Lobby.ServerChatPanelForTests, name);
 
     public void Dispose() => _runner.Dispose();
+
+    private static LanConnectChatChannelState RichMatrixState()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        state.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 0));
+        state.RichDraft.ReplaceAllWithText("multiline draft\nsecond line");
+        state.RichDraft.InsertEntity(new LanConnectEmojiRun("heart"));
+        state.RichDraft.InsertEntity(new LanConnectItemRun("card", "MegaCrit.Strike", 1));
+        state.RichDraft.InsertEntity(new LanConnectItemRun("relic", "MegaCrit.Anchor"));
+        state.AppendConfirmedContentForTests(
+            "rich-matrix-message",
+            LongNickname,
+            new LanConnectChatContent(1,
+            [
+                new LanConnectTextSegment("mixed entities\nwrapped line "),
+                new LanConnectEmojiSegment("smile"),
+                new LanConnectItemRefSegment("card", "MegaCrit.Strike", 1),
+                new LanConnectItemRefSegment("relic", "PrivateMod.MissingRelic"),
+                new LanConnectItemRefSegment("relic", "MegaCrit.Anchor"),
+                new LanConnectItemRefSegment("potion", "MegaCrit.FirePotion"),
+                new LanConnectEmojiSegment("heart"),
+                new LanConnectItemRefSegment("card", "PrivateMod.MissingCard"),
+                new LanConnectItemRefSegment("potion", "PrivateMod.MissingPotion"),
+                new LanConnectEmojiSegment("laugh"),
+                new LanConnectItemRefSegment("card", "MegaCrit.Defend", 0),
+                new LanConnectItemRefSegment("relic", "MegaCrit.BagOfPreparation"),
+                new LanConnectItemRefSegment("potion", "MegaCrit.BlockPotion")
+            ]),
+            sequence: 1,
+            isLocal: false);
+        return state;
+    }
+
+    private static LanConnectResolvedItem ResolveMatrixItem(LanConnectItemRun run)
+    {
+        if (run.ModelId.StartsWith("PrivateMod.", StringComparison.Ordinal))
+        {
+            string text = run.ItemType switch
+            {
+                "card" => "Unknown card",
+                "relic" => "Unknown relic",
+                "potion" => "Unknown potion",
+                _ => "Unknown item"
+            };
+            return new LanConnectResolvedItem(
+                LanConnectResolvedItemStatus.Unknown,
+                run.ItemType,
+                "chat.unknown_" + run.ItemType,
+                null,
+                text,
+                null);
+        }
+
+        string title = run.ItemType switch
+        {
+            "card" => run.UpgradeLevel > 0 ? "Strike+1" : "Defend",
+            "relic" => run.ModelId.EndsWith("Anchor", StringComparison.Ordinal)
+                ? "Anchor"
+                : "Bag of Preparation",
+            "potion" => run.ModelId.EndsWith("FirePotion", StringComparison.Ordinal)
+                ? "Fire Potion"
+                : "Block Potion",
+            _ => "Item"
+        };
+        LanConnectItemPreviewData preview = run.ItemType == "card"
+            ? new LanConnectCardPreviewData(new object(), run.UpgradeLevel ?? 0)
+            : new LanConnectHoverTipPreviewData(run.ItemType, title, "Preview description", null);
+        return new LanConnectResolvedItem(
+            LanConnectResolvedItemStatus.Resolved,
+            run.ItemType,
+            "chat.item." + run.ItemType,
+            title,
+            title,
+            preview);
+    }
+
+    private static void SizeRichPanel(LanConnectBasicChatPanel panel, Vector2I viewport)
+    {
+        panel.Position = new Vector2(8, 8);
+        panel.Size = new Vector2(
+            Math.Max(1, viewport.X - 16),
+            Math.Max(1, viewport.Y - 16));
+    }
+
+    private static void AssertRectInsideMatrix(Rect2 rect, Rect2 viewport, string name)
+    {
+        if (rect.Size.X <= 0f || rect.Size.Y <= 0f ||
+            rect.Position.X < viewport.Position.X || rect.Position.Y < viewport.Position.Y ||
+            rect.End.X > viewport.End.X || rect.End.Y > viewport.End.Y)
+        {
+            throw new InvalidOperationException($"{name}: rect {rect} is outside viewport {viewport}");
+        }
+    }
+
+    private static void PushTab(Viewport viewport)
+    {
+        viewport.PushInput(new InputEventKey
+        {
+            Keycode = Key.Tab,
+            PhysicalKeycode = Key.Tab,
+            Pressed = true,
+            Echo = false
+        });
+        viewport.PushInput(new InputEventKey
+        {
+            Keycode = Key.Tab,
+            PhysicalKeycode = Key.Tab,
+            Pressed = false,
+            Echo = false
+        });
+    }
 
     private static LanConnectChatChannelState PopulatedState(
         LanConnectChatChannel channel,
@@ -478,5 +919,14 @@ internal sealed class ChatUiFixture : IDisposable
                 }
             }
         }
+    }
+
+    private sealed class MatrixCardVisualFactory : ILanConnectCardPreviewVisualFactory
+    {
+        public Control Create(object card) => new PanelContainer
+        {
+            CustomMinimumSize = new Vector2(180, 250),
+            AccessibilityName = "Card preview"
+        };
     }
 }

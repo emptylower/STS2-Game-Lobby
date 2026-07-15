@@ -34,6 +34,11 @@ interface JoinedRoom {
   };
 }
 
+interface ConnectedPeer {
+  socket: WebSocket;
+  joined: JoinedRoom;
+}
+
 interface LegacyFixture {
   modVersion: "0.4.0" | "0.2.2";
 }
@@ -42,6 +47,20 @@ const fixtures: LegacyFixture[] = [
   { modVersion: "0.4.0" },
   { modVersion: "0.2.2" },
 ];
+
+const phaseThreeVersions = {
+  richContentVersion: 1,
+  emojiSetVersion: 1,
+  itemRefVersion: 1,
+  combatRefVersion: 0,
+} as const;
+
+const disabledVersions = {
+  richContentVersion: 0,
+  emojiSetVersion: 0,
+  itemRefVersion: 0,
+  combatRefVersion: 0,
+} as const;
 
 function compatibilityConfig(tempDir: string): LobbyServiceConfig {
   const relayPortStart = 45_000 + (process.pid % 10_000);
@@ -224,6 +243,41 @@ function rejectedWebSocketStatus(url: string): Promise<number> {
   });
 }
 
+async function joinRoom(
+  baseUrl: string,
+  roomId: string,
+  playerName: string,
+  playerNetId: string,
+): Promise<JoinedRoom> {
+  const response = await fetch(`${baseUrl}/rooms/${encodeURIComponent(roomId)}/join`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      playerName,
+      version: "1.0.0",
+      modVersion: "0.4.0",
+      modList: ["sts2_lan_connect"],
+      playerNetId,
+    }),
+  });
+  assert.equal(response.status, 200, `join failed for ${playerName}`);
+  return (await response.json()) as JoinedRoom;
+}
+
+async function openJoinedPeer(
+  wsBase: string,
+  wsPath: string,
+  created: CreatedRoom,
+  joined: JoinedRoom,
+): Promise<ConnectedPeer> {
+  const query =
+    `roomId=${encodeURIComponent(created.roomId)}` +
+    `&controlChannelId=${encodeURIComponent(created.controlChannelId)}` +
+    `&role=client&ticketId=${encodeURIComponent(joined.ticketId)}`;
+  const opened = await openControlWebSocket(`${wsBase}${wsPath}?${query}`);
+  return { socket: opened.socket, joined };
+}
+
 test("control websocket connection failure rejects once without an unhandled promise", async () => {
   const port = await reserveThenCloseLocalPort();
   const unhandled: unknown[] = [];
@@ -295,6 +349,289 @@ test("compatibility cleanup reports cleanup failures without replacing a primary
     );
     assert.deepEqual(visited, ["first", "second"]);
   });
+});
+
+test("real room gateway routes rich and exact legacy fallback per recipient and rejects combat", async () => {
+  let service: Awaited<ReturnType<typeof createLobbyService>> | undefined;
+  const sockets: WebSocket[] = [];
+  const tempDir = mkdtempSync(join(tmpdir(), "sts2-lobby-rich-compat-"));
+
+  await withCompatibilityCleanup(
+    async () => {
+      const config = compatibilityConfig(tempDir);
+      service = await createLobbyService(config);
+      const address = await service.start();
+      const httpBase = `http://127.0.0.1:${address.port}`;
+      const wsBase = `ws://127.0.0.1:${address.port}`;
+      const createResponse = await fetch(`${httpBase}/rooms`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          roomName: "phase-three-compat",
+          hostPlayerName: "Host",
+          gameMode: "standard",
+          version: "1.0.0",
+          modVersion: "0.4.0",
+          modList: ["sts2_lan_connect"],
+          maxPlayers: 5,
+          hostConnectionInfo: {
+            enetPort: 7777,
+            localAddresses: ["127.0.0.1"],
+          },
+        }),
+      });
+      assert.equal(createResponse.status, 201);
+      const created = (await createResponse.json()) as CreatedRoom;
+
+      const richJoined = await joinRoom(httpBase, created.roomId, "Rich", "net:rich");
+      const legacyJoined = await joinRoom(httpBase, created.roomId, "Legacy", "net:legacy");
+      const disabledJoined = await joinRoom(httpBase, created.roomId, "Disabled", "net:disabled");
+      const oldSenderJoined = await joinRoom(httpBase, created.roomId, "OldSender", "net:old");
+
+      const hostQuery =
+        `roomId=${encodeURIComponent(created.roomId)}` +
+        `&controlChannelId=${encodeURIComponent(created.controlChannelId)}` +
+        `&role=host&token=${encodeURIComponent(created.hostToken)}`;
+      const openedHost = await openControlWebSocket(`${wsBase}${config.wsPath}?${hostQuery}`);
+      const host = openedHost.socket;
+      sockets.push(host);
+      const rich = await openJoinedPeer(wsBase, config.wsPath, created, richJoined);
+      const legacy = await openJoinedPeer(wsBase, config.wsPath, created, legacyJoined);
+      const disabled = await openJoinedPeer(wsBase, config.wsPath, created, disabledJoined);
+      const oldSender = await openJoinedPeer(wsBase, config.wsPath, created, oldSenderJoined);
+      sockets.push(rich.socket, legacy.socket, disabled.socket, oldSender.socket);
+
+      const hostReadyPromise = waitForFrame(host, (frame) => frame.type === "room_chat_ready");
+      host.send(JSON.stringify({
+        type: "host_hello",
+        roomId: created.roomId,
+        controlChannelId: created.controlChannelId,
+        role: "host",
+        playerName: "Host",
+        playerNetId: "net:host",
+        roomChatVersions: phaseThreeVersions,
+      }));
+      const hostReady = await hostReadyPromise;
+      assert.deepEqual(hostReady.enabledFeatures, phaseThreeVersions);
+
+      const richReadyPromise = waitForFrame(rich.socket, (frame) => frame.type === "room_chat_ready");
+      rich.socket.send(JSON.stringify({
+        type: "client_hello",
+        roomId: created.roomId,
+        controlChannelId: created.controlChannelId,
+        role: "client",
+        playerName: "Rich",
+        playerNetId: "net:rich",
+        roomChatVersions: phaseThreeVersions,
+      }));
+      assert.deepEqual((await richReadyPromise).enabledFeatures, phaseThreeVersions);
+
+      legacy.socket.send(JSON.stringify({
+        type: "client_hello",
+        roomId: created.roomId,
+        controlChannelId: created.controlChannelId,
+        role: "client",
+        ticketId: legacy.joined.ticketId,
+        playerName: "Legacy",
+        playerNetId: "net:legacy",
+      }));
+
+      const disabledReadyPromise = waitForFrame(
+        disabled.socket,
+        (frame) => frame.type === "room_chat_ready",
+      );
+      disabled.socket.send(JSON.stringify({
+        type: "client_hello",
+        roomId: created.roomId,
+        controlChannelId: created.controlChannelId,
+        role: "client",
+        playerName: "Disabled",
+        playerNetId: "net:disabled",
+        roomChatVersions: disabledVersions,
+      }));
+      assert.deepEqual((await disabledReadyPromise).enabledFeatures, disabledVersions);
+
+      oldSender.socket.send(JSON.stringify({
+        type: "client_hello",
+        roomId: created.roomId,
+        controlChannelId: created.controlChannelId,
+        role: "client",
+        ticketId: oldSender.joined.ticketId,
+        playerName: "OldSender",
+        playerNetId: "net:old",
+      }));
+
+      const content = {
+        formatVersion: 1,
+        segments: [
+          { kind: "text", text: "look " },
+          { kind: "item_ref", itemType: "card", modelId: "MegaCrit.Strike", upgradeLevel: 1 },
+          { kind: "emoji", emojiId: "heart" },
+        ],
+      };
+      const clientMessageId = "31313131-3131-4131-8131-313131313131";
+      const richBroadcasts: JsonFrame[] = [];
+      rich.socket.on("message", (data) => {
+        const frame = JSON.parse(data.toString()) as JsonFrame;
+        if (frame.type === "room_chat_message") richBroadcasts.push(frame);
+      });
+      const ackPromise = waitForFrame(
+        host,
+        (frame) => frame.type === "room_chat_ack" && frame.clientMessageId === clientMessageId,
+      );
+      const selfPromise = waitForFrame(
+        host,
+        (frame) => frame.type === "room_chat_message" &&
+          (frame.message as Record<string, unknown> | undefined)?.plainTextFallback === "look [Card][Emoji]",
+      );
+      const richPromise = waitForFrame(
+        rich.socket,
+        (frame) => frame.type === "room_chat_message",
+      );
+      const legacyPromise = waitForFrame(
+        legacy.socket,
+        (frame) => frame.type === "room_chat" && frame.messageText === "look [Card][Emoji]",
+      );
+      const disabledPromise = waitForFrame(
+        disabled.socket,
+        (frame) => frame.type === "room_chat" && frame.messageText === "look [Card][Emoji]",
+      );
+      host.send(JSON.stringify({
+        type: "room_chat_v2",
+        protocolVersion: 1,
+        clientMessageId,
+        roomId: created.roomId,
+        roomSessionId: created.roomSessionId,
+        content,
+      }));
+
+      const ack = await ackPromise;
+      const self = await selfPromise;
+      const richFrame = await richPromise;
+      const legacyFrame = await legacyPromise;
+      const disabledFrame = await disabledPromise;
+      assert.deepEqual(ack.message, self.message);
+      const richMessage = richFrame.message as Record<string, unknown>;
+      assert.deepEqual(richMessage.content, content);
+      assert.equal(richMessage.plainTextFallback, "look [Card][Emoji]");
+      assert.equal(richBroadcasts.length, 1);
+      for (const fallback of [legacyFrame, disabledFrame]) {
+        assert.equal(fallback.messageText, "look [Card][Emoji]");
+        assert.equal("content" in fallback, false);
+        assert.equal("modelId" in fallback, false);
+        assert.equal(JSON.stringify(fallback).includes("MegaCrit.Strike"), false);
+        assert.equal(String(fallback.messageText).includes("Host"), false);
+      }
+
+      const duplicateAckPromise = waitForFrame(
+        host,
+        (frame) => frame.type === "room_chat_ack" && frame.clientMessageId === clientMessageId,
+      );
+      host.send(JSON.stringify({
+        type: "room_chat_v2",
+        protocolVersion: 1,
+        clientMessageId,
+        roomId: created.roomId,
+        roomSessionId: created.roomSessionId,
+        content,
+      }));
+      assert.deepEqual(await duplicateAckPromise, ack);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(richBroadcasts.length, 1, "same-connection dedupe must not rebroadcast");
+
+      const identityErrorPromise = waitForFrame(
+        host,
+        (frame) => frame.type === "room_chat_error" && frame.code === "protocol_mismatch",
+      );
+      host.send(JSON.stringify({
+        type: "host_hello",
+        roomId: created.roomId,
+        controlChannelId: created.controlChannelId,
+        role: "host",
+        playerName: "Mallory",
+        playerNetId: "net:mallory",
+        roomChatVersions: phaseThreeVersions,
+      }));
+      assert.equal((await identityErrorPromise).clientMessageId, "");
+
+      const afterLockId = "32323232-3232-4232-8232-323232323232";
+      const afterLockAckPromise = waitForFrame(
+        host,
+        (frame) => frame.type === "room_chat_ack" && frame.clientMessageId === afterLockId,
+      );
+      host.send(JSON.stringify({
+        type: "room_chat_v2",
+        protocolVersion: 1,
+        clientMessageId: afterLockId,
+        roomId: created.roomId,
+        roomSessionId: created.roomSessionId,
+        content: { formatVersion: 1, segments: [{ kind: "text", text: "identity stays locked" }] },
+      }));
+      const afterLockMessage = (await afterLockAckPromise).message as Record<string, unknown>;
+      assert.equal(afterLockMessage.senderName, "Host");
+      assert.equal(afterLockMessage.senderId, "net:host");
+
+      const oldMessageId = "old-sender-text";
+      const oldToNewPromise = waitForFrame(
+        rich.socket,
+        (frame) => frame.type === "room_chat" && frame.messageId === oldMessageId,
+      );
+      oldSender.socket.send(JSON.stringify({
+        type: "room_chat",
+        roomId: created.roomId,
+        controlChannelId: created.controlChannelId,
+        role: "client",
+        ticketId: oldSender.joined.ticketId,
+        playerName: "OldSender",
+        playerNetId: "net:old",
+        messageId: oldMessageId,
+        messageText: "legacy sender text",
+        sentAtUnixMs: 1_783_857_600_000,
+      }));
+      assert.deepEqual(await oldToNewPromise, {
+        type: "room_chat",
+        roomId: created.roomId,
+        controlChannelId: created.controlChannelId,
+        role: "client",
+        ticketId: oldSender.joined.ticketId,
+        playerName: "OldSender",
+        playerNetId: "net:old",
+        messageId: oldMessageId,
+        messageText: "legacy sender text",
+        sentAtUnixMs: 1_783_857_600_000,
+      });
+
+      for (const [index, segment] of [
+        { kind: "power_state", modelId: "MegaCrit.Strength", amount: 1, roomSessionId: created.roomSessionId },
+        { kind: "target_ref", targetKind: "player", targetKey: "net:rich", roomSessionId: created.roomSessionId },
+      ].entries()) {
+        const rejectedId = `41414141-4141-4141-8141-41414141414${index}`;
+        const rejectedPromise = waitForFrame(
+          host,
+          (frame) => frame.type === "room_chat_error" && frame.clientMessageId === rejectedId,
+        );
+        host.send(JSON.stringify({
+          type: "room_chat_v2",
+          protocolVersion: 1,
+          clientMessageId: rejectedId,
+          roomId: created.roomId,
+          roomSessionId: created.roomSessionId,
+          content: { formatVersion: 1, segments: [segment] },
+        }));
+        const rejected = await rejectedPromise;
+        assert.equal(rejected.code, "invalid_content");
+      }
+    },
+    [
+      () => {
+        for (const socket of sockets) socket.terminate();
+      },
+      async () => {
+        await service?.close();
+      },
+      () => cleanupTempDir(tempDir),
+    ],
+  );
 });
 
 test("new server preserves 0.4.0 and 0.2.2 legacy lobby/control compatibility", async (t) => {
