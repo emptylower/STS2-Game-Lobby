@@ -30,6 +30,9 @@ internal static class LanConnectServerChatProtocol
 
     internal static IReadOnlyList<string> EmojiSet1 { get; } = Array.AsReadOnly(EmojiIds);
 
+    internal static bool IsValidModelId(string? modelId) =>
+        modelId != null && ModelIdPattern.IsMatch(modelId);
+
     internal static LanConnectChatContent Canonicalize(
         LanConnectChatContent content,
         LanConnectChatFeatureVersions enabled)
@@ -266,7 +269,7 @@ internal static class LanConnectServerChatProtocol
         {
             throw Invalid("itemType must be card, relic, or potion.");
         }
-        if (item.ModelId == null || !ModelIdPattern.IsMatch(item.ModelId))
+        if (!IsValidModelId(item.ModelId))
         {
             throw Invalid("modelId must be 1 to 160 allowed ASCII characters.");
         }

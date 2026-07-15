@@ -41,6 +41,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
     private string? _clientReconnectInFlightToken;
     private double _timeUntilRestartSubmenuAttempt;
     private long _lastRestartSubmenuOpenAtUnixMs;
+    private LanConnectItemLinkCapture? _itemLinkCapture;
+    private static bool _enableItemLinkCaptureOnInstall;
 
     internal static LanConnectLobbyRuntime? Instance { get; private set; }
 
@@ -108,8 +110,9 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         return ReferenceEquals(_activeSession?.NetService, netService);
     }
 
-    internal static void Install()
+    internal static void Install(bool enableItemLinkCapture = false)
     {
+        _enableItemLinkCaptureOnInstall |= enableItemLinkCapture;
         Callable.From(InstallDeferred).CallDeferred();
     }
 
@@ -120,6 +123,11 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         _timeUntilRestartSubmenuAttempt = 0d;
         _lastRestartSubmenuOpenAtUnixMs = 0;
         Instance = this;
+        if (_enableItemLinkCaptureOnInstall)
+        {
+            _itemLinkCapture = new LanConnectItemLinkCapture(
+                new LanConnectGodotItemLinkCapturePorts(this));
+        }
         _chatOwner = new LanConnectRotatingServerChatPort(
             new LanConnectServerChatClient(),
             static () => new LanConnectServerChatClient());
@@ -156,6 +164,18 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         _heartbeatInFlight = true;
         _timeUntilHeartbeat = Math.Max(3d, _activeSession.HeartbeatIntervalSeconds);
         TaskHelper.RunSafely(SendHeartbeatAsync(_activeSession));
+    }
+
+    public override void _UnhandledInput(InputEvent inputEvent)
+    {
+        if (_itemLinkCapture == null)
+        {
+            return;
+        }
+        LanConnectItemLinkCaptureInputRoute.TryRoute(
+            inputEvent,
+            _itemLinkCapture,
+            () => GetViewport().SetInputAsHandled());
     }
 
     public override void _ExitTree()

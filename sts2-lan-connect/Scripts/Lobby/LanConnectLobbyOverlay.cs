@@ -30,6 +30,8 @@ internal readonly record struct LanConnectLobbyOverlayTestState(
 
 internal sealed partial class LanConnectLobbyOverlay : Control
 {
+    internal static LanConnectLobbyOverlay? Instance { get; private set; }
+
     private enum LobbyLayoutMode
     {
         Desktop,
@@ -256,6 +258,19 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     internal LanConnectBasicChatPanel ServerChatPanelForTests =>
         _serverChatPanel ?? throw new InvalidOperationException("The lobby server chat panel has not been built.");
 
+    internal bool ItemLinkCaptureBlocked =>
+        IsAnyDialogVisible() || _serverChatPanel?.PopupVisible == true;
+
+    internal void OpenAndFocusServerChat()
+    {
+        if (!Visible)
+        {
+            ShowOverlay();
+        }
+        RefreshServerChatPresentation(force: true);
+        _serverChatPanel?.RefreshDraftAndFocus();
+    }
+
     public void Initialize(NMultiplayerSubmenu submenu, NSubmenuButton templateButton, NSubmenuStack stack, Control loadingOverlay)
     {
         _ = templateButton;
@@ -301,6 +316,19 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         RefreshSelectedRoomDetails();
         RefreshServerChatPresentation(force: true);
         SetProcess(true);
+    }
+
+    public override void _EnterTree()
+    {
+        Instance = this;
+    }
+
+    public override void _ExitTree()
+    {
+        if (ReferenceEquals(Instance, this))
+        {
+            Instance = null;
+        }
     }
 
     internal Task RefreshLayoutForTests(Vector2I viewportSize)

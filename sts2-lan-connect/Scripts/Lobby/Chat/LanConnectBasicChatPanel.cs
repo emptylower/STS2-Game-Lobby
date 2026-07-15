@@ -292,6 +292,18 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
     }
 
+    internal void RefreshDraftAndFocus()
+    {
+        if (!InteractionBlocked &&
+            _draftEditor != null &&
+            GodotObject.IsInstanceValid(_draftEditor) &&
+            _draftEditor.Editable)
+        {
+            _draftEditor.RefreshFromDraft(preserveFocus: false);
+            _draftEditor.FocusEditor();
+        }
+    }
+
     internal void SetCompactLayout(bool compact)
     {
         _compactLayout = compact;

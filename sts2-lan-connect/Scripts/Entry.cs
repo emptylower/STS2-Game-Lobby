@@ -22,7 +22,7 @@ public static class Entry
         LanConnectMultiplayerCompatibility.Initialize();
         LanConnectGameplayPatches.Initialize();
         LanConnectSceneReadyPatches.Apply();
-        LanConnectLobbyRuntime.Install();
+        LanConnectLobbyRuntime.Install(enableItemLinkCapture: true);
         LanConnectRoomChatOverlay.Install();
         Log.Info("sts2_lan_connect initialized with ready hooks.");
     }
