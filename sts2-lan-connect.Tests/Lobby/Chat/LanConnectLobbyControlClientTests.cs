@@ -150,7 +150,7 @@ public sealed class LanConnectLobbyControlClientTests
     }
 
     [Fact]
-    public async Task HostHelloWithRoomSessionDeclaresExactPhaseThreeVersionsAndIdentity()
+    public async Task HostHelloWithRoomSessionDeclaresExactCurrentVersionsAndIdentity()
     {
         FakeWebSocket socket = new();
         await using LobbyControlClient client = new(socket);
@@ -165,12 +165,12 @@ public sealed class LanConnectLobbyControlClientTests
             CancellationToken.None);
 
         Assert.Equal(
-            """{"type":"host_hello","roomId":"room-1","controlChannelId":"control-1","role":"host","playerNetId":"net:host","playerName":"Host","roomChatVersions":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":0}}""",
+            """{"type":"host_hello","roomId":"room-1","controlChannelId":"control-1","role":"host","playerNetId":"net:host","playerName":"Host","roomChatVersions":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":1}}""",
             Assert.Single(socket.SentPayloads));
     }
 
     [Fact]
-    public async Task ClientHelloWithRoomSessionDeclaresExactPhaseThreeVersionsWithoutLegacyTicketField()
+    public async Task ClientHelloWithRoomSessionDeclaresExactCurrentVersionsWithoutLegacyTicketField()
     {
         FakeWebSocket socket = new();
         await using LobbyControlClient client = new(socket);
@@ -186,8 +186,130 @@ public sealed class LanConnectLobbyControlClientTests
             CancellationToken.None);
 
         Assert.Equal(
-            """{"type":"client_hello","roomId":"room-1","controlChannelId":"control-1","role":"client","playerNetId":"net-1","playerName":"Guest","roomChatVersions":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":0}}""",
+            """{"type":"client_hello","roomId":"room-1","controlChannelId":"control-1","role":"client","playerNetId":"net-1","playerName":"Guest","roomChatVersions":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":1}}""",
             Assert.Single(socket.SentPayloads));
+    }
+
+    [Fact]
+    public async Task MissingDtoSessionCannotBeUpgradedByRichReady()
+    {
+        FakeWebSocket socket = new();
+        List<string> warnings = [];
+        await using LobbyControlClient client = new(socket, warnings.Add);
+        int readyEvents = 0;
+        client.RoomChatReadyReceived += _ => readyEvents++;
+        await client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            CancellationToken.None);
+
+        client.HandlePayloadForTests(
+            """{"type":"room_chat_ready","protocolVersion":1,"roomId":"room-1","roomSessionId":"crafted-session","enabledFeatures":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":1}}""");
+
+        Assert.Null(client.LatestRoomChatReady);
+        Assert.Equal(0, readyEvents);
+        Assert.Contains(warnings, warning => warning.Contains("stale room_chat_ready", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CloseAndFaultClearReadyAndReconnectRequiresFreshReady(bool fault)
+    {
+        FakeWebSocket firstSocket = new();
+        LobbyControlClient first = new(firstSocket);
+        await first.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            "session-1",
+            CancellationToken.None);
+        first.HandlePayloadForTests(
+            """{"type":"room_chat_ready","protocolVersion":1,"roomId":"room-1","roomSessionId":"session-1","enabledFeatures":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":1}}""");
+        Assert.NotNull(first.LatestRoomChatReady);
+
+        if (fault)
+        {
+            first.HandleTransportFaultedForTests(new InvalidOperationException("receive failed"));
+        }
+        else
+        {
+            first.HandleTransportClosedForTests();
+        }
+        Assert.Null(first.LatestRoomChatReady);
+        await first.DisposeAsync();
+
+        FakeWebSocket secondSocket = new();
+        await using LobbyControlClient second = new(secondSocket);
+        await second.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            "session-1",
+            CancellationToken.None);
+        Assert.Null(second.LatestRoomChatReady);
+        second.HandlePayloadForTests(
+            """{"type":"room_chat_ready","protocolVersion":1,"roomId":"room-1","roomSessionId":"session-1","enabledFeatures":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":1}}""");
+        Assert.NotNull(second.LatestRoomChatReady);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TerminalTransitionWinsAgainstParsedRoomReadyCommit(bool dispose)
+    {
+        FakeWebSocket socket = new();
+        List<string> warnings = [];
+        using ManualResetEventSlim parsed = new(false);
+        using ManualResetEventSlim releaseCommit = new(false);
+        LobbyControlClient client = new(
+            socket,
+            warnings.Add,
+            beforeRoomChatCommit: () =>
+            {
+                parsed.Set();
+                if (!releaseCommit.Wait(TestTimeout))
+                {
+                    throw new TimeoutException("Room ready commit was not released.");
+                }
+            });
+        int readyEvents = 0;
+        client.RoomChatReadyReceived += _ => readyEvents++;
+        await client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            "session-1",
+            CancellationToken.None);
+
+        Task payload = Task.Run(() => client.HandlePayloadForTests(
+            """{"type":"room_chat_ready","protocolVersion":1,"roomId":"room-1","roomSessionId":"session-1","enabledFeatures":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":1}}"""));
+        Assert.True(parsed.Wait(TestTimeout));
+
+        if (dispose)
+        {
+            await client.DisposeAsync().AsTask().WaitAsync(TestTimeout);
+        }
+        else
+        {
+            client.HandleTransportClosedForTests();
+        }
+        releaseCommit.Set();
+        await payload.WaitAsync(TestTimeout);
+
+        Assert.Null(client.LatestRoomChatReady);
+        Assert.Equal(0, readyEvents);
+        Assert.Contains(warnings, warning =>
+            warning.Contains("inactive room generation", StringComparison.Ordinal));
+        if (!dispose)
+        {
+            await client.DisposeAsync().AsTask().WaitAsync(TestTimeout);
+        }
     }
 
     [Fact]

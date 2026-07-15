@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Godot;
@@ -31,6 +32,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
     private const int RestartContextRetryDelayMs = 250;
     private const int RestartRoomPollDelayMs = 2000;
     private const int RestartOpenSubmenuDebounceMs = 1500;
+    private static readonly LanConnectChatFeatureVersions CurrentRoomChatVersions =
+        new(1, 1, 1, 1);
 
     private HostedRoomSession? _activeSession;
     private JoinedClientSession? _activeClientSession;
@@ -50,6 +53,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
     private LanConnectItemLinkCapture? _itemLinkCapture;
     private static bool _enableItemLinkCaptureOnInstall;
     private bool _itemLinkCaptureRouteOnlyForTests;
+    private string? _chatRoomId;
+    private string? _chatRoomSessionId;
 
     internal static LanConnectLobbyRuntime? Instance { get; private set; }
 
@@ -251,16 +256,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
 
     public void AttachHostedRoom(NetHostGameService netService, LobbyApiClient apiClient, LobbyCreateRoomResponse registration, LanConnectHostedRoomMetadata metadata)
     {
-        if (_activeSession != null)
-        {
-            GD.Print($"sts2_lan_connect lobby runtime: replacing existing hosted room {_activeSession.RoomId} with {registration.RoomId}");
-            TaskHelper.RunSafely(CloseHostedRoomAsync(_activeSession, suppressErrors: true));
-        }
-
-        if (_activeClientSession != null)
-        {
-            TaskHelper.RunSafely(CloseJoinedClientAsync(_activeClientSession));
-        }
+        HostedRoomSession? previousHostedSession = _activeSession;
+        JoinedClientSession? previousClientSession = _activeClientSession;
+        string? previousChatRoomId = _chatRoomId;
+        string? previousChatRoomSessionId = _chatRoomSessionId;
 
         HostedRoomSession session = new(netService, apiClient, registration, metadata);
         session.SetEnvelopeHandler(envelope => OnHostedControlEnvelope(session, envelope));
@@ -268,28 +267,47 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         {
             if (ReferenceEquals(_activeSession, session))
             {
-                GetChatCoordinator().SetRoomRichFeatures(envelope.EnabledFeatures);
+                TryApplyRoomChatReady(
+                    GetChatCoordinator(),
+                    envelope,
+                    session.RoomId,
+                    session.RoomSessionId);
             }
         };
         session.ControlClient.RoomChatAckReceived += envelope =>
         {
             if (ReferenceEquals(_activeSession, session))
             {
-                GetChatCoordinator().ApplyRoomAck(envelope, session.NetService.NetId.ToString());
+                TryApplyRoomChatAck(
+                    GetChatCoordinator(),
+                    envelope,
+                    session.NetService.NetId.ToString(),
+                    session.RoomId,
+                    session.RoomSessionId);
             }
         };
         session.ControlClient.RoomChatMessageReceived += envelope =>
         {
             if (ReferenceEquals(_activeSession, session))
             {
-                GetChatCoordinator().ApplyRoomMessage(envelope, session.NetService.NetId.ToString());
+                TryApplyRoomChatMessage(
+                    GetChatCoordinator(),
+                    envelope,
+                    session.NetService.NetId.ToString(),
+                    session.RoomId,
+                    session.RoomSessionId);
             }
         };
         session.ControlClient.RoomChatErrorReceived += envelope =>
         {
             if (ReferenceEquals(_activeSession, session))
             {
-                GetChatCoordinator().ApplyRoomError(envelope);
+                TryApplyRoomChatError(
+                    GetChatCoordinator(),
+                    envelope,
+                    session.ControlClient.LatestRoomChatReady,
+                    session.RoomId,
+                    session.RoomSessionId);
             }
         };
         BindRoomChatDisconnect(
@@ -297,7 +315,23 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             GetChatCoordinator(),
             () => ReferenceEquals(_activeSession, session) && !session.IsClosing);
         _activeSession = session;
-        EnterChatRoom(registration.RoomId);
+        EnterChatRoom(
+            registration.RoomId,
+            registration.RoomSessionId,
+            previousChatRoomId,
+            previousChatRoomSessionId,
+            () =>
+            {
+                if (previousHostedSession != null)
+                {
+                    GD.Print($"sts2_lan_connect lobby runtime: replacing existing hosted room {previousHostedSession.RoomId} with {registration.RoomId}");
+                    TaskHelper.RunSafely(CloseHostedRoomAsync(previousHostedSession, suppressErrors: true));
+                }
+                if (previousClientSession != null)
+                {
+                    TaskHelper.RunSafely(CloseJoinedClientAsync(previousClientSession));
+                }
+            });
         _timeUntilHeartbeat = 0d;
         LanConnectProtocolProfiles.SetActiveProfile(registration.Room.ProtocolProfile, registration.Room.MaxPlayers, "attach_hosted_room");
         GD.Print(
@@ -322,10 +356,9 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             return;
         }
 
-        if (_activeClientSession != null)
-        {
-            TaskHelper.RunSafely(CloseJoinedClientAsync(_activeClientSession));
-        }
+        JoinedClientSession? previousClientSession = _activeClientSession;
+        string? previousChatRoomId = _chatRoomId;
+        string? previousChatRoomSessionId = _chatRoomSessionId;
 
         JoinedClientSession session = new(
             netService,
@@ -340,28 +373,47 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         {
             if (ReferenceEquals(_activeClientSession, session))
             {
-                GetChatCoordinator().SetRoomRichFeatures(envelope.EnabledFeatures);
+                TryApplyRoomChatReady(
+                    GetChatCoordinator(),
+                    envelope,
+                    session.RoomId,
+                    session.RoomSessionId);
             }
         };
         session.ControlClient.RoomChatAckReceived += envelope =>
         {
             if (ReferenceEquals(_activeClientSession, session))
             {
-                GetChatCoordinator().ApplyRoomAck(envelope, session.PlayerNetId);
+                TryApplyRoomChatAck(
+                    GetChatCoordinator(),
+                    envelope,
+                    session.PlayerNetId,
+                    session.RoomId,
+                    session.RoomSessionId);
             }
         };
         session.ControlClient.RoomChatMessageReceived += envelope =>
         {
             if (ReferenceEquals(_activeClientSession, session))
             {
-                GetChatCoordinator().ApplyRoomMessage(envelope, session.PlayerNetId);
+                TryApplyRoomChatMessage(
+                    GetChatCoordinator(),
+                    envelope,
+                    session.PlayerNetId,
+                    session.RoomId,
+                    session.RoomSessionId);
             }
         };
         session.ControlClient.RoomChatErrorReceived += envelope =>
         {
             if (ReferenceEquals(_activeClientSession, session))
             {
-                GetChatCoordinator().ApplyRoomError(envelope);
+                TryApplyRoomChatError(
+                    GetChatCoordinator(),
+                    envelope,
+                    session.ControlClient.LatestRoomChatReady,
+                    session.RoomId,
+                    session.RoomSessionId);
             }
         };
         BindRoomChatDisconnect(
@@ -369,7 +421,18 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             GetChatCoordinator(),
             () => ReferenceEquals(_activeClientSession, session) && !session.IsClosing);
         _activeClientSession = session;
-        EnterChatRoom(joinResponse.Room.RoomId);
+        EnterChatRoom(
+            joinResponse.Room.RoomId,
+            joinResponse.RoomSessionId,
+            previousChatRoomId,
+            previousChatRoomSessionId,
+            () =>
+            {
+                if (previousClientSession != null)
+                {
+                    TaskHelper.RunSafely(CloseJoinedClientAsync(previousClientSession));
+                }
+            });
         LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, joinResponse.Room.MaxPlayers, "attach_joined_client");
         LanConnectLobbyPlayerNameDirectory.BeginRoom(joinResponse.Room.RoomId);
         LanConnectLobbyPlayerNameDirectory.Upsert(joinResponse.Room.RoomId, netService.NetId, LanConnectConfig.GetEffectivePlayerDisplayName());
@@ -640,9 +703,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         LanConnectChatContent canonical;
         try
         {
-            canonical = LanConnectServerChatProtocol.Canonicalize(
+            canonical = LanConnectRoomChatSessionContext.Canonicalize(
                 content,
-                new LanConnectChatFeatureVersions(1, 1, 1, 0));
+                CurrentRoomChatVersions,
+                roomSessionId);
         }
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
         {
@@ -664,7 +728,9 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
                     string.Empty,
                     "Room rich chat ready has not been received.");
         }
-        if (!string.Equals(ready.RoomId, roomId, StringComparison.Ordinal) ||
+        if (string.IsNullOrEmpty(roomId) ||
+            string.IsNullOrEmpty(roomSessionId) ||
+            !string.Equals(ready.RoomId, roomId, StringComparison.Ordinal) ||
             !string.Equals(ready.RoomSessionId, roomSessionId, StringComparison.Ordinal))
         {
             return new LanConnectRoomChatSendDecision(
@@ -673,9 +739,28 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
                 string.Empty,
                 "Room rich chat ready does not match the active room session.");
         }
+        if (!LanConnectRoomChatSessionContext.ContentMatches(canonical, roomSessionId))
+        {
+            return new LanConnectRoomChatSendDecision(
+                false,
+                false,
+                string.Empty,
+                "Combat references do not match the active room session.");
+        }
         try
         {
-            canonical = LanConnectServerChatProtocol.Canonicalize(content, ready.EnabledFeatures);
+            canonical = LanConnectRoomChatSessionContext.Canonicalize(
+                content,
+                ready.EnabledFeatures,
+                roomSessionId);
+            if (!LanConnectChatFeatureResolver.SupportsContent(canonical, ready.EnabledFeatures))
+            {
+                return new LanConnectRoomChatSendDecision(
+                    false,
+                    false,
+                    string.Empty,
+                    "Room content is not supported by the active feature set.");
+            }
             LanConnectServerChatProtocol.AssertInboundBudget(
                 canonical,
                 LanConnectConfig.GetEffectivePlayerDisplayName());
@@ -732,10 +817,6 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             throw new InvalidOperationException("No active room control channel is available.");
         string roomId = _activeSession?.RoomId ?? _activeClientSession?.RoomId ?? string.Empty;
         string roomSessionId = _activeSession?.RoomSessionId ?? _activeClientSession?.RoomSessionId ?? string.Empty;
-        if (string.IsNullOrEmpty(roomSessionId))
-        {
-            roomSessionId = controlClient.LatestRoomChatReady?.RoomSessionId ?? string.Empty;
-        }
         LanConnectRoomChatSendDecision decision = DecideRoomChatSend(
             content,
             controlClient.LatestRoomChatReady,
@@ -755,9 +836,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             return;
         }
 
-        LanConnectChatContent canonical = LanConnectServerChatProtocol.Canonicalize(
+        LanConnectChatContent canonical = LanConnectRoomChatSessionContext.Canonicalize(
             content,
-            controlClient.LatestRoomChatReady!.EnabledFeatures);
+            controlClient.LatestRoomChatReady!.EnabledFeatures,
+            roomSessionId);
         string senderName = LanConnectConfig.GetEffectivePlayerDisplayName();
         string? senderNetId = _activeSession?.NetService.NetId.ToString() ?? _activeClientSession?.PlayerNetId;
         DateTimeOffset sentAt = DateTimeOffset.UtcNow;
@@ -801,10 +883,6 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             throw new InvalidOperationException("No active room control channel is available.");
         string roomId = _activeSession?.RoomId ?? _activeClientSession?.RoomId ?? string.Empty;
         string roomSessionId = _activeSession?.RoomSessionId ?? _activeClientSession?.RoomSessionId ?? string.Empty;
-        if (string.IsNullOrEmpty(roomSessionId))
-        {
-            roomSessionId = controlClient.LatestRoomChatReady?.RoomSessionId ?? string.Empty;
-        }
         return RetryRoomChatAsync(
             coordinator,
             controlClient,
@@ -824,6 +902,10 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(controlClient);
+        if (string.IsNullOrEmpty(roomId) || string.IsNullOrEmpty(roomSessionId))
+        {
+            throw new InvalidOperationException("The active room session is unavailable.");
+        }
         LanConnectRoomChatReadyEnvelope ready = controlClient.LatestRoomChatReady ??
             throw new InvalidOperationException("Room rich chat ready has not been received.");
         if (!string.Equals(ready.RoomId, roomId, StringComparison.Ordinal) ||
@@ -858,6 +940,7 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         {
             if (shouldMarkDisconnected())
             {
+                coordinator.SetRoomRichFeatures(new LanConnectChatFeatureVersions());
                 coordinator.MarkRoomDisconnected();
             }
         };
@@ -1521,9 +1604,22 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             isLocal: false);
     }
 
-    private void EnterChatRoom(string roomId)
+    private void EnterChatRoom(
+        string roomId,
+        string? roomSessionId,
+        string? previousRoomId,
+        string? previousRoomSessionId,
+        Action closePreviousSession)
     {
-        GetChatCoordinator().EnterRoom(roomId);
+        RebindRoomGeneration(
+            GetChatCoordinator(),
+            roomId,
+            roomSessionId ?? string.Empty,
+            previousRoomId,
+            previousRoomSessionId,
+            closePreviousSession);
+        _chatRoomId = roomId;
+        _chatRoomSessionId = roomSessionId ?? string.Empty;
         ApplyRoomChatEnabled(true);
         GetChatCoordinator().AppendRoomConfirmed(
             roomId,
@@ -1535,6 +1631,166 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
             isLocal: false);
     }
 
+    internal static void RebindRoomGeneration(
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        string roomId,
+        string roomSessionId,
+        string? previousRoomId,
+        string? previousRoomSessionId,
+        Action closePreviousSession)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentException.ThrowIfNullOrEmpty(roomId);
+        ArgumentNullException.ThrowIfNull(closePreviousSession);
+        closePreviousSession();
+        EnterRoomGeneration(
+            coordinator,
+            roomId,
+            roomSessionId,
+            previousRoomId,
+            previousRoomSessionId);
+    }
+
+    internal static void EnterRoomGeneration(
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        string roomId,
+        string roomSessionId,
+        string? currentRoomId,
+        string? currentRoomSessionId)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentException.ThrowIfNullOrEmpty(roomId);
+        bool sameGeneration = !string.IsNullOrEmpty(roomSessionId) &&
+            string.Equals(roomId, currentRoomId, StringComparison.Ordinal) &&
+            string.Equals(roomSessionId, currentRoomSessionId, StringComparison.Ordinal);
+        if (!sameGeneration)
+        {
+            coordinator.LeaveRoom();
+            coordinator.EnterRoom(roomId);
+        }
+        coordinator.SetRoomRichFeatures(new LanConnectChatFeatureVersions());
+    }
+
+    internal static bool TryApplyRoomChatReady(
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        LanConnectRoomChatReadyEnvelope envelope,
+        string roomId,
+        string roomSessionId,
+        Action<string>? warningSink = null)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (!MatchesRoomGeneration(envelope.RoomId, envelope.RoomSessionId, roomId, roomSessionId))
+        {
+            WarnIgnoredRoomChatEnvelope("room_chat_ready", warningSink);
+            return false;
+        }
+
+        coordinator.SetRoomRichFeatures(envelope.EnabledFeatures);
+        return true;
+    }
+
+    internal static bool TryApplyRoomChatAck(
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        LanConnectRoomChatAckEnvelope envelope,
+        string localSenderId,
+        string roomId,
+        string roomSessionId,
+        Action<string>? warningSink = null)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (!MatchesRoomMessageGeneration(envelope.Message, roomId, roomSessionId))
+        {
+            WarnIgnoredRoomChatEnvelope("room_chat_ack", warningSink);
+            return false;
+        }
+
+        coordinator.ApplyRoomAck(envelope, localSenderId);
+        return true;
+    }
+
+    internal static bool TryApplyRoomChatMessage(
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        LanConnectRoomChatMessageEnvelope envelope,
+        string localSenderId,
+        string roomId,
+        string roomSessionId,
+        Action<string>? warningSink = null)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (!MatchesRoomMessageGeneration(envelope.Message, roomId, roomSessionId))
+        {
+            WarnIgnoredRoomChatEnvelope("room_chat_message", warningSink);
+            return false;
+        }
+
+        coordinator.ApplyRoomMessage(envelope, localSenderId);
+        return true;
+    }
+
+    internal static bool TryApplyRoomChatError(
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        LanConnectRoomChatErrorEnvelope envelope,
+        LanConnectRoomChatReadyEnvelope? ready,
+        string roomId,
+        string roomSessionId,
+        Action<string>? warningSink = null)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (ready == null ||
+            !MatchesRoomGeneration(ready.RoomId, ready.RoomSessionId, roomId, roomSessionId))
+        {
+            WarnIgnoredRoomChatEnvelope("room_chat_error", warningSink);
+            return false;
+        }
+
+        coordinator.ApplyRoomError(envelope);
+        return true;
+    }
+
+    private static bool MatchesRoomMessageGeneration(
+        LanConnectRoomChatMessagePayload message,
+        string roomId,
+        string roomSessionId) =>
+        message != null &&
+        MatchesRoomGeneration(message.RoomId, message.RoomSessionId, roomId, roomSessionId) &&
+        LanConnectRoomChatSessionContext.ContentMatches(message.Content, roomSessionId);
+
+    private static bool MatchesRoomGeneration(
+        string candidateRoomId,
+        string candidateRoomSessionId,
+        string roomId,
+        string roomSessionId) =>
+        !string.IsNullOrEmpty(roomId) &&
+        !string.IsNullOrEmpty(roomSessionId) &&
+        string.Equals(candidateRoomId, roomId, StringComparison.Ordinal) &&
+        string.Equals(candidateRoomSessionId, roomSessionId, StringComparison.Ordinal);
+
+    private static void WarnIgnoredRoomChatEnvelope(string type, Action<string>? warningSink)
+    {
+        string message = $"sts2_lan_connect ignored stale {type} for inactive room generation.";
+        try
+        {
+            if (warningSink != null)
+            {
+                warningSink(message);
+            }
+            else
+            {
+                LogRoomChatGenerationWarning(message);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void LogRoomChatGenerationWarning(string message) => Log.Warn(message);
+
     private void ApplyRoomChatEnabled(bool enabled)
     {
         _chatEnabled = enabled;
@@ -1544,12 +1800,14 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
 
     private void LeaveChatRoomIfIdle()
     {
-        if (_activeSession != null || _activeClientSession != null || _chatOwner == null)
+        if (_activeSession != null || _activeClientSession != null)
         {
             return;
         }
 
-        _chatOwner.Current.LeaveRoom();
+        _chatRoomId = null;
+        _chatRoomSessionId = null;
+        _chatOwner?.Current.LeaveRoom();
     }
 
     private void AppendChatMessage(string roomId, string messageId, string senderName, string? senderNetId, string messageText, DateTimeOffset sentAt, bool isLocal)

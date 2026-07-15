@@ -447,6 +447,7 @@ public sealed class LanConnectRichChannelSubmissionTests
             "session-1",
             CancellationToken.None);
         control.HandlePayloadForTests("""{"type":"room_chat_ready","protocolVersion":1,"roomId":"room-1","roomSessionId":"session-1","enabledFeatures":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":0}}""");
+        coordinator.SetRoomRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 1));
         LanConnectLobbyRuntime.BindRoomChatDisconnect(control, coordinator, () => true);
 
         await LanConnectLobbyRuntime.RetryRoomChatAsync(
@@ -469,6 +470,7 @@ public sealed class LanConnectRichChannelSubmissionTests
         Assert.Equal(ServerChatDeliveryState.DeliveryUnknown, disconnected.Delivery);
         Assert.True(disconnected.DisconnectedAfterUnknown);
         Assert.True(delay.Tokens[^1].IsCancellationRequested);
+        Assert.Equal(new LanConnectChatFeatureVersions(), coordinator.State.Room.EnabledRichFeatures);
     }
 
     [Fact]
@@ -591,11 +593,376 @@ public sealed class LanConnectRichChannelSubmissionTests
             ready: null,
             "room-1",
             "session-1");
+        LanConnectRoomChatSendDecision combat = LanConnectLobbyRuntime.DecideRoomChatSend(
+            new LanConnectChatContent(1,
+                [new LanConnectPowerStateSegment("MegaCrit.Strength", 1, "session-1")]),
+            ready: null,
+            "room-1",
+            "session-1");
 
         Assert.True(text.Enabled);
         Assert.False(text.UseV2);
         Assert.False(entity.Enabled);
         Assert.Contains("ready", entity.DisabledReason, StringComparison.OrdinalIgnoreCase);
+        Assert.False(combat.Enabled);
+        Assert.Contains("ready", combat.DisabledReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Room_combat_requires_current_generation_while_item_refs_are_session_independent()
+    {
+        LanConnectRoomChatReadyEnvelope ready = new()
+        {
+            RoomId = "room-1",
+            RoomSessionId = "session-b",
+            EnabledFeatures = new LanConnectChatFeatureVersions(1, 1, 1, 1)
+        };
+        LanConnectRoomChatSendDecision power = LanConnectLobbyRuntime.DecideRoomChatSend(
+            new LanConnectChatContent(1,
+                [new LanConnectPowerStateSegment("MegaCrit.Strength", 2, "session-b")]),
+            ready,
+            "room-1",
+            "session-b");
+        LanConnectRoomChatSendDecision player = LanConnectLobbyRuntime.DecideRoomChatSend(
+            new LanConnectChatContent(1,
+                [new LanConnectTargetRefSegment("player", "net:bob", "session-b")]),
+            ready,
+            "room-1",
+            "session-b");
+        LanConnectRoomChatSendDecision monster = LanConnectLobbyRuntime.DecideRoomChatSend(
+            new LanConnectChatContent(1,
+                [new LanConnectTargetRefSegment("monster", "monster-1", "session-b")]),
+            ready,
+            "room-1",
+            "session-b");
+        LanConnectRoomChatSendDecision stalePower = LanConnectLobbyRuntime.DecideRoomChatSend(
+            new LanConnectChatContent(1,
+                [new LanConnectPowerStateSegment("MegaCrit.Strength", 2, "session-a")]),
+            ready,
+            "room-1",
+            "session-b");
+        LanConnectRoomChatSendDecision item = LanConnectLobbyRuntime.DecideRoomChatSend(
+            new LanConnectChatContent(1,
+                [new LanConnectItemRefSegment("card", "MegaCrit.Strike")]),
+            ready,
+            "room-1",
+            "session-b");
+        LanConnectRoomChatSendDecision noAuthority = LanConnectLobbyRuntime.DecideRoomChatSend(
+            new LanConnectChatContent(1,
+                [new LanConnectItemRefSegment("card", "MegaCrit.Strike")]),
+            ready with { RoomId = string.Empty, RoomSessionId = string.Empty },
+            string.Empty,
+            string.Empty);
+
+        Assert.True(power.Enabled && power.UseV2);
+        Assert.True(player.Enabled && player.UseV2);
+        Assert.False(monster.Enabled);
+        Assert.False(stalePower.Enabled);
+        Assert.Contains("active room session", stalePower.DisabledReason, StringComparison.OrdinalIgnoreCase);
+        Assert.True(item.Enabled && item.UseV2);
+        Assert.False(noAuthority.Enabled);
+    }
+
+    [Fact]
+    public void Room_reducer_preserves_power_and_player_content_without_enabling_server_combat()
+    {
+        LanConnectChatContent content = new(1,
+        [
+            new LanConnectPowerStateSegment(
+                "MegaCrit.Strength",
+                2,
+                "session-1",
+                "net:alice",
+                "net:bob"),
+            new LanConnectTargetRefSegment("player", "net:bob", "session-1")
+        ]);
+        LanConnectChatChannelState room = new(LanConnectChatChannel.Room);
+        room.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 1));
+        room.Apply(new LanConnectRoomChatMessageEnvelope
+        {
+            Message = RoomMessage("combat-message", content)
+        }, "net:local");
+
+        Assert.Equal(1, room.EnabledRichFeatures.CombatRefVersion);
+        AssertContentEqual(content, Assert.Single(room.Messages).Content);
+
+        LanConnectChatChannelState server = new(LanConnectChatChannel.Server);
+        server.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 1));
+        Assert.Equal(0, server.EnabledRichFeatures.CombatRefVersion);
+        server.Apply(new LanConnectServerChatMessageEnvelope
+        {
+            Message = ServerMessage("server-combat", content)
+        }, "net:local");
+        Assert.Empty(server.Messages);
+    }
+
+    [Fact]
+    public async Task Control_ignores_and_logs_stale_inbound_without_clearing_valid_ready()
+    {
+        StubWebSocket socket = new();
+        List<string> warnings = [];
+        await using LobbyControlClient client = new(socket, warnings.Add);
+        int ackEvents = 0;
+        int messageEvents = 0;
+        int errorEvents = 0;
+        client.RoomChatAckReceived += _ => ackEvents++;
+        client.RoomChatMessageReceived += _ => messageEvents++;
+        client.RoomChatErrorReceived += _ => errorEvents++;
+        await client.ConnectHostAsync(
+            new Uri("wss://lobby.example/control"),
+            "room-1",
+            "control-1",
+            "Host",
+            "session-b",
+            CancellationToken.None);
+        client.HandlePayloadForTests(
+            """{"type":"room_chat_ready","protocolVersion":1,"roomId":"room-1","roomSessionId":"session-b","enabledFeatures":{"richContentVersion":1,"emojiSetVersion":1,"itemRefVersion":1,"combatRefVersion":1}}""");
+        LanConnectRoomChatReadyEnvelope validReady = Assert.IsType<LanConnectRoomChatReadyEnvelope>(
+            client.LatestRoomChatReady);
+
+        client.HandlePayloadForTests(
+            """{"type":"room_chat_ready","protocolVersion":1,"roomId":"room-1","roomSessionId":"session-a","enabledFeatures":{"richContentVersion":0,"emojiSetVersion":0,"itemRefVersion":0,"combatRefVersion":0}}""");
+        client.HandlePayloadForTests(JsonSerializer.Serialize(new LanConnectRoomChatAckEnvelope
+        {
+            ClientMessageId = "stale-outer",
+            Message = RoomMessage("stale-outer", new LanConnectChatContent(1,
+                [new LanConnectItemRefSegment("card", "MegaCrit.Strike")])) with
+            {
+                RoomSessionId = "session-a"
+            }
+        }, LanConnectJson.Options));
+        client.HandlePayloadForTests(JsonSerializer.Serialize(new LanConnectRoomChatAckEnvelope
+        {
+            ClientMessageId = "stale-inner",
+            Message = RoomMessage("stale-inner", new LanConnectChatContent(1,
+                [new LanConnectPowerStateSegment("MegaCrit.Strength", 1, "session-a")])) with
+            {
+                RoomSessionId = "session-b"
+            }
+        }, LanConnectJson.Options));
+        client.HandlePayloadForTests(JsonSerializer.Serialize(new LanConnectRoomChatMessageEnvelope
+        {
+            Message = RoomMessage("stale-message-outer", new LanConnectChatContent(1,
+                [new LanConnectItemRefSegment("card", "MegaCrit.Strike")])) with
+            {
+                RoomSessionId = "session-a"
+            }
+        }, LanConnectJson.Options));
+        client.HandlePayloadForTests(JsonSerializer.Serialize(new LanConnectRoomChatMessageEnvelope
+        {
+            Message = RoomMessage("stale-message-inner", new LanConnectChatContent(1,
+                [new LanConnectTargetRefSegment("player", "net:bob", "session-a")])) with
+            {
+                RoomSessionId = "session-b"
+            }
+        }, LanConnectJson.Options));
+
+        Assert.Same(validReady, client.LatestRoomChatReady);
+        Assert.Equal(0, ackEvents);
+        Assert.Equal(0, messageEvents);
+        Assert.True(warnings.Count(warning => warning.Contains("stale room_chat_", StringComparison.Ordinal)) >= 5);
+
+        client.HandlePayloadForTests(JsonSerializer.Serialize(new LanConnectRoomChatAckEnvelope
+        {
+            ClientMessageId = "valid-item",
+            Message = RoomMessage("valid-item", new LanConnectChatContent(1,
+                [new LanConnectItemRefSegment("card", "MegaCrit.Strike")])) with
+            {
+                RoomSessionId = "session-b"
+            }
+        }, LanConnectJson.Options));
+        client.HandlePayloadForTests(JsonSerializer.Serialize(new LanConnectRoomChatMessageEnvelope
+        {
+            Message = RoomMessage("valid-player", new LanConnectChatContent(1,
+                [new LanConnectTargetRefSegment("player", "net:bob", "session-b")])) with
+            {
+                RoomSessionId = "session-b"
+            }
+        }, LanConnectJson.Options));
+        client.HandlePayloadForTests(JsonSerializer.Serialize(new LanConnectRoomChatErrorEnvelope
+        {
+            ClientMessageId = "valid-error",
+            Code = "invalid_content",
+            Message = "rejected"
+        }, LanConnectJson.Options));
+
+        Assert.Equal(1, ackEvents);
+        Assert.Equal(1, messageEvents);
+        Assert.Equal(1, errorEvents);
+        Assert.Same(validReady, client.LatestRoomChatReady);
+
+        int sentBefore = socket.SentPayloads.Count;
+        await client.SendRoomChatV2Async(new LanConnectRoomChatV2Envelope
+        {
+            ClientMessageId = "item-after-generation",
+            RoomId = "room-1",
+            RoomSessionId = "session-b",
+            Content = new LanConnectChatContent(1,
+                [new LanConnectItemRefSegment("card", "MegaCrit.Strike")])
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SendRoomChatV2Async(
+            new LanConnectRoomChatV2Envelope
+            {
+                ClientMessageId = "stale-combat",
+                RoomId = "room-1",
+                RoomSessionId = "session-b",
+                Content = new LanConnectChatContent(1,
+                    [new LanConnectPowerStateSegment("MegaCrit.Strength", 1, "session-a")])
+            }));
+        Assert.Equal(sentBefore + 1, socket.SentPayloads.Count);
+    }
+
+    [Fact]
+    public async Task Same_room_generation_replacement_clears_context_and_pending_timeout()
+    {
+        CoordinatorClient server = new();
+        RoomDelay delay = new();
+        await using LanConnectLobbyRuntimeChatCoordinator coordinator = new(
+            server,
+            delay: delay.DelayAsync);
+        coordinator.EnterRoom("room-1");
+        coordinator.SetRoomRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 1));
+        coordinator.State.Room.RichDraft.ReplaceAllWithText("old draft");
+        coordinator.BeginRoomPending(
+            "old-pending",
+            "Host",
+            "net:host",
+            new LanConnectChatContent(1, [new LanConnectTextSegment("old")]),
+            DateTimeOffset.UtcNow);
+        CancellationToken oldTimeout = Assert.Single(delay.Tokens);
+
+        LanConnectLobbyRuntime.EnterRoomGeneration(
+            coordinator,
+            "room-1",
+            "session-b",
+            "room-1",
+            "session-a");
+
+        Assert.True(oldTimeout.IsCancellationRequested);
+        Assert.Equal("room-1", coordinator.State.ActiveRoomId);
+        Assert.Empty(coordinator.State.Room.Messages);
+        Assert.True(coordinator.State.Room.RichDraft.IsEmpty);
+        Assert.Equal(new LanConnectChatFeatureVersions(), coordinator.State.Room.EnabledRichFeatures);
+    }
+
+    [Fact]
+    public async Task Same_generation_rebind_preserves_room_state_but_requires_fresh_ready()
+    {
+        CoordinatorClient server = new();
+        RoomDelay delay = new();
+        await using LanConnectLobbyRuntimeChatCoordinator coordinator = new(
+            server,
+            delay: delay.DelayAsync);
+        coordinator.EnterRoom("room-1");
+        coordinator.SetRoomRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 1));
+        coordinator.State.Room.RichDraft.ReplaceAllWithText("keep draft");
+        coordinator.BeginRoomPending(
+            "keep-pending",
+            "Host",
+            "net:host",
+            new LanConnectChatContent(1, [new LanConnectTextSegment("keep")]),
+            DateTimeOffset.UtcNow);
+        CancellationToken timeout = Assert.Single(delay.Tokens);
+
+        bool previousSessionClosed = false;
+        LanConnectLobbyRuntime.RebindRoomGeneration(
+            coordinator,
+            "room-1",
+            "session-1",
+            "room-1",
+            "session-1",
+            () =>
+            {
+                previousSessionClosed = true;
+                Assert.Equal("keep draft", coordinator.State.Room.Draft);
+                Assert.False(timeout.IsCancellationRequested);
+            });
+
+        Assert.True(previousSessionClosed);
+        Assert.False(timeout.IsCancellationRequested);
+        Assert.Equal("keep draft", coordinator.State.Room.Draft);
+        Assert.Single(coordinator.State.Room.Messages);
+        Assert.Equal(new LanConnectChatFeatureVersions(), coordinator.State.Room.EnabledRichFeatures);
+    }
+
+    [Fact]
+    public async Task Runtime_generation_guards_ignore_stale_ack_without_touching_pending_timeout_or_ready()
+    {
+        CoordinatorClient server = new();
+        RoomDelay delay = new();
+        await using LanConnectLobbyRuntimeChatCoordinator coordinator = new(
+            server,
+            delay: delay.DelayAsync);
+        coordinator.EnterRoom("room-1");
+        LanConnectChatFeatureVersions enabled = new(1, 1, 1, 1);
+        coordinator.SetRoomRichFeatures(enabled);
+        LanConnectChatContent pendingContent = new(1,
+            [new LanConnectPowerStateSegment("MegaCrit.Strength", 1, "session-b")]);
+        coordinator.BeginRoomPending(
+            "same-client-id",
+            "Ironclad",
+            "net-1",
+            pendingContent,
+            DateTimeOffset.UtcNow);
+        CancellationToken timeout = Assert.Single(delay.Tokens);
+        List<string> warnings = [];
+
+        Assert.False(LanConnectLobbyRuntime.TryApplyRoomChatReady(
+            coordinator,
+            new LanConnectRoomChatReadyEnvelope
+            {
+                RoomId = "room-1",
+                RoomSessionId = "stale-session",
+                EnabledFeatures = new LanConnectChatFeatureVersions()
+            },
+            "room-1",
+            "session-b",
+            warnings.Add));
+        Assert.False(LanConnectLobbyRuntime.TryApplyRoomChatAck(
+            coordinator,
+            new LanConnectRoomChatAckEnvelope
+            {
+                ClientMessageId = "same-client-id",
+                Message = RoomMessage("stale-outer", pendingContent) with
+                {
+                    RoomSessionId = "stale-session"
+                }
+            },
+            "net-1",
+            "room-1",
+            "session-b",
+            warnings.Add));
+        Assert.False(LanConnectLobbyRuntime.TryApplyRoomChatAck(
+            coordinator,
+            new LanConnectRoomChatAckEnvelope
+            {
+                ClientMessageId = "same-client-id",
+                Message = RoomMessage(
+                    "stale-inner",
+                    new LanConnectChatContent(1,
+                        [new LanConnectPowerStateSegment("MegaCrit.Strength", 1, "stale-session")])) with
+                {
+                    RoomSessionId = "session-b"
+                }
+            },
+            "net-1",
+            "room-1",
+            "session-b",
+            warnings.Add));
+
+        ServerChatMessageState pending = Assert.Single(coordinator.State.Room.Messages);
+        Assert.Equal("same-client-id", pending.ClientMessageId);
+        Assert.Equal(ServerChatDeliveryState.Pending, pending.Delivery);
+        Assert.False(timeout.IsCancellationRequested);
+        Assert.Equal(enabled, coordinator.State.Room.EnabledRichFeatures);
+        Assert.Equal(3, warnings.Count);
+        Assert.All(warnings, warning =>
+        {
+            Assert.Contains("inactive room generation", warning, StringComparison.Ordinal);
+            Assert.DoesNotContain("room-1", warning, StringComparison.Ordinal);
+            Assert.DoesNotContain("session", warning, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("same-client-id", warning, StringComparison.Ordinal);
+        });
     }
 
     [Fact]

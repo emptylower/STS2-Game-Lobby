@@ -33,13 +33,19 @@ public sealed class LanConnectChatFeatureResolverTests
             Resolve(compiled: new(1, 0, 1, 1)));
         Assert.Equal(None, Resolve(channelEnabled: false));
         Assert.Equal(None, Resolve(channel: LanConnectChatChannel.Room, roomV2Enabled: false));
-        Assert.Equal(new LanConnectChatFeatureVersions(1, 1, 0, 0), Resolve(
+        Assert.Equal(new LanConnectChatFeatureVersions(1, 1, 0, 1), Resolve(
             channel: LanConnectChatChannel.Room,
             receiver: new(1, 1, 0, 1)));
         Assert.Equal(None, Resolve(
             channel: LanConnectChatChannel.Room,
             sender: new(0, 1, 1, 1)));
-        Assert.Equal(0, Resolve(channel: LanConnectChatChannel.Room).CombatRefVersion);
+        Assert.Equal(1, Resolve(channel: LanConnectChatChannel.Room).CombatRefVersion);
+        Assert.Equal(0, Resolve(
+            channel: LanConnectChatChannel.Room,
+            receiver: new(1, 1, 1, 0)).CombatRefVersion);
+        Assert.Equal(0, Resolve(
+            channel: LanConnectChatChannel.Room,
+            adminOverrides: new LanConnectChatFeatureOverrides(CombatRefVersion: 0)).CombatRefVersion);
     }
 
     [Fact]
@@ -58,6 +64,32 @@ public sealed class LanConnectChatFeatureResolverTests
         Assert.True(LanConnectChatFeatureResolver.SupportsContent(
             new(1, [new LanConnectTextSegment("legacy")]), None));
         Assert.Equal(3, mixed.Segments.Count);
+    }
+
+    [Fact]
+    public void SupportsContentGatesPowerAndPlayerWithoutEnablingMonsterTargets()
+    {
+        LanConnectChatFeatureVersions combat = new(1, 1, 1, 1);
+        LanConnectChatFeatureVersions noCombat = new(1, 1, 1, 0);
+        LanConnectChatContent power = new(1,
+            [new LanConnectPowerStateSegment("MegaCrit.Strength", 2, "session-1")]);
+        LanConnectChatContent player = new(1,
+            [new LanConnectTargetRefSegment("player", "net:bob", "session-1")]);
+        LanConnectChatContent monster = new(1,
+            [new LanConnectTargetRefSegment("monster", "monster-1", "session-1")]);
+        LanConnectChatContent mixed = new(1,
+        [
+            new LanConnectItemRefSegment("card", "MegaCrit.Strike"),
+            new LanConnectPowerStateSegment("MegaCrit.Strength", 1, "session-1")
+        ]);
+
+        Assert.True(LanConnectChatFeatureResolver.SupportsContent(power, combat));
+        Assert.True(LanConnectChatFeatureResolver.SupportsContent(player, combat));
+        Assert.False(LanConnectChatFeatureResolver.SupportsContent(power, noCombat));
+        Assert.False(LanConnectChatFeatureResolver.SupportsContent(player, noCombat));
+        Assert.False(LanConnectChatFeatureResolver.SupportsContent(monster, combat));
+        Assert.True(LanConnectChatFeatureResolver.SupportsContent(mixed, combat));
+        Assert.False(LanConnectChatFeatureResolver.SupportsContent(mixed, new(1, 1, 0, 1)));
     }
 
     [Fact]

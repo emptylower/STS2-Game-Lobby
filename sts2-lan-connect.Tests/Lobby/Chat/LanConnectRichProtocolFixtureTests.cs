@@ -121,7 +121,7 @@ public sealed class LanConnectRichProtocolFixtureTests
     }
 
     [Fact]
-    public void ReservedCombatSegmentsDeserializeButPhaseThreeRejectsBothChannels()
+    public void CombatSegmentsDeserializeWhileRoomAdvertisesCombatAndMonsterStaysDisabled()
     {
         const string json =
             "{\"formatVersion\":1,\"segments\":[{\"kind\":\"power_state\",\"modelId\":\"MegaCrit.Strength\",\"amount\":-2,\"roomSessionId\":\"room-session-1\",\"ownerPlayerNetId\":\"net:a\",\"applierPlayerNetId\":\"net:b\"},{\"kind\":\"target_ref\",\"targetKind\":\"monster\",\"targetKey\":\"monster-1\",\"roomSessionId\":\"room-session-1\"}]}";
@@ -145,8 +145,20 @@ public sealed class LanConnectRichProtocolFixtureTests
             Sender = new(1, 1, 1, 1),
             Receiver = new(1, 1, 1, 1)
         });
-        Assert.Equal(0, room.CombatRefVersion);
+        Assert.Equal(1, room.CombatRefVersion);
         Assert.False(LanConnectChatFeatureResolver.SupportsContent(content, room));
+
+        LanConnectChatFeatureVersions server = LanConnectChatFeatureResolver.Resolve(new LanConnectChatFeatureInput
+        {
+            Channel = LanConnectChatChannel.Server,
+            Compiled = new(1, 1, 1, 1),
+            Configured = new(1, 1, 1, 1),
+            ChannelEnabled = true,
+            Sender = new(1, 1, 1, 1),
+            Receiver = new(1, 1, 1, 1)
+        });
+        Assert.Equal(0, server.CombatRefVersion);
+        Assert.False(LanConnectChatFeatureResolver.SupportsContent(content, server));
     }
 
     private static void AssertRoundTrip<T>(string json) => Assert.Equal(json, Serialize(Deserialize<T>(json)));

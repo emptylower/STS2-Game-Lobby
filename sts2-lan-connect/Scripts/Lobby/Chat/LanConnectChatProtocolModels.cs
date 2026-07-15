@@ -324,6 +324,65 @@ internal sealed record LanConnectTargetRefSegment(
     string TargetKey,
     string RoomSessionId) : LanConnectChatSegment("target_ref");
 
+internal static class LanConnectRoomChatSessionContext
+{
+    internal static LanConnectChatContent Canonicalize(
+        LanConnectChatContent content,
+        LanConnectChatFeatureVersions enabled,
+        string roomSessionId)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        HashSet<string> referencedPlayerNetIds = new(StringComparer.Ordinal);
+        foreach (LanConnectChatSegment segment in content.Segments ?? [])
+        {
+            if (segment is LanConnectPowerStateSegment power)
+            {
+                AddIfPresent(referencedPlayerNetIds, power.OwnerPlayerNetId);
+                AddIfPresent(referencedPlayerNetIds, power.ApplierPlayerNetId);
+            }
+            else if (segment is LanConnectTargetRefSegment { TargetKind: "player" } target)
+            {
+                AddIfPresent(referencedPlayerNetIds, target.TargetKey);
+            }
+        }
+        return LanConnectServerChatProtocol.CanonicalizeRoom(
+            content,
+            enabled,
+            roomSessionId,
+            roomSessionId,
+            referencedPlayerNetIds);
+    }
+
+    internal static bool ContentMatches(
+        LanConnectChatContent content,
+        string roomSessionId)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        if (content.Segments == null || string.IsNullOrEmpty(roomSessionId))
+        {
+            return content.Segments != null && content.Segments.All(segment =>
+                segment is not LanConnectPowerStateSegment and not LanConnectTargetRefSegment);
+        }
+
+        return content.Segments.All(segment => segment switch
+        {
+            LanConnectPowerStateSegment power =>
+                string.Equals(power.RoomSessionId, roomSessionId, StringComparison.Ordinal),
+            LanConnectTargetRefSegment target =>
+                string.Equals(target.RoomSessionId, roomSessionId, StringComparison.Ordinal),
+            _ => true
+        });
+    }
+
+    private static void AddIfPresent(HashSet<string> values, string? value)
+    {
+        if (!string.IsNullOrEmpty(value))
+        {
+            values.Add(value);
+        }
+    }
+}
+
 internal sealed class LanConnectChatSegmentJsonConverter : JsonConverter<LanConnectChatSegment>
 {
     public override LanConnectChatSegment Read(

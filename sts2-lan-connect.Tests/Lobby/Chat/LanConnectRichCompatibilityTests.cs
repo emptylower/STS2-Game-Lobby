@@ -189,7 +189,7 @@ public sealed class LanConnectRichCompatibilityTests
     }
 
     [Fact]
-    public async Task New_control_client_declares_phase_three_versions_in_hello()
+    public async Task New_control_client_declares_current_versions_in_hello()
     {
         RecordingWebSocket socket = new();
         await using LobbyControlClient client = new(socket);
@@ -212,7 +212,7 @@ public sealed class LanConnectRichCompatibilityTests
         Assert.Equal(1, versions.GetProperty("richContentVersion").GetInt32());
         Assert.Equal(1, versions.GetProperty("emojiSetVersion").GetInt32());
         Assert.Equal(1, versions.GetProperty("itemRefVersion").GetInt32());
-        Assert.Equal(0, versions.GetProperty("combatRefVersion").GetInt32());
+        Assert.Equal(1, versions.GetProperty("combatRefVersion").GetInt32());
     }
 
     private static LanConnectChatChannelState EnabledServerState()

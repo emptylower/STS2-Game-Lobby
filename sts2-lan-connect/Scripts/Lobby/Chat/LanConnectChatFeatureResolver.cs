@@ -39,7 +39,13 @@ internal static class LanConnectChatFeatureResolver
                 input.Admin?.ItemRefVersion ?? input.Configured.ItemRefVersion,
                 sender.ItemRefVersion,
                 receiver.ItemRefVersion),
-            0);
+            input.Channel == LanConnectChatChannel.Room
+                ? Enabled(
+                    input.Compiled.CombatRefVersion,
+                    input.Admin?.CombatRefVersion ?? input.Configured.CombatRefVersion,
+                    sender.CombatRefVersion,
+                    receiver.CombatRefVersion)
+                : 0);
     }
 
     internal static bool SupportsContent(
@@ -64,6 +70,12 @@ internal static class LanConnectChatFeatureResolver
                     break;
                 case LanConnectItemRefSegment when
                     enabled.RichContentVersion == 1 && enabled.ItemRefVersion == 1:
+                    break;
+                case LanConnectPowerStateSegment when
+                    enabled.RichContentVersion == 1 && enabled.CombatRefVersion == 1:
+                    break;
+                case LanConnectTargetRefSegment { TargetKind: "player" } when
+                    enabled.RichContentVersion == 1 && enabled.CombatRefVersion == 1:
                     break;
                 default:
                     return false;

@@ -148,6 +148,7 @@ internal sealed class LanConnectChatChannelState
     private bool _suppressDraftNotifications;
     private bool _chatEnabled;
     private ServerChatEnabledFeatures _enabledFeatures = new();
+    private int _combatRefVersion;
     private readonly LanConnectRichDraft _draft = new();
     private int _unreadCount;
     private long? _firstUnreadSequence;
@@ -317,7 +318,7 @@ internal sealed class LanConnectChatChannelState
                     _enabledFeatures.RichContentVersion,
                     _enabledFeatures.EmojiSetVersion,
                     _enabledFeatures.ItemRefVersion,
-                    0);
+                    Channel == LanConnectChatChannel.Room ? _combatRefVersion : 0);
             }
         }
     }
@@ -333,11 +334,13 @@ internal sealed class LanConnectChatChannelState
                 EmojiSetVersion = features.EmojiSetVersion,
                 ItemRefVersion = features.ItemRefVersion
             };
-            if (FeaturesEqual(_enabledFeatures, next))
+            int nextCombat = Channel == LanConnectChatChannel.Room ? features.CombatRefVersion : 0;
+            if (FeaturesEqual(_enabledFeatures, next) && _combatRefVersion == nextCombat)
             {
                 return;
             }
             _enabledFeatures = next;
+            _combatRefVersion = nextCombat;
             Touch();
         }
     }
@@ -1007,6 +1010,7 @@ internal sealed class LanConnectChatChannelState
             _messages.Clear();
             _snapshotAssembly = null;
             _enabledFeatures = new ServerChatEnabledFeatures();
+            _combatRefVersion = 0;
             if (!_draft.IsEmpty)
             {
                 _draftGeneration++;
@@ -1076,7 +1080,11 @@ internal sealed class LanConnectChatChannelState
         string sentAt = serverMessage?.SentAt ?? roomMessage?.SentAt ?? string.Empty;
         if (string.IsNullOrEmpty(clientMessageId) ||
             string.IsNullOrEmpty(messageId) ||
-            !TryCanonicalContent(rawContent, senderName, out LanConnectChatContent content))
+            !TryCanonicalContent(
+                rawContent,
+                senderName,
+                roomMessage?.RoomSessionId,
+                out LanConnectChatContent content))
         {
             return new LanConnectChatApplyResult(ReconnectRequired: false);
         }
@@ -1177,7 +1185,11 @@ internal sealed class LanConnectChatChannelState
         string sentAt = serverMessage?.SentAt ?? roomMessage?.SentAt ?? string.Empty;
         if (string.IsNullOrEmpty(messageId) ||
             _serverMessageIndex.ContainsKey(messageId) ||
-            !TryCanonicalContent(rawContent, senderName, out LanConnectChatContent content))
+            !TryCanonicalContent(
+                rawContent,
+                senderName,
+                roomMessage?.RoomSessionId,
+                out LanConnectChatContent content))
         {
             return new LanConnectChatApplyResult(ReconnectRequired: false);
         }
@@ -1448,7 +1460,11 @@ internal sealed class LanConnectChatChannelState
             {
                 return RejectSnapshot();
             }
-            if (!TryCanonicalContent(message.Content, message.SenderName, out LanConnectChatContent content))
+            if (!TryCanonicalContent(
+                    message.Content,
+                    message.SenderName,
+                    roomSessionId: null,
+                    out LanConnectChatContent content))
             {
                 return RejectSnapshot();
             }
@@ -1894,17 +1910,28 @@ internal sealed class LanConnectChatChannelState
     private bool TryCanonicalContent(
         LanConnectChatContent? content,
         string senderName,
+        string? roomSessionId,
         out LanConnectChatContent canonical)
     {
         try
         {
-            canonical = LanConnectServerChatProtocol.Canonicalize(
-                content ?? throw new InvalidOperationException("content is required."),
-                new LanConnectChatFeatureVersions(
-                    _enabledFeatures.RichContentVersion,
-                    _enabledFeatures.EmojiSetVersion,
-                    _enabledFeatures.ItemRefVersion,
-                    0));
+            LanConnectChatContent requiredContent = content ??
+                throw new InvalidOperationException("content is required.");
+            LanConnectChatFeatureVersions features = new(
+                _enabledFeatures.RichContentVersion,
+                _enabledFeatures.EmojiSetVersion,
+                _enabledFeatures.ItemRefVersion,
+                Channel == LanConnectChatChannel.Room ? _combatRefVersion : 0);
+            canonical = Channel == LanConnectChatChannel.Room
+                ? LanConnectRoomChatSessionContext.Canonicalize(
+                    requiredContent,
+                    features,
+                    roomSessionId ?? string.Empty)
+                : LanConnectServerChatProtocol.Canonicalize(requiredContent, features);
+            if (!LanConnectChatFeatureResolver.SupportsContent(canonical, features))
+            {
+                throw new InvalidOperationException("content is not supported by enabled features.");
+            }
             LanConnectServerChatProtocol.AssertInboundBudget(canonical, senderName ?? string.Empty);
             return true;
         }
