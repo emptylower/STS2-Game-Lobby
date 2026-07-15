@@ -146,6 +146,9 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
     internal const string PreviewName = "ChatItemPreview";
     internal const string SurfaceName = "ChatItemPreviewSurface";
     internal const string ContentName = "ChatItemPreviewContent";
+    internal const string HoverRootName = "ChatItemPreviewHoverRoot";
+    internal const string HoverTitleName = "ChatItemPreviewHoverTitle";
+    internal const string HoverDescriptionName = "ChatItemPreviewHoverDescription";
 
     internal const int SurfaceMargin = 12;
     internal static readonly Vector2 CardVisualMinimumSize = new(232, 332);
@@ -159,11 +162,26 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
     private MarginContainer? _surface;
     private VBoxContainer? _content;
     private Control? _cardVisual;
+    private VBoxContainer? _hoverRoot;
+    private HBoxContainer? _hoverHeader;
+    private TextureRect? _hoverIcon;
+    private Label? _hoverTitle;
+    private Label? _hoverDescription;
     private string _itemType = string.Empty;
     private string _title = string.Empty;
     private string _description = string.Empty;
     private bool _hasLocalVisual;
     private bool _closing;
+    private bool _openIntent;
+    private int _pendingInternalHideSignals;
+    private bool _internalHideMayTrail;
+    private bool _protectOpenFromTrailingInternalHide;
+    private bool _reopenQueued;
+    private long _showGeneration;
+    private long _internalHideGeneration;
+    private Rect2I _lastPopupContentRect;
+    private Rect2 _lastViewport;
+    private Vector2 _lastPreferredPosition;
 
     internal LanConnectItemPreview()
         : this(
@@ -226,7 +244,6 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
 
     public override void _ExitTree()
     {
-        ClearContent();
         ResetPresentationState();
     }
 
@@ -261,6 +278,13 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
             ClosePreview();
             return;
         }
+        long showGeneration = ++_showGeneration;
+        _protectOpenFromTrailingInternalHide = _internalHideMayTrail;
+        _internalHideMayTrail = false;
+        if (_protectOpenFromTrailingInternalHide)
+        {
+            _ = ClearTrailingHideProtectionAsync(showGeneration);
+        }
         if (Visible)
         {
             // Replacing an open popup must not schedule a native Hide whose delayed
@@ -282,15 +306,22 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
             };
             _itemType = item.ItemType;
             Rect2 bounds = ClampBounds(anchor, viewport, preferredSize);
-            ConstrainContentToBounds(bounds.Size);
+            if (!ConstrainContentToBounds(bounds.Size))
+            {
+                throw new InvalidOperationException("The viewport is too small for a safe local preview.");
+            }
             Vector2 popupContentSize = new(
                 Math.Max(1f, bounds.Size.X - PopupChromeSize.X),
                 Math.Max(1f, bounds.Size.Y - PopupChromeSize.Y));
-            Popup(new Rect2I(
+            _lastPopupContentRect = new Rect2I(
                 Mathf.RoundToInt(bounds.Position.X),
                 Mathf.RoundToInt(bounds.Position.Y),
                 Mathf.RoundToInt(popupContentSize.X),
-                Mathf.RoundToInt(popupContentSize.Y)));
+                Mathf.RoundToInt(popupContentSize.Y));
+            _lastViewport = viewport;
+            _lastPreferredPosition = bounds.Position;
+            _openIntent = true;
+            Popup(_lastPopupContentRect);
             ClampActualPopupToViewport(bounds.Position, viewport);
         }
         catch
@@ -308,9 +339,21 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         _closing = true;
         try
         {
+            _showGeneration++;
+            _openIntent = false;
             if (Visible)
             {
-                Hide();
+                long hideGeneration = ++_internalHideGeneration;
+                _internalHideMayTrail = true;
+                _pendingInternalHideSignals++;
+                base.Hide();
+                Callable.From(() =>
+                {
+                    if (hideGeneration == _internalHideGeneration && !_openIntent)
+                    {
+                        _internalHideMayTrail = false;
+                    }
+                }).CallDeferred();
             }
             ClearContent();
             ResetPresentationState();
@@ -319,6 +362,14 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         {
             _closing = false;
         }
+    }
+
+    public new void Hide()
+    {
+        _showGeneration++;
+        _openIntent = false;
+        _protectOpenFromTrailingInternalHide = false;
+        base.Hide();
     }
 
     internal void Invalidate(LanConnectItemPreviewInvalidation reason)
@@ -389,42 +440,87 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         {
             throw new InvalidOperationException("The local hover-tip data is incomplete.");
         }
-        HBoxContainer header = new();
-        header.AddThemeConstantOverride("separation", 8);
-        if (preview.Visual is Texture2D texture)
+        VBoxContainer root = new()
         {
-            header.AddChild(new TextureRect
-            {
-                Texture = texture,
-                ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
-                StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
-                CustomMinimumSize = new Vector2(40, 40),
-                MouseFilter = Control.MouseFilterEnum.Ignore
-            });
-            _hasLocalVisual = true;
-        }
-        Label title = new()
-        {
-            Text = preview.Title,
-            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-            VerticalAlignment = VerticalAlignment.Center,
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        title.AddThemeFontSizeOverride("font_size", 18);
-        header.AddChild(title);
-        _content!.AddChild(header);
-        Label description = new()
-        {
-            Text = preview.Description,
-            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            Name = HoverRootName,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             SizeFlagsVertical = Control.SizeFlags.ExpandFill,
-            MouseFilter = Control.MouseFilterEnum.Ignore
+            MouseFilter = Control.MouseFilterEnum.Stop
         };
-        _content.AddChild(description);
-        _title = preview.Title;
-        _description = preview.Description;
-        return HoverTipSurfacePreferredSize + PopupChromeSize;
+        root.AddThemeConstantOverride("separation", 8);
+        bool attached = false;
+        try
+        {
+            HBoxContainer header = new()
+            {
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            header.AddThemeConstantOverride("separation", 8);
+            TextureRect? icon = null;
+            if (preview.Visual is Texture2D texture)
+            {
+                icon = new TextureRect
+                {
+                    Texture = texture,
+                    ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+                    StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+                    CustomMinimumSize = new Vector2(40, 40),
+                    MouseFilter = Control.MouseFilterEnum.Ignore
+                };
+                header.AddChild(icon);
+            }
+            Label title = new()
+            {
+                Name = HoverTitleName,
+                Text = preview.Title,
+                AutowrapMode = TextServer.AutowrapMode.WordSmart,
+                ClipText = true,
+                TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
+                MaxLinesVisible = 1,
+                CustomMinimumSize = Vector2.Zero,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                VerticalAlignment = VerticalAlignment.Center,
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            title.AddThemeFontSizeOverride("font_size", 18);
+            header.AddChild(title);
+            root.AddChild(header);
+            Label description = new()
+            {
+                Name = HoverDescriptionName,
+                Text = preview.Description,
+                AutowrapMode = TextServer.AutowrapMode.WordSmart,
+                ClipText = true,
+                TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
+                MaxLinesVisible = 4,
+                CustomMinimumSize = Vector2.Zero,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+                VerticalAlignment = VerticalAlignment.Top,
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            root.AddChild(description);
+            _nodePort.Attach(_content!, root);
+            attached = true;
+            _hoverRoot = root;
+            _hoverHeader = header;
+            _hoverIcon = icon;
+            _hoverTitle = title;
+            _hoverDescription = description;
+            _hasLocalVisual = icon != null;
+            _title = preview.Title;
+            _description = preview.Description;
+            return HoverTipSurfacePreferredSize + PopupChromeSize;
+        }
+        catch
+        {
+            if (!attached && GodotObject.IsInstanceValid(root))
+            {
+                _nodePort.Release(root);
+            }
+            throw;
+        }
     }
 
     private static Rect2 ClampBounds(Rect2 anchor, Rect2 viewport, Vector2 preferredSize)
@@ -444,19 +540,47 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         return new Rect2(new Vector2(x, y), new Vector2(width, height));
     }
 
-    private void ConstrainContentToBounds(Vector2 popupSize)
+    private bool ConstrainContentToBounds(Vector2 popupSize)
     {
         MinSize = Vector2I.Zero;
-        if (_cardVisual == null || !GodotObject.IsInstanceValid(_cardVisual))
-        {
-            return;
-        }
         Vector2 available = new(
-            Math.Max(1f, popupSize.X - PopupChromeSize.X - SurfaceMargin * 2),
-            Math.Max(1f, popupSize.Y - PopupChromeSize.Y - SurfaceMargin * 2));
-        _cardVisual.CustomMinimumSize = new Vector2(
-            Math.Min(CardVisualMinimumSize.X, available.X),
-            Math.Min(CardVisualMinimumSize.Y, available.Y));
+            Math.Max(0f, popupSize.X - PopupChromeSize.X - SurfaceMargin * 2),
+            Math.Max(0f, popupSize.Y - PopupChromeSize.Y - SurfaceMargin * 2));
+        if (available.X < 48f || available.Y < 48f)
+        {
+            return false;
+        }
+        if (_cardVisual != null && GodotObject.IsInstanceValid(_cardVisual))
+        {
+            _cardVisual.CustomMinimumSize = new Vector2(
+                Math.Min(CardVisualMinimumSize.X, available.X),
+                Math.Min(CardVisualMinimumSize.Y, available.Y));
+        }
+        if (_hoverRoot != null &&
+            GodotObject.IsInstanceValid(_hoverRoot) &&
+            _hoverHeader != null &&
+            GodotObject.IsInstanceValid(_hoverHeader) &&
+            _hoverTitle != null &&
+            GodotObject.IsInstanceValid(_hoverTitle) &&
+            _hoverDescription != null &&
+            GodotObject.IsInstanceValid(_hoverDescription))
+        {
+            float headerHeight = Math.Min(40f, Math.Max(24f, available.Y * 0.34f));
+            _hoverRoot.CustomMinimumSize = Vector2.Zero;
+            _hoverHeader.CustomMinimumSize = new Vector2(0, headerHeight);
+            _hoverTitle.CustomMinimumSize = Vector2.Zero;
+            _hoverDescription.CustomMinimumSize = Vector2.Zero;
+            _hoverDescription.MaxLinesVisible = Math.Clamp(
+                Mathf.FloorToInt((available.Y - headerHeight - 8f) / 20f),
+                1,
+                4);
+            if (_hoverIcon != null && GodotObject.IsInstanceValid(_hoverIcon))
+            {
+                float iconSize = Math.Min(40f, Math.Min(headerHeight, available.X * 0.3f));
+                _hoverIcon.CustomMinimumSize = new Vector2(iconSize, iconSize);
+            }
+        }
+        return true;
     }
 
     private Vector2 PopupChromeSize =>
@@ -484,6 +608,7 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         {
             if (!child.IsQueuedForDeletion())
             {
+                _content.RemoveChild(child);
                 _nodePort.Release(child);
             }
         }
@@ -496,18 +621,76 @@ internal sealed partial class LanConnectItemPreview : PopupPanel
         _description = string.Empty;
         _hasLocalVisual = false;
         _cardVisual = null;
+        _hoverRoot = null;
+        _hoverHeader = null;
+        _hoverIcon = null;
+        _hoverTitle = null;
+        _hoverDescription = null;
     }
 
     private void OnPopupHide()
     {
-        // PopupHide can be delivered after an old Hide followed by a same-frame replacement.
-        // A currently visible popup owns newer content and must not be cleared by that stale signal.
+        if (_pendingInternalHideSignals > 0)
+        {
+            _pendingInternalHideSignals--;
+            if (_openIntent)
+            {
+                QueueEnsureOpenAfterInternalHide(_showGeneration);
+            }
+            return;
+        }
+        if (_protectOpenFromTrailingInternalHide &&
+            _openIntent &&
+            _content != null &&
+            GodotObject.IsInstanceValid(_content) &&
+            _content.GetChildren().Any(child => !child.IsQueuedForDeletion()))
+        {
+            QueueEnsureOpenAfterInternalHide(_showGeneration);
+            return;
+        }
         if (_closing || Visible)
         {
             return;
         }
+        _openIntent = false;
         ClearContent();
         ResetPresentationState();
+    }
+
+    private async Task ClearTrailingHideProtectionAsync(long showGeneration)
+    {
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        if (GodotObject.IsInstanceValid(this) && showGeneration == _showGeneration)
+        {
+            _protectOpenFromTrailingInternalHide = false;
+        }
+    }
+
+    private void QueueEnsureOpenAfterInternalHide(long showGeneration)
+    {
+        if (_reopenQueued)
+        {
+            return;
+        }
+        _reopenQueued = true;
+        Callable.From(() =>
+        {
+            _reopenQueued = false;
+            if (!GodotObject.IsInstanceValid(this) ||
+                showGeneration != _showGeneration ||
+                !_openIntent ||
+                Visible ||
+                _content == null ||
+                !GodotObject.IsInstanceValid(_content) ||
+                !_content.GetChildren().Any(child => !child.IsQueuedForDeletion()))
+            {
+                return;
+            }
+            Popup(_lastPopupContentRect);
+            ClampActualPopupToViewport(_lastPreferredPosition, _lastViewport);
+            _protectOpenFromTrailingInternalHide = false;
+        }).CallDeferred();
     }
 
 }

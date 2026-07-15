@@ -105,6 +105,49 @@ public sealed class LanConnectItemPreviewTests
         AssertThat(state.BlocksAltCapture).IsTrue();
     }
 
+    [TestCase("relic", true)]
+    [TestCase("potion", false)]
+    public async Task Long_localized_hovertip_stays_inside_tight_nonzero_viewport(
+        string itemType,
+        bool withIcon)
+    {
+        using PreviewFixture fixture = await PreviewFixture.Create(new FakeCardVisualFactory());
+        string title = itemType == "relic"
+            ? string.Concat(Enumerable.Repeat("超长本地化遗物标题", 12))
+            : string.Join(' ', Enumerable.Repeat("Extremely long localized potion title", 12));
+        string description = string.Concat(Enumerable.Repeat(
+            "这是一段很长的本地化描述 mixed with a long English explanation. ",
+            20));
+        Rect2 viewport = new(new Vector2(53, 47), new Vector2(220, 160));
+
+        fixture.Preview.ShowResolved(
+            ResolvedHoverTip(itemType, title, description, withIcon ? PreviewFixture.Icon() : null),
+            new Rect2(viewport.End - new Vector2(8, 8), new Vector2(8, 8)),
+            viewport);
+        await fixture.Runner.AwaitIdleFrame();
+
+        LanConnectItemPreviewTestState state = fixture.Preview.TestState;
+        AssertThat(state.Visible).IsTrue();
+        AssertThat(state.Bounds.Position.X >= viewport.Position.X).IsTrue();
+        AssertThat(state.Bounds.Position.Y >= viewport.Position.Y).IsTrue();
+        AssertThat(state.Bounds.End.X <= viewport.End.X).IsTrue();
+        AssertThat(state.Bounds.End.Y <= viewport.End.Y).IsTrue();
+        Label titleLabel = (Label)fixture.Preview.FindChild(
+            LanConnectItemPreview.HoverTitleName,
+            recursive: true,
+            owned: false);
+        Label descriptionLabel = (Label)fixture.Preview.FindChild(
+            LanConnectItemPreview.HoverDescriptionName,
+            recursive: true,
+            owned: false);
+        AssertThat(titleLabel.ClipText).IsTrue();
+        AssertThat(titleLabel.MaxLinesVisible).IsEqual(1);
+        AssertThat(descriptionLabel.ClipText).IsTrue();
+        AssertThat(descriptionLabel.MaxLinesVisible >= 1).IsTrue();
+        AssertThat(state.HasLocalVisual).IsEqual(withIcon);
+        AssertDescendantsInsidePopup(fixture.Preview);
+    }
+
     [TestCase]
     public async Task Unknown_item_has_no_preview_and_never_exposes_model_identifier()
     {
@@ -220,6 +263,40 @@ public sealed class LanConnectItemPreviewTests
             fixture.Preview.GetTree())).IsFalse();
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Hover_root_releases_temporary_subtree_once_when_attach_throws(
+        bool throwAfterAttach)
+    {
+        FakePreviewNodePort nodePort = new()
+        {
+            ThrowOnAttach = true,
+            ThrowAfterAttach = throwAfterAttach
+        };
+        using PreviewFixture fixture = await PreviewFixture.Create(
+            new FakeCardVisualFactory(),
+            nodePort);
+
+        fixture.Preview.ShowResolved(
+            ResolvedHoverTip(
+                "relic",
+                "Local title",
+                "Local description",
+                PreviewFixture.Icon()),
+            new Rect2(Vector2.Zero, new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)));
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(nodePort.AttachCalls).IsEqual(1);
+        AssertThat(nodePort.ReleaseCalls).IsEqual(1);
+        AssertThat(nodePort.LastChild != null).IsTrue();
+        AssertThat(GodotObject.IsInstanceValid(nodePort.LastChild)).IsFalse();
+        AssertThat(fixture.Preview.TestState.Visible).IsFalse();
+        AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(0);
+        AssertThat(LanConnectGodotItemLinkCapturePorts.HasVisibleItemPreview(
+            fixture.Preview.GetTree())).IsFalse();
+    }
+
     [TestCase]
     public async Task Real_viewport_escape_closes_preview_and_marks_no_preview_visible()
     {
@@ -283,7 +360,14 @@ public sealed class LanConnectItemPreviewTests
         FakeCardVisualFactory factory = new();
         using PreviewFixture fixture = await PreviewFixture.Create(factory);
         fixture.ShowCard();
+        Control oldVisual = factory.LastVisual!;
         fixture.ShowCard();
+
+        AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(1);
+        AssertThat(oldVisual.GetParent() == null).IsTrue();
+        AssertThat(oldVisual.IsInsideTree()).IsFalse();
+        AssertThat(LanConnectGodotItemLinkCapturePorts.HasVisibleItemPreview(
+            fixture.Preview.GetTree())).IsTrue();
         await fixture.Runner.AwaitIdleFrame();
 
         AssertThat(fixture.Preview.TestState.CardVisualCount).IsEqual(1);
@@ -293,6 +377,89 @@ public sealed class LanConnectItemPreviewTests
 
         AssertThat(fixture.Preview.TestState.Visible).IsFalse();
         AssertThat(fixture.Preview.TestState.ContentNodeCount).IsEqual(0);
+        await fixture.Runner.AwaitIdleFrame();
+    }
+
+    [TestCase]
+    public async Task Resolved_unknown_resolved_same_frame_has_one_real_child_and_no_stale_guard()
+    {
+        FakeCardVisualFactory factory = new();
+        using PreviewFixture fixture = await PreviewFixture.Create(factory);
+        fixture.ShowCard();
+        await fixture.Runner.AwaitIdleFrame();
+        Control oldVisual = factory.LastVisual!;
+
+        fixture.Preview.ShowResolved(
+            UnknownRelic(),
+            new Rect2(Vector2.Zero, new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)));
+        fixture.ShowCard();
+
+        AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(1);
+        AssertThat(oldVisual.GetParent() == null).IsTrue();
+        AssertThat(oldVisual.IsInsideTree()).IsFalse();
+        AssertThat(fixture.Preview.Visible).IsTrue();
+        AssertThat(LanConnectGodotItemLinkCapturePorts.HasVisibleItemPreview(
+            fixture.Preview.GetTree())).IsTrue();
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Preview.TestState.CardVisualCount).IsEqual(1);
+        AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(1);
+        fixture.Preview.ClosePreview();
+        await fixture.Runner.AwaitIdleFrame();
+    }
+
+    [TestCase]
+    public async Task External_hide_during_trailing_hide_protection_stays_closed_and_cleared()
+    {
+        using PreviewFixture fixture = await PreviewFixture.Create(new FakeCardVisualFactory());
+        fixture.ShowCard();
+        await fixture.Runner.AwaitIdleFrame();
+
+        fixture.Preview.ShowResolved(
+            UnknownRelic(),
+            new Rect2(Vector2.Zero, new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)));
+        fixture.ShowCard();
+        AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(1);
+        fixture.Preview.Hide();
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Preview.Visible).IsFalse();
+        AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(0);
+        AssertThat(fixture.Preview.TestState.ContentNodeCount).IsEqual(0);
+        AssertThat(LanConnectGodotItemLinkCapturePorts.HasVisibleItemPreview(
+            fixture.Preview.GetTree())).IsFalse();
+    }
+
+    [TestCase]
+    public async Task Escape_during_trailing_hide_protection_cancels_queued_reopen()
+    {
+        using PreviewFixture fixture = await PreviewFixture.Create(new FakeCardVisualFactory());
+        fixture.ShowCard();
+        await fixture.Runner.AwaitIdleFrame();
+
+        fixture.Preview.ShowResolved(
+            UnknownRelic(),
+            new Rect2(Vector2.Zero, new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)));
+        fixture.ShowCard();
+        AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(1);
+        fixture.Preview.GetViewport().PushInput(new InputEventKey
+        {
+            Keycode = Key.Escape,
+            Pressed = true,
+            Echo = false
+        });
+        await fixture.Runner.AwaitInputProcessed();
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Preview.Visible).IsFalse();
+        AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(0);
+        AssertThat(fixture.Preview.TestState.ContentNodeCount).IsEqual(0);
+        AssertThat(LanConnectGodotItemLinkCapturePorts.HasVisibleItemPreview(
+            fixture.Preview.GetTree())).IsFalse();
     }
 
     [TestCase]
@@ -329,6 +496,22 @@ public sealed class LanConnectItemPreviewTests
         LocalizedTitle: null,
         AccessibleText: "chat.unknown_relic",
         Preview: null);
+
+    private static LanConnectResolvedItem ResolvedHoverTip(
+        string itemType,
+        string title,
+        string description,
+        Texture2D? visual) => new(
+        LanConnectResolvedItemStatus.Resolved,
+        itemType,
+        "chat." + itemType,
+        title,
+        title,
+        new LanConnectHoverTipPreviewData(itemType, title, description, visual));
+
+    private static VBoxContainer Content(LanConnectItemPreview preview) =>
+        preview.GetNode<VBoxContainer>(
+            $"{LanConnectItemPreview.SurfaceName}/{LanConnectItemPreview.ContentName}");
 
     private static void AssertDescendantsInsidePopup(LanConnectItemPreview preview)
     {
@@ -446,9 +629,12 @@ public sealed class LanConnectItemPreviewTests
 
         internal int ReleaseCalls { get; private set; }
 
+        internal Node? LastChild { get; private set; }
+
         public void Attach(Node parent, Node child)
         {
             AttachCalls++;
+            LastChild = child;
             if (ThrowOnAttach)
             {
                 if (ThrowAfterAttach)
