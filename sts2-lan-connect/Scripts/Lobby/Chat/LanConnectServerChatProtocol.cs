@@ -35,7 +35,24 @@ internal static class LanConnectServerChatProtocol
 
     internal static LanConnectChatContent Canonicalize(
         LanConnectChatContent content,
-        LanConnectChatFeatureVersions enabled)
+        LanConnectChatFeatureVersions enabled) =>
+        CanonicalizeCore(content, enabled, null, null, null);
+
+    internal static LanConnectChatContent CanonicalizeRoom(
+        LanConnectChatContent content,
+        LanConnectChatFeatureVersions enabled,
+        string envelopeRoomSessionId,
+        string activeRoomSessionId,
+        IReadOnlySet<string> peerPlayerNetIds) =>
+        CanonicalizeCore(
+            content, enabled, envelopeRoomSessionId, activeRoomSessionId, peerPlayerNetIds);
+
+    private static LanConnectChatContent CanonicalizeCore(
+        LanConnectChatContent content,
+        LanConnectChatFeatureVersions enabled,
+        string? envelopeRoomSessionId,
+        string? activeRoomSessionId,
+        IReadOnlySet<string>? peerPlayerNetIds)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(enabled);
@@ -53,9 +70,13 @@ internal static class LanConnectServerChatProtocol
         }
 
         List<LanConnectChatSegment> canonical = [];
+        HashSet<string>? currentPeerPlayerNetIds = peerPlayerNetIds == null
+            ? null
+            : new HashSet<string>(peerPlayerNetIds, StringComparer.Ordinal);
         int entities = 0;
         bool requiresEmoji = false;
         bool requiresItem = false;
+        bool requiresCombat = false;
         foreach (LanConnectChatSegment? segment in content.Segments)
         {
             switch (segment)
@@ -95,9 +116,52 @@ internal static class LanConnectServerChatProtocol
                         item.ModelId,
                         item.UpgradeLevel));
                     break;
-                case LanConnectPowerStateSegment:
-                case LanConnectTargetRefSegment:
-                    throw Invalid("Combat reference segments are reserved for a later protocol version.");
+                case LanConnectPowerStateSegment power:
+                    if (envelopeRoomSessionId == null || activeRoomSessionId == null || currentPeerPlayerNetIds == null)
+                    {
+                        throw Invalid("Combat reference segments are not valid for server chat.");
+                    }
+                    ValidateCombatSession(
+                        power.RoomSessionId, envelopeRoomSessionId, activeRoomSessionId);
+                    if (!IsValidModelId(power.ModelId))
+                    {
+                        throw Invalid("power_state modelId is invalid.");
+                    }
+                    ValidateOptionalPeer(power.OwnerPlayerNetId, currentPeerPlayerNetIds, "ownerPlayerNetId");
+                    ValidateOptionalPeer(power.ApplierPlayerNetId, currentPeerPlayerNetIds, "applierPlayerNetId");
+                    entities++;
+                    requiresCombat = true;
+                    canonical.Add(new LanConnectPowerStateSegment(
+                        power.ModelId,
+                        power.Amount,
+                        power.RoomSessionId,
+                        power.OwnerPlayerNetId,
+                        power.ApplierPlayerNetId));
+                    break;
+                case LanConnectTargetRefSegment target:
+                    if (envelopeRoomSessionId == null || activeRoomSessionId == null || currentPeerPlayerNetIds == null)
+                    {
+                        throw Invalid("Combat reference segments are not valid for server chat.");
+                    }
+                    ValidateCombatSession(
+                        target.RoomSessionId, envelopeRoomSessionId, activeRoomSessionId);
+                    if (target.TargetKind is not ("player" or "monster") ||
+                        !IsPrintableAsciiId(target.TargetKey))
+                    {
+                        throw Invalid("target_ref target is invalid.");
+                    }
+                    if (target.TargetKind == "player" &&
+                        !currentPeerPlayerNetIds.Contains(target.TargetKey))
+                    {
+                        throw Invalid("player target must be a current room peer.");
+                    }
+                    entities++;
+                    requiresCombat = true;
+                    canonical.Add(new LanConnectTargetRefSegment(
+                        target.TargetKind,
+                        target.TargetKey,
+                        target.RoomSessionId));
+                    break;
                 case null:
                     throw Invalid("segment must not be null.");
                 default:
@@ -163,6 +227,11 @@ internal static class LanConnectServerChatProtocol
         {
             throw Invalid("Item reference segments are not enabled.");
         }
+        if (requiresCombat &&
+            (enabled.RichContentVersion != 1 || enabled.CombatRefVersion != 1))
+        {
+            throw Invalid("Combat reference segments are not enabled.");
+        }
 
         return new LanConnectChatContent(1, canonical);
     }
@@ -190,8 +259,66 @@ internal static class LanConnectServerChatProtocol
                 case LanConnectItemRefSegment { ItemType: "potion" }:
                     builder.Append("[Potion]");
                     break;
+                case LanConnectPowerStateSegment:
+                    builder.Append("[Power]");
+                    break;
+                case LanConnectTargetRefSegment { TargetKind: "player" }:
+                    builder.Append("[Player]");
+                    break;
+                case LanConnectTargetRefSegment { TargetKind: "monster" }:
+                    builder.Append("[Monster]");
+                    break;
                 default:
                     throw Invalid("Content contains an unsupported fallback segment.");
+            }
+        }
+        return builder.ToString();
+    }
+
+    internal static string RenderLegacyRoomFallback(
+        LanConnectChatContent content,
+        int maxUtf16Units = 60)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxUtf16Units);
+        Dictionary<int, string> selected = [];
+        int remaining = maxUtf16Units;
+        for (int index = 0; index < content.Segments.Count && remaining > 0; index++)
+        {
+            if (content.Segments[index] is not LanConnectTextSegment text)
+            {
+                continue;
+            }
+            int end = Math.Min(text.Text.Length, remaining);
+            if (end > 0 && char.IsHighSurrogate(text.Text[end - 1]))
+            {
+                end--;
+            }
+            if (end > 0)
+            {
+                selected[index] = text.Text[..end];
+            }
+            remaining -= end;
+        }
+        for (int index = 0; index < content.Segments.Count; index++)
+        {
+            if (content.Segments[index] is LanConnectTextSegment)
+            {
+                continue;
+            }
+            string token = GenericEntityToken(content.Segments[index]);
+            if (token.Length <= remaining)
+            {
+                selected[index] = token;
+                remaining -= token.Length;
+            }
+        }
+        StringBuilder builder = new();
+        for (int index = 0; index < content.Segments.Count; index++)
+        {
+            if (selected.TryGetValue(index, out string? value))
+            {
+                builder.Append(value);
             }
         }
         return builder.ToString();
@@ -251,6 +378,45 @@ internal static class LanConnectServerChatProtocol
         }
     }
 
+    internal static int MeasureWorstCaseRoomBytes(
+        LanConnectChatContent content,
+        string roomId,
+        string roomSessionId,
+        string senderName)
+    {
+        LanConnectRoomChatMessagePayload payload = new()
+        {
+            RoomId = roomId,
+            RoomSessionId = roomSessionId,
+            MessageId = WorstCaseMessageId,
+            SenderId = new string('S', 128),
+            SenderName = senderName,
+            Content = content,
+            PlainTextFallback = RenderGenericFallback(content),
+            SentAt = WorstCaseSentAt
+        };
+        LanConnectRoomChatAckEnvelope ack = new()
+        {
+            ClientMessageId = WorstCaseMessageId,
+            Message = payload
+        };
+        LanConnectRoomChatMessageEnvelope message = new() { Message = payload };
+        return Math.Max(MeasureUtf8(ack), MeasureUtf8(message));
+    }
+
+    internal static void AssertRoomBudget(
+        LanConnectChatContent content,
+        string roomId,
+        string roomSessionId,
+        string senderName)
+    {
+        int measured = MeasureWorstCaseRoomBytes(content, roomId, roomSessionId, senderName);
+        if (measured > MaxPayloadBytes)
+        {
+            throw Invalid($"room wire envelope exceeds budget: {measured} > {MaxPayloadBytes}.");
+        }
+    }
+
     internal static int CountUnicodeScalars(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
@@ -285,6 +451,58 @@ internal static class LanConnectServerChatProtocol
             throw Invalid("Only cards may include upgradeLevel.");
         }
     }
+
+    private static void ValidateCombatSession(
+        string value,
+        string envelopeRoomSessionId,
+        string activeRoomSessionId)
+    {
+        if (!IsPrintableAsciiId(value) ||
+            !string.Equals(value, envelopeRoomSessionId, StringComparison.Ordinal) ||
+            !string.Equals(value, activeRoomSessionId, StringComparison.Ordinal))
+        {
+            throw Invalid("combat roomSessionId must match the active room session.");
+        }
+    }
+
+    private static void ValidateOptionalPeer(
+        string? value,
+        IReadOnlySet<string> peers,
+        string label)
+    {
+        if (value != null && (!IsPrintableAsciiId(value) || !peers.Contains(value)))
+        {
+            throw Invalid($"{label} must be a current room peer.");
+        }
+    }
+
+    private static bool IsPrintableAsciiId(string? value)
+    {
+        if (value == null || value.Length is < 1 or > 128)
+        {
+            return false;
+        }
+        foreach (char character in value)
+        {
+            if (character is < (char)0x20 or > (char)0x7e)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static string GenericEntityToken(LanConnectChatSegment segment) => segment switch
+    {
+        LanConnectEmojiSegment => "[Emoji]",
+        LanConnectItemRefSegment { ItemType: "card" } => "[Card]",
+        LanConnectItemRefSegment { ItemType: "relic" } => "[Relic]",
+        LanConnectItemRefSegment { ItemType: "potion" } => "[Potion]",
+        LanConnectPowerStateSegment => "[Power]",
+        LanConnectTargetRefSegment { TargetKind: "player" } => "[Player]",
+        LanConnectTargetRefSegment { TargetKind: "monster" } => "[Monster]",
+        _ => throw Invalid("Content contains an unsupported fallback segment.")
+    };
 
     private static string NormalizeText(string text)
     {

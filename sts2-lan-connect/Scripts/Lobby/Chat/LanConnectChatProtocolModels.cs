@@ -519,11 +519,16 @@ internal sealed class LanConnectChatSegmentJsonConverter : JsonConverter<LanConn
 
     private static int RequiredInt32(JsonElement element, string name)
     {
-        if (element.ValueKind != JsonValueKind.Number || !element.TryGetInt32(out int value))
+        if (element.ValueKind != JsonValueKind.Number ||
+            !element.TryGetDouble(out double numeric) ||
+            !double.IsFinite(numeric) ||
+            Math.Truncate(numeric) != numeric ||
+            numeric < int.MinValue ||
+            numeric > int.MaxValue)
         {
             throw new JsonException($"{name} must be an Int32.");
         }
-        return value;
+        return (int)numeric;
     }
 }
 

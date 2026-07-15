@@ -660,7 +660,7 @@ test("real room gateway routes rich and exact legacy fallback per recipient and 
           content: { formatVersion: 1, segments: [segment] },
         }));
         const rejected = await rejectedPromise;
-        assert.equal(rejected.code, "invalid_content");
+        assert.equal(rejected.code, "feature_disabled");
       }
     },
     [

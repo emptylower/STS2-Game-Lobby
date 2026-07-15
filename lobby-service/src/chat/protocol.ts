@@ -36,7 +36,13 @@ export interface EnabledRichFeatures {
   richContentVersion: 0 | 1;
   emojiSetVersion: 0 | 1;
   itemRefVersion: 0 | 1;
-  combatRefVersion: 0;
+  combatRefVersion: 0 | 1;
+}
+
+export interface RoomContentContext {
+  envelopeRoomSessionId: string;
+  activeRoomSessionId: string;
+  peerPlayerNetIds: ReadonlySet<string>;
 }
 
 export interface CanonicalChatMessage {
@@ -46,6 +52,11 @@ export interface CanonicalChatMessage {
   content: ChatContent;
   plainTextFallback: string;
   sentAt: string;
+}
+
+export interface CanonicalRoomChatMessage extends CanonicalChatMessage {
+  roomId: string;
+  roomSessionId: string;
 }
 
 export type ChatProtocolErrorCode =
@@ -76,8 +87,15 @@ const TEXT_SEGMENT_ALLOWED_KEYS = new Set(["kind", "text"]);
 const EMOJI_SEGMENT_ALLOWED_KEYS = new Set(["kind", "emojiId"]);
 const CARD_REF_SEGMENT_ALLOWED_KEYS = new Set(["kind", "itemType", "modelId", "upgradeLevel"]);
 const STATIC_ITEM_REF_SEGMENT_ALLOWED_KEYS = new Set(["kind", "itemType", "modelId"]);
+const POWER_STATE_SEGMENT_ALLOWED_KEYS = new Set([
+  "kind", "modelId", "amount", "roomSessionId", "ownerPlayerNetId", "applierPlayerNetId",
+]);
+const TARGET_REF_SEGMENT_ALLOWED_KEYS = new Set([
+  "kind", "targetKind", "targetKey", "roomSessionId",
+]);
 const EMOJI_SET_1_IDS = new Set<string>(EMOJI_SET_1);
 const MODEL_ID_PATTERN = /^[A-Za-z0-9._-]{1,160}$/;
+const OPAQUE_ASCII_ID_PATTERN = /^[\x20-\x7e]{1,128}$/;
 // config.ts permits snapshotLimit up to 1000. If every message needs its own
 // chunk, valid indices span 0..999; reserve the widest supported index.
 const MAX_CONFIGURED_SNAPSHOT_LIMIT = 1000;
@@ -244,10 +262,19 @@ export function canonicalizeChatContent(
   return canonicalizeContent(input, features, false);
 }
 
+export function canonicalizeRoomContent(
+  input: unknown,
+  features: EnabledRichFeatures,
+  context: RoomContentContext,
+): ChatContent {
+  return canonicalizeContent(input, features, false, context);
+}
+
 function canonicalizeContent(
   input: unknown,
   features: EnabledRichFeatures,
   legacyRichKindPrecedence: boolean,
+  roomContext?: RoomContentContext,
 ): ChatContent {
   if (!isPlainObject(input)) {
     throw new ChatProtocolError("invalid_content", "content must be an object");
@@ -272,6 +299,7 @@ function canonicalizeContent(
   let entityCount = 0;
   let requiresEmoji = false;
   let requiresItemRef = false;
+  let requiresCombatRef = false;
 
   for (const segment of input.segments) {
     if (!isPlainObject(segment)) {
@@ -371,12 +399,72 @@ function canonicalizeContent(
       continue;
     }
 
-    if (kind === "power_state" || kind === "target_ref") {
-      throw new ChatProtocolError(
-        legacyRichKindPrecedence ? "feature_disabled" : "invalid_content",
-        `segment kind "${kind}" is not valid for server chat`,
-      );
+    if (kind === "power_state") {
+      if (roomContext === undefined) {
+        throw new ChatProtocolError(
+          legacyRichKindPrecedence ? "feature_disabled" : "invalid_content",
+          `segment kind "${kind}" is not valid for server chat`,
+        );
+      }
+      assertOwnRequiredKeys(segment, ["modelId", "amount", "roomSessionId"], "power_state segment");
+      assertAllowedKeys(segment, POWER_STATE_SEGMENT_ALLOWED_KEYS, "power_state segment");
+      if (typeof segment.modelId !== "string" || !MODEL_ID_PATTERN.test(segment.modelId)) {
+        throw new ChatProtocolError("invalid_content", "power_state modelId is invalid");
+      }
+      if (
+        typeof segment.amount !== "number"
+        || !Number.isInteger(segment.amount)
+        || segment.amount < -32768
+        || segment.amount > 32767
+      ) {
+        throw new ChatProtocolError("invalid_content", "power_state amount must fit signed 16-bit");
+      }
+      assertRoomSession(segment.roomSessionId, roomContext);
+      const ownerPlayerNetId = optionalCurrentPeerId(segment, "ownerPlayerNetId", roomContext);
+      const applierPlayerNetId = optionalCurrentPeerId(segment, "applierPlayerNetId", roomContext);
+      requiresCombatRef = true;
+      entityCount += 1;
+      canonicalSegments.push({
+        kind: "power_state",
+        modelId: segment.modelId,
+        amount: segment.amount,
+        roomSessionId: segment.roomSessionId,
+        ...(ownerPlayerNetId === undefined ? {} : { ownerPlayerNetId }),
+        ...(applierPlayerNetId === undefined ? {} : { applierPlayerNetId }),
+      });
+      continue;
     }
+
+    if (kind === "target_ref") {
+      if (roomContext === undefined) {
+        throw new ChatProtocolError(
+          legacyRichKindPrecedence ? "feature_disabled" : "invalid_content",
+          `segment kind "${kind}" is not valid for server chat`,
+        );
+      }
+      assertOwnRequiredKeys(segment, ["targetKind", "targetKey", "roomSessionId"], "target_ref segment");
+      assertAllowedKeys(segment, TARGET_REF_SEGMENT_ALLOWED_KEYS, "target_ref segment");
+      if (segment.targetKind !== "player" && segment.targetKind !== "monster") {
+        throw new ChatProtocolError("invalid_content", "targetKind must be player or monster");
+      }
+      if (typeof segment.targetKey !== "string" || !OPAQUE_ASCII_ID_PATTERN.test(segment.targetKey)) {
+        throw new ChatProtocolError("invalid_content", "targetKey must be 1 to 128 printable ASCII characters");
+      }
+      assertRoomSession(segment.roomSessionId, roomContext);
+      if (segment.targetKind === "player" && !roomContext.peerPlayerNetIds.has(segment.targetKey)) {
+        throw new ChatProtocolError("invalid_content", "player target must be a current room peer");
+      }
+      requiresCombatRef = true;
+      entityCount += 1;
+      canonicalSegments.push({
+        kind: "target_ref",
+        targetKind: segment.targetKind,
+        targetKey: segment.targetKey,
+        roomSessionId: segment.roomSessionId,
+      });
+      continue;
+    }
+
     throw new ChatProtocolError("invalid_content", `segment kind "${kind}" is not valid`);
   }
 
@@ -420,11 +508,63 @@ function canonicalizeContent(
   if (requiresItemRef && (features.richContentVersion !== 1 || features.itemRefVersion !== 1)) {
     throw new ChatProtocolError("feature_disabled", "item_ref segments are not enabled");
   }
+  if (requiresCombatRef && (features.richContentVersion !== 1 || features.combatRefVersion !== 1)) {
+    throw new ChatProtocolError("feature_disabled", "combat reference segments are not enabled");
+  }
 
   return {
     formatVersion: 1,
     segments: canonicalSegments,
   };
+}
+
+function assertRoomSession(value: unknown, context: RoomContentContext): asserts value is string {
+  if (
+    typeof value !== "string"
+    || !OPAQUE_ASCII_ID_PATTERN.test(value)
+    || value !== context.envelopeRoomSessionId
+    || value !== context.activeRoomSessionId
+  ) {
+    throw new ChatProtocolError("invalid_content", "combat roomSessionId must match the active room session");
+  }
+}
+
+function optionalCurrentPeerId(
+  segment: Record<string, unknown>,
+  key: "ownerPlayerNetId" | "applierPlayerNetId",
+  context: RoomContentContext,
+): string | undefined {
+  if (!Object.hasOwn(segment, key)) return undefined;
+  const value = segment[key];
+  if (
+    typeof value !== "string"
+    || !OPAQUE_ASCII_ID_PATTERN.test(value)
+    || !context.peerPlayerNetIds.has(value)
+  ) {
+    throw new ChatProtocolError("invalid_content", `${key} must be a current room peer`);
+  }
+  return value;
+}
+
+export function assertRoomContentContext(
+  content: ChatContent,
+  context: RoomContentContext,
+): void {
+  for (const segment of content.segments) {
+    if (segment.kind === "power_state") {
+      assertRoomSession(segment.roomSessionId, context);
+      for (const peerId of [segment.ownerPlayerNetId, segment.applierPlayerNetId]) {
+        if (peerId !== undefined && !context.peerPlayerNetIds.has(peerId)) {
+          throw new ChatProtocolError("invalid_content", "power_state peer is no longer in the room");
+        }
+      }
+    } else if (segment.kind === "target_ref") {
+      assertRoomSession(segment.roomSessionId, context);
+      if (segment.targetKind === "player" && !context.peerPlayerNetIds.has(segment.targetKey)) {
+        throw new ChatProtocolError("invalid_content", "player target is no longer in the room");
+      }
+    }
+  }
 }
 
 export function canonicalizeServerContent(input: unknown): ChatContent {
@@ -442,6 +582,45 @@ export function renderPlainTextFallback(content: ChatContent): string {
     if (segment.kind === "power_state") return "[Power]";
     return segment.targetKind === "player" ? "[Player]" : "[Monster]";
   }).join("");
+}
+
+export function renderLegacyRoomFallback(content: ChatContent, maxUtf16Units = 60): string {
+  const selectedText = new Map<number, string>();
+  let remaining = maxUtf16Units;
+  for (const [index, segment] of content.segments.entries()) {
+    if (segment.kind !== "text" || remaining === 0) continue;
+    let end = Math.min(segment.text.length, remaining);
+    if (end > 0 && isHighSurrogate(segment.text.charCodeAt(end - 1))) end -= 1;
+    if (end > 0) selectedText.set(index, segment.text.slice(0, end));
+    remaining -= end;
+  }
+
+  const selectedEntities = new Map<number, string>();
+  for (const [index, segment] of content.segments.entries()) {
+    if (segment.kind === "text") continue;
+    const token = fallbackToken(segment);
+    if (token.length <= remaining) {
+      selectedEntities.set(index, token);
+      remaining -= token.length;
+    }
+  }
+  return content.segments.map((_segment, index) => (
+    selectedText.get(index) ?? selectedEntities.get(index) ?? ""
+  )).join("");
+}
+
+function fallbackToken(segment: Exclude<ChatSegment, TextSegment>): string {
+  if (segment.kind === "emoji") return "[Emoji]";
+  if (segment.kind === "item_ref") {
+    return segment.itemType === "card" ? "[Card]"
+      : segment.itemType === "relic" ? "[Relic]" : "[Potion]";
+  }
+  if (segment.kind === "power_state") return "[Power]";
+  return segment.targetKind === "player" ? "[Player]" : "[Monster]";
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
 }
 
 export function deterministicContentJson(content: ChatContent): string {
@@ -537,6 +716,43 @@ export function projectChatWireEnvelopes(message: CanonicalChatMessage): {
 export function measureChatWireBytes(message: CanonicalChatMessage): number {
   const { ack, chatMessage, snapshotChunk } = projectChatWireEnvelopes(message);
   return Math.max(utf8JsonBytes(ack), utf8JsonBytes(chatMessage), utf8JsonBytes(snapshotChunk));
+}
+
+export function projectRoomChatWireEnvelopes(
+  message: CanonicalRoomChatMessage,
+  clientMessageId = "00000000-0000-0000-0000-000000000000",
+): { ack: unknown; roomMessage: unknown } {
+  return {
+    ack: {
+      type: "room_chat_ack",
+      protocolVersion: 1,
+      clientMessageId,
+      message,
+    },
+    roomMessage: {
+      type: "room_chat_message",
+      protocolVersion: 1,
+      message,
+    },
+  };
+}
+
+export function measureRoomChatWireBytes(
+  message: CanonicalRoomChatMessage,
+  clientMessageId?: string,
+): number {
+  const { ack, roomMessage } = projectRoomChatWireEnvelopes(message, clientMessageId);
+  return Math.max(utf8JsonBytes(ack), utf8JsonBytes(roomMessage));
+}
+
+export function assertRoomChatWireBudget(
+  message: CanonicalRoomChatMessage,
+  clientMessageId: string,
+): void {
+  const bytes = measureRoomChatWireBytes(message, clientMessageId);
+  if (bytes > 8192) {
+    throw new ChatProtocolError("invalid_content", `room wire envelope exceeds budget: ${bytes} > 8192`);
+  }
 }
 
 export function assertWireBudget(value: unknown, maxBytes: number): void {

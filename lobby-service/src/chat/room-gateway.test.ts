@@ -403,6 +403,130 @@ test("room v2 validates protocol room session and chat-enabled context", () => {
   assert.equal(client.frames.at(-1)?.code, "chat_disabled");
 });
 
+test("room combat plumbing validates active context before the phase four feature gate", () => {
+  let reads = 0;
+  const gateway = createGateway({
+    context: (roomId) => {
+      reads += 1;
+      return {
+        roomId,
+        roomSessionId: "session-1",
+        chatEnabled: true,
+        peerPlayerNetIds: new Set(["net:alice", "net:bob"]),
+      };
+    },
+  });
+  const sender = peer("combat-plumbing");
+  gateway.registerPeer(sender.registration);
+  gateway.handleControlEnvelope("combat-plumbing", hello("Alice", "net:alice"));
+  sender.frames.length = 0;
+  reads = 0;
+
+  gateway.handleControlEnvelope("combat-plumbing", roomSend(
+    "30303030-3030-4030-8030-303030303030",
+    {
+      formatVersion: 1,
+      segments: [{
+        kind: "power_state",
+        modelId: "MegaCrit.Strength",
+        amount: 1,
+        roomSessionId: "session-1",
+        ownerPlayerNetId: "net:alice",
+      }],
+    },
+  ));
+  assert.equal(sender.frames.at(-1)?.code, "feature_disabled");
+  assert.equal(reads, 2);
+
+  gateway.handleControlEnvelope("combat-plumbing", roomSend(
+    "31313131-3131-4131-8131-313131313131",
+    {
+      formatVersion: 1,
+      segments: [{
+        kind: "target_ref",
+        targetKind: "player",
+        targetKey: "net:gone",
+        roomSessionId: "session-1",
+      }],
+    },
+  ));
+  assert.equal(sender.frames.at(-1)?.code, "invalid_content");
+});
+
+test("room wire failures precede disabled state and cache without limiter or UUID pollution", () => {
+  const roomId = "R".repeat(128);
+  const roomSessionId = "S".repeat(128);
+  const playerNetId = "P".repeat(128);
+  let chatEnabled = false;
+  let generatedIds = 0;
+  const gateway = createGateway({
+    connectionBurst: 1,
+    randomUuid: () => {
+      generatedIds += 1;
+      return `00000000-0000-4000-8000-${String(generatedIds).padStart(12, "0")}`;
+    },
+    context: () => ({
+      roomId,
+      roomSessionId,
+      chatEnabled,
+      peerPlayerNetIds: new Set([playerNetId]),
+    }),
+  });
+  const sender = peer("wire-transaction", "client", { roomId, roomSessionId });
+  gateway.registerPeer(sender.registration);
+  gateway.handleControlEnvelope("wire-transaction", {
+    ...hello("N".repeat(32), playerNetId),
+    roomId,
+  });
+  sender.frames.length = 0;
+
+  // Task 5 will make this resolver result reachable through normal negotiation.
+  (gateway as unknown as { resolveFeatures: () => ChatFeatureVersions }).resolveFeatures =
+    () => allVersions;
+
+  const boundaryContent = (firstAmount: number) => ({
+    formatVersion: 1,
+    segments: [
+      { kind: "text", text: "T".repeat(38) },
+      ...Array.from({ length: 11 }, (_unused, index) => ({
+        kind: "power_state",
+        modelId: "M".repeat(160),
+        amount: index === 0 ? firstAmount : -32768,
+        roomSessionId,
+        ownerPlayerNetId: playerNetId,
+        applierPlayerNetId: playerNetId,
+      })),
+    ],
+  });
+  const clientMessageId = "32323232-3232-4232-8232-323232323232";
+  const sendBoundary = (content: unknown) => gateway.handleControlEnvelope(
+    "wire-transaction",
+    roomSend(clientMessageId, content, { roomId, roomSessionId }),
+  );
+
+  sendBoundary(boundaryContent(-32768));
+  const firstError = sender.frames.at(-1);
+  assert.equal(firstError?.code, "invalid_content");
+  assert.equal(generatedIds, 0);
+
+  sendBoundary(boundaryContent(-32768));
+  assert.deepEqual(sender.frames.at(-1), firstError);
+  assert.equal(generatedIds, 0);
+
+  sendBoundary(boundaryContent(32767));
+  assert.equal(sender.frames.at(-1)?.code, "duplicate_message");
+  assert.equal(generatedIds, 0);
+
+  chatEnabled = true;
+  gateway.handleControlEnvelope("wire-transaction", roomSend(
+    "33333333-3333-4333-8333-333333333333",
+    textContent("limiter remains available"),
+    { roomId, roomSessionId },
+  ));
+  assert.equal(sender.frames.some((frame) => frame.type === "room_chat_ack"), true);
+  assert.equal(generatedIds, 1);
+});
+
 test("room_chat_ready rejects a deleted or replaced Phase 1 generation", () => {
   for (const [label, context] of [
     ["deleted", undefined],

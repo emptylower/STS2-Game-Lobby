@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertWireBudget,
+  assertRoomContentContext,
+  assertRoomChatWireBudget,
+  canonicalizeRoomContent,
   canonicalizeChatContent,
   canonicalizeServerContent,
   type CanonicalChatMessage,
@@ -10,8 +13,10 @@ import {
   EMOJI_SET_1,
   type EnabledRichFeatures,
   measureChatWireBytes,
+  measureRoomChatWireBytes,
   projectChatWireEnvelopes,
   renderPlainTextFallback,
+  renderLegacyRoomFallback,
   utf8JsonBytes,
 } from "./protocol.js";
 
@@ -31,6 +36,12 @@ const allRichFeatures: EnabledRichFeatures = {
   emojiSetVersion: 1,
   itemRefVersion: 1,
   combatRefVersion: 0,
+};
+const allRoomFeatures: EnabledRichFeatures = { ...allRichFeatures, combatRefVersion: 1 };
+const roomContext = {
+  envelopeRoomSessionId: "session-1",
+  activeRoomSessionId: "session-1",
+  peerPlayerNetIds: new Set(["net:owner", "net:applier", "net:target"]),
 };
 
 function textContent(text: string): ChatContent {
@@ -439,6 +450,136 @@ test("keeps Phase 1 combat kinds feature-disabled while strict rich server schem
       hasCode("feature_disabled"),
     );
   }
+});
+
+test("canonicalizes strict room combat references and preserves deterministic fields", () => {
+  const canonical = canonicalizeRoomContent({
+    formatVersion: 1,
+    segments: [
+      {
+        kind: "power_state",
+        modelId: "MegaCrit.Strength",
+        amount: -32768,
+        roomSessionId: "session-1",
+        ownerPlayerNetId: "net:owner",
+        applierPlayerNetId: "net:applier",
+      },
+      { kind: "target_ref", targetKind: "player", targetKey: "net:target", roomSessionId: "session-1" },
+      { kind: "target_ref", targetKind: "monster", targetKey: "monster-1", roomSessionId: "session-1" },
+    ],
+  }, allRoomFeatures, roomContext);
+
+  assert.equal(renderPlainTextFallback(canonical), "[Power][Player][Monster]");
+  assert.equal(
+    deterministicContentJson(canonical),
+    '{"formatVersion":1,"segments":[{"kind":"power_state","modelId":"MegaCrit.Strength","amount":-32768,"roomSessionId":"session-1","ownerPlayerNetId":"net:owner","applierPlayerNetId":"net:applier"},{"kind":"target_ref","targetKind":"player","targetKey":"net:target","roomSessionId":"session-1"},{"kind":"target_ref","targetKind":"monster","targetKey":"monster-1","roomSessionId":"session-1"}]}',
+  );
+  assert.doesNotThrow(() => assertRoomContentContext(canonical, roomContext));
+});
+
+test("rejects invalid room combat schema, authority and feature gates", () => {
+  const power = {
+    kind: "power_state", modelId: "MegaCrit.Strength", amount: 1, roomSessionId: "session-1",
+  };
+  const target = {
+    kind: "target_ref", targetKind: "player", targetKey: "net:target", roomSessionId: "session-1",
+  };
+  for (const segment of [
+    { ...power, amount: -32769 },
+    { ...power, amount: 32768 },
+    { ...power, amount: 1.5 },
+    { ...power, modelId: "bad/model" },
+    { ...power, roomSessionId: "session-2" },
+    { ...power, ownerPlayerNetId: "net:gone" },
+    { ...power, applierPlayerNetId: "net:gone" },
+    { ...power, displayName: "leak" },
+    { ...target, targetKey: "net:gone" },
+    { ...target, targetKind: "other" },
+    { ...target, targetKey: "bad\nkey" },
+    { ...target, label: "leak" },
+  ]) {
+    assert.throws(
+      () => canonicalizeRoomContent({ formatVersion: 1, segments: [segment] }, allRoomFeatures, roomContext),
+      hasCode("invalid_content"),
+    );
+  }
+  for (const segment of [power, target]) {
+    assert.throws(
+      () => canonicalizeRoomContent(
+        { formatVersion: 1, segments: [segment] },
+        { ...allRoomFeatures, combatRefVersion: 0 },
+        roomContext,
+      ),
+      hasCode("feature_disabled"),
+    );
+    assert.throws(
+      () => canonicalizeChatContent({ formatVersion: 1, segments: [segment] }, allRoomFeatures),
+      hasCode("invalid_content"),
+    );
+  }
+  assert.throws(
+    () => canonicalizeRoomContent(
+      { formatVersion: 1, segments: [power] },
+      allRoomFeatures,
+      { ...roomContext, activeRoomSessionId: "session-2" },
+    ),
+    hasCode("invalid_content"),
+  );
+  for (const amountLiteral of ["1.0", "1e0", "32767.0"]) {
+    assert.doesNotThrow(() => canonicalizeRoomContent(
+      JSON.parse(`{"formatVersion":1,"segments":[{"kind":"power_state","modelId":"Power","amount":${amountLiteral},"roomSessionId":"session-1"}]}`),
+      allRoomFeatures,
+      roomContext,
+    ));
+  }
+  for (const amountLiteral of ["1.5", "32768.0", "null", '"1"']) {
+    assert.throws(
+      () => canonicalizeRoomContent(
+        JSON.parse(`{"formatVersion":1,"segments":[{"kind":"power_state","modelId":"Power","amount":${amountLiteral},"roomSessionId":"session-1"}]}`),
+        allRoomFeatures,
+        roomContext,
+      ),
+      hasCode("invalid_content"),
+    );
+  }
+  assert.throws(
+    () => canonicalizeRoomContent(
+      { formatVersion: 1, segments: [{ ...power, ownerPlayerNetId: "NET:OWNER" }] },
+      allRoomFeatures,
+      roomContext,
+    ),
+    hasCode("invalid_content"),
+  );
+});
+
+test("revalidates combat membership against the commit context", () => {
+  const content = canonicalizeRoomContent({
+    formatVersion: 1,
+    segments: [
+      {
+        kind: "power_state", modelId: "MegaCrit.Strength", amount: 1,
+        roomSessionId: "session-1", ownerPlayerNetId: "net:owner",
+      },
+      { kind: "target_ref", targetKind: "player", targetKey: "net:target", roomSessionId: "session-1" },
+    ],
+  }, allRoomFeatures, roomContext);
+  assert.throws(
+    () => assertRoomContentContext(content, {
+      envelopeRoomSessionId: "session-1",
+      activeRoomSessionId: "session-1",
+      peerPlayerNetIds: new Set(["net:target"]),
+    }),
+    hasCode("invalid_content"),
+  );
+  assert.throws(
+    () => assertRoomContentContext(content, {
+      envelopeRoomSessionId: "session-1",
+      activeRoomSessionId: "session-2",
+      peerPlayerNetIds: roomContext.peerPlayerNetIds,
+    }),
+    hasCode("invalid_content"),
+  );
+  assert.doesNotThrow(() => assertRoomContentContext(content, roomContext));
 });
 
 test("rejects custom prototypes and inherited required fields", () => {
@@ -860,6 +1001,111 @@ test("reserved combat models serialize deterministically with generic fallback",
   assert.equal(
     deterministicContentJson(content),
     '{"formatVersion":1,"segments":[{"kind":"power_state","modelId":"Secret.ModStrength","amount":-2,"roomSessionId":"session-1","ownerPlayerNetId":"net:owner","applierPlayerNetId":"net:applier"},{"kind":"target_ref","targetKind":"player","targetKey":"net:target","roomSessionId":"session-1"},{"kind":"target_ref","targetKind":"monster","targetKey":"monster-1","roomSessionId":"session-1"}]}',
+  );
+});
+
+test("legacy room fallback spends text before whole generic entity tokens", () => {
+  const card = { kind: "item_ref", itemType: "card", modelId: "Secret.Card" } as const;
+  const monster = {
+    kind: "target_ref", targetKind: "monster", targetKey: "secret", roomSessionId: "session-1",
+  } as const;
+  assert.equal(renderLegacyRoomFallback({
+    formatVersion: 1,
+    segments: [{ kind: "emoji", emojiId: "heart" }, { kind: "text", text: "x".repeat(53) }],
+  }), `[Emoji]${"x".repeat(53)}`);
+  assert.equal(renderLegacyRoomFallback({
+    formatVersion: 1,
+    segments: [monster, { kind: "text", text: "x".repeat(53) }],
+  }), "x".repeat(53));
+  assert.equal(renderLegacyRoomFallback({
+    formatVersion: 1,
+    segments: [monster, { kind: "text", text: "x".repeat(54) }, card],
+  }), `${"x".repeat(54)}[Card]`);
+  assert.equal(renderLegacyRoomFallback(textContent("x".repeat(60))), "x".repeat(60));
+  assert.equal(renderLegacyRoomFallback(textContent("x".repeat(61))), "x".repeat(60));
+  assert.equal(renderLegacyRoomFallback({
+    formatVersion: 1,
+    segments: [
+      { kind: "text", text: "x".repeat(59) },
+      { kind: "text", text: "😀" },
+      { kind: "text", text: "z" },
+    ],
+  }), `${"x".repeat(59)}z`);
+  assert.equal(renderLegacyRoomFallback({
+    formatVersion: 1,
+    segments: [
+      { kind: "emoji", emojiId: "heart" }, card,
+      { kind: "item_ref", itemType: "relic", modelId: "Secret.Relic" },
+      { kind: "item_ref", itemType: "potion", modelId: "Secret.Potion" },
+      { kind: "power_state", modelId: "Secret.Power", amount: 1, roomSessionId: "session-1" },
+      { kind: "target_ref", targetKind: "player", targetKey: "net:target", roomSessionId: "session-1" },
+      monster,
+    ],
+  }), "[Emoji][Card][Relic][Potion][Power][Player][Monster]");
+});
+
+test("room ACK and message projection uses 128-byte sender IDs", () => {
+  const content = canonicalizeRoomContent({
+    formatVersion: 1,
+    segments: [{ kind: "power_state", modelId: "MegaCrit.Strength", amount: 1, roomSessionId: "session-1" }],
+  }, allRoomFeatures, roomContext);
+  const bytes = measureRoomChatWireBytes({
+    roomId: "room-1",
+    roomSessionId: "session-1",
+    messageId: "00000000-0000-0000-0000-000000000000",
+    senderId: "S".repeat(128),
+    senderName: "Ironclad",
+    content,
+    plainTextFallback: "[Power]",
+    sentAt: "2026-07-12T12:00:00.123Z",
+  }, "00000000-0000-0000-0000-000000000000");
+  assert.equal(bytes, 577);
+
+  const sessionId = "S".repeat(128);
+  const playerNetId = "P".repeat(128);
+  const boundaryContext = {
+    envelopeRoomSessionId: sessionId,
+    activeRoomSessionId: sessionId,
+    peerPlayerNetIds: new Set([playerNetId]),
+  };
+  const boundaryContent = (firstAmount: number) => canonicalizeRoomContent({
+    formatVersion: 1,
+    segments: [
+      { kind: "text", text: "T".repeat(38) },
+      ...Array.from({ length: 11 }, (_unused, index) => ({
+        kind: "power_state",
+        modelId: "M".repeat(160),
+        amount: index === 0 ? firstAmount : -32768,
+        roomSessionId: sessionId,
+        ownerPlayerNetId: playerNetId,
+        applierPlayerNetId: playerNetId,
+      })),
+    ],
+  }, allRoomFeatures, boundaryContext);
+  const roomMessage = (firstAmount: number) => {
+    const projectedContent = boundaryContent(firstAmount);
+    return {
+      roomId: "R".repeat(128),
+      roomSessionId: sessionId,
+      messageId: "00000000-0000-0000-0000-000000000000",
+      senderId: playerNetId,
+      senderName: "N".repeat(32),
+      content: projectedContent,
+      plainTextFallback: renderPlainTextFallback(projectedContent),
+      sentAt: "2026-07-12T12:00:00.123Z",
+    };
+  };
+  const exact8192 = roomMessage(32767);
+  const exact8193 = roomMessage(-32768);
+  assert.equal(exact8192.content.segments.length, 12);
+  assert.equal(measureRoomChatWireBytes(exact8192), 8192);
+  assert.equal(measureRoomChatWireBytes(exact8193), 8193);
+  assert.doesNotThrow(() => assertRoomChatWireBudget(
+    exact8192, "00000000-0000-0000-0000-000000000000",
+  ));
+  assert.throws(
+    () => assertRoomChatWireBudget(exact8193, "00000000-0000-0000-0000-000000000000"),
+    hasCode("invalid_content"),
   );
 });
 

@@ -1,8 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  canonicalizeChatContent,
+  assertRoomChatWireBudget,
+  assertRoomContentContext,
+  canonicalizeRoomContent,
   ChatProtocolError,
   deterministicContentJson,
+  renderLegacyRoomFallback,
   renderPlainTextFallback,
   type CanonicalChatMessage,
   type ChatContent,
@@ -99,7 +102,6 @@ interface RoomChatV2Envelope {
 const CLIENT_MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_DEDUPE_ENTRIES = 256;
 const DEDUPE_TTL_MS = 10 * 60_000;
-const MAX_LEGACY_UTF16_UNITS = 60;
 const DEFAULT_MAX_PEERS_TOTAL = 500;
 const DEFAULT_MAX_PEERS_PER_ROOM = 32;
 
@@ -425,11 +427,15 @@ export class RoomChatGateway {
     let canonicalJson: string;
     try {
       const senderFeatures = this.resolveFeatures(peer, peer, true);
-      content = canonicalizeChatContent(envelope.content, {
+      content = canonicalizeRoomContent(envelope.content, {
         richContentVersion: senderFeatures.richContentVersion,
         emojiSetVersion: senderFeatures.emojiSetVersion,
         itemRefVersion: senderFeatures.itemRefVersion,
-        combatRefVersion: 0,
+        combatRefVersion: senderFeatures.combatRefVersion,
+      }, {
+        envelopeRoomSessionId: envelope.roomSessionId,
+        activeRoomSessionId: receiveContext.roomSessionId,
+        peerPlayerNetIds: receiveContext.peerPlayerNetIds,
       });
       canonicalJson = deterministicContentJson(content);
     } catch (error) {
@@ -452,6 +458,40 @@ export class RoomChatGateway {
     const commitContext = this.activeContext(peer, envelope.roomSessionId);
     if (!commitContext) {
       this.sendError(peer, "protocol_mismatch", envelope.clientMessageId);
+      return;
+    }
+    try {
+      assertRoomContentContext(content, {
+        envelopeRoomSessionId: envelope.roomSessionId,
+        activeRoomSessionId: commitContext.roomSessionId,
+        peerPlayerNetIds: commitContext.peerPlayerNetIds,
+      });
+    } catch {
+      this.sendError(peer, "invalid_content", envelope.clientMessageId);
+      return;
+    }
+
+    const projectedMessage: RoomChatMessage = {
+      roomId: peer.roomId,
+      roomSessionId: peer.roomSessionId,
+      messageId: "00000000-0000-0000-0000-000000000000",
+      senderId: peer.identity.playerNetId,
+      senderName: peer.identity.playerName,
+      content,
+      plainTextFallback: renderPlainTextFallback(content),
+      sentAt: "2026-07-12T12:00:00.123Z",
+    };
+    try {
+      assertRoomChatWireBudget(projectedMessage, envelope.clientMessageId);
+    } catch {
+      if (!this.replayOrRejectConflict(peer, envelope.clientMessageId, canonicalJson)) {
+        this.cacheAndSendError(
+          peer,
+          envelope.clientMessageId,
+          canonicalJson,
+          "invalid_content",
+        );
+      }
       return;
     }
 
@@ -483,13 +523,8 @@ export class RoomChatGateway {
 
     const now = this.now();
     const message: RoomChatMessage = {
-      roomId: peer.roomId,
-      roomSessionId: peer.roomSessionId,
+      ...projectedMessage,
       messageId: this.randomUuid(),
-      senderId: peer.identity.playerNetId,
-      senderName: peer.identity.playerName,
-      content,
-      plainTextFallback: renderPlainTextFallback(content),
       sentAt: new Date(now).toISOString(),
     };
     const ack = {
@@ -525,7 +560,7 @@ export class RoomChatGateway {
           playerName: peer.identity.playerName,
           playerNetId: peer.identity.playerNetId,
           messageId: message.messageId,
-          messageText: renderLegacyFallback(content),
+          messageText: renderLegacyRoomFallback(content),
           sentAtUnixMs: now,
         });
       }
@@ -790,54 +825,6 @@ function isDisallowedNameChar(code: number): boolean {
     0x00ad, 0x061c, 0x180e, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f,
     0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xfeff, 0xfff9, 0xfffa, 0xfffb,
   ].includes(code);
-}
-
-function renderLegacyFallback(content: ChatContent): string {
-  const selectedText = new Map<number, string>();
-  let remaining = MAX_LEGACY_UTF16_UNITS;
-  for (const [index, segment] of content.segments.entries()) {
-    if (segment.kind !== "text") continue;
-    if (segment.text.length <= remaining) {
-      selectedText.set(index, segment.text);
-      remaining -= segment.text.length;
-      continue;
-    }
-    let end = remaining;
-    if (end > 0 && isHighSurrogate(segment.text.charCodeAt(end - 1))) {
-      end -= 1;
-    }
-    if (end > 0) selectedText.set(index, segment.text.slice(0, end));
-    remaining -= end;
-    if (remaining === 0) break;
-  }
-
-  const selectedEntities = new Map<number, string>();
-  for (const [index, segment] of content.segments.entries()) {
-    if (segment.kind === "text") continue;
-    const token = segment.kind === "emoji"
-      ? "[Emoji]"
-      : segment.kind === "power_state"
-        ? "[Power]"
-        : segment.kind === "target_ref"
-          ? segment.targetKind === "player" ? "[Player]" : "[Monster]"
-          : segment.itemType === "card"
-            ? "[Card]"
-            : segment.itemType === "relic"
-              ? "[Relic]"
-              : "[Potion]";
-    if (token.length <= remaining) {
-      selectedEntities.set(index, token);
-      remaining -= token.length;
-    }
-  }
-
-  return content.segments.map((_segment, index) => (
-    selectedText.get(index) ?? selectedEntities.get(index) ?? ""
-  )).join("");
-}
-
-function isHighSurrogate(code: number): boolean {
-  return code >= 0xd800 && code <= 0xdbff;
 }
 
 function sameFeatures(left: ChatFeatureVersions, right: ChatFeatureVersions): boolean {
