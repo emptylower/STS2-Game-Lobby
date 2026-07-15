@@ -246,7 +246,7 @@ internal sealed class LanConnectGodotItemLinkCapturePorts : ILanConnectItemLinkC
     private LanConnectRoomChatOverlay? ResolveRoomOverlay() =>
         _runtime.GetTree().Root.GetNodeOrNull<LanConnectRoomChatOverlay>(LanConnectConstants.RoomChatOverlayName);
 
-    private static bool HasVisibleItemPreview(SceneTree tree)
+    internal static bool HasVisibleItemPreview(SceneTree tree)
     {
         foreach (Node node in tree.GetNodesInGroup(ItemPreviewGroupName))
         {
