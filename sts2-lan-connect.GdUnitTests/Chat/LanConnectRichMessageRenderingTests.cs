@@ -153,6 +153,42 @@ public sealed class LanConnectRichMessageRenderingTests
         AssertThat(port.PotionLookups).IsEqual(3);
     }
 
+    [TestCase]
+    public async Task Twelve_entities_cannot_collapse_multiline_text_run_or_escape_1280x720()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.AppendConfirmedContentForTests(
+            "bounds-message",
+            new string('N', 32),
+            TwelveEntityContent(),
+            sequence: 1,
+            isLocal: false);
+        Control root = AutoFree(new Control { Size = new Vector2(1280, 720) })!;
+        LanConnectBasicChatPanel panel = new(
+            LanConnectChatUiComposition.Icons,
+            ResolveItem)
+        {
+            Position = new Vector2(8, 8),
+            Size = new Vector2(1264, 704)
+        };
+        root.AddChild(panel);
+        using ISceneRunner runner = ISceneRunner.Load(root, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        Control text = FindNode<Control>(panel, "ChatMessageRun0");
+        Rect2 rect = text.GetGlobalRect();
+        AssertThat(rect.Size.X).IsGreaterEqual(96f);
+        AssertThat(rect.Size.Y).IsGreater(0f);
+        AssertThat(rect.Position.X).IsGreaterEqual(0f);
+        AssertThat(rect.Position.Y).IsGreaterEqual(0f);
+        AssertThat(rect.End.X).IsLessEqual(1280f);
+        AssertThat(rect.End.Y).IsLessEqual(720f);
+        AssertThat(Enumerable.Range(1, 12)
+            .All(index => panel.FindChild($"ChatMessageRun{index}", true, false) != null)).IsTrue();
+    }
+
     private static LanConnectChatContent Content() => new(1,
     [
         new LanConnectTextSegment("before "),
@@ -160,6 +196,23 @@ public sealed class LanConnectRichMessageRenderingTests
         new LanConnectTextSegment(" middle "),
         new LanConnectItemRefSegment("relic", "PrivateMod.SecretRelic"),
         new LanConnectEmojiSegment("heart"),
+        new LanConnectItemRefSegment("potion", "MegaCrit.FirePotion")
+    ]);
+
+    private static LanConnectChatContent TwelveEntityContent() => new(1,
+    [
+        new LanConnectTextSegment("mixed entities\nwrapped line "),
+        new LanConnectEmojiSegment("smile"),
+        new LanConnectItemRefSegment("card", "MegaCrit.Strike", 1),
+        new LanConnectItemRefSegment("relic", "PrivateMod.SecretRelic"),
+        new LanConnectItemRefSegment("potion", "MegaCrit.FirePotion"),
+        new LanConnectEmojiSegment("heart"),
+        new LanConnectItemRefSegment("card", "MegaCrit.Strike", 2),
+        new LanConnectItemRefSegment("relic", "MegaCrit.Anchor"),
+        new LanConnectItemRefSegment("potion", "MegaCrit.FirePotion"),
+        new LanConnectEmojiSegment("laugh"),
+        new LanConnectItemRefSegment("card", "MegaCrit.Strike", 0),
+        new LanConnectItemRefSegment("relic", "MegaCrit.Anchor"),
         new LanConnectItemRefSegment("potion", "MegaCrit.FirePotion")
     ]);
 

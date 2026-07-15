@@ -906,6 +906,15 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             case LanConnectTextSegment text:
                 Label label = CreateLabel(text.Text, 14, TextStrongColor);
                 label.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+                int longestLine = text.Text
+                    .Split('\n')
+                    .Select(line => line.EnumerateRunes().Count())
+                    .DefaultIfEmpty(0)
+                    .Max();
+                int visibleLines = Math.Clamp(text.Text.Count(character => character == '\n') + 1, 1, 3);
+                label.CustomMinimumSize = new Vector2(
+                    Math.Clamp(44f + longestLine * 7f, 96f, 280f),
+                    Math.Max(22f, visibleLines * 20f));
                 label.MouseFilter = MouseFilterEnum.Ignore;
                 return label;
             case LanConnectEmojiSegment emoji:
