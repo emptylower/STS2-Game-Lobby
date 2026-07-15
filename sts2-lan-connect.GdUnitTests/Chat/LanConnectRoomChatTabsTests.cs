@@ -225,6 +225,17 @@ internal sealed class RoomChatFixture : IDisposable
 
     internal static async Task<RoomChatFixture> OpenWithServerSupport()
     {
+        RoomChatFixture fixture = await CreateWithServerSupport();
+        await fixture.Overlay.OpenForTests();
+        await fixture.Runner.AwaitIdleFrame();
+        return fixture;
+    }
+
+    internal static Task<RoomChatFixture> CreateNeverOpenedWithServerSupport() =>
+        CreateWithServerSupport();
+
+    private static async Task<RoomChatFixture> CreateWithServerSupport()
+    {
         LanConnectChatChannelState server = new(LanConnectChatChannel.Server);
         server.Apply(new ServerChatInboundEnvelope
         {
@@ -253,7 +264,6 @@ internal sealed class RoomChatFixture : IDisposable
             state,
             (_, _) => Task.CompletedTask,
             (_, _) => Task.CompletedTask);
-        await overlay.OpenForTests();
         await runner.AwaitIdleFrame();
         return new RoomChatFixture(overlay, state, runner);
     }

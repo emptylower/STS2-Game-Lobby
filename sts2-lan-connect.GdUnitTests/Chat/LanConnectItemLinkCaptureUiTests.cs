@@ -168,12 +168,12 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
     [TestCase("post_insert_throw")]
     public async Task Production_panel_failure_keeps_runs_and_selection_unchanged(string scenario)
     {
-        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        using RoomChatFixture fixture = await RoomChatFixture.CreateNeverOpenedWithServerSupport();
         LanConnectChatChannelState bound = fixture.State.Room;
         bound.RichDraft.ReplaceAllWithText("ab");
         bound.RichDraft.SetCaret(new LanConnectDraftPosition(0, 1));
+        fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Server, sequence: 20);
         await fixture.Overlay.RefreshForTests();
-        await fixture.Overlay.CloseForTests();
         LanConnectBasicChatPanel panel = fixture.Overlay.ChatPanelForTests;
         LanConnectChatChannel selectedBefore = fixture.State.SelectedChannel;
         Button previousFocus = new() { Name = "OutsideItemCaptureFocus" };
@@ -201,6 +201,12 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
             ? EnabledState(LanConnectChatChannel.Server)
             : bound;
         LanConnectRichDraftSnapshot before = bound.RichDraft.CaptureSnapshot();
+        int roomUnreadBefore = fixture.State.Room.UnreadCount;
+        int serverUnreadBefore = fixture.State.Server.UnreadCount;
+        long? roomFirstUnreadBefore = fixture.State.Room.FirstUnreadSequence;
+        long? serverFirstUnreadBefore = fixture.State.Server.FirstUnreadSequence;
+        long roomRevisionBefore = fixture.State.Room.Revision;
+        long serverRevisionBefore = fixture.State.Server.Revision;
 
         bool inserted = LanConnectGodotItemLinkCapturePorts.TryInsertAndFocus(
             roomActive: true,
@@ -215,10 +221,19 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         AssertThat(bound.RichDraft.ContentRevision).IsEqual(before.ContentRevision);
         AssertThat(fixture.Overlay.TestState.PanelOpen).IsFalse();
         AssertThat(fixture.State.SelectedChannel).IsEqual(selectedBefore);
+        AssertThat(fixture.State.Room.UnreadCount).IsEqual(roomUnreadBefore);
+        AssertThat(fixture.State.Server.UnreadCount).IsEqual(serverUnreadBefore);
+        AssertThat(fixture.State.Room.FirstUnreadSequence == roomFirstUnreadBefore).IsTrue();
+        AssertThat(fixture.State.Server.FirstUnreadSequence == serverFirstUnreadBefore).IsTrue();
+        AssertThat(fixture.State.Room.Revision == roomRevisionBefore).IsTrue();
+        AssertThat(fixture.State.Server.Revision == serverRevisionBefore).IsTrue();
         AssertThat(ReferenceEquals(
             fixture.Overlay.GetViewport().GuiGetFocusOwner(),
             previousFocus)).IsTrue();
         modal?.QueueFree();
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Overlay.OpenForTests();
+        AssertThat(fixture.State.SelectedChannel).IsEqual(LanConnectChatChannel.Room);
     }
 
     [TestCase]
@@ -253,6 +268,12 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
             LanConnectServerChatPresentation.Ready);
         fixture.ServerState.RichDraft.ReplaceAllWithText("lobby");
         fixture.Overlay.HideForTests();
+        fixture.ServerState.AppendConfirmedForTests(
+            $"hidden-{scenario}",
+            "Remote",
+            "unread",
+            sequence: 90,
+            isLocal: false);
         LanConnectBasicChatPanel panel = fixture.Overlay.ServerChatPanelForTests;
         Button previousFocus = new() { Name = "OutsideLobbyItemCaptureFocus" };
         fixture.Overlay.GetViewport().AddChild(previousFocus);
@@ -274,6 +295,9 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         bool dialogBefore = fixture.Overlay.AnyDialogVisibleForTests;
         bool pendingInviteBefore = fixture.Overlay.HasPendingInviteForTests;
         LanConnectRichDraftSnapshot before = fixture.ServerState.RichDraft.CaptureSnapshot();
+        int unreadBefore = fixture.ServerState.UnreadCount;
+        long? firstUnreadBefore = fixture.ServerState.FirstUnreadSequence;
+        long channelRevisionBefore = fixture.ServerState.Revision;
 
         bool inserted = LanConnectGodotItemLinkCapturePorts.TryInsertAndFocus(
             roomActive: false,
@@ -288,6 +312,9 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         AssertThat(fixture.ServerState.RichDraft.Runs).ContainsExactly(before.Runs.ToArray());
         AssertThat(fixture.ServerState.RichDraft.Selection).IsEqual(before.Selection);
         AssertThat(fixture.ServerState.RichDraft.ContentRevision).IsEqual(before.ContentRevision);
+        AssertThat(fixture.ServerState.UnreadCount).IsEqual(unreadBefore);
+        AssertThat(fixture.ServerState.FirstUnreadSequence == firstUnreadBefore).IsTrue();
+        AssertThat(fixture.ServerState.Revision == channelRevisionBefore).IsTrue();
         AssertThat(fixture.Overlay.Visible).IsFalse();
         AssertThat(fixture.Overlay.ServerPickerOpenForTests).IsEqual(pickerBefore);
         AssertThat(fixture.Overlay.AnyDialogVisibleForTests).IsEqual(dialogBefore);
@@ -295,6 +322,46 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         AssertThat(ReferenceEquals(
             fixture.Overlay.GetViewport().GuiGetFocusOwner(),
             previousFocus)).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Hidden_lobby_success_ignores_clipboard_and_missing_endpoint_and_keeps_draft_focus()
+    {
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready);
+        fixture.Overlay.HideForTests();
+        fixture.Overlay.SetEndpointAvailableForTests(false);
+        string previousClipboard = DisplayServer.ClipboardGet();
+        DisplayServer.ClipboardSet(LanConnectInviteCode.Encode(
+            "https://invite.example",
+            "capture-room",
+            password: null));
+        try
+        {
+            bool inserted = LanConnectGodotItemLinkCapturePorts.TryInsertAndFocus(
+                roomActive: false,
+                fixture.ServerState,
+                new LanConnectItemRun("card", "MegaCrit.Strike", 1),
+                roomOverlay: null,
+                fixture.Overlay);
+
+            AssertThat(inserted).IsTrue();
+            AssertThat(fixture.Overlay.Visible).IsTrue();
+            AssertThat(fixture.Overlay.ServerChatPanelForTests.DraftHasFocus).IsTrue();
+            for (int frame = 0; frame < 4; frame++)
+            {
+                await fixture.Runner.AwaitIdleFrame();
+            }
+            AssertThat(fixture.Overlay.ServerChatPanelForTests.DraftHasFocus).IsTrue();
+            AssertThat(fixture.Overlay.AnyDialogVisibleForTests).IsFalse();
+            AssertThat(fixture.Overlay.HasPendingInviteForTests).IsFalse();
+            AssertThat(fixture.Overlay.ServerPickerOpenForTests).IsFalse();
+        }
+        finally
+        {
+            DisplayServer.ClipboardSet(previousClipboard);
+        }
     }
 
     [TestCase]

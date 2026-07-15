@@ -231,6 +231,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Action<Func<string, Task>, Action, Action>? _testServerPickerLauncher;
     private Func<CancellationToken, Task<bool>>? _testServerRefresh;
     private string? _testDefaultServer;
+    private bool? _testHasAvailableLobbyEndpoint;
     private string? _testAppliedServerOverride;
     private bool _testAppliedServerOverrideInitialized;
     private string? _failedServerOverride;
@@ -275,40 +276,64 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         bool wasVisible = Visible;
         Control? previousFocus = GetViewport().GuiGetFocusOwner();
         bool openedForInsert = !Visible;
+        bool committed = false;
+        using LanConnectBasicChatPanel.VisibilityPublishScope visibilityScope =
+            _serverChatPanel.SuppressVisibilityPublishing();
         try
         {
             if (openedForInsert)
             {
-                ShowOverlayCore(startConnectivity: false);
+                ShowForItemInsertProvisional();
             }
-            RefreshServerChatPresentation(force: true);
-            if (_serverChatPanel.TryInsertItemAndFocus(expectedState, run))
+            RefreshServerChatPresentation(force: true, publishStateVisibility: false);
+            committed = _serverChatPanel.TryInsertItemAndFocus(expectedState, run);
+            if (!committed)
+            {
+                return false;
+            }
+            visibilityScope.Complete();
+            try
             {
                 if (openedForInsert)
                 {
-                    try
-                    {
-                        CheckClipboardForInviteCode();
-                        TaskHelper.RunSafely(CheckConnectivityAndRefreshAsync());
-                    }
-                    catch
-                    {
-                        // The item is committed; background refresh startup cannot reverse it.
-                    }
+                    ShowOverlayCore(startConnectivity: false, publishChatVisibility: true);
+                    _timeUntilAutoRefresh = Math.Max(
+                        _timeUntilAutoRefresh,
+                        LanConnectConstants.LobbyRefreshIntervalSeconds);
                 }
-                return true;
+                else
+                {
+                    RefreshServerChatPresentation(force: true, publishStateVisibility: true);
+                }
             }
+            catch
+            {
+                // The draft is committed; formal visibility publication is best-effort.
+            }
+            return true;
         }
         catch
         {
-            // Restore the prior UI state below and leave the click unconsumed.
+            return committed;
         }
-
-        RestoreItemInsertUi(wasVisible, previousFocus);
-        return false;
+        finally
+        {
+            if (!committed)
+            {
+                RestoreItemInsertUi(wasVisible, previousFocus);
+            }
+        }
     }
 
-    internal void HideForTests() => HideOverlayCore(persistSettings: false);
+    internal void HideForTests() => HideOverlayCore(
+        persistSettings: false,
+        publishChatVisibility: true);
+
+    private void ShowForItemInsertProvisional()
+    {
+        Visible = true;
+        RefreshServerChatPresentation(force: true, publishStateVisibility: false);
+    }
 
     private void RestoreItemInsertUi(bool wasVisible, Control? previousFocus)
     {
@@ -316,7 +341,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             if (!wasVisible && Visible)
             {
-                HideOverlayCore(persistSettings: false);
+                Visible = false;
             }
         }
         catch
@@ -477,6 +502,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     internal bool HasPendingInviteForTests => _pendingInvitePayload != null;
 
+    internal void SetEndpointAvailableForTests(bool? available) =>
+        _testHasAvailableLobbyEndpoint = available;
+
     internal bool CreateRoomButtonEnabledForTests => _createButton?.Disabled == false;
 
     internal bool JoinRoomButtonEnabledForTests => _joinButton?.Disabled == false;
@@ -518,15 +546,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     public void ShowOverlay()
     {
-        ShowOverlayCore(startConnectivity: true);
+        ShowOverlayCore(startConnectivity: true, publishChatVisibility: true);
     }
 
-    private void ShowOverlayCore(bool startConnectivity)
+    private void ShowOverlayCore(bool startConnectivity, bool publishChatVisibility)
     {
         GD.Print("sts2_lan_connect overlay: show requested");
         SetUnderlyingMenuVisible(false);
         Visible = true;
-        RefreshServerChatPresentation(force: true);
+        RefreshServerChatPresentation(force: true, publishStateVisibility: publishChatVisibility);
         SyncSettingsInputsFromConfig();
         ApplyResponsiveLayout();
         EnsureAnnouncementFallback();
@@ -739,10 +767,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void HideOverlay()
     {
-        HideOverlayCore(persistSettings: true);
+        HideOverlayCore(persistSettings: true, publishChatVisibility: true);
     }
 
-    private void HideOverlayCore(bool persistSettings)
+    private void HideOverlayCore(bool persistSettings, bool publishChatVisibility)
     {
         GD.Print("sts2_lan_connect overlay: hide requested");
         if (persistSettings)
@@ -750,7 +778,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             PersistSettings();
         }
         Visible = false;
-        RefreshServerChatPresentation(force: true);
+        RefreshServerChatPresentation(force: true, publishStateVisibility: publishChatVisibility);
         ResetRoomListTouchTracking();
         SetUnderlyingMenuVisible(true);
 
@@ -1815,7 +1843,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _serverChatPresentationRevision = -1;
     }
 
-    private void RefreshServerChatPresentation(bool force = false)
+    private void RefreshServerChatPresentation(
+        bool force = false,
+        bool publishStateVisibility = true)
     {
         EnsureCurrentLobbyServerChatBinding();
         if (_serverChatPanel?.State is not { } state ||
@@ -1836,7 +1866,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         bool visible = state.Presentation != LanConnectServerChatPresentation.Unsupported;
         _serverChatFrame.Visible = visible;
         _serverChatPanel.Visible = visible;
-        state.SetVisible(visible && IsInsideTree() && IsVisibleInTree());
+        if (publishStateVisibility)
+        {
+            state.SetVisible(visible && IsInsideTree() && IsVisibleInTree());
+        }
         ApplySidebarPanelSizing();
     }
 
@@ -5554,9 +5587,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         SetStatus(message);
     }
 
-    private static bool HasAvailableLobbyEndpoint()
+    private bool HasAvailableLobbyEndpoint()
     {
-        return LanConnectConfig.HasLobbyServerOverrides || LanConnectLobbyEndpointDefaults.HasBundledDefaults();
+        return _testHasAvailableLobbyEndpoint ??
+               (LanConnectConfig.HasLobbyServerOverrides || LanConnectLobbyEndpointDefaults.HasBundledDefaults());
     }
 
     private static List<LobbySavedRunSlot> GetAvailableSavedRunSlots(LobbyRoomSummary room)

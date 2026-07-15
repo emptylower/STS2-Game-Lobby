@@ -86,6 +86,22 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private bool _compactLayout;
     private string _operationStatus = string.Empty;
     private Action? _itemLinkPostInsertForTests;
+    private int _visibilityPublishSuppressionDepth;
+    private bool _publishVisibilityWhenSuppressionEnds;
+
+    internal sealed class VisibilityPublishScope(LanConnectBasicChatPanel owner) : IDisposable
+    {
+        private LanConnectBasicChatPanel? _owner = owner;
+        private bool _completed;
+
+        internal void Complete() => _completed = true;
+
+        public void Dispose()
+        {
+            LanConnectBasicChatPanel? current = Interlocked.Exchange(ref _owner, null);
+            current?.EndVisibilityPublishSuppression(_completed);
+        }
+    }
 
     internal LanConnectBasicChatPanel()
         : this(LanConnectChatUiComposition.Icons)
@@ -230,7 +246,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         if (_state != null && !ReferenceEquals(_state, state))
         {
             CaptureCurrentViewState();
-            _state.SetVisible(false);
+            if (_visibilityPublishSuppressionDepth == 0)
+            {
+                _state.SetVisible(false);
+            }
         }
 
         _bindingGeneration++;
@@ -312,10 +331,18 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         ArgumentNullException.ThrowIfNull(expectedState);
         return IsInsideTree() &&
                ReferenceEquals(_state, expectedState) &&
+               expectedState.Presentation == LanConnectServerChatPresentation.Ready &&
+               expectedState.ChatEnabled &&
                !InteractionBlocked &&
                _draftEditor != null &&
                GodotObject.IsInstanceValid(_draftEditor) &&
                _draftEditor.Editable;
+    }
+
+    internal VisibilityPublishScope SuppressVisibilityPublishing()
+    {
+        _visibilityPublishSuppressionDepth++;
+        return new VisibilityPublishScope(this);
     }
 
     internal void SetItemLinkPostInsertForTests(Action? callback) =>
@@ -543,7 +570,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             LanConnectConfig.GetEffectivePlayerDisplayName(),
             AccessibleDraftLabel);
         _draftEditor.SetCompactLayout(_compactLayout);
-        _state.SetVisible(IsInsideTree() && IsVisibleInTree());
+        PublishStateVisibility();
         Refresh();
     }
 
@@ -1155,9 +1182,33 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private void UpdateStateVisibility()
     {
-        if (_state != null)
+        PublishStateVisibility();
+    }
+
+    private void PublishStateVisibility()
+    {
+        if (_visibilityPublishSuppressionDepth == 0 && _state != null)
         {
             _state.SetVisible(IsInsideTree() && IsVisibleInTree());
+        }
+    }
+
+    private void EndVisibilityPublishSuppression(bool publishCurrentVisibility)
+    {
+        if (_visibilityPublishSuppressionDepth <= 0)
+        {
+            return;
+        }
+        _publishVisibilityWhenSuppressionEnds |= publishCurrentVisibility;
+        _visibilityPublishSuppressionDepth--;
+        if (_visibilityPublishSuppressionDepth == 0)
+        {
+            bool publish = _publishVisibilityWhenSuppressionEnds;
+            _publishVisibilityWhenSuppressionEnds = false;
+            if (publish)
+            {
+                PublishStateVisibility();
+            }
         }
     }
 
