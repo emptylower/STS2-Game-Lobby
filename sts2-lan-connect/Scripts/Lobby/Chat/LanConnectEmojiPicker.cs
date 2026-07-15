@@ -29,6 +29,10 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
     private bool _openIntent;
     private long _bindingGeneration;
     private long _focusIntentGeneration;
+    private bool _explicitHideSettling;
+    private bool _explicitHideCompletionScheduled;
+    private bool _openQueuedAfterExplicitHide;
+    private long _explicitHideGeneration;
 
     internal event Action<string>? Inserted;
 
@@ -94,8 +98,8 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
             }
             else
             {
-                _focusIntentGeneration++;
-                Hide();
+                InvalidateOpenIntent();
+                HideExplicitly();
             }
         }
     }
@@ -104,10 +108,8 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
     {
         bool wasActive = _openIntent || Visible || PickerOwnsFocus();
         _bindingGeneration++;
-        _focusIntentGeneration++;
-        _openIntent = false;
-        _previousFocus = null;
-        Hide();
+        InvalidateOpenIntent();
+        HideExplicitly();
         return wasActive;
     }
 
@@ -115,6 +117,11 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
     {
         if (!_available || _editor == null || _buttons.Count == 0 || !IsInsideTree())
         {
+            return;
+        }
+        if (_explicitHideSettling)
+        {
+            _openQueuedAfterExplicitHide = true;
             return;
         }
         Control? current = GetViewport().GuiGetFocusOwner();
@@ -171,10 +178,8 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
     {
         LanConnectRichDraftEditor? editor = _editor;
         Control? restoreFocus = _previousFocus;
-        _focusIntentGeneration++;
-        _openIntent = false;
-        _previousFocus = null;
-        Hide();
+        InvalidateOpenIntent();
+        HideExplicitly();
         if (!restoreDraftFocus || editor == null ||
             !GodotObject.IsInstanceValid(editor) ||
             editor.IsQueuedForDeletion() || !editor.IsInsideTree())
@@ -201,13 +206,16 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
         Unresizable = true;
         BuildGrid();
         Hide();
+        PopupHide += OnPopupHide;
     }
 
     public override void _ExitTree()
     {
-        _focusIntentGeneration++;
-        _openIntent = false;
-        _previousFocus = null;
+        HideExplicitly();
+        InvalidateOpenIntent();
+        _explicitHideGeneration++;
+        _explicitHideSettling = false;
+        _explicitHideCompletionScheduled = false;
     }
 
     private void BuildGrid()
@@ -386,10 +394,8 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
 
     private void ExitForTab(bool backwards)
     {
-        _focusIntentGeneration++;
-        _openIntent = false;
-        _previousFocus = null;
-        Hide();
+        InvalidateOpenIntent();
+        HideExplicitly();
         if (FocusExitRequested != null)
         {
             FocusExitRequested.Invoke(backwards);
@@ -405,4 +411,58 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
 
     private bool IsPickerControl(Control? control) =>
         control != null && _buttons.Any(button => ReferenceEquals(button, control));
+
+    private void OnPopupHide()
+    {
+        if (_explicitHideSettling)
+        {
+            if (!_explicitHideCompletionScheduled)
+            {
+                _explicitHideCompletionScheduled = true;
+                long generation = _explicitHideGeneration;
+                Callable.From(() => CompleteExplicitHide(generation)).CallDeferred();
+            }
+            return;
+        }
+        if (Visible && _openIntent)
+        {
+            return;
+        }
+        InvalidateOpenIntent();
+    }
+
+    private void HideExplicitly()
+    {
+        if (Visible)
+        {
+            _explicitHideGeneration++;
+            _explicitHideSettling = true;
+            _explicitHideCompletionScheduled = false;
+        }
+        Hide();
+    }
+
+    private void CompleteExplicitHide(long generation)
+    {
+        if (generation != _explicitHideGeneration)
+        {
+            return;
+        }
+        _explicitHideSettling = false;
+        _explicitHideCompletionScheduled = false;
+        if (!_openQueuedAfterExplicitHide)
+        {
+            return;
+        }
+        _openQueuedAfterExplicitHide = false;
+        OpenPicker();
+    }
+
+    private void InvalidateOpenIntent()
+    {
+        _focusIntentGeneration++;
+        _openIntent = false;
+        _previousFocus = null;
+        _openQueuedAfterExplicitHide = false;
+    }
 }

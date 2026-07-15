@@ -315,6 +315,107 @@ public sealed class LanConnectEmojiPickerTests
     }
 
     [TestCase]
+    public async Task Open_remove_readd_stays_hidden_and_can_open_and_focus_again()
+    {
+        using PickerFixture fixture = await PickerFixture.Create();
+        fixture.Picker.OpenPicker();
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Picker.Visible).IsTrue();
+
+        fixture.Root.RemoveChild(fixture.Picker);
+        bool hiddenAfterRemove = !fixture.Picker.Visible;
+        fixture.Root.AddChild(fixture.Picker);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(hiddenAfterRemove).IsTrue();
+        AssertThat(fixture.Picker.Visible).IsFalse();
+
+        fixture.Picker.OpenPicker();
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Picker.Visible).IsTrue();
+        AssertThat(EmojiButtons(fixture.Picker)[0].HasFocus()).IsTrue();
+    }
+
+    [TestCase("rebind")]
+    [TestCase("context")]
+    [TestCase("downgrade")]
+    public async Task Engine_popup_hide_invalidates_intent_without_later_stealing_external_focus(
+        string invalidation)
+    {
+        LanConnectChatChannelState state = EnabledState(emojiVersion: 1);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        Button external = new() { Name = "PopupHideExternalFocus" };
+        panel.AddChild(external);
+        await runner.AwaitIdleFrame();
+        FindNode<Button>(panel, LanConnectEmojiPicker.ToggleButtonName)
+            .EmitSignal(Button.SignalName.Pressed);
+        LanConnectEmojiPicker picker = FindNode<LanConnectEmojiPicker>(
+            panel,
+            LanConnectEmojiPicker.PickerName);
+        AssertThat(picker.Visible).IsTrue();
+
+        picker.Hide();
+        external.GrabFocus();
+        AssertThat(external.HasFocus()).IsTrue();
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+        AssertThat(picker.Visible).IsFalse();
+        AssertThat(external.HasFocus()).IsTrue();
+
+        switch (invalidation)
+        {
+            case "rebind":
+                panel.Bind(
+                    EnabledState(emojiVersion: 1),
+                    _ => Task.CompletedTask,
+                    _ => Task.CompletedTask);
+                break;
+            case "context":
+                state.ClearForContextChange();
+                break;
+            case "downgrade":
+                ApplyFeatures(state, richVersion: 2, emojiVersion: 2);
+                await panel.RefreshForTests();
+                break;
+        }
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(picker.Visible).IsFalse();
+        AssertThat(external.HasFocus()).IsTrue();
+        AssertThat(panel.DraftHasFocus).IsFalse();
+    }
+
+    [TestCase]
+    public async Task Explicit_hide_while_hidden_does_not_mask_the_next_engine_popup_hide()
+    {
+        using PickerFixture fixture = await PickerFixture.Create();
+        Button external = new() { Name = "NextPopupHideExternalFocus" };
+        fixture.Root.AddChild(external);
+        await fixture.Runner.AwaitIdleFrame();
+
+        fixture.Picker.ClosePicker(restoreDraftFocus: false);
+        fixture.Picker.OpenPicker();
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Picker.Visible).IsTrue();
+
+        fixture.Picker.Hide();
+        external.GrabFocus();
+        await fixture.Runner.AwaitIdleFrame();
+        fixture.Picker.Bind(
+            fixture.Editor,
+            LanConnectChatEmojiSet.Version1,
+            _ => PickerFixture.Icon(),
+            key => "label:" + key);
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Picker.Visible).IsFalse();
+        AssertThat(external.HasFocus()).IsTrue();
+        AssertThat(fixture.Editor.HasEditorFocus).IsFalse();
+    }
+
+    [TestCase]
     public async Task Repeated_bind_same_frame_keeps_eighteen_stable_nodes_and_focus()
     {
         using PickerFixture fixture = await PickerFixture.Create();
