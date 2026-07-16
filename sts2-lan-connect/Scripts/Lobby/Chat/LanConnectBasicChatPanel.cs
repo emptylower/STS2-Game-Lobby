@@ -202,6 +202,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     internal LanConnectItemPreview ItemPreviewForTests => _itemPreview ??
         throw new InvalidOperationException("The item preview is not ready.");
 
+    internal LanConnectEmojiPicker EmojiPickerForTests => _emojiPicker ??
+        throw new InvalidOperationException("The emoji picker is not ready.");
+
     internal bool DraftHasFocus =>
         _draftEditor != null &&
         GodotObject.IsInstanceValid(_draftEditor) &&

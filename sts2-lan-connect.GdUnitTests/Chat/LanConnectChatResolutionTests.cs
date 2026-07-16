@@ -81,7 +81,7 @@ public sealed class LanConnectChatResolutionTests
                     }
                 }
                 AssertNoPairwiseOverlap(messageRuns, $"{context} rich message runs");
-                AssertThat(fixture.RichResolvedItemCount).IsGreaterEqual(6);
+                AssertThat(fixture.RichResolvedItemCount).IsGreaterEqual(5);
                 AssertThat(fixture.RichUnknownItemCount).IsGreaterEqual(3);
                 AssertThat(fixture.RichVisibleText.Contains("PrivateMod.", StringComparison.Ordinal)).IsFalse();
 
@@ -324,6 +324,7 @@ internal sealed class ChatUiFixture : IDisposable
     private readonly SubViewport _root;
     private readonly ISceneRunner _runner;
     private readonly Control _richSurface;
+    private float _uiScale;
 
     private ChatUiFixture(
         SubViewport root,
@@ -335,7 +336,8 @@ internal sealed class ChatUiFixture : IDisposable
         Control richSurface,
         LanConnectBasicChatPanel richPanel,
         LanConnectChatChannelState richState,
-        LanConnectItemPreview matrixPreview)
+        LanConnectItemPreview matrixPreview,
+        float uiScale)
     {
         _root = root;
         _runner = runner;
@@ -347,6 +349,7 @@ internal sealed class ChatUiFixture : IDisposable
         RichPanel = richPanel;
         RichState = richState;
         MatrixPreview = matrixPreview;
+        _uiScale = uiScale;
     }
 
     internal LanConnectLobbyOverlay Lobby { get; }
@@ -363,7 +366,13 @@ internal sealed class ChatUiFixture : IDisposable
 
     internal LanConnectItemPreview MatrixPreview { get; }
 
-    internal Rect2 ViewportRect => new(Vector2.Zero, _root.Size);
+    internal Rect2 ViewportRect => new(Vector2.Zero, _root.Size2DOverride);
+
+    internal Vector2I PhysicalSize => _root.Size;
+
+    internal Vector2I LogicalViewportSize => _root.Size2DOverride;
+
+    internal float UiScale => _uiScale;
 
     internal int RichResolvedItemCount => RichMessageRuns()
         .Count(run => run.HasMeta("lan_connect_resolved_item"));
@@ -400,9 +409,17 @@ internal sealed class ChatUiFixture : IDisposable
 
         SubViewport root = AutoFree(new SubViewport
         {
-            Size = logicalSize,
-            Disable3D = true
+            Size = physicalSize,
+            Size2DOverride = logicalSize,
+            Size2DOverrideStretch = true,
+            Disable3D = true,
+            GuiEmbedSubwindows = true,
+            RenderTargetUpdateMode = SubViewport.UpdateMode.Always,
+            TransparentBg = false,
+            Snap2DTransformsToPixel = true,
+            Snap2DVerticesToPixel = true
         })!;
+        Theme fixedTheme = LoadFixedTestTheme();
         LanConnectLobbyOverlay lobby = new() { Visible = false };
         lobby.SetProcess(false);
         root.AddChild(lobby);
@@ -412,7 +429,8 @@ internal sealed class ChatUiFixture : IDisposable
         {
             Name = "RichCompatibilitySurface",
             Visible = false,
-            MouseFilter = Control.MouseFilterEnum.Ignore
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            Theme = fixedTheme
         };
         root.AddChild(richSurface);
         richSurface.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
@@ -421,7 +439,8 @@ internal sealed class ChatUiFixture : IDisposable
             LanConnectChatUiComposition.Icons,
             ResolveMatrixItem)
         {
-            Name = "RichCompatibilityPanel"
+            Name = "RichCompatibilityPanel",
+            ClipContents = true
         };
         richSurface.AddChild(richPanel);
         LanConnectItemPreview matrixPreview = new(new MatrixCardVisualFactory());
@@ -429,6 +448,12 @@ internal sealed class ChatUiFixture : IDisposable
         SizeRichPanel(richPanel, logicalSize);
         ISceneRunner runner = ISceneRunner.Load(root, autoFree: true);
         await runner.AwaitIdleFrame();
+
+        Find<Control>(room, "RoomChatOverlayRoot").Theme = fixedTheme;
+        richPanel.Theme = fixedTheme;
+        richPanel.EmojiPickerForTests.Theme = fixedTheme;
+        richPanel.ItemPreviewForTests.Theme = fixedTheme;
+        matrixPreview.Theme = fixedTheme;
 
         lobby.ConfigureForTests(
             logicalSize,
@@ -445,6 +470,15 @@ internal sealed class ChatUiFixture : IDisposable
             richState,
             (_, _) => Task.CompletedTask,
             _ => Task.CompletedTask);
+        MatrixCombatContext matrixCombatContext = new();
+        LanConnectRoomCombatReferenceResolver matrixCombatResolver = new(matrixCombatContext);
+        richPanel.ConfigureCombatRendering(() => new LanConnectRoomCombatRenderContext(
+            matrixCombatResolver,
+            TranslationServer.GetLocale(),
+            "fixed-mod-fingerprint",
+            matrixCombatContext.ActiveRoomSessionId,
+            "fixed-peer-directory",
+            FreshReady: true));
         await room.OpenForTests();
         room.SelectChannelForTests(LanConnectChatChannel.Server);
 
@@ -479,13 +513,16 @@ internal sealed class ChatUiFixture : IDisposable
             richSurface,
             richPanel,
             richState,
-            matrixPreview);
+            matrixPreview,
+            uiScale);
     }
 
     internal async Task Resize(Vector2I physicalSize, float uiScale)
     {
         Vector2I logicalSize = LogicalSize(physicalSize, uiScale);
-        _root.Size = logicalSize;
+        _root.Size = physicalSize;
+        _root.Size2DOverride = logicalSize;
+        _uiScale = uiScale;
         SizeRichPanel(RichPanel, logicalSize);
         await AwaitTwoFrames();
     }
@@ -493,10 +530,13 @@ internal sealed class ChatUiFixture : IDisposable
     internal async Task TriggerRealResize(Vector2I physicalSize, float uiScale)
     {
         Vector2I target = LogicalSize(physicalSize, uiScale);
-        _root.Size = target + Vector2I.One;
+        _root.Size = physicalSize + Vector2I.One;
+        _root.Size2DOverride = target + Vector2I.One;
         SizeRichPanel(RichPanel, target + Vector2I.One);
         await AwaitTwoFrames();
-        _root.Size = target;
+        _root.Size = physicalSize;
+        _root.Size2DOverride = target;
+        _uiScale = uiScale;
         SizeRichPanel(RichPanel, target);
         await AwaitTwoFrames();
     }
@@ -506,6 +546,72 @@ internal sealed class ChatUiFixture : IDisposable
         _richSurface.Visible = true;
         await RichPanel.RefreshForTests();
         await AwaitTwoFrames();
+    }
+
+    internal async Task ShowRichMatrixOnly()
+    {
+        Lobby.Visible = false;
+        Room.Visible = false;
+        await ShowRichMatrix();
+    }
+
+    internal async Task ShowRoomMatrixOnly()
+    {
+        Lobby.Visible = false;
+        _richSurface.Visible = false;
+        Room.Visible = true;
+        await Room.RefreshForTests();
+        await AwaitTwoFrames();
+    }
+
+    internal async Task ShowReducedMotionFadeOverRich()
+    {
+        Lobby.Visible = false;
+        LanConnectChatChannelState fadeServer = new(LanConnectChatChannel.Server);
+        fadeServer.Apply(new ServerChatInboundEnvelope
+        {
+            Type = "chat_ready",
+            Channel = LanConnectChatChannel.Server,
+            ServerChatVersion = 1,
+            InstanceId = "screenshot-fade",
+            HistoryEpoch = 1,
+            ChatEnabled = true,
+            EnabledFeatures = new ServerChatEnabledFeatures()
+        });
+        fadeServer.SetPresentationForTests(LanConnectServerChatPresentation.Ready);
+        LanConnectDualChatState fade = new(fadeServer);
+        fade.EnterRoom("screenshot-fade-room");
+        Room.ConfigureForTests(
+            fade,
+            (_, _) => Task.CompletedTask,
+            (_, _) => Task.CompletedTask);
+        await Room.OpenForTests();
+        ScreenshotClock clock = new();
+        Room.ConfigureFadeForTests(clock, () => true);
+        clock.NowSeconds = LanConnectRoomOverlayFadeController.IdleDelaySeconds;
+        Room.RefreshFadeForTests();
+        _richSurface.Visible = true;
+        Room.Visible = true;
+        await RichPanel.RefreshForTests();
+        await AwaitTwoFrames();
+    }
+
+    internal void DisableCaretBlink()
+    {
+        foreach (LineEdit input in _root.FindChildren("*", "LineEdit", recursive: true, owned: false)
+                     .OfType<LineEdit>())
+        {
+            input.CaretBlink = false;
+        }
+        foreach (TextEdit input in _root.FindChildren("*", "TextEdit", recursive: true, owned: false)
+                     .OfType<TextEdit>())
+        {
+            input.CaretBlink = false;
+        }
+        FreezeDynamicProcessing(RichPanel);
+        FreezeDynamicProcessing(Room);
+        FreezeDynamicProcessing(MatrixPreview);
+        FreezeDynamicProcessing(RichPanel.EmojiPickerForTests);
     }
 
     internal Control[] RichMessageRuns() => RichPanel
@@ -602,6 +708,7 @@ internal sealed class ChatUiFixture : IDisposable
         RichPanel.CloseEmojiPicker(restoreDraftFocus: false);
         MatrixPreview.ClosePreview();
         _richSurface.Visible = false;
+        Room.Visible = true;
         await AwaitTwoFrames();
     }
 
@@ -681,6 +788,35 @@ internal sealed class ChatUiFixture : IDisposable
         await _runner.AwaitIdleFrame();
     }
 
+    internal async Task<Image> CaptureImage()
+    {
+        await _runner.AwaitIdleFrame();
+        await _runner.AwaitIdleFrame();
+        TaskCompletionSource frameDrawn = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnFramePostDraw() => frameDrawn.TrySetResult();
+        RenderingServer.FramePostDraw += OnFramePostDraw;
+        try
+        {
+            RenderingServer.ForceDraw();
+            await frameDrawn.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            RenderingServer.FramePostDraw -= OnFramePostDraw;
+        }
+        Image image = _root.GetTexture().GetImage();
+        if (image.GetWidth() != PhysicalSize.X || image.GetHeight() != PhysicalSize.Y)
+        {
+            throw new InvalidOperationException(
+                $"capture size {image.GetWidth()}x{image.GetHeight()} != {PhysicalSize.X}x{PhysicalSize.Y}");
+        }
+        if (image.GetFormat() != Image.Format.Rgba8)
+        {
+            image.Convert(Image.Format.Rgba8);
+        }
+        return image;
+    }
+
     internal IReadOnlyList<string> OverlappingNamedControls()
     {
         List<string> overlaps = new();
@@ -701,6 +837,13 @@ internal sealed class ChatUiFixture : IDisposable
 
     internal IReadOnlyList<string> LobbyRetryNames() => RetryNames(Lobby.ServerChatPanelForTests);
 
+    internal IReadOnlyList<string> VisibleControlsAt(Vector2 logicalPoint) => _root
+        .FindChildren("*", "Control", recursive: true, owned: false)
+        .OfType<Control>()
+        .Where(control => control.IsVisibleInTree() && control.GetGlobalRect().HasPoint(logicalPoint))
+        .Select(control => control.GetPath().ToString())
+        .ToArray();
+
     internal Control FindRoomControl(string name) => Find<Control>(Room, name);
 
     internal Control FindLobbyControl(string name) => Find<Control>(Lobby.ServerChatPanelForTests, name);
@@ -710,7 +853,7 @@ internal sealed class ChatUiFixture : IDisposable
     private static LanConnectChatChannelState RichMatrixState()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
-        state.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 0));
+        state.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 1));
         state.RichDraft.ReplaceAllWithText("multiline draft\nsecond line");
         state.RichDraft.InsertEntity(new LanConnectEmojiRun("heart"));
         state.RichDraft.InsertEntity(new LanConnectItemRun("card", "MegaCrit.Strike", 1));
@@ -726,13 +869,13 @@ internal sealed class ChatUiFixture : IDisposable
                 new LanConnectItemRefSegment("relic", "PrivateMod.MissingRelic"),
                 new LanConnectItemRefSegment("relic", "MegaCrit.Anchor"),
                 new LanConnectItemRefSegment("potion", "MegaCrit.FirePotion"),
-                new LanConnectEmojiSegment("heart"),
+                new LanConnectPowerStateSegment("MegaCrit.Strength", 2, "generation-a"),
                 new LanConnectItemRefSegment("card", "PrivateMod.MissingCard"),
                 new LanConnectItemRefSegment("potion", "PrivateMod.MissingPotion"),
-                new LanConnectEmojiSegment("laugh"),
+                new LanConnectTargetRefSegment("player", "net:watcher", "generation-a"),
                 new LanConnectItemRefSegment("card", "MegaCrit.Defend", 0),
                 new LanConnectItemRefSegment("relic", "MegaCrit.BagOfPreparation"),
-                new LanConnectItemRefSegment("potion", "MegaCrit.BlockPotion")
+                new LanConnectTargetRefSegment("monster", "prototype:stale", "generation-b")
             ]),
             sequence: 1,
             isLocal: false);
@@ -844,7 +987,7 @@ internal sealed class ChatUiFixture : IDisposable
 
     private static void Populate(LanConnectChatChannelState state, string prefix, int confirmedCount)
     {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset now = new(2026, 7, 16, 8, 0, 0, TimeSpan.Zero);
         state.BeginPendingText($"{prefix}-pending", LongNickname, "pending message\nwith two lines", queuedAt: now);
         state.BeginPendingText($"{prefix}-failed", LongNickname, "failed message", queuedAt: now);
         state.MarkFailed($"{prefix}-failed", "send_failed", "offline");
@@ -928,5 +1071,47 @@ internal sealed class ChatUiFixture : IDisposable
             CustomMinimumSize = new Vector2(180, 250),
             AccessibilityName = "Card preview"
         };
+    }
+
+    private sealed class MatrixCombatContext : ILanConnectRoomCombatContext
+    {
+        public string ActiveRoomSessionId => "generation-a";
+
+        public bool IsCurrentPeer(string playerNetId) => playerNetId == "net:watcher";
+
+        public bool TryGetCurrentPeerName(string playerNetId, out string name)
+        {
+            name = playerNetId == "net:watcher" ? "Watcher" : string.Empty;
+            return name.Length > 0;
+        }
+
+        public bool TryResolveLocalPower(string modelId, out LanConnectLocalPowerReference power)
+        {
+            power = new LanConnectLocalPowerReference("Strength", "Gain attack damage.");
+            return modelId == "MegaCrit.Strength";
+        }
+    }
+
+    private sealed class ScreenshotClock : ILanConnectMonotonicClock
+    {
+        public double NowSeconds { get; set; }
+    }
+
+    private static Theme LoadFixedTestTheme()
+    {
+        FontFile font = GD.Load<FontFile>(
+            "res://TestAssets/Fonts/ark-pixel-10px-proportional-zh_cn.otf") ??
+            throw new InvalidOperationException("Fixed Ark Pixel screenshot font failed to load.");
+        return new Theme { DefaultFont = font };
+    }
+
+    private static void FreezeDynamicProcessing(Node node)
+    {
+        node.SetProcess(false);
+        node.SetPhysicsProcess(false);
+        foreach (Node child in node.GetChildren())
+        {
+            FreezeDynamicProcessing(child);
+        }
     }
 }

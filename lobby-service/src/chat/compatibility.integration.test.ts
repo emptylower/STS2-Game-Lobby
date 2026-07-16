@@ -226,6 +226,58 @@ function openControlWebSocket(
   });
 }
 
+function openServerChatWebSocket(
+  url: string,
+  ticket: string,
+): Promise<{ socket: WebSocket; ready: JsonFrame }> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, {
+      headers: { authorization: `Bearer ${ticket}` },
+    });
+    let opened = false;
+    let ready: JsonFrame | undefined;
+    let settled = false;
+    const timer = setTimeout(() => fail(new Error("server chat websocket timeout")), 2_000);
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off("open", onOpen);
+      socket.off("message", onMessage);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      socket.once("error", () => {});
+      socket.terminate();
+      reject(error);
+    };
+    const resolveIfReady = () => {
+      if (settled || !opened || !ready) return;
+      settled = true;
+      cleanup();
+      resolve({ socket, ready });
+    };
+    const onOpen = () => {
+      opened = true;
+      resolveIfReady();
+    };
+    const onMessage = (data: WebSocket.RawData) => {
+      const frame = JSON.parse(data.toString()) as JsonFrame;
+      if (frame.type !== "chat_ready") return;
+      ready = frame;
+      resolveIfReady();
+    };
+    const onError = (error: Error) => fail(error);
+    const onClose = (code: number) => fail(new Error(`server chat closed before ready (${code})`));
+    socket.on("open", onOpen);
+    socket.on("message", onMessage);
+    socket.on("error", onError);
+    socket.on("close", onClose);
+  });
+}
+
 async function reserveThenCloseLocalPort(): Promise<number> {
   const server = createNetServer();
   await new Promise<void>((resolve, reject) => {
@@ -384,6 +436,31 @@ test("real room gateway routes rich and exact legacy fallback per recipient and 
       const address = await service.start();
       const httpBase = `http://127.0.0.1:${address.port}`;
       const wsBase = `ws://127.0.0.1:${address.port}`;
+      const serverTicketResponse = await fetch(`${httpBase}/chat/tickets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          protocolVersion: 1,
+          playerNetId: "net:server-channel",
+          playerName: "ServerChannel",
+        }),
+      });
+      assert.equal(serverTicketResponse.status, 200);
+      const issuedServerTicket = await serverTicketResponse.json() as {
+        ticket: string;
+        webSocketUrl: string;
+      };
+      const openedServerChat = await openServerChatWebSocket(
+        issuedServerTicket.webSocketUrl,
+        issuedServerTicket.ticket,
+      );
+      const serverChat = openedServerChat.socket;
+      sockets.push(serverChat);
+      assert.equal(openedServerChat.ready.channel, "server");
+      const serverFrames: JsonFrame[] = [];
+      serverChat.on("message", (data) => {
+        serverFrames.push(JSON.parse(data.toString()) as JsonFrame);
+      });
       const createResponse = await fetch(`${httpBase}/rooms`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -561,6 +638,51 @@ test("real room gateway routes rich and exact legacy fallback per recipient and 
         assert.equal(JSON.stringify(fallback).includes("MegaCrit.Strike"), false);
         assert.equal(String(fallback.messageText).includes("Host"), false);
       }
+      assert.equal(
+        serverFrames.some((frame) => frame.type.startsWith("room_")),
+        false,
+        "room messages must never enter the server channel socket",
+      );
+
+      const roomSockets = [host, rich.socket, legacy.socket, disabled.socket, oldSender.socket];
+      const crossChannelFrames: JsonFrame[] = [];
+      const crossChannelListeners = roomSockets.map((socket) => {
+        const listener = (data: WebSocket.RawData) => {
+          const frame = JSON.parse(data.toString()) as JsonFrame;
+          if (frame.type.startsWith("chat_")) crossChannelFrames.push(frame);
+        };
+        socket.on("message", listener);
+        return listener;
+      });
+      const serverClientMessageId = "51515151-5151-4151-8151-515151515151";
+      const serverAckPromise = waitForFrame(
+        serverChat,
+        (frame) => frame.type === "chat_ack" && frame.clientMessageId === serverClientMessageId,
+      );
+      const serverBroadcastPromise = waitForFrame(
+        serverChat,
+        (frame) => frame.type === "chat_message",
+      );
+      serverChat.send(JSON.stringify({
+        type: "chat_send",
+        protocolVersion: 1,
+        channel: "server",
+        clientMessageId: serverClientMessageId,
+        content: {
+          formatVersion: 1,
+          segments: [{ kind: "text", text: "server channel stays independent" }],
+        },
+      }));
+      const [serverAck, serverBroadcast] = await Promise.all([
+        serverAckPromise,
+        serverBroadcastPromise,
+      ]);
+      assert.deepEqual(serverAck.message, serverBroadcast.message);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.deepEqual(crossChannelFrames, []);
+      roomSockets.forEach((socket, index) => {
+        socket.off("message", crossChannelListeners[index]!);
+      });
 
       const duplicateAckPromise = waitForFrame(
         host,

@@ -104,6 +104,124 @@ function openPeer(name: string, url: string): Promise<TrackedPeer> {
   });
 }
 
+test("host reconnect keeps generation while delete and republish creates a new generation", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sts2-room-generation-routing-"));
+  const relayPortStart = 44_000 + ((process.pid * 19) % 15_000);
+  const config = loadLobbyServiceConfig({
+    HOST: "127.0.0.1",
+    PORT: "0",
+    PEER_NETWORK_ENABLED: "false",
+    PEER_SELF_ADDRESS: "",
+    PEER_CF_DISCOVERY_BASE_URL: "",
+    SERVER_ADMIN_STATE_FILE: join(tempDir, "server-admin.json"),
+    PEER_STATE_DIR: join(tempDir, "peer"),
+    ENFORCE_LOBBY_ACCESS_TOKEN: "false",
+    ENFORCE_CREATE_ROOM_TOKEN: "false",
+    SERVER_CHAT_ENABLED: "true",
+    RELAY_BIND_HOST: "127.0.0.1",
+    RELAY_PORT_START: String(relayPortStart),
+    RELAY_PORT_END: String(relayPortStart + 8),
+  });
+  const service = await createLobbyService(config);
+  const peers: TrackedPeer[] = [];
+  try {
+    const address = await service.start();
+    const httpBase = `http://127.0.0.1:${address.port}`;
+    const createRoom = async () => {
+      const response = await fetch(`${httpBase}/rooms`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          roomName: "generation-routing",
+          hostPlayerName: "Host",
+          gameMode: "standard",
+          version: "1.0.0",
+          modVersion: "0.4.0",
+          modList: ["sts2_lan_connect"],
+          maxPlayers: 4,
+          hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+        }),
+      });
+      assert.equal(response.status, 201);
+      return response.json() as Promise<{
+        roomId: string;
+        roomSessionId: string;
+        controlChannelId: string;
+        hostToken: string;
+      }>;
+    };
+
+    const first = await createRoom();
+    const hostUrl = `ws://127.0.0.1:${address.port}${config.wsPath}`
+      + `?roomId=${encodeURIComponent(first.roomId)}`
+      + `&controlChannelId=${encodeURIComponent(first.controlChannelId)}`
+      + `&role=host&token=${encodeURIComponent(first.hostToken)}`;
+    const hello = {
+      type: "host_hello",
+      roomId: first.roomId,
+      controlChannelId: first.controlChannelId,
+      role: "host",
+      playerName: "Host",
+      playerNetId: "net:host",
+      roomChatVersions: allVersions,
+    };
+
+    const original = await openPeer("generation-original", hostUrl);
+    peers.push(original);
+    let start = original.frames.length;
+    original.socket.send(JSON.stringify(hello));
+    const firstReady = await waitForFrame(
+      original,
+      start,
+      (frame) => frame.type === "room_chat_ready",
+    );
+    assert.equal(firstReady.roomSessionId, first.roomSessionId);
+    await new Promise<void>((resolve, reject) => {
+      const onClose = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const cleanup = () => {
+        original.socket.off("close", onClose);
+        original.socket.off("error", onError);
+      };
+      original.socket.once("close", onClose);
+      original.socket.once("error", onError);
+      original.socket.close(1000, "reconnect");
+    });
+
+    const reconnected = await openPeer("generation-reconnect", hostUrl);
+    peers.push(reconnected);
+    start = reconnected.frames.length;
+    reconnected.socket.send(JSON.stringify(hello));
+    const reconnectReady = await waitForFrame(
+      reconnected,
+      start,
+      (frame) => frame.type === "room_chat_ready",
+    );
+    assert.equal(reconnectReady.roomSessionId, first.roomSessionId);
+
+    const deleted = await fetch(`${httpBase}/rooms/${encodeURIComponent(first.roomId)}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hostToken: first.hostToken }),
+    });
+    assert.equal(deleted.status, 204);
+    const republished = await createRoom();
+    assert.notEqual(republished.roomId, first.roomId);
+    assert.notEqual(republished.roomSessionId, first.roomSessionId);
+    assert.notEqual(republished.controlChannelId, first.controlChannelId);
+  } finally {
+    for (const peer of peers) peer.socket.terminate();
+    await service.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("real room service routes each whole combat message by recipient capability", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "sts2-room-routing-"));
   const relayPortStart = 46_000 + ((process.pid * 17) % 15_000);

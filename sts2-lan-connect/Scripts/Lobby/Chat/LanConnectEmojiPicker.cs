@@ -8,7 +8,9 @@ internal readonly record struct LanConnectEmojiPickerTestState(
     IReadOnlyList<string> EmojiIds,
     int FocusedIndex,
     bool Available,
-    bool Visible);
+    bool Visible,
+    Rect2 Bounds,
+    IReadOnlyList<LanConnectNamedControlRect> ButtonRects);
 
 internal sealed partial class LanConnectEmojiPicker : PopupPanel
 {
@@ -55,7 +57,14 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
                 _emojis.Select(emoji => emoji.Id).ToArray(),
                 focusedIndex,
                 _available,
-                Visible);
+                Visible,
+                Visible ? new Rect2(Position, Size) : default,
+                _buttons
+                    .Where(button => button.Visible && button.IsInsideTree())
+                    .Select(button => new LanConnectNamedControlRect(
+                        button.Name.ToString(),
+                        button.GetGlobalRect()))
+                    .ToArray());
         }
     }
 

@@ -24,3 +24,10 @@ sts2_typing Compatibility Note
 STS2 LAN Connect does not bundle, link, or runtime-depend on sts2_typing.
 No substantive sts2_typing source code was copied into this project, so no
 sts2_typing MIT attribution is included as a bundled-code license notice.
+
+Ark Pixel Font (test-only fixture)
+----------------------------------
+Copyright (c) 2021, TakWolf (https://takwolf.com).
+The fixed zh_cn screenshot-test font is distributed under the SIL Open Font
+License, Version 1.1. Its complete license is stored at
+sts2-lan-connect.GdUnitTests/TestAssets/Fonts/ARK_PIXEL_FONT_OFL.txt.
