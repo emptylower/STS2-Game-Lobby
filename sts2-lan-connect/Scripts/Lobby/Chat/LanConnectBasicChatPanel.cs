@@ -210,6 +210,33 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     internal bool PopupVisible =>
         EmojiPickerVisible || ConfirmationPopupVisible;
 
+    internal bool PreviewVisible =>
+        _itemPreview != null &&
+        GodotObject.IsInstanceValid(_itemPreview) &&
+        _itemPreview.TestState.Visible;
+
+    internal bool AnyDescendantHasFocus
+    {
+        get
+        {
+            if (!GodotObject.IsInstanceValid(this) || !IsInsideTree())
+            {
+                return false;
+            }
+            Control? focus = GetViewport().GuiGetFocusOwner();
+            return focus != null &&
+                (ReferenceEquals(focus, this) || IsAncestorOf(focus));
+        }
+    }
+
+    internal bool HasDeliveryBlocker => StateHasDeliveryBlocker(_state);
+
+    internal static bool StateHasDeliveryBlocker(LanConnectChatChannelState? state) =>
+        state?.Messages.Any(static message => message.Delivery is
+            ServerChatDeliveryState.Pending or
+            ServerChatDeliveryState.Failed or
+            ServerChatDeliveryState.DeliveryUnknown) == true;
+
     internal bool EmojiPickerVisible =>
         _emojiPicker != null &&
         GodotObject.IsInstanceValid(_emojiPicker) &&
@@ -315,10 +342,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     public override void _ExitTree()
     {
-        _itemPreview?.Invalidate(LanConnectItemPreviewInvalidation.ContextCleared);
+        CloseTransientUi(restoreFocus: false);
         _bindingGeneration++;
         _messageFocusRestoreGeneration++;
-        _pendingUnknownConfirmation = null;
         _sendInFlight.Clear();
         _retryInFlight.Clear();
         _state?.SetVisible(false);
@@ -536,6 +562,17 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             _unknownConfirmation!.Hide();
             _pendingUnknownConfirmation = null;
         }
+    }
+
+    internal void CloseTransientUi(bool restoreFocus = false)
+    {
+        CloseEmojiPicker(restoreFocus);
+        _pendingUnknownConfirmation = null;
+        if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
+        {
+            _unknownConfirmation.Hide();
+        }
+        _itemPreview?.Invalidate(LanConnectItemPreviewInvalidation.ContextCleared);
     }
 
     internal void CloseEmojiPicker(bool restoreDraftFocus = true)

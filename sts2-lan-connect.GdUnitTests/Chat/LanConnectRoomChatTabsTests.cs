@@ -225,16 +225,31 @@ internal sealed class RoomChatFixture : IDisposable
 
     internal static async Task<RoomChatFixture> OpenWithServerSupport()
     {
-        RoomChatFixture fixture = await CreateWithServerSupport();
+        RoomChatFixture fixture = await CreateWithServerSupport(new Vector2I(1920, 1080));
         await fixture.Overlay.OpenForTests();
         await fixture.Runner.AwaitIdleFrame();
         return fixture;
     }
 
-    internal static Task<RoomChatFixture> CreateNeverOpenedWithServerSupport() =>
-        CreateWithServerSupport();
+    internal static async Task<RoomChatFixture> OpenWithServerSupport(Vector2I viewportSize)
+    {
+        RoomChatFixture fixture = await CreateWithServerSupport(viewportSize);
+        await fixture.Overlay.OpenForTests();
+        await fixture.Runner.AwaitIdleFrame();
+        return fixture;
+    }
 
-    private static async Task<RoomChatFixture> CreateWithServerSupport()
+    internal static Task<RoomChatFixture> OpenWithServerSupport(
+        Vector2I physicalViewportSize,
+        float uiScale) =>
+        OpenWithServerSupport(new Vector2I(
+            Mathf.Max(1, Mathf.FloorToInt(physicalViewportSize.X / uiScale)),
+            Mathf.Max(1, Mathf.FloorToInt(physicalViewportSize.Y / uiScale))));
+
+    internal static Task<RoomChatFixture> CreateNeverOpenedWithServerSupport() =>
+        CreateWithServerSupport(new Vector2I(1920, 1080));
+
+    private static async Task<RoomChatFixture> CreateWithServerSupport(Vector2I viewportSize)
     {
         LanConnectChatChannelState server = new(LanConnectChatChannel.Server);
         server.Apply(new ServerChatInboundEnvelope
@@ -253,7 +268,7 @@ internal sealed class RoomChatFixture : IDisposable
 
         SubViewport root = AutoFree(new SubViewport
         {
-            Size = new Vector2I(1920, 1080),
+            Size = viewportSize,
             Disable3D = true
         })!;
         LanConnectRoomChatOverlay overlay = new();

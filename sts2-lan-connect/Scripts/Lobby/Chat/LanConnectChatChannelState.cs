@@ -142,6 +142,7 @@ internal sealed class LanConnectChatChannelState
     private readonly LanConnectChatArrivalSequenceClock _arrivalClock;
     private SnapshotAssembly? _snapshotAssembly;
     private long _revision;
+    private long _remoteArrivalRevision;
     private long _contextGeneration;
     private long _draftGeneration;
     private long _observedDraftContentRevision;
@@ -201,6 +202,17 @@ internal sealed class LanConnectChatChannelState
             {
                 ReconcileDraftContentRevision();
                 return _revision;
+            }
+        }
+    }
+
+    internal long RemoteArrivalRevision
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _remoteArrivalRevision;
             }
         }
     }
@@ -844,6 +856,7 @@ internal sealed class LanConnectChatChannelState
                 return;
             }
 
+            EnsureRemoteArrivalCapacity(isLocal);
             _arrivalClock.Observe(sequence);
 
             ServerChatMessageState entry = new()
@@ -881,6 +894,7 @@ internal sealed class LanConnectChatChannelState
             {
                 return;
             }
+            EnsureRemoteArrivalCapacity(isLocal);
             _arrivalClock.Observe(sequence);
             ServerChatMessageState entry = new()
             {
@@ -924,6 +938,7 @@ internal sealed class LanConnectChatChannelState
                 return;
             }
 
+            EnsureRemoteArrivalCapacity(isLocal);
             long sequence = _arrivalClock.Next();
             ServerChatMessageState entry = new()
             {
@@ -1195,6 +1210,7 @@ internal sealed class LanConnectChatChannelState
         }
         bool isLocal = !string.IsNullOrEmpty(localSenderId) &&
                        string.Equals(senderId, localSenderId, StringComparison.Ordinal);
+        EnsureRemoteArrivalCapacity(isLocal);
         ServerChatMessageState entry = CreateCanonicalState(
             existing: null,
             messageId,
@@ -1361,6 +1377,7 @@ internal sealed class LanConnectChatChannelState
             return new LanConnectChatApplyResult(ReconnectRequired: false);
         }
 
+        EnsureRemoteArrivalCapacity(isLocal: false);
         ServerChatMessageState entry = new()
         {
             MessageId = canonical.MessageId,
@@ -1732,7 +1749,13 @@ internal sealed class LanConnectChatChannelState
 
     private void TrackIncoming(string? messageId, long sequence, bool isLocal)
     {
-        if (isLocal || string.IsNullOrEmpty(messageId))
+        if (isLocal)
+        {
+            return;
+        }
+
+        _remoteArrivalRevision++;
+        if (string.IsNullOrEmpty(messageId))
         {
             return;
         }
@@ -1750,6 +1773,14 @@ internal sealed class LanConnectChatChannelState
         {
             _belowIncomingMessageIds.Add(messageId);
             _newMessagesBelowCount = _belowIncomingMessageIds.Count;
+        }
+    }
+
+    private void EnsureRemoteArrivalCapacity(bool isLocal)
+    {
+        if (!isLocal && _remoteArrivalRevision == long.MaxValue)
+        {
+            throw new InvalidOperationException("The remote chat arrival revision is exhausted.");
         }
     }
 

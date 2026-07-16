@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Godot;
+using MegaCrit.Sts2.Core.Saves;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -23,7 +24,17 @@ internal readonly record struct LanConnectRoomChatOverlayTestState(
     IReadOnlyList<Rect2> RetryRects,
     Rect2 NewMessagesRect,
     Rect2 PinRect,
-    IReadOnlyList<LanConnectNamedControlRect> FocusTargetRects);
+    IReadOnlyList<LanConnectNamedControlRect> FocusTargetRects,
+    float PanelAlpha,
+    float HintAlpha,
+    string HintText,
+    LanConnectRoomOverlayFadePhase FadePhase,
+    bool TweenActive,
+    bool PanelVisible,
+    Rect2 HintRect,
+    Rect2 ToggleRect,
+    Rect2 RootRect,
+    Rect2 ViewportRect);
 
 internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 {
@@ -43,6 +54,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private MarginContainer? _root;
     private Control? _toggleBadge;
     private Label? _toggleBadgeLabel;
+    private Label? _fadeHint;
     private Button? _toggleButton;
     private PanelContainer? _panelFrame;
     private Button? _roomTab;
@@ -72,6 +84,12 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private Vector2 _dragRootStart;
     private float _currentPanelWidth = PanelWidth;
     private float _currentPanelHeight = PanelHeight;
+    private LanConnectRoomOverlayFadeController _fadeController =
+        new(new GodotMonotonicClock());
+    private Func<bool> _reducedMotionProvider = ReadReducedMotionPreference;
+    private Tween? _fadeTween;
+    private bool _panelHovered;
+    private long _fadeActivityToken;
 
     internal LanConnectRoomChatOverlayTestState TestState
     {
@@ -102,7 +120,17 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 panelState.RetryRects,
                 panelState.NewMessagesRect,
                 RectForTests(_pinButton),
-                FocusTargetRectsForTests(panelState));
+                FocusTargetRectsForTests(panelState),
+                _panelFrame?.Modulate.A ?? 1f,
+                _fadeHint?.Modulate.A ?? 0f,
+                _fadeHint?.Text ?? string.Empty,
+                _fadeController.Phase,
+                IsFadeTweenActive(),
+                _panelFrame?.Visible == true,
+                RectForTests(_fadeHint),
+                RectForTests(_toggleButton),
+                RectForTests(_root),
+                GetViewport()?.GetVisibleRect() ?? default);
         }
     }
 
@@ -211,6 +239,12 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     {
         UpdateDragState(delta);
         RefreshFromSource();
+    }
+
+    public override void _ExitTree()
+    {
+        _chatPanel?.CloseTransientUi(restoreFocus: false);
+        KillFadeTween();
     }
 
     public override void _UnhandledInput(InputEvent inputEvent)
@@ -351,6 +385,27 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     internal void FocusFirstForTests() => _roomTab?.GrabFocus();
 
+    internal void FocusToggleForTests() => _toggleButton?.GrabFocus();
+
+    internal void ConfigureFadeForTests(
+        ILanConnectMonotonicClock clock,
+        Func<bool>? reducedMotionProvider = null)
+    {
+        KillFadeTween();
+        _fadeController = new LanConnectRoomOverlayFadeController(
+            clock ?? throw new ArgumentNullException(nameof(clock)));
+        _reducedMotionProvider = reducedMotionProvider ?? (() => false);
+        _fadeActivityToken = 0;
+        SetPanelAlpha(1f);
+        UpdateRoomOverlayFade(ResolveChat());
+    }
+
+    internal void SetFadeHoverForTests(bool hovered) => SetPanelHovered(hovered);
+
+    internal void SignalFadeActivityForTests() => SignalFadeActivity();
+
+    internal void RefreshFadeForTests() => UpdateRoomOverlayFade(ResolveChat());
+
     private static void InstallDeferred()
     {
         if (Engine.GetMainLoop() is not SceneTree tree || tree.Root == null)
@@ -371,8 +426,10 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     private void BuildUi()
     {
-        _root = new MarginContainer();
+        _root = new MarginContainer { Name = "RoomChatOverlayRoot" };
         _root.SetAnchorsPreset(Control.LayoutPreset.TopRight);
+        _root.MouseEntered += () => SetPanelHovered(true);
+        _root.MouseExited += () => SetPanelHovered(false);
         AddChild(_root);
         ApplyOverlayPosition(LanConnectConfig.RoomChatOverlayOffset ?? GetDefaultOverlayOffset());
 
@@ -384,6 +441,16 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         HBoxContainer topRow = new() { Alignment = BoxContainer.AlignmentMode.End };
         stack.AddChild(topRow);
 
+        _fadeHint = CreateLabel(string.Empty, 13, TextMutedColor);
+        _fadeHint.Name = "RoomChatFadeHint";
+        _fadeHint.CustomMinimumSize = new Vector2(180f, 44f);
+        _fadeHint.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        _fadeHint.HorizontalAlignment = HorizontalAlignment.Right;
+        _fadeHint.VerticalAlignment = VerticalAlignment.Center;
+        _fadeHint.MouseFilter = Control.MouseFilterEnum.Ignore;
+        SetControlAlpha(_fadeHint, 0f);
+        topRow.AddChild(_fadeHint);
+
         Control toggleWrap = new()
         {
             CustomMinimumSize = new Vector2(132f, 44f),
@@ -392,6 +459,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         topRow.AddChild(toggleWrap);
 
         _toggleButton = CreateButton("聊天", accent: true, TogglePanel);
+        _toggleButton.Name = "RoomChatToggleButton";
         _toggleButton.CustomMinimumSize = new Vector2(132f, 44f);
         _toggleButton.TooltipText = "点击打开聊天，长按可拖动位置";
         _toggleButton.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnDragHandleGuiInput));
@@ -401,6 +469,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         toggleWrap.AddChild(_toggleBadge);
 
         _panelFrame = CreatePanel(PanelColor, BorderColor, 10, 14);
+        _panelFrame.Name = "RoomChatPanelFrame";
         _panelFrame.CustomMinimumSize = new Vector2(PanelWidth, PanelHeight);
         stack.AddChild(_panelFrame);
 
@@ -468,14 +537,16 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
         if (!hasRoom || chat == null)
         {
-            _chatPanel?.CloseEmojiPicker(restoreDraftFocus: false);
+            _chatPanel?.CloseTransientUi(restoreFocus: false);
             _chatPanel?.ReleaseDraftFocus();
             if (_panelFrame != null)
             {
                 _panelFrame.Visible = false;
             }
             CancelDrag();
+            _panelHovered = false;
             RefreshBadges(chat);
+            ResetFadeVisual();
             return;
         }
 
@@ -496,13 +567,14 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
         if (!chat.RoomOverlayOpen)
         {
-            _chatPanel?.CloseEmojiPicker(restoreDraftFocus: false);
+            _chatPanel?.CloseTransientUi(restoreFocus: false);
             _chatPanel?.ReleaseDraftFocus();
         }
         BindSelectedChannel(chat);
         RefreshTabStyles(chat);
         RefreshBadges(chat);
         ConfigureFocusChain();
+        UpdateRoomOverlayFade(chat);
     }
 
     private LanConnectDualChatState? ResolveChat()
@@ -591,6 +663,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
         bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
         chat.OpenRoomOverlay(serverSelectable);
+        SignalFadeActivity();
         RefreshFromSource();
     }
 
@@ -604,6 +677,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
         bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
         chat.ShowRoomOverlayPreservingSelection(serverSelectable);
+        SignalFadeActivity();
         RefreshFromSource();
     }
 
@@ -612,13 +686,16 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         LanConnectDualChatState? chat = ResolveChat();
         if (chat?.RoomOverlayOpen != true)
         {
+            _chatPanel?.CloseTransientUi(restoreFocus: false);
+            ResetFadeVisual();
             return;
         }
 
         CaptureCurrentViewState(chat);
-        _chatPanel?.CloseEmojiPicker(restoreDraftFocus: false);
+        _chatPanel?.CloseTransientUi(restoreFocus: false);
         _chatPanel?.ReleaseDraftFocus();
         chat.CloseRoomOverlay();
+        ResetFadeVisual();
         RefreshFromSource();
     }
 
@@ -647,6 +724,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
         CaptureCurrentViewState(chat);
         chat.Select(channel);
+        SignalFadeActivity();
         BindSelectedChannel(chat);
         RefreshTabStyles(chat);
         RefreshBadges(chat);
@@ -728,6 +806,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private void SetPinned(bool value)
     {
         _pinned = value;
+        SignalFadeActivity();
         if (_pinButton != null)
         {
             _pinButton.Text = _pinned ? "取消固定" : "固定";
@@ -774,6 +853,179 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
     }
 
+    private void UpdateRoomOverlayFade(LanConnectDualChatState? chat)
+    {
+        if (_panelFrame == null || _fadeHint == null)
+        {
+            return;
+        }
+
+        bool serverSupported = chat?.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
+        int roomUnread = chat?.Room.UnreadCount ?? 0;
+        int roomNewBelow = chat?.Room.NewMessagesBelowCount ?? 0;
+        int serverUnread = serverSupported ? chat?.Server.UnreadCount ?? 0 : 0;
+        int serverNewBelow = serverSupported ? chat?.Server.NewMessagesBelowCount ?? 0 : 0;
+        bool reducedMotion;
+        try
+        {
+            reducedMotion = _reducedMotionProvider();
+        }
+        catch
+        {
+            reducedMotion = true;
+        }
+
+        LanConnectRoomOverlayFadeTick tick = _fadeController.Tick(
+            new LanConnectRoomOverlayFadeInput(
+                Open: chat?.RoomOverlayOpen == true,
+                Pinned: _pinned,
+                HasFocus: HasPanelFocus(),
+                Hovered: _panelHovered,
+                Dragging: _dragPointerDown || _dragging,
+                PreviewVisible: _chatPanel?.PreviewVisible == true,
+                PickerOrConfirmationVisible: _chatPanel?.PopupVisible == true,
+                ModalVisible: HasBlockingModalOutsideOverlay(),
+                HasDeliveryBlocker:
+                    LanConnectBasicChatPanel.StateHasDeliveryBlocker(chat?.Room) ||
+                    (serverSupported && LanConnectBasicChatPanel.StateHasDeliveryBlocker(chat?.Server)),
+                RoomUnread: roomUnread,
+                ServerUnread: serverUnread,
+                RoomNewBelow: roomNewBelow,
+                ServerNewBelow: serverNewBelow,
+                ActivityToken: _fadeActivityToken,
+                RoomRemoteArrivalRevision: chat?.Room.RemoteArrivalRevision ?? 0,
+                ServerRemoteArrivalRevision: chat?.Server.RemoteArrivalRevision ?? 0,
+                ReducedMotion: reducedMotion));
+
+        int hintCount = roomUnread + roomNewBelow + serverUnread + serverNewBelow;
+        string hintText = LanConnectChatUiComposition.Localizer.Format(
+            TranslationServer.GetLocale(),
+            "chat.fade.unread_hint",
+            hintCount);
+        _fadeHint.Text = hintText;
+        _fadeHint.AccessibilityName = hintText;
+        SetControlAlpha(
+            _fadeHint,
+            tick.Phase is LanConnectRoomOverlayFadePhase.Fading or
+                LanConnectRoomOverlayFadePhase.Faded
+                ? 1f
+                : 0f);
+
+        if (tick.Command is { } command)
+        {
+            ApplyFadeCommand(command);
+        }
+    }
+
+    private void ApplyFadeCommand(LanConnectRoomOverlayFadeCommand command)
+    {
+        if (_panelFrame == null)
+        {
+            return;
+        }
+        if (command.KillTween)
+        {
+            KillFadeTween();
+        }
+        if (command.DurationSeconds <= 0d)
+        {
+            SetPanelAlpha(command.TargetAlpha);
+            return;
+        }
+
+        _fadeTween = CreateTween();
+        _fadeTween.TweenProperty(
+            _panelFrame,
+            new NodePath("modulate:a"),
+            command.TargetAlpha,
+            command.DurationSeconds);
+    }
+
+    private void SignalFadeActivity()
+    {
+        unchecked
+        {
+            _fadeActivityToken++;
+        }
+        UpdateRoomOverlayFade(ResolveChat());
+    }
+
+    private void SetPanelHovered(bool hovered)
+    {
+        if (_panelHovered == hovered)
+        {
+            return;
+        }
+        _panelHovered = hovered;
+        SignalFadeActivity();
+    }
+
+    private bool HasPanelFocus()
+    {
+        if (_chatPanel?.AnyDescendantHasFocus == true)
+        {
+            return true;
+        }
+        if (_root == null ||
+            !GodotObject.IsInstanceValid(_root) ||
+            !_root.IsInsideTree())
+        {
+            return false;
+        }
+        Control? focus = GetViewport().GuiGetFocusOwner();
+        return focus != null &&
+            (ReferenceEquals(focus, _root) || _root.IsAncestorOf(focus));
+    }
+
+    private void ResetFadeVisual()
+    {
+        KillFadeTween();
+        SetPanelAlpha(1f);
+        if (_fadeHint != null)
+        {
+            SetControlAlpha(_fadeHint, 0f);
+        }
+    }
+
+    private void KillFadeTween()
+    {
+        if (_fadeTween != null && GodotObject.IsInstanceValid(_fadeTween))
+        {
+            _fadeTween.Kill();
+        }
+        _fadeTween = null;
+    }
+
+    private bool IsFadeTweenActive() =>
+        _fadeTween != null &&
+        GodotObject.IsInstanceValid(_fadeTween) &&
+        _fadeTween.IsRunning();
+
+    private void SetPanelAlpha(float alpha)
+    {
+        if (_panelFrame != null)
+        {
+            SetControlAlpha(_panelFrame, alpha);
+        }
+    }
+
+    private static void SetControlAlpha(CanvasItem control, float alpha)
+    {
+        Color color = control.Modulate;
+        control.Modulate = new Color(color.R, color.G, color.B, Mathf.Clamp(alpha, 0f, 1f));
+    }
+
+    internal static bool ReducedMotionFromTextEffectsEnabled(bool textEffectsEnabled) =>
+        !textEffectsEnabled;
+
+    private static bool ReadReducedMotionPreference() =>
+        ReducedMotionFromTextEffectsEnabled(SaveManager.Instance.PrefsSave.TextEffectsEnabled);
+
+    private sealed class GodotMonotonicClock : ILanConnectMonotonicClock
+    {
+        public double NowSeconds => Time.GetTicksMsec() / 1000d;
+    }
+
     private static LanConnectChatChannelState? SelectedState(LanConnectDualChatState? chat)
     {
         if (chat == null)
@@ -793,6 +1045,11 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         bool overlayOpen = chat?.RoomOverlayOpen == true;
         bool modalVisible = blockingModalVisible || _chatPanel?.PopupVisible == true;
         LanConnectChatInputAction action;
+
+        if (key is Key.Enter or Key.KpEnter or Key.F8)
+        {
+            SignalFadeActivity();
+        }
 
         if (key is Key.Enter or Key.KpEnter)
         {
@@ -979,6 +1236,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         {
             return;
         }
+        SignalFadeActivity();
         _dragPointerDown = true;
         _dragTriggered = false;
         _dragging = false;

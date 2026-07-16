@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using Sts2LanConnect.Scripts;
 
@@ -18,6 +19,93 @@ public sealed class LanConnectChatChannelStateTests
         Assert.Equal(LanConnectServerChatPresentation.Ready, room.Presentation);
         Assert.False(server.ChatEnabled);
         Assert.Equal(LanConnectServerChatPresentation.Connecting, server.Presentation);
+    }
+
+    [Fact]
+    public void Remote_arrival_revision_increments_only_for_new_remote_messages()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
+        Assert.Equal(0, state.RemoteArrivalRevision);
+
+        state.AppendConfirmedForTests("local", "Me", "local", 1, isLocal: true);
+        Assert.Equal(0, state.RemoteArrivalRevision);
+
+        state.AppendConfirmedForTests("remote", "Other", "remote", 6732, isLocal: false);
+        Assert.Equal(1, state.RemoteArrivalRevision);
+        state.AppendConfirmedForTests("remote", "Other", "duplicate", 9999, isLocal: false);
+        Assert.Equal(1, state.RemoteArrivalRevision);
+
+        state.BeginPendingText("pending", "Me", "pending");
+        state.Apply(BuildAck("pending", BuildCanonical("acked", "Me", "pending", sequence: 0)));
+        Assert.Equal(1, state.RemoteArrivalRevision);
+
+        state.Apply(BuildSnapshotBegin("revision-snapshot", "instance", historyEpoch: 1, totalMessages: 1));
+        state.Apply(BuildSnapshotChunk(
+            "revision-snapshot",
+            0,
+            BuildCanonical("history", "Other", "history", sequence: 0)));
+        state.Apply(BuildSnapshotEnd("revision-snapshot", historyEpoch: 1));
+        Assert.Equal(1, state.RemoteArrivalRevision);
+    }
+
+    [Theory]
+    [InlineData("canonical")]
+    [InlineData("legacy-append")]
+    [InlineData("test-append")]
+    [InlineData("content-test-append")]
+    [InlineData("typed-server")]
+    [InlineData("typed-room")]
+    public void Exhausted_remote_arrival_revision_rejects_new_remote_atomically(string entryPoint)
+    {
+        LanConnectChatArrivalSequenceClock arrivalClock = new();
+        LanConnectChatChannel channel = entryPoint == "typed-server"
+            ? LanConnectChatChannel.Server
+            : LanConnectChatChannel.Room;
+        LanConnectChatChannelState state = new(channel, arrivalClock);
+        state.SetVisible(true);
+        state.SetScrollState(12, atBottom: false);
+        state.AppendConfirmedForTests("duplicate", "Me", "seed", sequence: 1, isLocal: true);
+        SetRemoteArrivalRevision(state, long.MaxValue);
+
+        // Capacity is irrelevant when dedupe proves that no remote arrival will be committed.
+        InvokeArrivalEntryPoint(state, entryPoint, "duplicate", isLocal: false);
+        Assert.Equal(long.MaxValue, state.RemoteArrivalRevision);
+        Assert.Single(state.Messages);
+
+        // Local writes remain available after the remote counter is exhausted.
+        if (EntryPointSupportsLocalIdentity(entryPoint))
+        {
+            InvokeArrivalEntryPoint(state, entryPoint, "local-after-full", isLocal: true);
+        }
+        else
+        {
+            state.AppendConfirmedForTests("local-after-full", "Me", "local", sequence: 2, isLocal: true);
+        }
+        Assert.Equal(long.MaxValue, state.RemoteArrivalRevision);
+        Assert.Equal(2, state.Messages.Count);
+
+        ServerChatMessageState[] messagesBefore = state.Messages.ToArray();
+        long revisionBefore = state.Revision;
+        int unreadBefore = state.UnreadCount;
+        int newBelowBefore = state.NewMessagesBelowCount;
+        long? firstUnreadBefore = state.FirstUnreadSequence;
+        string[] serverIndexBefore = PrivateIndexSnapshot(state, "_serverMessageIndex");
+        string[] pendingIndexBefore = PrivateIndexSnapshot(state, "_clientPendingIndex");
+        long arrivalClockBefore = PrivateLong(arrivalClock, "_current");
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+            () => InvokeArrivalEntryPoint(state, entryPoint, "rejected-remote", isLocal: false));
+
+        Assert.Equal("The remote chat arrival revision is exhausted.", error.Message);
+        Assert.Equal(messagesBefore, state.Messages.ToArray());
+        Assert.Equal(revisionBefore, state.Revision);
+        Assert.Equal(long.MaxValue, state.RemoteArrivalRevision);
+        Assert.Equal(unreadBefore, state.UnreadCount);
+        Assert.Equal(newBelowBefore, state.NewMessagesBelowCount);
+        Assert.Equal(firstUnreadBefore, state.FirstUnreadSequence);
+        Assert.Equal(serverIndexBefore, PrivateIndexSnapshot(state, "_serverMessageIndex"));
+        Assert.Equal(pendingIndexBefore, PrivateIndexSnapshot(state, "_clientPendingIndex"));
+        Assert.Equal(arrivalClockBefore, PrivateLong(arrivalClock, "_current"));
     }
 
     [Fact]
@@ -595,6 +683,111 @@ public sealed class LanConnectChatChannelStateTests
         Assert.Equal(0, state.UnreadCount);
         Assert.Null(state.FirstUnreadSequence);
     }
+
+    private static void InvokeArrivalEntryPoint(
+        LanConnectChatChannelState state,
+        string entryPoint,
+        string messageId,
+        bool isLocal)
+    {
+        const string localSenderId = "local-sender-id";
+        string senderId = isLocal ? localSenderId : "remote-sender-id";
+        LanConnectChatContent content = new(
+            1,
+            [new LanConnectTextSegment(isLocal ? "local" : "remote")]);
+        switch (entryPoint)
+        {
+            case "canonical":
+                state.Apply(BuildMessage(messageId, "Remote", "remote"));
+                break;
+            case "legacy-append":
+                state.AppendLegacyConfirmed(
+                    messageId,
+                    "Remote",
+                    senderId,
+                    isLocal ? "local" : "remote",
+                    FixedNow,
+                    isLocal,
+                    confirmedMessageLimit: 60);
+                break;
+            case "test-append":
+                state.AppendConfirmedForTests(
+                    messageId,
+                    isLocal ? "Me" : "Remote",
+                    isLocal ? "local" : "remote",
+                    sequence: 6732,
+                    isLocal);
+                break;
+            case "content-test-append":
+                state.AppendConfirmedContentForTests(
+                    messageId,
+                    isLocal ? "Me" : "Remote",
+                    content,
+                    sequence: 6732,
+                    isLocal);
+                break;
+            case "typed-server":
+                state.Apply(
+                    new LanConnectServerChatMessageEnvelope
+                    {
+                        Message = new LanConnectServerChatMessagePayload
+                        {
+                            MessageId = messageId,
+                            SenderId = senderId,
+                            SenderName = isLocal ? "Me" : "Remote",
+                            Content = content,
+                            PlainTextFallback = isLocal ? "local" : "remote",
+                            SentAt = "2026-07-12T12:00:00Z"
+                        }
+                    },
+                    localSenderId);
+                break;
+            case "typed-room":
+                state.Apply(
+                    new LanConnectRoomChatMessageEnvelope
+                    {
+                        Message = new LanConnectRoomChatMessagePayload
+                        {
+                            RoomId = "room-1",
+                            RoomSessionId = "room-session-1",
+                            MessageId = messageId,
+                            SenderId = senderId,
+                            SenderName = isLocal ? "Me" : "Remote",
+                            Content = content,
+                            PlainTextFallback = isLocal ? "local" : "remote",
+                            SentAt = "2026-07-12T12:00:00Z"
+                        }
+                    },
+                    localSenderId);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(entryPoint), entryPoint, null);
+        }
+    }
+
+    private static bool EntryPointSupportsLocalIdentity(string entryPoint) =>
+        entryPoint is "legacy-append" or
+            "test-append" or
+            "content-test-append" or
+            "typed-server" or
+            "typed-room";
+
+    private static void SetRemoteArrivalRevision(LanConnectChatChannelState state, long value) =>
+        PrivateField(typeof(LanConnectChatChannelState), "_remoteArrivalRevision").SetValue(state, value);
+
+    private static string[] PrivateIndexSnapshot(LanConnectChatChannelState state, string fieldName) =>
+        ((Dictionary<string, int>)PrivateField(typeof(LanConnectChatChannelState), fieldName)
+                .GetValue(state)!)
+            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+            .Select(static pair => $"{pair.Key}:{pair.Value}")
+            .ToArray();
+
+    private static long PrivateLong(object instance, string fieldName) =>
+        (long)PrivateField(instance.GetType(), fieldName).GetValue(instance)!;
+
+    private static FieldInfo PrivateField(Type type, string name) =>
+        type.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic) ??
+        throw new InvalidOperationException($"Missing private field {type.FullName}.{name}.");
 
     private static ServerChatInboundEnvelope BuildAck(string clientMessageId, string serverMessageId, string senderName, string text)
     {
