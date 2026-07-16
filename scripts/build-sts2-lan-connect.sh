@@ -19,6 +19,7 @@ LEGACY_MANIFEST_FILE_NAME="mod_manifest.json"
 LOCAL_DEFAULTS_FILE="$PROJECT_DIR/$DEFAULTS_FILE_NAME"
 LOCAL_MANIFEST_FILE="$PROJECT_DIR/$MANIFEST_FILE_NAME"
 INSTALL_AFTER_BUILD=0
+DRY_RUN=0
 SYNC_SAVES=1
 
 usage() {
@@ -28,6 +29,7 @@ Usage:
 
 Options:
   --install           Build into the staging directory, then run the macOS installer.
+  --dry-run           With --install, validate and print the install plan without writes or builds.
   --mods-dir <path>   Override the build staging directory.
   --no-save-sync      Forwarded to the installer when used with --install.
   --help              Show this help.
@@ -141,6 +143,10 @@ while [[ $# -gt 0 ]]; do
       INSTALL_AFTER_BUILD=1
       shift
       ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
     --mods-dir)
       [[ $# -ge 2 ]] || die "--mods-dir requires a value"
       MOD_OUTPUT_DIR="$2"
@@ -159,6 +165,16 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  [[ "$INSTALL_AFTER_BUILD" -eq 1 ]] || die "--dry-run requires --install"
+  install_args=(--install --dry-run --package-dir "$MOD_OUTPUT_DIR")
+  if [[ "$SYNC_SAVES" -eq 0 ]]; then
+    install_args+=(--no-save-sync)
+  fi
+  "$INSTALL_SCRIPT" "${install_args[@]}"
+  exit 0
+fi
 
 mkdir -p "$PROJECT_DIR/release"
 
@@ -186,11 +202,22 @@ rm -f "$MOD_OUTPUT_DIR/$MANIFEST_FILE_NAME"
 rm -f "$MOD_OUTPUT_DIR/$LEGACY_MANIFEST_FILE_NAME"
 cp "$DLL_SOURCE" "$MOD_OUTPUT_DIR/"
 cp "$PCK_SOURCE" "$MOD_OUTPUT_DIR/"
+cp "$ROOT_DIR/LICENSE" "$MOD_OUTPUT_DIR/LICENSE"
+cp "$ROOT_DIR/THIRD_PARTY_NOTICES" "$MOD_OUTPUT_DIR/THIRD_PARTY_NOTICES"
 if [[ -f "$LOCAL_MANIFEST_FILE" ]]; then
   cp "$LOCAL_MANIFEST_FILE" "$MOD_OUTPUT_DIR/$MANIFEST_FILE_NAME"
 fi
 rm -f "$MOD_OUTPUT_DIR/$DEFAULTS_FILE_NAME"
 write_lobby_defaults "$MOD_OUTPUT_DIR"
+
+for required_file in \
+  "$ASSEMBLY_NAME.dll" \
+  "$ASSEMBLY_NAME.pck" \
+  "$DEFAULTS_FILE_NAME" \
+  LICENSE \
+  THIRD_PARTY_NOTICES; do
+  [[ -f "$MOD_OUTPUT_DIR/$required_file" ]] || die "Missing staged install input: $MOD_OUTPUT_DIR/$required_file"
+done
 
 if [[ -n "${STS2_LOBBY_DEFAULT_BASE_URL:-}" ]]; then
   if [[ -n "${STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL:-}" ]]; then

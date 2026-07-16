@@ -13,7 +13,9 @@ APP_PATH="$DEFAULT_APP_PATH"
 USERDATA_DIR="$DEFAULT_USERDATA_DIR"
 SYNC_SAVES=1
 REFRESH_SIGNATURE=1
+DRY_RUN=0
 ACTION="toggle"
+INSTALL_PAYLOAD_FILES=()
 
 usage() {
   cat <<'EOF'
@@ -27,6 +29,7 @@ Options:
   --game-dir <path>     Game root directory that contains SlayTheSpire2.app.
   --data-dir <path>     SlayTheSpire2 user data directory.
   --package-dir <path>  Directory that contains sts2_lan_connect.dll/.pck.
+  --dry-run             With --install, validate and print the payload plan without writes.
   --no-save-sync        Install only; skip save migration/sync.
   --skip-codesign       Skip refreshing the macOS app bundle signature after install/uninstall.
   --help                Show this help.
@@ -74,9 +77,43 @@ ensure_game_not_running() {
 }
 
 validate_package_dir() {
-  if [[ ! -f "$PACKAGE_DIR/$ASSEMBLY_NAME.dll" || ! -f "$PACKAGE_DIR/$ASSEMBLY_NAME.pck" ]]; then
-    die "Package directory '$PACKAGE_DIR' does not contain $ASSEMBLY_NAME.dll and $ASSEMBLY_NAME.pck"
-  fi
+  local required_file
+  for required_file in \
+    "$ASSEMBLY_NAME.dll" \
+    "$ASSEMBLY_NAME.pck" \
+    lobby-defaults.json \
+    LICENSE \
+    THIRD_PARTY_NOTICES; do
+    [[ -f "$PACKAGE_DIR/$required_file" && ! -L "$PACKAGE_DIR/$required_file" ]] || \
+      die "Missing required package input: $PACKAGE_DIR/$required_file"
+  done
+}
+
+prepare_install_payload_plan() {
+  local optional_file
+  validate_package_dir
+  INSTALL_PAYLOAD_FILES=(
+    "$ASSEMBLY_NAME.dll"
+    "$ASSEMBLY_NAME.pck"
+    lobby-defaults.json
+    LICENSE
+    THIRD_PARTY_NOTICES
+  )
+  for optional_file in "$MANIFEST_FILE_NAME" STS2_LAN_CONNECT_USER_GUIDE_ZH.md; do
+    if [[ -f "$PACKAGE_DIR/$optional_file" && ! -L "$PACKAGE_DIR/$optional_file" ]]; then
+      INSTALL_PAYLOAD_FILES+=("$optional_file")
+    fi
+  done
+}
+
+print_install_payload_plan() {
+  local mod_dir="$1"
+  local payload_file
+  for payload_file in "${INSTALL_PAYLOAD_FILES[@]}"; do
+    printf 'DRY-RUN copy: %s -> %s\n' \
+      "$PACKAGE_DIR/$payload_file" \
+      "$mod_dir/$payload_file"
+  done
 }
 
 verify_installed_payload() {
@@ -188,8 +225,9 @@ sync_profile_saves() {
 install_mod() {
   local mod_dir="$1"
   local temp_mod_dir
+  local payload_file
 
-  validate_package_dir
+  prepare_install_payload_plan
 
   temp_mod_dir="${mod_dir}.tmp.$$"
 
@@ -198,17 +236,9 @@ install_mod() {
   mkdir -p "$temp_mod_dir"
 
   log "Installing mod files to: $mod_dir"
-  cp -f "$PACKAGE_DIR/$ASSEMBLY_NAME.dll" "$temp_mod_dir/"
-  cp -f "$PACKAGE_DIR/$ASSEMBLY_NAME.pck" "$temp_mod_dir/"
-  if [[ -f "$PACKAGE_DIR/$MANIFEST_FILE_NAME" ]]; then
-    cp -f "$PACKAGE_DIR/$MANIFEST_FILE_NAME" "$temp_mod_dir/"
-  fi
-  if [[ -f "$PACKAGE_DIR/lobby-defaults.json" ]]; then
-    cp -f "$PACKAGE_DIR/lobby-defaults.json" "$temp_mod_dir/"
-  fi
-  if [[ -f "$PACKAGE_DIR/STS2_LAN_CONNECT_USER_GUIDE_ZH.md" ]]; then
-    cp -f "$PACKAGE_DIR/STS2_LAN_CONNECT_USER_GUIDE_ZH.md" "$temp_mod_dir/"
-  fi
+  for payload_file in "${INSTALL_PAYLOAD_FILES[@]}"; do
+    cp -f "$PACKAGE_DIR/$payload_file" "$temp_mod_dir/$payload_file"
+  done
 
   mkdir -p "$(dirname "$mod_dir")"
   rm -rf "$mod_dir"
@@ -277,6 +307,10 @@ while [[ $# -gt 0 ]]; do
       PACKAGE_DIR="$2"
       shift 2
       ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
     --no-save-sync)
       SYNC_SAVES=0
       shift
@@ -295,13 +329,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$DRY_RUN" -eq 1 && "$ACTION" != "install" ]]; then
+  die "--dry-run requires --install"
+fi
+
+TARGET_MOD_DIR="$APP_PATH/Contents/MacOS/mods/$ASSEMBLY_NAME"
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  prepare_install_payload_plan
+  print_install_payload_plan "$TARGET_MOD_DIR"
+  exit 0
+fi
+
 if [[ ! -d "$APP_PATH" ]]; then
   die "Could not find SlayTheSpire2.app at '$APP_PATH'"
 fi
 
 ensure_game_not_running
 
-TARGET_MOD_DIR="$APP_PATH/Contents/MacOS/mods/$ASSEMBLY_NAME"
 EFFECTIVE_ACTION="$ACTION"
 if [[ "$ACTION" == "toggle" ]]; then
   if is_mod_installed "$TARGET_MOD_DIR"; then

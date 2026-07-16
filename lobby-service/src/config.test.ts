@@ -3,8 +3,13 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { LobbyServiceConfigError, loadLobbyServiceConfig } from "./config.js";
 
-const PHASE_ONE_CHAT_TEMPLATE_DEFAULTS = {
+const CHAT_TEMPLATE_DEFAULTS = {
   SERVER_CHAT_ENABLED: "false",
+  SERVER_CHAT_RICH_CONTENT_ENABLED: "true",
+  SERVER_CHAT_EMOJI_ENABLED: "true",
+  SERVER_CHAT_ITEM_REFS_ENABLED: "true",
+  ROOM_CHAT_V2_ENABLED: "true",
+  ROOM_CHAT_COMBAT_REFS_ENABLED: "true",
   SERVER_CHAT_HISTORY_LIMIT: "100",
   SERVER_CHAT_HISTORY_TTL_HOURS: "24",
   SERVER_CHAT_SNAPSHOT_LIMIT: "50",
@@ -13,50 +18,85 @@ const PHASE_ONE_CHAT_TEMPLATE_DEFAULTS = {
   SERVER_CHAT_MAX_CONNECTIONS_TOTAL: "500",
   SERVER_CHAT_MAX_PENDING_TICKETS: "2000",
   SERVER_CHAT_TRUSTED_PROXY_CIDRS: "",
+  SERVER_CHAT_TICKET_REQUESTS_PER_MINUTE: "20",
+  SERVER_CHAT_IP_MESSAGES_PER_MINUTE: "30",
+  SERVER_CHAT_CONNECTION_BURST: "5",
+  SERVER_CHAT_CONNECTION_REFILL_MS: "2000",
+  SERVER_CHAT_SLOW_CLIENT_BYTES: "262144",
 } as const;
 
-function readTemplateSettings(template: string): Map<string, string> {
-  const settings = new Map<string, string>();
+type TemplateFormat = "dotenv" | "systemd";
 
+function readTemplateSettings(template: string, format: TemplateFormat): Array<[string, string]> {
+  const settings: Array<[string, string]> = [];
   for (const line of template.split(/\r?\n/)) {
-    const match = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line);
+    const match = format === "dotenv"
+      ? /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line)
+      : /^Environment="([A-Z][A-Z0-9_]*)=(.*)"$/.exec(line);
     if (match?.[1] !== undefined && match[2] !== undefined) {
-      settings.set(match[1], match[2]);
+      settings.push([match[1], match[2]]);
     }
   }
-
   return settings;
 }
 
-function countTemplateSettingLines(template: string, setting: string): number {
-  return template.split(/\r?\n/).filter((line) => line.startsWith(`${setting}=`)).length;
-}
-
-test("config templates define phase 1 chat settings exactly once", () => {
-  const templates: Array<[string, string]> = [
-    ["lobby-service/.env.example", readFileSync(new URL("../.env.example", import.meta.url), "utf8")],
+test("config templates define every chat setting exactly once with parser defaults", () => {
+  const templates: Array<[string, string, TemplateFormat]> = [
+    [
+      "lobby-service/.env.example",
+      readFileSync(new URL("../.env.example", import.meta.url), "utf8"),
+      "dotenv",
+    ],
     [
       "deploy/lobby-service.env.example",
       readFileSync(new URL("../../deploy/lobby-service.env.example", import.meta.url), "utf8"),
+      "dotenv",
+    ],
+    [
+      "lobby-service/deploy/sts2-lobby.service.example",
+      readFileSync(new URL("../deploy/sts2-lobby.service.example", import.meta.url), "utf8"),
+      "systemd",
     ],
   ];
+  const expectedKeys = Object.keys(CHAT_TEMPLATE_DEFAULTS).sort();
+  const parserDefaults = loadLobbyServiceConfig({}).chat;
 
-  for (const [templateName, template] of templates) {
-    const settings = readTemplateSettings(template);
+  for (const [templateName, template, format] of templates) {
+    const entries = readTemplateSettings(template, format);
+    const chatEntries = entries.filter(([key]) =>
+      key.startsWith("SERVER_CHAT_") || key.startsWith("ROOM_CHAT_"));
+    assert.deepEqual(
+      chatEntries.map(([key]) => key).sort(),
+      expectedKeys,
+      `${templateName} must contain the exact chat key set`,
+    );
 
-    for (const [setting, expectedValue] of Object.entries(PHASE_ONE_CHAT_TEMPLATE_DEFAULTS)) {
+    for (const [setting, expectedValue] of Object.entries(CHAT_TEMPLATE_DEFAULTS)) {
       assert.equal(
-        countTemplateSettingLines(template, setting),
+        chatEntries.filter(([key]) => key === setting).length,
         1,
         `${templateName} must define ${setting} exactly once`,
       );
       assert.equal(
-        settings.get(setting),
+        chatEntries.find(([key]) => key === setting)?.[1],
         expectedValue,
         `${templateName} must define ${setting}=${expectedValue}`,
       );
     }
+
+    assert.deepEqual(
+      loadLobbyServiceConfig(Object.fromEntries(chatEntries)).chat,
+      parserDefaults,
+      `${templateName} values must round-trip through the real parser`,
+    );
   }
+
+  const systemd = templates[2]?.[1] ?? "";
+  assert.ok(
+    systemd.lastIndexOf('Environment="SERVER_CHAT_SLOW_CLIENT_BYTES=262144"')
+      < systemd.indexOf("EnvironmentFile="),
+    "the operator EnvironmentFile must follow built-in defaults so it can override them",
+  );
 });
 
 test("README documents CREATE_ROOM_TOKEN read fallback without granting chat ticket access", () => {
@@ -67,6 +107,35 @@ test("README documents CREATE_ROOM_TOKEN read fallback without granting chat tic
     /When `LOBBY_ACCESS_TOKEN` is unset, `CREATE_ROOM_TOKEN` also authorizes protected room-list and detailed-health reads\./,
   );
   assert.match(readme, /`CREATE_ROOM_TOKEN` alone does not authorize chat tickets\./);
+});
+
+test("operator docs lock chat privacy generation rollback and temporary release boundaries", () => {
+  const documents: Array<[string, string]> = [
+    ["README.md", readFileSync(new URL("../../README.md", import.meta.url), "utf8")],
+    ["lobby-service/README.md", readFileSync(new URL("../README.md", import.meta.url), "utf8")],
+    [
+      "docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md",
+      readFileSync(new URL("../../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md", import.meta.url), "utf8"),
+    ],
+  ];
+
+  for (const [name, document] of documents) {
+    for (const required of [
+      /(?:未验证|unverified)/i,
+      /roomSessionId/,
+      /60 UTF-16/i,
+      /monster/i,
+      /SERVER_ADMIN_STATE_FILE/,
+      /lobby-service\/\.env\.example/,
+      /deploy\/lobby-service\.env\.example/,
+      /lobby-service\/deploy\/sts2-lobby\.service\.example/,
+      /releases\//,
+      /typing\.dll/i,
+    ]) {
+      assert.match(document, required, `${name} missing ${required}`);
+    }
+    assert.doesNotMatch(document, /persistent chat history|verified nickname|持久化聊天历史|已验证昵称/i);
+  }
 });
 
 test("loadLobbyServiceConfig applies phase 1 chat defaults", () => {

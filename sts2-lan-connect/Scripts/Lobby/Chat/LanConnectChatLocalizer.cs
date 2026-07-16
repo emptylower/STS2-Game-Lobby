@@ -245,8 +245,34 @@ internal sealed class LanConnectChatLocalizer
     private static string? NormalizeLocale(string? locale)
     {
         string? normalized = locale?.Trim().Replace('_', '-');
-        return string.IsNullOrEmpty(normalized) ? null : normalized;
+        if (string.IsNullOrEmpty(normalized))
+        {
+            return null;
+        }
+
+        string[] subtags = normalized.Split('-');
+        if (subtags.Length == 0 || subtags[0].Length is < 2 or > 8 ||
+            !subtags[0].All(IsAsciiLetter))
+        {
+            return null;
+        }
+
+        foreach (string subtag in subtags)
+        {
+            if (subtag.Length is < 1 or > 8 || !subtag.All(IsAsciiLetterOrDigit))
+            {
+                return null;
+            }
+        }
+
+        return normalized;
     }
+
+    private static bool IsAsciiLetter(char value) =>
+        value is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
+
+    private static bool IsAsciiLetterOrDigit(char value) =>
+        IsAsciiLetter(value) || value is >= '0' and <= '9';
 
     private static IReadOnlyDictionary<string, string> ReadOnly(Dictionary<string, string> source) =>
         new ReadOnlyDictionary<string, string>(source);

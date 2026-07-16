@@ -1,4 +1,5 @@
 using Sts2LanConnect.Scripts;
+using System.Text.RegularExpressions;
 
 namespace Sts2LanConnect.Tests.Lobby.Chat;
 
@@ -143,6 +144,8 @@ public sealed class LanConnectChatLocalizerTests
     [Theory]
     [InlineData("zh-CN")]
     [InlineData("zh-Hans")]
+    [InlineData("zh-Hans-CN")]
+    [InlineData("zh-CN-x-test")]
     [InlineData(" ZH_cn ")]
     [InlineData("zh_hans")]
     public void Simplified_Chinese_locales_use_Chinese(string locale)
@@ -157,11 +160,32 @@ public sealed class LanConnectChatLocalizerTests
     }
 
     [Theory]
+    [InlineData("en")]
+    [InlineData("en-US")]
+    [InlineData(" EN_us ")]
+    public void English_locales_use_English(string locale)
+    {
+        LanConnectChatLocalizer localizer = new();
+
+        Assert.Equal("Unknown power", localizer.Get(locale, "chat.unknown_power"));
+        Assert.Equal("Chat · {0} unread", localizer.Get(locale, "chat.fade.unread_hint"));
+    }
+
+    [Theory]
     [InlineData("fr-FR")]
     [InlineData("ja-JP")]
     [InlineData("unknown")]
     [InlineData("zh-CNN")]
     [InlineData("zh-Hansfoo")]
+    [InlineData("zh-TW")]
+    [InlineData("zh-Hant")]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("zh-CN-")]
+    [InlineData("zh-Hans--CN")]
+    [InlineData("zh__CN")]
+    [InlineData("-zh-CN")]
+    [InlineData("zh-CN-\u0001")]
     [InlineData(null)]
     public void Unsupported_or_null_locales_fall_back_to_English(string? locale)
     {
@@ -172,6 +196,53 @@ public sealed class LanConnectChatLocalizerTests
         Assert.Equal("Target is no longer available", localizer.Get(locale, "chat.target_expired"));
         Assert.Equal("Combat state can only be shared in room chat", localizer.Get(locale, "chat.combat.room_only"));
         Assert.Equal("Message text exceeds 300 characters", localizer.Get(locale, "chat.budget.text_limit"));
+    }
+
+    [Fact]
+    public void Phase_four_governance_combat_and_fade_copy_is_exact_in_both_languages()
+    {
+        LanConnectChatLocalizer localizer = new();
+        Dictionary<string, (string English, string Chinese)> expected = new()
+        {
+            ["chat.unknown_power"] = ("Unknown power", "未知能力"),
+            ["chat.target_expired"] = ("Target is no longer available", "目标已不可用"),
+            ["chat.combat.room_only"] = ("Combat state can only be shared in room chat", "战斗状态只能分享到房间聊天"),
+            ["chat.fade.unread_hint"] = ("Chat · {0} unread", "聊天 · {0} 条未读"),
+            ["chat.rich_disabled"] = ("Rich content is unavailable in this channel", "当前频道不支持草稿中的富内容"),
+            ["chat.emoji_disabled"] = ("Emoji are unavailable in this channel", "当前频道不支持表情"),
+            ["chat.item_disabled"] = ("Item links are unavailable in this channel", "当前频道不支持物品链接"),
+            ["chat.combat_disabled"] = ("Combat references are unavailable in this channel", "当前频道不支持战斗引用"),
+            ["chat.presentation.room_disabled"] = ("Room chat unavailable", "房间聊天暂不可用"),
+            ["chat.presentation.chat_disabled"] = ("Chat unavailable", "聊天暂不可用"),
+            ["chat.presentation.server_disabled"] = ("Server chat disabled by the server", "频道已由服务器停用")
+        };
+
+        foreach ((string key, (string english, string chinese)) in expected)
+        {
+            Assert.Equal(english, localizer.Get("en-US", key));
+            Assert.Equal(chinese, localizer.Get("zh-Hans-CN", key));
+        }
+    }
+
+    [Fact]
+    public void English_and_Chinese_format_placeholders_match_for_every_key()
+    {
+        LanConnectChatLocalizer localizer = new();
+        foreach (string key in ExpectedKeys)
+        {
+            int[] english = PlaceholderIndexes(localizer.Get("en", key));
+            int[] chinese = PlaceholderIndexes(localizer.Get("zh-CN", key));
+            Assert.Equal(english, chinese);
+
+            if (english.Length > 0)
+            {
+                object[] args = Enumerable.Range(0, english.Max() + 1)
+                    .Select(index => (object)index)
+                    .ToArray();
+                Assert.False(string.IsNullOrWhiteSpace(localizer.Format("en", key, args)));
+                Assert.False(string.IsNullOrWhiteSpace(localizer.Format("zh-CN", key, args)));
+            }
+        }
     }
 
     [Fact]
@@ -262,6 +333,13 @@ public sealed class LanConnectChatLocalizerTests
         }
         return count;
     }
+
+    private static int[] PlaceholderIndexes(string value) =>
+        Regex.Matches(value, @"\{(\d+)(?:[^}]*)\}")
+            .Select(match => int.Parse(match.Groups[1].Value))
+            .Distinct()
+            .Order()
+            .ToArray();
 
     private static string FindRepositoryRoot()
     {

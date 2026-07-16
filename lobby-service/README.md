@@ -418,11 +418,17 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 | `CREATE_JOIN_RATE_LIMIT_WINDOW_MS` | 建房 / 加房请求限流窗口 |
 | `CREATE_JOIN_RATE_LIMIT_MAX_REQUESTS` | 单来源窗口内允许请求数 |
 
-### Phase 1 server chat
+### 服务器频道与房间富聊天
 
-Phase 1 server chat is text-only. It keeps a bounded, process-memory history for the current lobby-service process; messages are not persistent and are lost when the process restarts. Chat nicknames come from unverified client session data and must not be treated as identities or authorization claims.
+- 服务器频道只保留当前节点、当前进程的有界内存历史，重启即清空；房间聊天不保留历史，peer 节点也不会复制聊天。昵称来自未验证的客户端 session，只能展示，不得作为身份或授权依据。
+- 建房和 continue-run 重新发布会创建新的 `roomSessionId` generation。power/player/monster 战斗引用必须匹配当前 generation；过期引用在客户端降级，不影响静态 item 引用或相邻文本。
+- legacy fallback 先按原顺序使用最多 60 个 UTF-16 unit 保存所有用户文本，再用剩余预算追加完整通用实体占位符；不会拆 surrogate pair，也不会暴露 model ID。monster target 因缺少双客户端稳定 ID 证明而保持 hard-disabled。
+- 六个治理开关由 `/server-admin` 写入现有 `SERVER_ADMIN_STATE_FILE`，持久化成功后才向 server/room gateway 顺序广播。消息、metrics、history 不写入状态文件。环境变量只填充缺失键，持久化值在重启后优先。
+- 依赖顺序：rich 关闭时 Emoji/item/combat 的有效版本为 0，但子开关持久值保留；room-v2 关闭时 combat-v2 为 0，legacy 房间文本仍可用；服务器频道开关独立。分阶段回滚先关 combat，再关 Emoji/item 与 rich，最后才按需关 room-v2。
+- 三份配置默认面必须一致：`lobby-service/.env.example`、`deploy/lobby-service.env.example`、`lobby-service/deploy/sts2-lobby.service.example`。`SERVER_CHAT_TRUSTED_PROXY_CIDRS` 默认留空，只有明确受信的反向代理地址才能加入。
+- 安装零写预检：`./scripts/build-sts2-lan-connect.sh --install --dry-run`。发布验证只使用临时输出目录，不读写 `releases/`；包内不得出现 `typing.dll`、游戏程序集、游戏图片/字体或除本 MOD PCK 外的游戏 PCK。
 
-Server chat channels are node-local: peer-network nodes do not share or replicate messages. `SERVER_CHAT_TRUSTED_PROXY_CIDRS` controls which reverse-proxy peers may supply forwarded client addressing; leave it empty unless those proxy addresses are explicitly trusted. When `LOBBY_ACCESS_TOKEN` is unset, `CREATE_ROOM_TOKEN` also authorizes protected room-list and detailed-health reads. `CREATE_ROOM_TOKEN` alone does not authorize chat tickets.
+当 `LOBBY_ACCESS_TOKEN` 未设置时，`CREATE_ROOM_TOKEN` 也可授权受保护的房间列表和详细健康读取；`CREATE_ROOM_TOKEN` 本身不授权聊天 ticket。
 
 ### 子服务管理面板
 
@@ -578,6 +584,17 @@ If `PEER_SELF_ADDRESS` is missing, `/server-admin` will show "Peer network uncon
 | `Private only` | `PEER_SELF_ADDRESS` set but `publicListingEnabled=false` |
 | `Joining` | Public, no external peers observed yet |
 | `Joined` | Public and external peers observed |
+
+### Chat governance and rich-room operations
+
+- Server-channel history is bounded, node-local process memory and disappears on restart. Room chat retains no history. Display nicknames are unverified client-session data, never authenticated identities.
+- Room creation and continue-run republish rotate the authoritative `roomSessionId` generation. Stale power/player/monster references degrade locally while static item links and adjacent text remain intact.
+- Legacy projection spends its 60 UTF-16-unit budget on user text first, then adds only whole generic entity placeholders that fit. It never splits surrogate pairs or exposes model IDs. Monster targets ship disabled until a two-client stable-ID proof exists.
+- `/server-admin` persists six toggles in the existing `SERVER_ADMIN_STATE_FILE` before ordered gateway broadcasts. Messages, metrics, and history are runtime-only. Environment variables fill missing keys; persisted values win after restart.
+- Rich-off makes effective Emoji/item/combat versions zero without erasing child toggles. Room-v2-off disables combat-v2 but keeps legacy room text. Server chat is independent. Roll back in stages: combat, then Emoji/item and rich, then room-v2 only if needed.
+- Keep `lobby-service/.env.example`, `deploy/lobby-service.env.example`, and `lobby-service/deploy/sts2-lobby.service.example` in exact parity. Use `./scripts/build-sts2-lan-connect.sh --install --dry-run` for zero-write install planning. Release verification uses temporary output only, never `releases/`, and packages no `typing.dll` or game assemblies/assets/fonts/PCKs.
+
+When `LOBBY_ACCESS_TOKEN` is unset, `CREATE_ROOM_TOKEN` also authorizes protected room-list and detailed-health reads. `CREATE_ROOM_TOKEN` alone does not authorize chat tickets.
 
 ### Reference sections
 

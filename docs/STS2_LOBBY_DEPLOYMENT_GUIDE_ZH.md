@@ -189,6 +189,16 @@ PEER_STATE_DIR=/app/data/peer
 - `/server-admin` 可直接打开，但未配置密码哈希和会话密钥时无法登录修改
 - 如果你通过反向代理提供 HTTPS / WSS，`PEER_SELF_ADDRESS` 也要写成代理对外的实际地址
 
+### 6. 聊天治理、兼容与回滚
+
+- 服务器频道历史是当前节点进程内的有界内存，服务重启即清空；房间聊天不保留历史，节点间不复制聊天。昵称来自未验证的客户端 session，只用于展示，不能参与身份认证或授权。
+- 建房或 continue-run 重新发布会轮换权威 `roomSessionId` generation。战斗引用必须匹配当前 generation；旧 power/player/monster 引用在客户端降级，静态 item 引用和相邻文本保持正常。
+- legacy 客户端 fallback 先保留最多 60 UTF-16 unit 的全部用户文本，再在剩余预算内追加完整通用实体占位符，不拆 surrogate pair、不暴露 model ID。monster target 因没有双客户端稳定 ID 证明而在发布版保持关闭。
+- `/server-admin` 的六个开关持久化到同一个 `SERVER_ADMIN_STATE_FILE`，成功落盘后才广播；消息、metrics、history 不持久化。环境变量只补缺失键，已持久化值在重启后优先。
+- rich 关闭会令 Emoji/item/combat 的有效版本归零，但保留子开关值；room-v2 关闭会关闭 combat-v2，legacy 房间文本仍可用；服务器频道独立。回滚顺序建议：combat refs → Emoji/item refs 与 rich → 必要时 room-v2，服务器频道单独处理。
+- 三个配置真理面为 `lobby-service/.env.example`、`deploy/lobby-service.env.example`、`lobby-service/deploy/sts2-lobby.service.example`。安装前用 `./scripts/build-sts2-lan-connect.sh --install --dry-run` 做零写路径检查。
+- 发布验证必须在临时输出目录完成，不读写 `releases/`。客户端包不得包含 `typing.dll`、游戏程序集、游戏图片/字体或除本 MOD PCK 外的游戏 PCK。
+
 ---
 
 ## 三、加入节点网络 vs 私有模式
@@ -341,6 +351,7 @@ curl http://127.0.0.1:8787/peers/metrics
 9. 如安装 `say-the-spire2`，房间卡片焦点能朗读中文房间摘要，且不会朗读密码
 10. 如使用扩展人数补丁，房间人数元数据与实际配置一致
 11. `复制本地调试报告` 功能可用
+12. 新旧客户端混用时，富内容接收端获得完整消息，旧接收端获得 60 UTF-16 text-first fallback；重建房间后旧战斗引用显示为安全降级文本
 
 ---
 
@@ -451,6 +462,15 @@ The canonical reference is [`deploy/lobby-service.env.example`](../deploy/lobby-
 - **Private but networked**: `PEER_PUBLIC_LISTING_ENABLED=false`. Direct connections still work; the node just isn't aggregated.
 - **Fully offline of the peer network**: `PEER_NETWORK_ENABLED=false`. Only players who know the direct URL can connect.
 - **Token-gated** (private API): keep defaults `PUBLIC_ROOM_LIST_ENABLED=false`, `PUBLIC_DETAILED_HEALTH_ENABLED=false`, `ENFORCE_LOBBY_ACCESS_TOKEN=true`, `ENFORCE_CREATE_ROOM_TOKEN=true` and issue strong tokens.
+
+### Chat governance, compatibility, and rollback
+
+- Server-channel history is bounded process memory on one node and is lost on restart. Room chat retains no history and is not replicated. Nicknames are unverified client-session display data, never authentication or authorization claims.
+- Room creation and continue-run republish rotate the authoritative `roomSessionId` generation. Stale power/player/monster references degrade locally without damaging static item links or adjacent text.
+- Legacy fallback spends at most 60 UTF-16 units on user text first, then adds only whole generic entity placeholders that fit. It never splits surrogate pairs or exposes model IDs. Monster targets remain disabled until a two-client stable-ID proof exists.
+- `/server-admin` persists six governance toggles in the existing `SERVER_ADMIN_STATE_FILE` before ordered broadcasts. Messages, metrics, and history remain runtime-only. Environment defaults fill missing keys; persisted values win after restart.
+- Rich-off clears effective Emoji/item/combat versions without erasing child values. Room-v2-off clears combat-v2 while legacy room text remains. Server chat is independent. Roll back combat first, then Emoji/item and rich, and room-v2 last if required.
+- Keep `lobby-service/.env.example`, `deploy/lobby-service.env.example`, and `lobby-service/deploy/sts2-lobby.service.example` in parity. Use `./scripts/build-sts2-lan-connect.sh --install --dry-run` before install. Release verification uses temporary output only, never `releases/`, and public packages exclude `typing.dll` and all game assemblies/assets/fonts/PCKs.
 
 ### Client packaging
 
