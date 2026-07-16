@@ -14,12 +14,14 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.4.0` |
+| 客户端版本 | `0.5.0` |
 | 默认大厅 | `47.111.146.69:8787`（兜底社区节点，可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `test_relaxed + relay-only` |
 
-`0.4.0` 主要改进：大厅支持键盘 / 手柄式焦点导航，房间卡片可聚焦，`Enter` / `Space` / `ui_accept` 可加入当前聚焦房间；`Esc` 优先关闭最上层弹窗，再退出大厅；若安装 `say-the-spire2` 盲人辅助模组，客户端会软检测并把大厅焦点朗读桥接给该模组。新增 `F7` 邀请快捷键、`F8` 聊天快捷键，以及“剪贴板已有有效邀请码时跳过服务器选择器、直接弹出加入确认”的入口流程。发布包现在强制携带带 CF discovery 和内置 seed peers 的 `lobby-defaults.json`。
+`0.5.0` 主要改进：大厅新增节点级“频道聊天”，进入大厅即可使用；房间聊天升级为富聊天，支持 Emoji、卡牌 / 遗物 / 药水引用，以及按当前房间 generation 校验并安全降级的战斗状态引用。大厅聊天采用与主界面一致的浅色侧栏，房间聊天保留深色浮层；输入框、Emoji 面板和图标渲染已完成实机修复。完整功能要求客户端与 `0.5.0` lobby-service 配套更新。
+
+`0.4.0` 主要改进（保留作历史参考）：大厅支持键盘 / 手柄式焦点导航，房间卡片可聚焦，`Enter` / `Space` / `ui_accept` 可加入当前聚焦房间；`Esc` 优先关闭最上层弹窗，再退出大厅；若安装 `say-the-spire2` 盲人辅助模组，客户端会软检测并把大厅焦点朗读桥接给该模组。新增 `F7` 邀请快捷键、`F8` 聊天快捷键，以及“剪贴板已有有效邀请码时跳过服务器选择器、直接弹出加入确认”的入口流程。发布包强制携带带 CF discovery 和内置 seed peers 的 `lobby-defaults.json`。
 
 `0.3.1` 主要改进（v0.3 系列，去中心化发现，保留作历史参考）：进入"游戏大厅"时弹出
 **服务器选择 picker**，列表来自 CF Worker 聚合 + 本地缓存 + 内置种子三路；
@@ -150,12 +152,14 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.4.0` |
+| Client version | `0.5.0` |
 | Default lobby | `47.111.146.69:8787` fallback community node |
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `test_relaxed + relay-only` |
 
-`0.4.0` key changes: the lobby supports keyboard/controller-style focus navigation, focusable room cards, `Enter` / `Space` / `ui_accept` room joining, and dialog-first `Esc` behavior. If the `say-the-spire2` accessibility mod is present, the client soft-detects it and forwards lobby focus announcements to its speech system. `F7` handles clipboard/visible invite confirmation, `F8` toggles the room chat panel, and valid clipboard invites skip the server picker and open the lobby invite confirmation directly. Release packages now require `lobby-defaults.json` with CF discovery and bundled seed peers.
+`0.5.0` key changes: the lobby now has node-local server-channel chat, while room chat supports Emoji, card/relic/potion references, and generation-checked combat references with safe fallback. Lobby chat uses a native light sidebar and room chat retains its dark overlay; composer sizing, the Emoji popup, and icon rasterization were fixed in the real game. The complete feature set requires both the v0.5.0 client and v0.5.0 lobby service.
+
+Historical `0.4.0` changes: keyboard/controller lobby navigation, focusable room cards, dialog-first `Esc`, optional `say-the-spire2` announcements, `F7` invite handling, `F8` room-chat toggling, clipboard invite routing, and mandatory CF discovery/seed defaults in the release package.
 
 Historical `0.3.x` changes: the server picker lists lobbies from CF Worker aggregation, local cache, and bundled seed peers. Historical `0.2.3` changes: scene-based runtime hook, 4-player legacy compatibility, 5-8 player extended protocol, Android stability fixes, announcement carousel, room chat, search/filtering, and pause-menu `Restart Run`.
 

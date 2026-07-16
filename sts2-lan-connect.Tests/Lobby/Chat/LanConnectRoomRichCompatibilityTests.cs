@@ -38,7 +38,7 @@ public sealed class LanConnectRoomRichCompatibilityTests
             LanConnectJson.Options) ?? throw new InvalidOperationException("Missing-version fixture returned null.");
         Assert.Equal(None, missingVersions.EnabledFeatures);
 
-        foreach (string modVersion in new[] { "0.4.0", "0.2.2" })
+        foreach (string modVersion in new[] { "0.5.0", "0.4.0", "0.2.2" })
         {
             LobbyControlEnvelope legacy = JsonSerializer.Deserialize<LobbyControlEnvelope>(
                 $$"""{"type":"room_chat","roomId":"room-a","playerName":"Legacy {{modVersion}}","playerNetId":"net:legacy","messageId":"legacy-1","messageText":"legacy text","sentAtUnixMs":1784073600000}""",

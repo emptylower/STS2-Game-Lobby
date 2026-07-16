@@ -2,8 +2,8 @@
   "id": "sts2_lan_connect",
   "name": "STS2 LAN Connect",
   "author": "mac",
-  "version": "0.4.0",
-  "description": "Adds LAN host/join support to Slay the Spire 2 multiplayer.",
+  "version": "0.5.0",
+  "description": "Adds public lobby discovery, relay-assisted rooms, and rich chat to Slay the Spire 2 multiplayer.",
   "has_dll": true,
   "has_pck": true,
   "affects_gameplay": false

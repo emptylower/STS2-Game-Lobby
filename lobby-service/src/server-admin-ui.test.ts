@@ -153,19 +153,19 @@ test("chat rejection rates include accepted and rejected messages", () => {
 });
 
 test("server admin page preserves unsaved drafts during poll refresh", () => {
-  const html = renderServerAdminPage("0.4.0");
+  const html = renderServerAdminPage("0.5.0");
 
   assert.match(html, /if \(source === "poll" && draftDirtyRef\.current\)/);
   assert.match(html, /自动刷新不会覆盖当前草稿/);
   assert.match(html, /重新加载会覆盖左侧设置和公告草稿/);
-  assert.match(html, /Lobby Service v0\.4\.0/);
+  assert.match(html, /Lobby Service v0\.5\.0/);
   assert.match(html, /mergePollSnapshot\(previous, next, draftDirtyRef\.current\)/);
   assert.match(html, /settingsRequestSeqRef/);
   assert.match(html, /sessionGenerationRef/);
 });
 
 test("server admin page renders six nested persisted switches and effective versions", () => {
-  const html = renderServerAdminPage("0.4.0");
+  const html = renderServerAdminPage("0.5.0");
   for (const key of [
     "serverChatEnabled",
     "richContentEnabled",
@@ -186,7 +186,7 @@ test("server admin page renders six nested persisted switches and effective vers
 });
 
 test("server admin page renders all chat metrics, rejection rates, and guarded clear action", () => {
-  const html = renderServerAdminPage("0.4.0");
+  const html = renderServerAdminPage("0.5.0");
   for (const key of [
     "serverConnectionCount",
     "roomConnectionCount",
@@ -213,7 +213,7 @@ test("server admin page renders all chat metrics, rejection rates, and guarded c
 });
 
 test("server admin page centralizes CSRF requests and 401/403 handling", () => {
-  const html = renderServerAdminPage("0.4.0");
+  const html = renderServerAdminPage("0.5.0");
   assert.match(html, /credentials: "same-origin"/);
   assert.match(html, /headers\["x-csrf-token"\] = csrfToken/);
   assert.match(html, /response\.status === 204 \? null : payload/);
@@ -231,14 +231,14 @@ test("server admin page centralizes CSRF requests and 401/403 handling", () => {
 });
 
 test("server admin page shows server version in current status block", () => {
-  const html = renderServerAdminPage("0.4.0");
+  const html = renderServerAdminPage("0.5.0");
 
   assert.match(html, /title: "当前状态"[\s\S]*label: "服务器版本"[\s\S]*serviceVersionLabel/);
-  assert.match(html, /Lobby Service v0\.4\.0/);
+  assert.match(html, /Lobby Service v0\.5\.0/);
 });
 
 test("server admin page maps node-network status from peerRuntimeState", () => {
-  const html = renderServerAdminPage("0.4.0");
+  const html = renderServerAdminPage("0.5.0");
 
   assert.match(html, /switch \(settings\.peerRuntimeState\)/);
   assert.match(html, /节点网络未启用/);
@@ -249,7 +249,7 @@ test("server admin page maps node-network status from peerRuntimeState", () => {
 });
 
 test("server admin page mobile layout wraps actions and bounds long status content", () => {
-  const html = renderServerAdminPage("0.4.0");
+  const html = renderServerAdminPage("0.5.0");
 
   assert.match(html, /className: "settings-actions"/);
   assert.match(html, /className: "announcement-actions"/);

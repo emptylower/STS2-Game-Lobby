@@ -10,6 +10,13 @@
 
 # STS2 LAN Connect 使用说明
 
+## v0.5.0 聊天升级
+
+- 大厅右侧新增 `频道聊天`，连接当前大厅服务器后即可收发消息，不需要先加入房间
+- 频道聊天历史只保存在当前服务器进程内，服务重启后清空，也不会同步到其他大厅节点
+- 房间聊天支持 Emoji、卡牌 / 遗物 / 药水引用，以及安全降级的战斗状态引用；旧客户端只能看到兼容文本
+- 完整聊天能力要求客户端和大厅服务都升级到 `0.5.0`
+
 ## 进入大厅
 
 1. 启动游戏并进入多人首页
@@ -58,13 +65,17 @@
 3. 如果刷新失败或延迟异常，先用 `切换服务器` 换一个大厅
 4. 选择目标房间加入；如房间有密码，按提示输入
 
-## 房间聊天
+## 频道聊天与房间聊天
+
+- 大厅右侧 `频道聊天` 属于当前服务器节点；切换服务器后会进入另一条频道
+- 频道昵称来自客户端显示名，不代表已验证账号或管理身份
 
 - 进入已连接房间后，右上角出现 `房间聊天` 按钮；点击后展开面板，按 `Enter` 或点 `发送` 发消息
 - 也可以按 `F8` 打开或收起聊天面板；文本输入框聚焦时不会把快捷键内容写进聊天文本
 - 面板收起时，收到新消息会显示未读角标
 - 聊天面板标题栏和按钮支持长按拖动，位置保存到本地配置
-- 聊天走大厅控制通道，仅在当前房间内广播，不写入续局存档
+- 房间聊天走大厅控制通道，仅在当前房间内广播，不写入续局存档，也不保留历史
+- Emoji 与物品引用会按双方协商能力显示；旧版本或功能关闭时自动降级为普通文本
 
 ## 房间管理
 
@@ -169,13 +180,13 @@
 
 ### 安卓端启动就弹"致命错误"
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本仓库 v0.4.0 文档对应 `0.4.0`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本仓库 v0.5.0 文档对应 `0.5.0`）
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保 `sts2_lan_connect.dll`、`sts2_lan_connect.pck` 和 `sts2_lan_connect.json` 同步更新
 - 如仍崩溃，将最新 `godot.log` 和本地调试报告一并发给开发者
 
 ### 安卓端进了主菜单，但打开多人页面 / 游戏大厅异常
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本仓库 v0.4.0 文档对应 `0.4.0`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本仓库 v0.5.0 文档对应 `0.5.0`）
 - 确认安装的是当前发布的客户端包，而非更早的旧包
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保三个文件来自同一批 release
 - 如问题仍存在，将最新 `godot.log` 和本地调试报告一并发给开发者
@@ -189,6 +200,13 @@
 <a name="english"></a>
 
 # STS2 LAN Connect User Guide
+
+## v0.5.0 Chat Upgrade
+
+- The lobby sidebar now includes server-channel chat for the currently selected lobby node; joining a room is not required.
+- Server-channel history is node-local process memory, disappears on restart, and is not replicated to other lobby nodes.
+- Room chat supports Emoji, card/relic/potion references, and safely degraded combat references. Older clients receive compatibility text only.
+- The complete chat feature set requires both the v0.5.0 client and v0.5.0 lobby service.
 
 ## Entering the Lobby
 
@@ -238,13 +256,17 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 3. If refresh fails or latency is abnormal, use `Switch Server` first
 4. Select the room and join; if the room has a password, enter it when prompted
 
-## Room Chat
+## Server-Channel and Room Chat
+
+- `Channel Chat` in the lobby belongs to the current server node; switching servers moves to a different channel.
+- Display names are client-provided and are not verified account or moderator identities.
 
 - After connecting to a room, a `Room Chat` button appears in the top-right corner; click to expand the panel and send messages with `Enter` or the `Send` button
 - You can also press `F8` to open or collapse the chat panel; focused text inputs do not receive shortcut text
 - When the panel is collapsed, unread messages show a badge indicator
 - The chat panel title bar and button support press-and-drag repositioning; the position is saved to local config
-- Chat uses the lobby control channel and is broadcast only within the current room; it is not written to save files
+- Room chat uses the lobby control channel, is broadcast only within the current room, is not written to save files, and retains no history
+- Emoji and item references follow negotiated peer capabilities and degrade to ordinary compatibility text for old clients or disabled features
 
 ## Room Management
 
@@ -350,13 +372,13 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 
 ### Android: "Fatal Error" on launch
 
-- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.4.0 documentation corresponds to `0.4.0`)
+- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.5.0 documentation corresponds to `0.5.0`)
 - If you installed over an older package, fully uninstall first and then reinstall to ensure `sts2_lan_connect.dll`, `sts2_lan_connect.pck`, and `sts2_lan_connect.json` are all updated together
 - If the crash persists, send the latest `godot.log` and the local debug report to the developer
 
 ### Android: Main menu loads, but multiplayer page / Game Lobby behaves abnormally
 
-- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.4.0 documentation corresponds to `0.4.0`)
+- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.5.0 documentation corresponds to `0.5.0`)
 - Confirm you installed the current release package, not an older package
 - If you installed over an older package, fully uninstall first and then reinstall to ensure all three files come from the same release batch
 - If the issue persists, send the latest `godot.log` and the local debug report to the developer

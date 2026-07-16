@@ -1,10 +1,10 @@
 # STS2 服务 Docker 化部署与运维指南
 
-> 本文档对应 **v0.4.0**。在 v0.4.0 中，部署只需要 `lobby-service` 一个容器——以前的"双服务"栈（lobby-service + server-registry + postgres）只是 v0.3.x 时代的产物，相关材料保留在本文末尾，供旧部署运维参考。
+> 本文档对应 **v0.5.0**。部署仍只需要 `lobby-service` 一个容器；v0.5.0 在 v0.4.0 去中心化架构上新增服务器频道、房间富聊天和治理开关。以前的"双服务"栈（lobby-service + server-registry + postgres）仅作历史运维参考。
 
 ## 一、当前推荐：lobby-service 单容器
 
-v0.4.0 的去中心化节点网络通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）做节点列表聚合，本地不再需要 PostgreSQL 或 `server-registry`。推荐用单服务 compose 部署。
+v0.5.0 沿用 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）聚合去中心化节点，本地不需要 PostgreSQL 或 `server-registry`。升级时应替换完整 lobby-service 包并重新构建容器，确保 chat gateway、管理面板和 env 默认值来自同一版本。
 
 ### 1.1 准备 env 文件
 
@@ -27,7 +27,7 @@ $EDITOR deploy/lobby-service.env
 - `PEER_PUBLIC_LISTING_ENABLED=false` 如果只想跑私有节点（仍在节点网络里但不公开）
 - `PEER_NETWORK_ENABLED=false` 如果完全不想加入节点网络
 
-> ⚠️ `PEER_SELF_ADDRESS` 是 v0.4.0 新部署最容易漏掉的一项。漏了就会在 `/server-admin` 看到"节点网络未配置"。
+> ⚠️ `PEER_SELF_ADDRESS` 是 v0.4.0+ 新部署最容易漏掉的一项。漏了就会在 `/server-admin` 看到"节点网络未配置"。
 
 ### 1.2 启动
 

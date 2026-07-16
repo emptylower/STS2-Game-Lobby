@@ -12,7 +12,7 @@
 
 # STS2 Lobby Service
 
-> 本文档对应 **v0.4.0**（去中心化节点网络）。v0.3.x 时代的 `SERVER_REGISTRY_*` 一组环境变量已在 v0.4.0 运行时中完全删除，本文不再提及。
+> 本文档对应 **v0.5.0**。去中心化节点网络沿用 v0.4.0 架构；v0.5.0 新增服务器频道、房间富聊天与管理面板治理开关。v0.3.x 时代的 `SERVER_REGISTRY_*` 环境变量自 v0.4.0 起已完全删除。
 
 ## 文档定位
 
@@ -21,7 +21,7 @@
 它主要回答：
 
 - 该服务负责什么、**不**负责什么
-- 当前 v0.4.0 推荐的部署路径是什么
+- 当前 v0.5.0 推荐的部署路径是什么
 - 首次部署完成后先检查哪些项目
 - 如何配置节点网络、私有访问、管理面板与客户端默认大厅
 - 需要深入查阅时，环境变量和 API 在哪里看
@@ -35,6 +35,8 @@
 - 房主心跳与僵尸房间清理
 - 控制通道握手与按房间广播
 - 房间聊天 envelope 广播
+- 服务器频道 ticket、历史缓冲、限流与广播
+- Emoji / item / combat 引用的能力协商和 legacy 文本降级
 - 房主踢人（`kick_player`）
 - 房间设置同步（`room_settings`）
 - 生成 `ENet` 直连优先、失败后自动切 relay 的连接计划
@@ -49,7 +51,7 @@
 - 战斗同步
 - 账号系统
 - 保证 NAT 一定打通
-- 任何"母面板"/审核后台 —— v0.4.0 没有这种概念
+- 任何"母面板"/审核后台 —— v0.4.0 起已没有这种概念
 
 > 当前 relay 的定位是"直连失败时的房间级兜底路径"，不是独立完整的联机协议。
 
@@ -87,7 +89,7 @@ sudo ./scripts/install-lobby-service-linux.sh \
 - 生成 `/opt/sts2-lobby/start-lobby-service.sh`
 - 在 systemd 可用且以 root 执行时安装并启动 `sts2-lobby.service`
 
-> ⚠️ **首次安装后必检**：编辑 `/opt/sts2-lobby/lobby-service/.env`，确认里面包含 `PEER_SELF_ADDRESS` 与 `PEER_CF_DISCOVERY_BASE_URL`。如果没有，按本文"4) 配置节点网络"补齐——这是 v0.4.0 新部署最常见的遗漏，会导致 `/server-admin` 显示"节点网络未配置"。
+> ⚠️ **首次安装后必检**：编辑 `/opt/sts2-lobby/lobby-service/.env`，确认里面包含 `PEER_SELF_ADDRESS` 与 `PEER_CF_DISCOVERY_BASE_URL`。如果没有，按本文"4) 配置节点网络"补齐——这是 v0.4.0+ 新部署最常见的遗漏，会导致 `/server-admin` 显示"节点网络未配置"。
 
 ### 2) 开放端口
 
@@ -111,7 +113,7 @@ SERVER_ADMIN_PASSWORD_HASH=<密码哈希>
 SERVER_ADMIN_SESSION_SECRET=<会话密钥>
 ```
 
-### 4) 配置节点网络（v0.4.0 必检）
+### 4) 配置节点网络（v0.4.0+ 必检）
 
 在 `.env` 中加入 / 确认以下行：
 
@@ -420,6 +422,7 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 
 ### 服务器频道与房间富聊天
 
+- 这是 v0.5.0 的服务端协议面。升级客户端而不升级 lobby-service 时，服务器频道 ticket 和富聊天协商不可用；发布时必须同步更新两个组件。
 - 服务器频道只保留当前节点、当前进程的有界内存历史，重启即清空；房间聊天不保留历史，peer 节点也不会复制聊天。昵称来自未验证的客户端 session，只能展示，不得作为身份或授权依据。
 - 建房和 continue-run 重新发布会创建新的 `roomSessionId` generation。power/player/monster 战斗引用必须匹配当前 generation；过期引用在客户端降级，不影响静态 item 引用或相邻文本。
 - legacy fallback 先按原顺序使用最多 60 个 UTF-16 unit 保存所有用户文本，再用剩余预算追加完整通用实体占位符；不会拆 surrogate pair，也不会暴露 model ID。monster target 因缺少双客户端稳定 ID 证明而保持 hard-disabled。
@@ -513,7 +516,7 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 
 ## 历史兼容 / 补充说明
 
-以下内容 **不是 v0.4.0 推荐主路径**，但仍保留供旧部署管理员查阅：
+以下内容 **不是 v0.5.0 推荐主路径**，但仍保留供旧部署管理员查阅：
 
 - v0.3.x 升级与 sidecar 过渡资料：[`../docs/STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md`](../docs/STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md)、[`../docs/STS2_PEER_SIDECAR_GUIDE_ZH.md`](../docs/STS2_PEER_SIDECAR_GUIDE_ZH.md)
 - 当前部署主路径中文版：[`../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md)
@@ -527,7 +530,7 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 
 # STS2 Lobby Service
 
-> Targets **v0.4.0** (decentralized peer network). All `SERVER_REGISTRY_*` env vars from the v0.3.x era are inert at runtime in v0.4.0 and are not documented below.
+> Targets **v0.5.0**. It retains the v0.4.0 decentralized peer network and adds server-channel chat, rich room chat, and persisted governance controls. All `SERVER_REGISTRY_*` env vars from the v0.3.x era have been inert since v0.4.0.
 
 This README is the **operator/admin guide** for `lobby-service`.
 
@@ -536,6 +539,8 @@ This README is the **operator/admin guide** for `lobby-service`.
 - Room directory and password validation
 - Host heartbeat and stale room cleanup
 - Control-channel handshake and room-scoped broadcast
+- Server-channel tickets, bounded history, rate limits, and broadcast
+- Capability negotiation and legacy fallback for Emoji/item/combat references
 - In-room announcements and `/server-admin` management
 - Relay fallback planning when direct ENet connection fails
 - Joins the decentralized peer network via `/peers/announce` + the Cloudflare discovery worker
@@ -546,7 +551,7 @@ This README is the **operator/admin guide** for `lobby-service`.
 - Battle synchronization
 - Account systems
 - Guaranteed NAT traversal
-- Any "master panel" / review backend — v0.4.0 has no such concept
+- Any "master panel" / review backend — this has not existed since v0.4.0
 
 ### Recommended path
 
@@ -587,6 +592,7 @@ If `PEER_SELF_ADDRESS` is missing, `/server-admin` will show "Peer network uncon
 
 ### Chat governance and rich-room operations
 
+- This is the v0.5.0 service protocol surface. Updating only the client does not provide server-channel tickets or rich capability negotiation; publish and deploy both components together.
 - Server-channel history is bounded, node-local process memory and disappears on restart. Room chat retains no history. Display nicknames are unverified client-session data, never authenticated identities.
 - Room creation and continue-run republish rotate the authoritative `roomSessionId` generation. Stale power/player/monster references degrade locally while static item links and adjacent text remain intact.
 - Legacy projection spends its 60 UTF-16-unit budget on user text first, then adds only whole generic entity placeholders that fit. It never splits surrogate pairs or exposes model IDs. Monster targets ship disabled until a two-client stable-ID proof exists.
@@ -600,4 +606,4 @@ When `LOBBY_ACCESS_TOKEN` is unset, `CREATE_ROOM_TOKEN` also authorizes protecte
 
 - Environment variables: see [`../deploy/lobby-service.env.example`](../deploy/lobby-service.env.example)
 - Current deployment guide (Chinese): [`../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md)
-- Historical compatibility notes are intentionally demoted and not part of the v0.4.0 path
+- Historical compatibility notes are intentionally demoted and not part of the v0.5.0 path

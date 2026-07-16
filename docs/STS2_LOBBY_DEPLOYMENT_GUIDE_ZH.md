@@ -10,7 +10,7 @@
 
 # STS2 游戏大厅部署指南
 
-> 本文档对应 **v0.4.0**（去中心化节点网络）。如果你正从 v0.3.x 升级上来，请先看文末的"v0.3.x → v0.4.0 升级要点"。
+> 本文档对应 **v0.5.0**。去中心化节点网络沿用 v0.4.0 架构；v0.5.0 新增服务器频道、房间富聊天和管理面板治理开关。如果你从 v0.3.x 升级，请同时阅读文末的 v0.4.0 架构迁移要点。
 
 ## 文档定位
 
@@ -25,11 +25,14 @@
 1. [`../README.md`](../README.md)
 2. [`../lobby-service/README.md`](../lobby-service/README.md)
 
-本文只讲 **v0.4.0 怎么部署与验证**。旧的 mother registry / SERVER_REGISTRY_* 流程已经在 v0.4.0 中删除，相关内容只在文末作为升级参考保留。
+本文只讲 **v0.5.0 怎么部署与验证**。旧的 mother registry / SERVER_REGISTRY_* 流程已经在 v0.4.0 中删除，相关内容只在文末作为升级参考保留。
 
-## v0.4.0 关键变更（一句话）
+## v0.5.0 关键变更
 
-`lobby-service` 不再向任何"母面板"上报。每个节点自己通过 `PEER_SELF_ADDRESS` 公开对外地址，并由 Cloudflare 上的 discovery worker（`PEER_CF_DISCOVERY_BASE_URL`）做无状态聚合。`SERVER_REGISTRY_*` 一整组环境变量在运行时已经完全无效——配置了也不会生效。
+- v0.4.0 的去中心化架构保持不变：`lobby-service` 通过 `PEER_SELF_ADDRESS` 公开对外地址，由 Cloudflare discovery worker 聚合；`SERVER_REGISTRY_*` 仍完全无效。
+- v0.5.0 新增服务器频道 chat ticket、历史缓冲、限流、房间富聊天能力协商和 generation 隔离。
+- `/server-admin` 新增六项聊天治理开关并写入 `SERVER_ADMIN_STATE_FILE`。部署包中的三个 env 示例已经包含对应默认值。
+- 客户端与 lobby-service 必须同步升级到 `0.5.0` 才能获得完整聊天能力；仅更新客户端无法使用服务器频道 ticket 与富聊天协商。
 
 ## 当前推荐部署路径（主路径）
 
@@ -146,7 +149,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 SERVER_ADMIN_SESSION_SECRET=<上一步输出的随机字符串>
 ```
 
-### 3. 节点网络（PEER_*）—— **v0.4.0 最容易漏的一节**
+### 3. 节点网络（PEER_*）—— **v0.4.0+ 最容易漏的一节**
 
 `lobby-service` 默认开启节点网络（`PEER_NETWORK_ENABLED` 不显式为 `false` 即认为开启）。要真正加入节点网络，必须额外提供 **本机对外可达的 URL**：
 
@@ -278,7 +281,7 @@ export STS2_LOBBY_SEEDS_FILE="$PWD/data/seeds.json"
 - 若未显式设置 `STS2_LOBBY_DEFAULT_WS_URL`，打包脚本会根据 `STS2_LOBBY_DEFAULT_BASE_URL` 自动推导
 - 若服务端启用了 `CREATE_ROOM_TOKEN`，客户端打包时的默认值需与服务端 `.env` 保持一致
 - `STS2_LOBBY_DEFAULT_CF_DISCOVERY_BASE_URL` + `STS2_LOBBY_SEEDS_FILE` 决定客户端 picker 默认能看到 CF 聚合列表 + 内置种子；公开包应使用 `https://sts2-gamelobby-register.xyz` 和仓库内 `data/seeds.json`
-- `STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL` 在 v0.4.0 客户端里只用于诊断报告字符串，不再用于发起任何 HTTP 请求，**新部署可不设置**
+- `STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL` 在 v0.4.0+ 客户端里只用于诊断报告字符串，不再用于发起任何 HTTP 请求，**新部署可不设置**
 - 打包脚本会强制检查发布包内存在 `lobby-defaults.json`，且该文件包含公开 CF discovery 地址和内置 seed peers；缺失时会中止打包，避免发出只能连接单一旧默认节点的客户端包
 - 玩家安装 / 卸载说明：[`./CLIENT_RELEASE_README_ZH.md`](./CLIENT_RELEASE_README_ZH.md)
 
@@ -411,7 +414,7 @@ CF discovery worker 还没拉到本节点的 announce，或本节点的 `PEER_SE
 
 # STS2 Game Lobby Deployment Guide
 
-> Targets **v0.4.0** (decentralized peer network). If you are upgrading from v0.3.x, see the upgrade notes at the end.
+> Targets **v0.5.0**. It retains the v0.4.0 decentralized peer network and adds server-channel chat, rich room chat, and persisted governance controls. If you are upgrading from v0.3.x, see the architecture migration notes at the end.
 
 ## Document scope
 
@@ -422,9 +425,12 @@ Prerequisite reading:
 1. [`../README.md`](../README.md)
 2. [`../lobby-service/README.md`](../lobby-service/README.md)
 
-## What changed in v0.4.0 (one sentence)
+## What changed in v0.5.0
 
-`lobby-service` no longer reports to any "master registry". Each node advertises its own externally-reachable URL via `PEER_SELF_ADDRESS` and a Cloudflare discovery worker (`PEER_CF_DISCOVERY_BASE_URL`) provides stateless aggregation. All `SERVER_REGISTRY_*` env vars are inert at runtime — setting them does nothing.
+- The v0.4.0 decentralized architecture remains: nodes advertise through `PEER_SELF_ADDRESS`, the Cloudflare discovery worker aggregates them, and all `SERVER_REGISTRY_*` variables remain inert.
+- v0.5.0 adds server-channel chat tickets, bounded history, rate limiting, rich-room capability negotiation, and room-generation isolation.
+- `/server-admin` persists six chat governance controls in `SERVER_ADMIN_STATE_FILE`; all three shipped env examples contain matching defaults.
+- Upgrade the client and lobby service together to v0.5.0. A client-only update cannot obtain server-channel tickets or negotiate the complete rich-chat feature set.
 
 ## Current recommended path
 
@@ -483,7 +489,7 @@ export STS2_LOBBY_SEEDS_FILE="$PWD/data/seeds.json"
 ./scripts/package-sts2-lan-connect.sh
 ```
 
-> `STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL` is retained only for diagnostic strings in the v0.4.0 client; you do not need to set it for new packaging.
+> `STS2_LOBBY_DEFAULT_REGISTRY_BASE_URL` is retained only for diagnostic strings in v0.4.0+ clients; you do not need to set it for new packaging.
 
 Public client packages should use `https://sts2-gamelobby-register.xyz` and the repository `data/seeds.json`. The packaging script now requires `lobby-defaults.json` in the release package and fails if the public CF discovery URL or bundled seed peers are missing.
 

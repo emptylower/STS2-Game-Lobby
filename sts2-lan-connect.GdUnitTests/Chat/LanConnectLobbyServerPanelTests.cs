@@ -519,7 +519,7 @@ internal sealed class LobbyOverlayFixture : IDisposable
             MaxPlayers = 4,
             GameMode = "standard",
             Version = "1.0",
-            ModVersion = "0.4.0",
+            ModVersion = "0.5.0",
             Status = "waiting"
         },
         new LobbyRoomSummary
@@ -531,7 +531,7 @@ internal sealed class LobbyOverlayFixture : IDisposable
             MaxPlayers = 4,
             GameMode = "daily",
             Version = "1.0",
-            ModVersion = "0.4.0",
+            ModVersion = "0.5.0",
             Status = "waiting",
             RequiresPassword = true
         }

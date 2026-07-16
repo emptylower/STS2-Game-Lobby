@@ -328,7 +328,7 @@ async function joinRoom(
     body: JSON.stringify({
       playerName,
       version: "1.0.0",
-      modVersion: "0.4.0",
+      modVersion: "0.5.0",
       modList: ["sts2_lan_connect"],
       playerNetId,
     }),
@@ -469,7 +469,7 @@ test("real room gateway routes rich and exact legacy fallback per recipient and 
           hostPlayerName: "Host",
           gameMode: "standard",
           version: "1.0.0",
-          modVersion: "0.4.0",
+          modVersion: "0.5.0",
           modList: ["sts2_lan_connect"],
           maxPlayers: 5,
           hostConnectionInfo: {
@@ -969,7 +969,7 @@ test("passworded continue-game rooms remain coherent across delete and join race
           hostPlayerName: "Host",
           gameMode: "standard",
           version: "1.0.0",
-          modVersion: "0.4.0",
+          modVersion: "0.5.0",
           modList: ["sts2_lan_connect"],
           maxPlayers: 4,
           hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -994,7 +994,7 @@ test("passworded continue-game rooms remain coherent across delete and join race
         playerNetId: `live:${playerName}`,
         password,
         version: "1.0.0",
-        modVersion: "0.4.0",
+        modVersion: "0.5.0",
         modList: ["sts2_lan_connect"],
         desiredSavePlayerNetId,
       });
