@@ -1,5 +1,6 @@
 using System;
 using Godot;
+using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.Potions;
 using MegaCrit.Sts2.Core.Nodes.Relics;
@@ -18,9 +19,17 @@ internal interface ILanConnectItemLinkCapturePorts
 
     bool ItemRefsEnabledForSelectedChannel { get; }
 
+    bool CombatRefsEnabledForSelectedChannel { get; }
+
+    bool IsRoomChannelSelected { get; }
+
     bool IsCaptureBoundary(object node);
 
     bool IsSupportedHolder(object node);
+
+    bool IsPowerHolder(object node);
+
+    bool IsPlayerHolder(object node);
 
     bool TryResolveCard(object node, out LanConnectItemRun run);
 
@@ -28,7 +37,15 @@ internal interface ILanConnectItemLinkCapturePorts
 
     bool TryResolvePotion(object node, out LanConnectItemRun run);
 
+    bool TryResolvePower(object node, out LanConnectCombatRun run);
+
+    bool TryResolvePlayerTarget(object node, out LanConnectCombatRun run);
+
     bool InsertAndFocus(LanConnectItemRun run);
+
+    bool InsertCombatAndFocus(LanConnectCombatRun run);
+
+    void ShowCombatRoomOnlyWarning();
 }
 
 internal sealed class LanConnectItemLinkCapture
@@ -58,11 +75,16 @@ internal sealed class LanConnectItemLinkCapture
         return enabled.RichContentVersion == 1 && enabled.ItemRefVersion == 1;
     }
 
+    internal static bool CombatRefsEnabled(LanConnectChatFeatureVersions enabled)
+    {
+        ArgumentNullException.ThrowIfNull(enabled);
+        return enabled.RichContentVersion == 1 && enabled.CombatRefVersion == 1;
+    }
+
     private bool TryCaptureCore(LanConnectPointerGesture gesture)
     {
         if (!gesture.Alt || !gesture.Left || !gesture.Pressed ||
-            _ports.IsChatInteractionBlocking ||
-            !_ports.ItemRefsEnabledForSelectedChannel)
+            _ports.IsChatInteractionBlocking)
         {
             return false;
         }
@@ -80,6 +102,10 @@ internal sealed class LanConnectItemLinkCapture
                 _ports.TryResolveRelic(node, out run) ||
                 _ports.TryResolvePotion(node, out run))
             {
+                if (!_ports.ItemRefsEnabledForSelectedChannel)
+                {
+                    return false;
+                }
                 LanConnectItemRun? canonical = Canonicalize(run);
                 return canonical != null && _ports.InsertAndFocus(canonical);
             }
@@ -87,9 +113,36 @@ internal sealed class LanConnectItemLinkCapture
             {
                 return false;
             }
+            if (_ports.TryResolvePower(node, out LanConnectCombatRun combat))
+            {
+                return TryInsertCombat(combat);
+            }
+            if (_ports.IsPowerHolder(node))
+            {
+                return false;
+            }
+            if (_ports.TryResolvePlayerTarget(node, out combat))
+            {
+                return TryInsertCombat(combat);
+            }
+            if (_ports.IsPlayerHolder(node))
+            {
+                return false;
+            }
         }
 
         return false;
+    }
+
+    private bool TryInsertCombat(LanConnectCombatRun run)
+    {
+        if (!_ports.IsRoomChannelSelected)
+        {
+            _ports.ShowCombatRoomOnlyWarning();
+            return false;
+        }
+        return _ports.CombatRefsEnabledForSelectedChannel &&
+               _ports.InsertCombatAndFocus(run);
     }
 
     private static LanConnectItemRun? Canonicalize(LanConnectItemRun run)
@@ -114,10 +167,12 @@ internal sealed class LanConnectGodotItemLinkCapturePorts : ILanConnectItemLinkC
     internal const string ItemPreviewGroupName = "sts2_lan_connect_item_preview";
 
     private readonly LanConnectLobbyRuntime _runtime;
+    private readonly LanConnectRoomCombatReferenceResolver _combatResolver;
 
     internal LanConnectGodotItemLinkCapturePorts(LanConnectLobbyRuntime runtime)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _combatResolver = new LanConnectRoomCombatReferenceResolver(runtime);
     }
 
     public object? GuiGetHoveredControl() => _runtime.GetViewport().GuiGetHoveredControl();
@@ -158,10 +213,30 @@ internal sealed class LanConnectGodotItemLinkCapturePorts : ILanConnectItemLinkC
         }
     }
 
+    public bool CombatRefsEnabledForSelectedChannel
+    {
+        get
+        {
+            LanConnectChatChannelState state = SelectedState;
+            return state.Presentation == LanConnectServerChatPresentation.Ready &&
+                   state.ChatEnabled &&
+                   LanConnectItemLinkCapture.CombatRefsEnabled(state.EnabledRichFeatures);
+        }
+    }
+
+    public bool IsRoomChannelSelected =>
+        _runtime.HasActiveRoomSession &&
+        _runtime.Chat.SelectedChannel == LanConnectChatChannel.Room;
+
     public bool IsCaptureBoundary(object node) => node is NPreviewCardHolder;
 
     public bool IsSupportedHolder(object node) =>
         node is NCardHolder or NRelicInventoryHolder or NPotionHolder;
+
+    public bool IsPowerHolder(object node) => node is NPower;
+
+    public bool IsPlayerHolder(object node) =>
+        node is NCreature { Entity.IsPlayer: true };
 
     public bool TryResolveCard(object node, out LanConnectItemRun run)
     {
@@ -199,6 +274,45 @@ internal sealed class LanConnectGodotItemLinkCapturePorts : ILanConnectItemLinkC
         return false;
     }
 
+    public bool TryResolvePower(object node, out LanConnectCombatRun run)
+    {
+        run = null!;
+        if (node is not NPower powerNode)
+        {
+            return false;
+        }
+        try
+        {
+            MegaCrit.Sts2.Core.Models.PowerModel model = powerNode.Model;
+            return _combatResolver.TryCreatePowerRun(
+                new LanConnectPowerCaptureCandidate(
+                    model.Id.ToString(),
+                    model.Amount,
+                    ((ILanConnectRoomCombatContext)_runtime).ActiveRoomSessionId,
+                    model.Owner?.Player?.NetId.ToString(),
+                    model.Applier?.Player?.NetId.ToString()),
+                out run);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool TryResolvePlayerTarget(object node, out LanConnectCombatRun run)
+    {
+        run = null!;
+        if (node is not NCreature { Entity.Player: { } player })
+        {
+            return false;
+        }
+        return _combatResolver.TryCreatePlayerTargetRun(
+            new LanConnectPlayerTargetCaptureCandidate(
+                player.NetId.ToString(),
+                ((ILanConnectRoomCombatContext)_runtime).ActiveRoomSessionId),
+            out run);
+    }
+
     public bool InsertAndFocus(LanConnectItemRun run)
     {
         LanConnectChatChannelState expectedState = SelectedState;
@@ -221,6 +335,19 @@ internal sealed class LanConnectGodotItemLinkCapturePorts : ILanConnectItemLinkC
             roomOverlay: null,
             lobby);
     }
+
+    public bool InsertCombatAndFocus(LanConnectCombatRun run)
+    {
+        if (!_combatResolver.CanCommit(run) || !IsRoomChannelSelected)
+        {
+            return false;
+        }
+        LanConnectChatChannelState expectedState = SelectedState;
+        return ResolveRoomOverlay()?.TryInsertCombatReferenceAndFocus(expectedState, run) == true;
+    }
+
+    public void ShowCombatRoomOnlyWarning() =>
+        ResolveRoomOverlay()?.ShowCombatRoomOnlyWarning();
 
     internal static bool TryInsertAndFocus(
         bool roomActive,

@@ -52,6 +52,8 @@ public sealed class LanConnectChatLocalizerTests
         "chat.item.card",
         "chat.item.relic",
         "chat.item.potion",
+        "chat.item.power",
+        "chat.item.player",
         "chat.item.entity",
         "chat.unknown_card",
         "chat.unknown_relic",
@@ -60,10 +62,14 @@ public sealed class LanConnectChatLocalizerTests
         "chat.unknown_emoji",
         "chat.unknown_content",
         "chat.unknown_player",
+        "chat.unknown_power",
+        "chat.target_expired",
         "chat.preview_unavailable",
         "chat.rich_disabled",
         "chat.emoji_disabled",
         "chat.item_disabled",
+        "chat.combat_disabled",
+        "chat.combat.room_only",
         "chat.budget.empty",
         "chat.budget.text_limit",
         "chat.budget.segment_limit",
@@ -75,6 +81,8 @@ public sealed class LanConnectChatLocalizerTests
         "chat.copy.card",
         "chat.copy.relic",
         "chat.copy.potion",
+        "chat.copy.power",
+        "chat.copy.player",
         "chat.copy.entity",
         "chat.capture.blocked",
         "chat.tooltip.emoji_picker",
@@ -137,6 +145,9 @@ public sealed class LanConnectChatLocalizerTests
         LanConnectChatLocalizer localizer = new();
 
         Assert.Equal("未知遗物", localizer.Get(locale, "chat.unknown_relic"));
+        Assert.Equal("未知能力", localizer.Get(locale, "chat.unknown_power"));
+        Assert.Equal("目标已不可用", localizer.Get(locale, "chat.target_expired"));
+        Assert.Equal("战斗状态只能分享到房间聊天", localizer.Get(locale, "chat.combat.room_only"));
         Assert.Equal("消息文字超过 300 字符", localizer.Get(locale, "chat.budget.text_limit"));
     }
 
@@ -152,6 +163,9 @@ public sealed class LanConnectChatLocalizerTests
         LanConnectChatLocalizer localizer = new();
 
         Assert.Equal("Unknown relic", localizer.Get(locale, "chat.unknown_relic"));
+        Assert.Equal("Unknown power", localizer.Get(locale, "chat.unknown_power"));
+        Assert.Equal("Target is no longer available", localizer.Get(locale, "chat.target_expired"));
+        Assert.Equal("Combat state can only be shared in room chat", localizer.Get(locale, "chat.combat.room_only"));
         Assert.Equal("Message text exceeds 300 characters", localizer.Get(locale, "chat.budget.text_limit"));
     }
 

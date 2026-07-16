@@ -132,7 +132,7 @@ public sealed class LanConnectItemLinkCaptureTests
         FakeCaptureNode innerCard = new(
             "card",
             new LanConnectItemRun("card", "MegaCrit.Strike", 1),
-            outerRelic);
+            parent: outerRelic);
         FakeCapturePorts ports = new()
         {
             Hovered = new FakeCaptureNode("hitbox", parent: innerCard)
@@ -145,7 +145,14 @@ public sealed class LanConnectItemLinkCaptureTests
             new LanConnectItemRun("card", "MegaCrit.Strike", 1),
             Assert.Single(ports.Inserted));
         Assert.Equal(
-            ["card:hitbox", "relic:hitbox", "potion:hitbox", "card:card"],
+            [
+                "card:hitbox",
+                "relic:hitbox",
+                "potion:hitbox",
+                "power:hitbox",
+                "player:hitbox",
+                "card:card"
+            ],
             ports.ResolveAttempts);
     }
 
@@ -204,8 +211,128 @@ public sealed class LanConnectItemLinkCaptureTests
 
         Assert.False(consumed);
         Assert.Empty(ports.Inserted);
+        Assert.Empty(ports.InsertedCombat);
         Assert.Equal(1, ports.OpenAndFocusCalls);
         Assert.Equal(0, ports.SendCalls);
+    }
+
+    [Fact]
+    public void Power_capture_inserts_signed_session_bound_reference_without_sending()
+    {
+        LanConnectCombatRun power = new(new LanConnectPowerStateSegment(
+            "MegaCrit.Strength",
+            -2,
+            "session-1",
+            "net:owner",
+            "net:applier"));
+        FakeCapturePorts ports = new()
+        {
+            Hovered = new FakeCaptureNode("power", combat: power)
+        };
+
+        Assert.True(Capture(ports));
+        Assert.Same(power, Assert.Single(ports.InsertedCombat));
+        Assert.Equal(1, ports.OpenAndFocusCalls);
+        Assert.Equal(0, ports.SendCalls);
+    }
+
+    [Fact]
+    public void Player_capture_inserts_current_room_target_without_sending()
+    {
+        LanConnectCombatRun player = new(new LanConnectTargetRefSegment(
+            "player",
+            "net:target",
+            "session-1"));
+        FakeCapturePorts ports = new()
+        {
+            Hovered = new FakeCaptureNode("player", combat: player)
+        };
+
+        Assert.True(Capture(ports));
+        Assert.Same(player, Assert.Single(ports.InsertedCombat));
+        Assert.Equal(0, ports.SendCalls);
+    }
+
+    [Fact]
+    public void Server_destination_shows_room_only_warning_without_consuming_or_inserting()
+    {
+        FakeCapturePorts ports = new()
+        {
+            Hovered = new FakeCaptureNode(
+                "power",
+                combat: new LanConnectCombatRun(new LanConnectPowerStateSegment(
+                    "MegaCrit.Strength",
+                    2,
+                    "session-1"))),
+            IsRoomChannelSelected = false
+        };
+
+        Assert.False(Capture(ports));
+        Assert.Equal(1, ports.RoomOnlyWarnings);
+        Assert.Empty(ports.InsertedCombat);
+        Assert.Equal(0, ports.OpenAndFocusCalls);
+    }
+
+    [Fact]
+    public void Disabled_combat_capability_or_failed_commit_does_not_consume()
+    {
+        FakeCapturePorts disabled = CombatPorts();
+        disabled.CombatRefsEnabledForSelectedChannel = false;
+        Assert.False(Capture(disabled));
+
+        FakeCapturePorts staleAtCommit = CombatPorts();
+        staleAtCommit.InsertCombatAndFocusSucceeds = false;
+        Assert.False(Capture(staleAtCommit));
+
+        Assert.Empty(disabled.InsertedCombat);
+        Assert.Empty(staleAtCommit.InsertedCombat);
+    }
+
+    [Fact]
+    public void Blocking_interaction_rejects_combat_candidate_before_resolution()
+    {
+        FakeCapturePorts ports = CombatPorts();
+        ports.ActiveTextControl = true;
+
+        Assert.False(Capture(ports));
+        Assert.Empty(ports.ResolveAttempts);
+        Assert.Empty(ports.InsertedCombat);
+    }
+
+    [Fact]
+    public void Invalid_power_holder_stops_before_player_parent()
+    {
+        FakeCaptureNode player = new(
+            "player",
+            combat: new LanConnectCombatRun(new LanConnectTargetRefSegment(
+                "player",
+                "net:target",
+                "session-1")));
+        FakeCapturePorts ports = new()
+        {
+            Hovered = new FakeCaptureNode("power", parent: player)
+        };
+
+        Assert.False(Capture(ports));
+        Assert.Empty(ports.InsertedCombat);
+        Assert.DoesNotContain("player:player", ports.ResolveAttempts);
+    }
+
+    [Theory]
+    [InlineData(1, 1, true)]
+    [InlineData(0, 1, false)]
+    [InlineData(1, 0, false)]
+    [InlineData(2, 1, false)]
+    [InlineData(1, 2, false)]
+    public void Combat_capability_requires_exact_supported_versions(
+        int richVersion,
+        int combatVersion,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            LanConnectItemLinkCapture.CombatRefsEnabled(
+                new LanConnectChatFeatureVersions(richVersion, 0, 0, combatVersion)));
     }
 
     private static bool Capture(FakeCapturePorts ports) =>
@@ -219,6 +346,16 @@ public sealed class LanConnectItemLinkCaptureTests
             new LanConnectItemRun("card", "MegaCrit.Strike", 2))
     };
 
+    private static FakeCapturePorts CombatPorts() => new()
+    {
+        Hovered = new FakeCaptureNode(
+            "power",
+            combat: new LanConnectCombatRun(new LanConnectPowerStateSegment(
+                "MegaCrit.Strength",
+                2,
+                "session-1")))
+    };
+
     private static void AssertNotCaptured(FakeCapturePorts ports, bool consumed)
     {
         Assert.False(consumed);
@@ -230,11 +367,14 @@ public sealed class LanConnectItemLinkCaptureTests
     private sealed class FakeCaptureNode(
         string kind,
         LanConnectItemRun? item = null,
+        LanConnectCombatRun? combat = null,
         FakeCaptureNode? parent = null)
     {
         internal string Kind { get; } = kind;
 
         internal LanConnectItemRun? Item { get; } = item;
+
+        internal LanConnectCombatRun? Combat { get; } = combat;
 
         internal FakeCaptureNode? Parent { get; } = parent;
     }
@@ -244,6 +384,10 @@ public sealed class LanConnectItemLinkCaptureTests
         internal FakeCaptureNode? Hovered { get; init; }
 
         public bool ItemRefsEnabledForSelectedChannel { get; set; } = true;
+
+        public bool CombatRefsEnabledForSelectedChannel { get; set; } = true;
+
+        public bool IsRoomChannelSelected { get; set; } = true;
 
         public bool ActiveTextControl { get; set; }
 
@@ -259,17 +403,23 @@ public sealed class LanConnectItemLinkCaptureTests
 
         internal bool InsertAndFocusSucceeds { get; set; } = true;
 
+        internal bool InsertCombatAndFocusSucceeds { get; set; } = true;
+
         public bool IsChatInteractionBlocking =>
             ActiveTextControl || PickerVisible || PreviewVisible ||
             BlockingDialogVisible || CardPreviewInteraction;
 
         internal List<LanConnectItemRun> Inserted { get; } = new();
 
+        internal List<LanConnectCombatRun> InsertedCombat { get; } = new();
+
         internal List<string> ResolveAttempts { get; } = new();
 
         internal int OpenAndFocusCalls { get; private set; }
 
         internal int SendCalls { get; private set; }
+
+        internal int RoomOnlyWarnings { get; private set; }
 
         public object? GuiGetHoveredControl() => Hovered;
 
@@ -281,6 +431,10 @@ public sealed class LanConnectItemLinkCaptureTests
         public bool IsSupportedHolder(object node) =>
             ((FakeCaptureNode)node).Kind is "card" or "relic" or "potion";
 
+        public bool IsPowerHolder(object node) => ((FakeCaptureNode)node).Kind == "power";
+
+        public bool IsPlayerHolder(object node) => ((FakeCaptureNode)node).Kind == "player";
+
         public bool TryResolveCard(object node, out LanConnectItemRun run) =>
             TryResolve("card", node, out run);
 
@@ -289,6 +443,12 @@ public sealed class LanConnectItemLinkCaptureTests
 
         public bool TryResolvePotion(object node, out LanConnectItemRun run) =>
             TryResolve("potion", node, out run);
+
+        public bool TryResolvePower(object node, out LanConnectCombatRun run) =>
+            TryResolveCombat("power", node, out run);
+
+        public bool TryResolvePlayerTarget(object node, out LanConnectCombatRun run) =>
+            TryResolveCombat("player", node, out run);
 
         public bool InsertAndFocus(LanConnectItemRun run)
         {
@@ -301,6 +461,19 @@ public sealed class LanConnectItemLinkCaptureTests
             return true;
         }
 
+        public bool InsertCombatAndFocus(LanConnectCombatRun run)
+        {
+            OpenAndFocusCalls++;
+            if (!InsertCombatAndFocusSucceeds)
+            {
+                return false;
+            }
+            InsertedCombat.Add(run);
+            return true;
+        }
+
+        public void ShowCombatRoomOnlyWarning() => RoomOnlyWarnings++;
+
         private bool TryResolve(string kind, object node, out LanConnectItemRun run)
         {
             if (ThrowOnResolve)
@@ -312,6 +485,26 @@ public sealed class LanConnectItemLinkCaptureTests
             if (target.Kind == kind && target.Item != null)
             {
                 run = target.Item;
+                return true;
+            }
+            run = null!;
+            return false;
+        }
+
+        private bool TryResolveCombat(
+            string kind,
+            object node,
+            out LanConnectCombatRun run)
+        {
+            if (ThrowOnResolve)
+            {
+                throw new InvalidOperationException("resolver failed");
+            }
+            FakeCaptureNode target = (FakeCaptureNode)node;
+            ResolveAttempts.Add($"{kind}:{target.Kind}");
+            if (target.Kind == kind && target.Combat != null)
+            {
+                run = target.Combat;
                 return true;
             }
             run = null!;

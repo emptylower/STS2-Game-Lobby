@@ -25,7 +25,10 @@ internal readonly record struct LanConnectRoomChatSendDecision(
     string LegacyText,
     string DisabledReason);
 
-internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLifecycle
+internal sealed partial class LanConnectLobbyRuntime :
+    Node,
+    ILanConnectRoomLifecycle,
+    ILanConnectRoomCombatContext
 {
     private const string RuntimeName = "Sts2LanConnectLobbyRuntime";
     private const double RestartSubmenuRetryIntervalSeconds = 0.6d;
@@ -64,6 +67,45 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
 
     internal bool HasActiveRoomSession => _activeSession != null || _activeClientSession != null;
 
+    string ILanConnectRoomCombatContext.ActiveRoomSessionId =>
+        _activeSession?.RoomSessionId ?? _activeClientSession?.RoomSessionId ?? string.Empty;
+
+    bool ILanConnectRoomCombatContext.IsCurrentPeer(string playerNetId) =>
+        IsCurrentRoomPeer(playerNetId);
+
+    bool ILanConnectRoomCombatContext.TryGetCurrentPeerName(
+        string playerNetId,
+        out string name)
+    {
+        name = string.Empty;
+        if (!ulong.TryParse(playerNetId, out ulong peerId) || !IsCurrentRoomPeer(playerNetId))
+        {
+            return false;
+        }
+        try
+        {
+            INetGameService? netService = _activeSession != null
+                ? _activeSession.NetService
+                : _activeClientSession?.NetService;
+            if (netService == null)
+            {
+                return false;
+            }
+            name = PlatformUtil.GetPlayerNameRaw(netService.Platform, peerId);
+            return !string.IsNullOrWhiteSpace(name);
+        }
+        catch
+        {
+            name = string.Empty;
+            return false;
+        }
+    }
+
+    bool ILanConnectRoomCombatContext.TryResolveLocalPower(
+        string modelId,
+        out LanConnectLocalPowerReference power) =>
+        LanConnectProductionPowerModelResolver.TryResolve(modelId, out power);
+
     internal int ChatRevision => unchecked((int)Chat.Room.Revision);
 
     internal LanConnectDualChatState Chat => _chatOwner?.Current.State ??
@@ -74,6 +116,29 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
     internal int ChatEnabledRevision => _chatEnabledRevision;
 
     internal event Action? ChatStateChanged;
+
+    private bool IsCurrentRoomPeer(string playerNetId)
+    {
+        string activeRoomSessionId = _activeSession?.RoomSessionId ??
+            _activeClientSession?.RoomSessionId ?? string.Empty;
+        if (string.IsNullOrEmpty(activeRoomSessionId) ||
+            !string.Equals(activeRoomSessionId, _chatRoomSessionId, StringComparison.Ordinal) ||
+            !ulong.TryParse(playerNetId, out ulong peerId))
+        {
+            return false;
+        }
+        HostedRoomSession? hosted = _activeSession;
+        if (hosted != null && !hosted.IsClosing && hosted.NetService.IsConnected)
+        {
+            return peerId == hosted.NetService.NetId || hosted.ConnectedPeerIds.Contains(peerId);
+        }
+        JoinedClientSession? joined = _activeClientSession;
+        if (joined == null || joined.IsClosing || !joined.NetService.IsConnected)
+        {
+            return false;
+        }
+        return peerId == joined.NetService.NetId || peerId == joined.NetService.HostNetId;
+    }
 
     private sealed record PendingHostRestart(
         string RestartToken,
@@ -697,7 +762,8 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
         LanConnectChatContent content,
         LanConnectRoomChatReadyEnvelope? ready,
         string roomId,
-        string roomSessionId)
+        string roomSessionId,
+        string? senderName = null)
     {
         ArgumentNullException.ThrowIfNull(content);
         LanConnectChatContent canonical;
@@ -761,9 +827,11 @@ internal sealed partial class LanConnectLobbyRuntime : Node, ILanConnectRoomLife
                     string.Empty,
                     "Room content is not supported by the active feature set.");
             }
-            LanConnectServerChatProtocol.AssertInboundBudget(
+            LanConnectServerChatProtocol.AssertRoomBudget(
                 canonical,
-                LanConnectConfig.GetEffectivePlayerDisplayName());
+                roomId,
+                roomSessionId,
+                senderName ?? LanConnectConfig.GetEffectivePlayerDisplayName());
             return new LanConnectRoomChatSendDecision(true, true, string.Empty, string.Empty);
         }
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)

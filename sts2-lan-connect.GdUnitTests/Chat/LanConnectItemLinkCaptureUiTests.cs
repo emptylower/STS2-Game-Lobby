@@ -93,11 +93,56 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
     }
 
     [TestCase]
+    public async Task Successful_power_capture_inserts_room_entity_focuses_and_marks_handled()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText("ab");
+        draft.SetCaret(new LanConnectDraftPosition(0, 1));
+        LanConnectRichDraftEditor editor = AutoFree(new LanConnectRichDraftEditor())!;
+        editor.Bind(draft, new(1, 1, 1, 1), "Ironclad", _ => "Entity");
+        Control root = AutoFree(new Control())!;
+        root.AddChild(editor);
+        LanConnectCombatRun power = new(new LanConnectPowerStateSegment(
+            "MegaCrit.Strength",
+            -2,
+            "session-1",
+            "net:owner"));
+        TestCombatHolder holder = new("power", power);
+        Control hitbox = new();
+        holder.AddChild(hitbox);
+        root.AddChild(holder);
+        using ISceneRunner runner = ISceneRunner.Load(root, autoFree: true);
+        await runner.AwaitIdleFrame();
+
+        TestCapturePorts ports = new(editor)
+        {
+            Hovered = hitbox,
+            SelectedChannel = LanConnectChatChannel.Room
+        };
+        ports.Drafts[LanConnectChatChannel.Room] = draft;
+        bool handled = false;
+        bool consumed = LanConnectItemLinkCaptureInputRoute.TryRoute(
+            AltLeftPress(),
+            new LanConnectItemLinkCapture(ports),
+            () => handled = true);
+        await runner.AwaitIdleFrame();
+
+        AssertThat(consumed).IsTrue();
+        AssertThat(handled).IsTrue();
+        AssertThat(draft.Runs).ContainsExactly(
+            new LanConnectTextRun("a"),
+            power,
+            new LanConnectTextRun("b"));
+        AssertThat(editor.HasEditorFocus).IsTrue();
+        AssertThat(ports.SendCalls).IsEqual(0);
+    }
+
+    [TestCase]
     public async Task Production_room_overlay_inserts_into_selected_server_and_room_drafts()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
         LanConnectRichDraft serverDraft = fixture.State.Server.RichDraft;
         LanConnectRichDraft roomDraft = fixture.State.Room.RichDraft;
+        fixture.State.Room.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 1));
         serverDraft.ReplaceAllWithText("S");
         roomDraft.ReplaceAllWithText("R");
 
@@ -118,13 +163,58 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
             new LanConnectItemRun("potion", "MegaCrit.FirePotion"),
             fixture.Overlay,
             lobbyOverlay: null)).IsTrue();
+        fixture.Overlay.ChatPanelForTests.ReleaseDraftFocus();
+        LanConnectCombatRun power = new(new LanConnectPowerStateSegment(
+            "MegaCrit.Strength",
+            -2,
+            "session-1"));
+        AssertThat(fixture.Overlay.TryInsertCombatReferenceAndFocus(
+            fixture.State.Room,
+            power)).IsTrue();
 
         AssertThat(serverDraft.Runs).ContainsExactly(
             new LanConnectTextRun("S"),
             new LanConnectItemRun("card", "MegaCrit.Strike", 1));
         AssertThat(roomDraft.Runs).ContainsExactly(
             new LanConnectTextRun("R"),
-            new LanConnectItemRun("potion", "MegaCrit.FirePotion"));
+            new LanConnectItemRun("potion", "MegaCrit.FirePotion"),
+            power);
+    }
+
+    [TestCase]
+    public async Task Server_combat_candidate_shows_warning_without_marking_input_handled()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText("server");
+        LanConnectRichDraftEditor editor = AutoFree(new LanConnectRichDraftEditor())!;
+        editor.Bind(draft, new(1, 1, 1, 1), "Ironclad", _ => "Entity");
+        Control root = AutoFree(new Control())!;
+        root.AddChild(editor);
+        TestCombatHolder holder = new(
+            "power",
+            new LanConnectCombatRun(new LanConnectPowerStateSegment(
+                "MegaCrit.Strength",
+                2,
+                "session-1")));
+        root.AddChild(holder);
+        using ISceneRunner runner = ISceneRunner.Load(root, autoFree: true);
+        await runner.AwaitIdleFrame();
+        TestCapturePorts ports = new(editor)
+        {
+            Hovered = holder,
+            SelectedChannel = LanConnectChatChannel.Server
+        };
+        ports.Drafts[LanConnectChatChannel.Server] = draft;
+        bool handled = false;
+
+        bool consumed = LanConnectItemLinkCaptureInputRoute.TryRoute(
+            AltLeftPress(),
+            new LanConnectItemLinkCapture(ports),
+            () => handled = true);
+
+        AssertThat(consumed).IsFalse();
+        AssertThat(handled).IsFalse();
+        AssertThat(ports.RoomOnlyWarnings).IsEqual(1);
+        AssertThat(draft.IsExactlyText("server")).IsTrue();
     }
 
     [TestCase]
@@ -519,6 +609,15 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         internal LanConnectItemRun Item { get; }
     }
 
+    private sealed partial class TestCombatHolder(
+        string kind,
+        LanConnectCombatRun combat) : Control
+    {
+        internal string Kind { get; } = kind;
+
+        internal LanConnectCombatRun Combat { get; } = combat;
+    }
+
     private sealed class TestCapturePorts : ILanConnectItemLinkCapturePorts
     {
         private readonly LanConnectRichDraftEditor _editor;
@@ -538,9 +637,15 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
 
         internal int SendCalls { get; private set; }
 
+        internal int RoomOnlyWarnings { get; private set; }
+
         public bool IsChatInteractionBlocking { get; set; }
 
         public bool ItemRefsEnabledForSelectedChannel { get; set; } = true;
+
+        public bool CombatRefsEnabledForSelectedChannel { get; set; } = true;
+
+        public bool IsRoomChannelSelected => SelectedChannel == LanConnectChatChannel.Room;
 
         public object? GuiGetHoveredControl() => Hovered;
 
@@ -552,6 +657,10 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         public bool IsSupportedHolder(object node) =>
             node is TestItemHolder { Kind: "card" or "relic" or "potion" };
 
+        public bool IsPowerHolder(object node) => node is TestCombatHolder { Kind: "power" };
+
+        public bool IsPlayerHolder(object node) => node is TestCombatHolder { Kind: "player" };
+
         public bool TryResolveCard(object node, out LanConnectItemRun run) =>
             TryResolve("card", node, out run);
 
@@ -560,6 +669,12 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
 
         public bool TryResolvePotion(object node, out LanConnectItemRun run) =>
             TryResolve("potion", node, out run);
+
+        public bool TryResolvePower(object node, out LanConnectCombatRun run) =>
+            TryResolveCombat("power", node, out run);
+
+        public bool TryResolvePlayerTarget(object node, out LanConnectCombatRun run) =>
+            TryResolveCombat("player", node, out run);
 
         public bool InsertAndFocus(LanConnectItemRun run)
         {
@@ -575,11 +690,44 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
             return true;
         }
 
+        public bool InsertCombatAndFocus(LanConnectCombatRun run)
+        {
+            if (!Drafts.TryGetValue(SelectedChannel, out LanConnectRichDraft? draft))
+            {
+                return false;
+            }
+            draft.InsertEntity(run);
+            _editor.Bind(draft, new(1, 1, 1, 1), "Ironclad", _ => "Entity");
+            _editor.RefreshFromDraft();
+            _editor.FocusEditor();
+            OpenAndFocusChannels.Add(SelectedChannel);
+            return true;
+        }
+
+        public void ShowCombatRoomOnlyWarning()
+        {
+            RoomOnlyWarnings++;
+        }
+
         private static bool TryResolve(string kind, object node, out LanConnectItemRun run)
         {
             if (node is TestItemHolder holder && holder.Kind == kind)
             {
                 run = holder.Item;
+                return true;
+            }
+            run = null!;
+            return false;
+        }
+
+        private static bool TryResolveCombat(
+            string kind,
+            object node,
+            out LanConnectCombatRun run)
+        {
+            if (node is TestCombatHolder holder && holder.Kind == kind)
+            {
+                run = holder.Combat;
                 return true;
             }
             run = null!;
@@ -597,6 +745,10 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
 
         public bool ItemRefsEnabledForSelectedChannel => true;
 
+        public bool CombatRefsEnabledForSelectedChannel => false;
+
+        public bool IsRoomChannelSelected => false;
+
         public object? GuiGetHoveredControl() => holder;
 
         public object? GetParent(object node) => (node as Node)?.GetParent();
@@ -604,6 +756,10 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         public bool IsCaptureBoundary(object node) => false;
 
         public bool IsSupportedHolder(object node) => ReferenceEquals(node, holder);
+
+        public bool IsPowerHolder(object node) => false;
+
+        public bool IsPlayerHolder(object node) => false;
 
         public bool TryResolveCard(object node, out LanConnectItemRun run)
         {
@@ -628,10 +784,28 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
             return false;
         }
 
+        public bool TryResolvePower(object node, out LanConnectCombatRun run)
+        {
+            run = null!;
+            return false;
+        }
+
+        public bool TryResolvePlayerTarget(object node, out LanConnectCombatRun run)
+        {
+            run = null!;
+            return false;
+        }
+
         public bool InsertAndFocus(LanConnectItemRun run)
         {
             InsertCalls++;
             return true;
+        }
+
+        public bool InsertCombatAndFocus(LanConnectCombatRun run) => false;
+
+        public void ShowCombatRoomOnlyWarning()
+        {
         }
     }
 
@@ -643,6 +817,10 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
 
         public bool ItemRefsEnabledForSelectedChannel => true;
 
+        public bool CombatRefsEnabledForSelectedChannel => false;
+
+        public bool IsRoomChannelSelected => false;
+
         public object? GuiGetHoveredControl() => holder;
 
         public object? GetParent(object node) => (node as Node)?.GetParent();
@@ -650,6 +828,10 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         public bool IsCaptureBoundary(object node) => false;
 
         public bool IsSupportedHolder(object node) => ReferenceEquals(node, holder);
+
+        public bool IsPowerHolder(object node) => false;
+
+        public bool IsPlayerHolder(object node) => false;
 
         public bool TryResolveCard(object node, out LanConnectItemRun run)
         {
@@ -674,6 +856,24 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
             return false;
         }
 
+        public bool TryResolvePower(object node, out LanConnectCombatRun run)
+        {
+            run = null!;
+            return false;
+        }
+
+        public bool TryResolvePlayerTarget(object node, out LanConnectCombatRun run)
+        {
+            run = null!;
+            return false;
+        }
+
         public bool InsertAndFocus(LanConnectItemRun run) => insert(run);
+
+        public bool InsertCombatAndFocus(LanConnectCombatRun run) => false;
+
+        public void ShowCombatRoomOnlyWarning()
+        {
+        }
     }
 }

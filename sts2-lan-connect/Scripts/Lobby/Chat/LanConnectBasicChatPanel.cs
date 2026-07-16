@@ -418,6 +418,20 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         return _draftEditor!.InsertItem(run, _itemLinkPostInsertForTests);
     }
 
+    internal bool TryInsertCombatReferenceAndFocus(
+        LanConnectChatChannelState expectedState,
+        LanConnectCombatRun run)
+    {
+        ArgumentNullException.ThrowIfNull(expectedState);
+        ArgumentNullException.ThrowIfNull(run);
+        if (!CanInsertCombatReference(expectedState))
+        {
+            return false;
+        }
+
+        return _draftEditor!.InsertCombatReference(run, _itemLinkPostInsertForTests);
+    }
+
     internal bool CanInsertItem(LanConnectChatChannelState expectedState)
     {
         ArgumentNullException.ThrowIfNull(expectedState);
@@ -429,6 +443,18 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                _draftEditor != null &&
                GodotObject.IsInstanceValid(_draftEditor) &&
                _draftEditor.Editable;
+    }
+
+    internal bool CanInsertCombatReference(LanConnectChatChannelState expectedState) =>
+        CanInsertItem(expectedState) &&
+        expectedState.Channel == LanConnectChatChannel.Room &&
+        expectedState.EnabledRichFeatures.RichContentVersion == 1 &&
+        expectedState.EnabledRichFeatures.CombatRefVersion == 1;
+
+    internal void ShowCombatRoomOnlyWarning()
+    {
+        SetOperationStatus("chat.combat.room_only");
+        Refresh();
     }
 
     internal VisibilityPublishScope SuppressVisibilityPublishing()
@@ -1077,13 +1103,20 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             if (binding.SendContent != null)
             {
-                LanConnectChatContent canonical = LanConnectServerChatProtocol.Canonicalize(
-                    content,
-                    binding.State.EnabledRichFeatures);
-                LanConnectServerChatProtocol.AssertInboundBudget(
-                    canonical,
-                    LanConnectConfig.GetEffectivePlayerDisplayName());
-                await binding.SendContent(canonical, Guid.NewGuid().ToString("D"));
+                if (binding.State.Channel == LanConnectChatChannel.Room)
+                {
+                    await binding.SendContent(content, Guid.NewGuid().ToString("D"));
+                }
+                else
+                {
+                    LanConnectChatContent canonical = LanConnectServerChatProtocol.Canonicalize(
+                        content,
+                        binding.State.EnabledRichFeatures);
+                    LanConnectServerChatProtocol.AssertInboundBudget(
+                        canonical,
+                        LanConnectConfig.GetEffectivePlayerDisplayName());
+                    await binding.SendContent(canonical, Guid.NewGuid().ToString("D"));
+                }
             }
             else if (binding.SendText != null)
             {
@@ -1738,6 +1771,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         LanConnectItemRun { ItemType: "card" } => Localize("chat.item.card"),
         LanConnectItemRun { ItemType: "relic" } => Localize("chat.item.relic"),
         LanConnectItemRun { ItemType: "potion" } => Localize("chat.item.potion"),
+        LanConnectCombatRun { Segment: LanConnectPowerStateSegment } => Localize("chat.item.power"),
+        LanConnectCombatRun { Segment: LanConnectTargetRefSegment { TargetKind: "player" } } => Localize("chat.item.player"),
         _ => Localize("chat.item.entity")
     };
 
@@ -1747,6 +1782,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         LanConnectItemRun { ItemType: "card" } => Localize("chat.copy.card"),
         LanConnectItemRun { ItemType: "relic" } => Localize("chat.copy.relic"),
         LanConnectItemRun { ItemType: "potion" } => Localize("chat.copy.potion"),
+        LanConnectCombatRun { Segment: LanConnectPowerStateSegment } => Localize("chat.copy.power"),
+        LanConnectCombatRun { Segment: LanConnectTargetRefSegment { TargetKind: "player" } } => Localize("chat.copy.player"),
         _ => Localize("chat.copy.entity")
     };
 

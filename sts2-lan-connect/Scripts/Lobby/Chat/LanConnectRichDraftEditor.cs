@@ -289,6 +289,18 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     internal bool InsertItem(LanConnectItemRun run, Action? afterMutation = null)
     {
         ArgumentNullException.ThrowIfNull(run);
+        return InsertRichEntity(run, afterMutation);
+    }
+
+    internal bool InsertCombatReference(LanConnectCombatRun run, Action? afterMutation = null)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        return InsertRichEntity(run, afterMutation);
+    }
+
+    private bool InsertRichEntity(LanConnectDraftRun run, Action? afterMutation)
+    {
+        ArgumentNullException.ThrowIfNull(run);
         if (!_editable || _draft == null)
         {
             return false;
@@ -1355,6 +1367,10 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         {
             return Localize("chat.item_disabled");
         }
+        if (_enabled.CombatRefVersion != 1 && runs.Any(run => run is LanConnectCombatRun))
+        {
+            return Localize("chat.combat_disabled");
+        }
         return Localize("chat.rich_disabled");
     }
 
@@ -1363,6 +1379,8 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         LanConnectTextRun => "text",
         LanConnectEmojiRun => "emoji",
         LanConnectItemRun item => $"item_ref:{item.ItemType}",
+        LanConnectCombatRun { Segment: LanConnectPowerStateSegment } => "power_state",
+        LanConnectCombatRun { Segment: LanConnectTargetRefSegment target } => $"target_ref:{target.TargetKind}",
         _ => "unknown"
     };
 
@@ -1372,6 +1390,8 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         LanConnectItemRun { ItemType: "card" } => Localize("chat.item.card"),
         LanConnectItemRun { ItemType: "relic" } => Localize("chat.item.relic"),
         LanConnectItemRun { ItemType: "potion" } => Localize("chat.item.potion"),
+        LanConnectCombatRun { Segment: LanConnectPowerStateSegment } => Localize("chat.item.power"),
+        LanConnectCombatRun { Segment: LanConnectTargetRefSegment { TargetKind: "player" } } => Localize("chat.item.player"),
         _ => Localize("chat.item.entity")
     };
 
@@ -1381,6 +1401,8 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         LanConnectItemRun { ItemType: "card" } => Localize("chat.copy.card"),
         LanConnectItemRun { ItemType: "relic" } => Localize("chat.copy.relic"),
         LanConnectItemRun { ItemType: "potion" } => Localize("chat.copy.potion"),
+        LanConnectCombatRun { Segment: LanConnectPowerStateSegment } => Localize("chat.copy.power"),
+        LanConnectCombatRun { Segment: LanConnectTargetRefSegment { TargetKind: "player" } } => Localize("chat.copy.player"),
         _ => Localize("chat.copy.entity")
     };
 

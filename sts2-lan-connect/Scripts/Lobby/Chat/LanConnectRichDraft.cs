@@ -14,6 +14,9 @@ internal sealed record LanConnectItemRun(
     string ModelId,
     int? UpgradeLevel = null) : LanConnectDraftRun;
 
+internal sealed record LanConnectCombatRun(
+    LanConnectChatSegment Segment) : LanConnectDraftRun;
+
 internal readonly record struct LanConnectDraftPosition(int RunIndex, int TextOffset);
 
 internal readonly record struct LanConnectDraftSelection(
@@ -133,9 +136,9 @@ internal sealed class LanConnectRichDraft
     {
         ArgumentNullException.ThrowIfNull(entity);
         ArgumentNullException.ThrowIfNull(acceptMutation);
-        if (entity is not (LanConnectEmojiRun or LanConnectItemRun))
+        if (entity is not (LanConnectEmojiRun or LanConnectItemRun or LanConnectCombatRun))
         {
-            throw new ArgumentException("Only Emoji and item runs are atomic draft entities.", nameof(entity));
+            throw new ArgumentException("Only rich entity runs are atomic draft entities.", nameof(entity));
         }
 
         long? revision;
@@ -203,9 +206,9 @@ internal sealed class LanConnectRichDraft
     internal void InsertEntity(LanConnectDraftRun entity)
     {
         ArgumentNullException.ThrowIfNull(entity);
-        if (entity is not (LanConnectEmojiRun or LanConnectItemRun))
+        if (entity is not (LanConnectEmojiRun or LanConnectItemRun or LanConnectCombatRun))
         {
-            throw new ArgumentException("Only Emoji and item runs are atomic draft entities.", nameof(entity));
+            throw new ArgumentException("Only rich entity runs are atomic draft entities.", nameof(entity));
         }
         long? revision;
         lock (_sync)
@@ -409,6 +412,10 @@ internal sealed class LanConnectRichDraft
                         item.ModelId,
                         item.UpgradeLevel));
                     break;
+                case LanConnectCombatRun combat when
+                    combat.Segment is LanConnectPowerStateSegment or LanConnectTargetRefSegment:
+                    segments.Add(combat.Segment);
+                    break;
                 default:
                     throw new InvalidOperationException("Unsupported draft run type.");
             }
@@ -427,9 +434,22 @@ internal sealed class LanConnectRichDraft
         bool contentValid = false;
         try
         {
-            content = LanConnectServerChatProtocol.Canonicalize(
-                rawContent,
-                new LanConnectChatFeatureVersions(1, 1, 1, 0));
+            string? combatSessionId = rawContent.Segments
+                .Select(static segment => segment switch
+                {
+                    LanConnectPowerStateSegment power => power.RoomSessionId,
+                    LanConnectTargetRefSegment target => target.RoomSessionId,
+                    _ => null
+                })
+                .FirstOrDefault(static value => value != null);
+            content = combatSessionId == null
+                ? LanConnectServerChatProtocol.Canonicalize(
+                    rawContent,
+                    new LanConnectChatFeatureVersions(1, 1, 1, 0))
+                : LanConnectRoomChatSessionContext.Canonicalize(
+                    rawContent,
+                    new LanConnectChatFeatureVersions(1, 1, 1, 1),
+                    combatSessionId);
             contentValid = true;
         }
         catch (Exception exception) when (
@@ -460,7 +480,21 @@ internal sealed class LanConnectRichDraft
         int wireBytes;
         try
         {
-            wireBytes = LanConnectServerChatProtocol.MeasureWorstCaseInboundBytes(content, senderName);
+            string? combatSessionId = content.Segments
+                .Select(static segment => segment switch
+                {
+                    LanConnectPowerStateSegment power => power.RoomSessionId,
+                    LanConnectTargetRefSegment target => target.RoomSessionId,
+                    _ => null
+                })
+                .FirstOrDefault(static value => value != null);
+            wireBytes = combatSessionId == null
+                ? LanConnectServerChatProtocol.MeasureWorstCaseInboundBytes(content, senderName)
+                : LanConnectServerChatProtocol.MeasureWorstCaseRoomBytes(
+                    content,
+                    new string('R', 128),
+                    combatSessionId,
+                    senderName);
         }
         catch (Exception exception) when (
             exception is InvalidOperationException or ArgumentException)
@@ -562,6 +596,15 @@ internal sealed class LanConnectRichDraft
                     break;
                 case LanConnectItemRun:
                     builder.Append("[Item]");
+                    break;
+                case LanConnectCombatRun { Segment: LanConnectPowerStateSegment }:
+                    builder.Append("[Power]");
+                    break;
+                case LanConnectCombatRun { Segment: LanConnectTargetRefSegment { TargetKind: "player" } }:
+                    builder.Append("[Player]");
+                    break;
+                case LanConnectCombatRun:
+                    builder.Append("[Target]");
                     break;
             }
         }
@@ -688,7 +731,7 @@ internal sealed class LanConnectRichDraft
                 case LanConnectTextRun text:
                     normalized.Add(text);
                     break;
-                case LanConnectEmojiRun or LanConnectItemRun:
+                case LanConnectEmojiRun or LanConnectItemRun or LanConnectCombatRun:
                     normalized.Add(run);
                     break;
                 case null:

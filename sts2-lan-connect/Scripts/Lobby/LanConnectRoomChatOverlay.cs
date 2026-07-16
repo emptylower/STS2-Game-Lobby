@@ -119,7 +119,30 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         LanConnectChatChannelState expectedState,
         LanConnectItemRun run)
     {
-        if (_chatPanel?.CanInsertItem(expectedState) != true ||
+        return TryInsertEntityAndFocus(
+            expectedState,
+            () => _chatPanel?.CanInsertItem(expectedState) == true,
+            () => _chatPanel!.TryInsertItemAndFocus(expectedState, run));
+    }
+
+    internal bool TryInsertCombatReferenceAndFocus(
+        LanConnectChatChannelState expectedState,
+        LanConnectCombatRun run)
+    {
+        return TryInsertEntityAndFocus(
+            expectedState,
+            () => _chatPanel?.CanInsertCombatReference(expectedState) == true,
+            () => _chatPanel!.TryInsertCombatReferenceAndFocus(expectedState, run));
+    }
+
+    internal void ShowCombatRoomOnlyWarning() => _chatPanel?.ShowCombatRoomOnlyWarning();
+
+    private bool TryInsertEntityAndFocus(
+        LanConnectChatChannelState expectedState,
+        Func<bool> canInsert,
+        Func<bool> insert)
+    {
+        if (!canInsert() ||
             _panelFrame == null ||
             ResolveChat() is not { } chat)
         {
@@ -130,11 +153,11 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         Control? previousFocus = GetViewport().GuiGetFocusOwner();
         bool committed = false;
         using LanConnectBasicChatPanel.VisibilityPublishScope visibilityScope =
-            _chatPanel.SuppressVisibilityPublishing();
+            _chatPanel!.SuppressVisibilityPublishing();
         try
         {
             _panelFrame.Visible = true;
-            committed = _chatPanel.TryInsertItemAndFocus(expectedState, run);
+            committed = insert();
             if (!committed)
             {
                 return false;
