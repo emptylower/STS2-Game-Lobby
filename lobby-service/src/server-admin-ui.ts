@@ -1,3 +1,84 @@
+export function mergeServerAdminPollSnapshot(
+  current: Record<string, unknown> | null,
+  next: Record<string, unknown>,
+  dirty: boolean,
+): Record<string, unknown> {
+  if (!dirty || !current) return { ...next };
+  const merged = { ...next };
+  for (const key of [
+    "displayName",
+    "publicListingEnabled",
+    "bandwidthCapacityMbps",
+    "announcements",
+    "chatFeatures",
+  ]) {
+    if (Object.hasOwn(current, key)) merged[key] = current[key];
+  }
+  return merged;
+}
+
+export function resolveServerAdminChatControlState(features: Record<string, unknown> | null) {
+  const richContentEnabled = features?.richContentEnabled === true;
+  const roomChatV2Enabled = features?.roomChatV2Enabled === true;
+  return {
+    serverChatEnabled: false,
+    richContentEnabled: false,
+    emojiEnabled: !richContentEnabled,
+    itemRefsEnabled: !richContentEnabled,
+    roomChatV2Enabled: false,
+    roomCombatRefsEnabled: !richContentEnabled || !roomChatV2Enabled,
+  };
+}
+
+export function calculateServerAdminRejectionRate(accepted: unknown, rejected: unknown): number {
+  const acceptedCount = typeof accepted === "number" && accepted >= 0 ? accepted : 0;
+  const rejectedCount = typeof rejected === "number" && rejected >= 0 ? rejected : 0;
+  const total = acceptedCount + rejectedCount;
+  return total === 0 ? 0 : rejectedCount / total;
+}
+
+export function beginServerAdminSingleFlight(ref: { current: boolean }): boolean {
+  if (ref.current) return false;
+  ref.current = true;
+  return true;
+}
+
+export function releaseServerAdminSingleFlight(ref: { current: boolean }): void {
+  ref.current = false;
+}
+
+export function isCurrentServerAdminRequest(
+  generation: number,
+  currentGeneration: number,
+  sequence?: number,
+  currentSequence?: number,
+): boolean {
+  return generation === currentGeneration
+    && (sequence === undefined || sequence === currentSequence);
+}
+
+export function buildServerAdminRequestInit(
+  method: string | undefined,
+  csrfToken: string | null,
+  options: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const normalizedMethod = (method || "GET").toUpperCase();
+  const headers = {
+    ...((options.headers && typeof options.headers === "object")
+      ? options.headers as Record<string, string>
+      : {}),
+  };
+  if (!["GET", "HEAD", "OPTIONS"].includes(normalizedMethod) && csrfToken) {
+    headers["x-csrf-token"] = csrfToken;
+  }
+  return {
+    ...options,
+    method: normalizedMethod,
+    credentials: "same-origin",
+    headers,
+  };
+}
+
 export function renderServerAdminPage(serviceVersion: string) {
   const versionLabel = `Lobby Service v${serviceVersion}`;
   return `<!doctype html>
@@ -91,10 +172,25 @@ export function renderServerAdminPage(serviceVersion: string) {
       .console-card {
         border-radius: 18px;
         box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
+        min-width: 0;
+      }
+      .console-card .ant-card-head-wrapper,
+      .console-card .ant-card-head-title,
+      .console-card .ant-card-extra {
+        min-width: 0;
       }
       .status-block .ant-descriptions-item-label {
         width: 164px;
         color: #667085;
+      }
+      .status-block .ant-descriptions-view table {
+        table-layout: fixed;
+        width: 100%;
+      }
+      .status-block .ant-descriptions-item-content {
+        min-width: 0;
+        overflow-wrap: anywhere;
+        word-break: break-word;
       }
       .section-title {
         display: flex;
@@ -131,6 +227,10 @@ export function renderServerAdminPage(serviceVersion: string) {
         flex-wrap: wrap;
         gap: 8px;
       }
+      .settings-actions,
+      .announcement-actions {
+        max-width: 100%;
+      }
       .announcement-empty {
         padding: 18px 20px;
         border-radius: 16px;
@@ -146,6 +246,11 @@ export function renderServerAdminPage(serviceVersion: string) {
       .announcement-card .ant-input-textarea textarea {
         min-height: 112px;
       }
+      .feature-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 4px 16px;
+      }
       @media (max-width: 992px) {
         .page-header-inner,
         .page-content {
@@ -153,6 +258,9 @@ export function renderServerAdminPage(serviceVersion: string) {
           padding-right: 16px;
         }
         .announcement-grid.two-columns {
+          grid-template-columns: 1fr;
+        }
+        .feature-grid {
           grid-template-columns: 1fr;
         }
       }
@@ -172,6 +280,45 @@ export function renderServerAdminPage(serviceVersion: string) {
         }
         .page-actions {
           width: 100%;
+        }
+        .console-card .ant-card-head {
+          min-height: 0;
+          padding-inline: 16px;
+        }
+        .console-card .ant-card-body {
+          padding: 16px;
+        }
+        .console-card .ant-card-head-wrapper {
+          align-items: flex-start;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .console-card .ant-card-head-title {
+          white-space: normal;
+          overflow-wrap: anywhere;
+        }
+        .console-card .ant-card-extra {
+          margin-inline-start: 0;
+          max-width: 100%;
+        }
+        .settings-actions,
+        .announcement-actions {
+          display: flex !important;
+          flex-wrap: wrap;
+          width: 100%;
+          row-gap: 8px;
+        }
+        .settings-actions .ant-space-item,
+        .announcement-actions .ant-space-item {
+          min-width: 0;
+          max-width: 100%;
+        }
+        .settings-actions .ant-btn,
+        .announcement-actions .ant-btn {
+          max-width: 100%;
+          white-space: normal;
+          height: auto;
+          min-height: 32px;
         }
         .section-title,
         .announcement-card-header {
@@ -222,6 +369,7 @@ export function renderServerAdminPage(serviceVersion: string) {
           Input,
           InputNumber,
           Layout,
+          Modal,
           Row,
           Select,
           Space,
@@ -235,6 +383,13 @@ export function renderServerAdminPage(serviceVersion: string) {
         const { Title, Paragraph, Text } = Typography;
         const TextArea = Input.TextArea;
         const serviceVersionLabel = ${JSON.stringify(versionLabel)};
+        const mergePollSnapshot = ${mergeServerAdminPollSnapshot.toString()};
+        const resolveChatControlState = ${resolveServerAdminChatControlState.toString()};
+        const calculateRejectionRate = ${calculateServerAdminRejectionRate.toString()};
+        const beginSingleFlight = ${beginServerAdminSingleFlight.toString()};
+        const releaseSingleFlight = ${releaseServerAdminSingleFlight.toString()};
+        const isCurrentRequest = ${isCurrentServerAdminRequest.toString()};
+        const buildRequestInit = ${buildServerAdminRequestInit.toString()};
 
         const ANNOUNCEMENT_TYPES = [
           { value: "update", label: "更新" },
@@ -243,14 +398,50 @@ export function renderServerAdminPage(serviceVersion: string) {
           { value: "info", label: "信息" },
         ];
 
-        async function readJson(path, options) {
-          const response = await fetch(path, options);
-          const text = await response.text();
-          const payload = text ? JSON.parse(text) : {};
-          if (!response.ok) {
-            throw new Error(payload.message || response.statusText || "请求失败");
+        class AdminRequestError extends Error {
+          constructor(status, code, messageText) {
+            super(messageText || "请求失败");
+            this.name = "AdminRequestError";
+            this.status = status;
+            this.code = code || "request_failed";
           }
-          return payload;
+        }
+
+        async function performAdminRequest(path, options, csrfToken) {
+          const requestOptions = options || {};
+          const response = await fetch(
+            path,
+            buildRequestInit(requestOptions.method, csrfToken, requestOptions),
+          );
+          const text = await response.text();
+          let payload = {};
+          if (text) {
+            try {
+              payload = JSON.parse(text);
+            } catch {
+              payload = {};
+            }
+          }
+          if (!response.ok) {
+            throw new AdminRequestError(
+              response.status,
+              payload.code,
+              payload.message || response.statusText || "请求失败",
+            );
+          }
+          return response.status === 204 ? null : payload;
+        }
+
+        function normalizeChatFeatures(value) {
+          const next = value || {};
+          return {
+            serverChatEnabled: next.serverChatEnabled === true,
+            richContentEnabled: next.richContentEnabled !== false,
+            emojiEnabled: next.emojiEnabled !== false,
+            itemRefsEnabled: next.itemRefsEnabled !== false,
+            roomChatV2Enabled: next.roomChatV2Enabled !== false,
+            roomCombatRefsEnabled: next.roomCombatRefsEnabled !== false,
+          };
         }
 
         function formatDateTime(value) {
@@ -409,6 +600,24 @@ export function renderServerAdminPage(serviceVersion: string) {
           return typeof value === "number" && value > 0 ? (value / 1000).toFixed(0) + " 秒" : "未记录";
         }
 
+        function formatFeatureVersions(value) {
+          const next = value || {};
+          return [
+            "富文本 v" + (next.richContentVersion || 0),
+            "Emoji v" + (next.emojiSetVersion || 0),
+            "物品引用 v" + (next.itemRefVersion || 0),
+            "战斗引用 v" + (next.combatRefVersion || 0),
+          ].join(" · ");
+        }
+
+        function formatMetricCount(value) {
+          return typeof value === "number" && value >= 0 ? value : 0;
+        }
+
+        function formatRejectionRate(accepted, rejected) {
+          return (calculateRejectionRate(accepted, rejected) * 100).toFixed(1) + "%";
+        }
+
         function createAnnouncementDraft(partial) {
           const next = partial || {};
           return {
@@ -445,11 +654,35 @@ export function renderServerAdminPage(serviceVersion: string) {
           const [loginLoading, setLoginLoading] = React.useState(false);
           const [settingsLoading, setSettingsLoading] = React.useState(false);
           const [saveLoading, setSaveLoading] = React.useState(false);
+          const [clearLoading, setClearLoading] = React.useState(false);
+          const [logoutLoading, setLogoutLoading] = React.useState(false);
+          const [adminMutationInFlight, setAdminMutationInFlight] = React.useState(false);
           const [loginForm] = Form.useForm();
           const [settingsForm] = Form.useForm();
           const settingsRef = React.useRef(null);
           const draftDirtyRef = React.useRef(false);
+          const csrfTokenRef = React.useRef(null);
+          const sessionGenerationRef = React.useRef(0);
+          const settingsRequestSeqRef = React.useRef(0);
+          const loginInFlightRef = React.useRef(false);
+          const adminMutationInFlightRef = React.useRef(false);
+          const clearConfirmOpenRef = React.useRef(false);
+          const watchedChatFeatures = Form.useWatch("chatFeatures", settingsForm);
+          const chatControlState = resolveChatControlState(
+            watchedChatFeatures || (settings && settings.chatFeatures) || null,
+          );
           const statusAlert = settings ? buildStatusAlert(settings) : null;
+
+          function beginAdminMutation() {
+            if (!beginSingleFlight(adminMutationInFlightRef)) return false;
+            setAdminMutationInFlight(true);
+            return true;
+          }
+
+          function endAdminMutation() {
+            releaseSingleFlight(adminMutationInFlightRef);
+            setAdminMutationInFlight(false);
+          }
 
           const clearDraftDirty = React.useCallback(function () {
             draftDirtyRef.current = false;
@@ -466,10 +699,54 @@ export function renderServerAdminPage(serviceVersion: string) {
             setHasUnsavedDrafts(true);
           }, []);
 
+          const clearLocalAdminState = React.useCallback(function () {
+            setSession(null);
+            setSettings(null);
+            setAnnouncements([]);
+            settingsRef.current = null;
+            loginForm.resetFields();
+            settingsForm.resetFields();
+            clearDraftDirty();
+          }, [clearDraftDirty, loginForm, settingsForm]);
+
+          const invalidateSession = React.useCallback(function () {
+            sessionGenerationRef.current += 1;
+            settingsRequestSeqRef.current += 1;
+            csrfTokenRef.current = null;
+            clearLocalAdminState();
+          }, [clearLocalAdminState]);
+
+          const request = React.useCallback(async function (path, options, expectedGeneration) {
+            const requestGeneration = typeof expectedGeneration === "number"
+              ? expectedGeneration
+              : sessionGenerationRef.current;
+            try {
+              return await performAdminRequest(path, options, csrfTokenRef.current);
+            } catch (error) {
+              if (
+                requestGeneration === sessionGenerationRef.current
+                && error
+                && error.status === 401
+              ) {
+                invalidateSession();
+              } else if (
+                requestGeneration === sessionGenerationRef.current
+                && error
+                && error.status === 403
+              ) {
+                message.error("安全令牌已失效，请重新登录后再操作");
+              }
+              throw error;
+            }
+          }, [invalidateSession]);
+
           const applySettingsSnapshot = React.useCallback(function (next, source) {
             const previous = settingsRef.current;
-            settingsRef.current = next;
-            setSettings(next);
+            const displaySnapshot = source === "poll"
+              ? mergePollSnapshot(previous, next, draftDirtyRef.current)
+              : next;
+            settingsRef.current = displaySnapshot;
+            setSettings(displaySnapshot);
             if (source === "poll" && draftDirtyRef.current) {
               setPollRefreshDeferred(true);
             } else {
@@ -478,22 +755,39 @@ export function renderServerAdminPage(serviceVersion: string) {
                 displayName: next.displayName || "",
                 publicListingEnabled: Boolean(next.publicListingEnabled),
                 bandwidthCapacityMbps: next.bandwidthCapacityMbps,
+                chatFeatures: normalizeChatFeatures(next.chatFeatures),
               });
               clearDraftDirty();
             }
-            notifySyncState(next, previous, source || "refresh");
+            notifySyncState(displaySnapshot, previous, source || "refresh");
           }, [clearDraftDirty, settingsForm]);
 
           const refreshSettings = React.useCallback(async function (options) {
             const source = options && options.source ? options.source : "refresh";
+            if (source === "poll" && adminMutationInFlightRef.current) {
+              return;
+            }
             const showLoading = source !== "poll";
+            const generation = sessionGenerationRef.current;
+            const sequence = ++settingsRequestSeqRef.current;
             if (showLoading) {
               setSettingsLoading(true);
             }
             try {
-              const next = await readJson("/server-admin/settings");
+              const next = await request("/server-admin/settings", undefined, generation);
+              if (!isCurrentRequest(
+                generation,
+                sessionGenerationRef.current,
+                sequence,
+                settingsRequestSeqRef.current,
+              )) {
+                return;
+              }
               applySettingsSnapshot(next, source);
             } catch (error) {
+              if (error && (error.status === 401 || error.status === 403)) {
+                return;
+              }
               if (source === "poll") {
                 notification.warning({
                   message: "状态刷新失败",
@@ -511,24 +805,24 @@ export function renderServerAdminPage(serviceVersion: string) {
                 setSettingsLoading(false);
               }
             }
-          }, [applySettingsSnapshot]);
+          }, [applySettingsSnapshot, request]);
 
           const refreshSession = React.useCallback(async function () {
+            const generation = ++sessionGenerationRef.current;
+            settingsRequestSeqRef.current += 1;
             setBooting(true);
             try {
-              const nextSession = await readJson("/server-admin/session");
+              const nextSession = await request("/server-admin/session", undefined, generation);
+              if (!isCurrentRequest(generation, sessionGenerationRef.current)) return;
+              csrfTokenRef.current = nextSession.csrfToken;
               setSession(nextSession);
               await refreshSettings({ source: "initial" });
-            } catch (_error) {
-              setSession(null);
-              setSettings(null);
-              setAnnouncements([]);
-              settingsRef.current = null;
-              clearDraftDirty();
+            } catch (error) {
+              if (!error || error.status !== 401) invalidateSession();
             } finally {
               setBooting(false);
             }
-          }, [clearDraftDirty, refreshSettings]);
+          }, [invalidateSession, refreshSettings, request]);
 
           React.useEffect(function () {
             void refreshSession();
@@ -549,50 +843,87 @@ export function renderServerAdminPage(serviceVersion: string) {
           }, [session, refreshSettings]);
 
           async function handleLogin(values) {
+            if (!beginSingleFlight(loginInFlightRef)) return;
             setLoginLoading(true);
             try {
-              await readJson("/server-admin/login", {
+              const nextSession = await performAdminRequest("/server-admin/login", {
                 method: "POST",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify(values),
-              });
+              }, null);
+              sessionGenerationRef.current += 1;
+              settingsRequestSeqRef.current += 1;
+              csrfTokenRef.current = nextSession.csrfToken;
+              setSession(nextSession);
               message.success("登录成功");
-              await refreshSession();
+              await refreshSettings({ source: "initial" });
             } catch (error) {
+              if (csrfTokenRef.current) invalidateSession();
               message.error(error.message || "登录失败");
             } finally {
+              loginInFlightRef.current = false;
               setLoginLoading(false);
             }
           }
 
           async function handleLogout() {
-            await fetch("/server-admin/logout", { method: "POST" });
-            loginForm.resetFields();
-            settingsForm.resetFields();
-            setSession(null);
-            setSettings(null);
-            setAnnouncements([]);
-            settingsRef.current = null;
-            clearDraftDirty();
-            message.success("已退出登录");
+            if (!beginAdminMutation()) return;
+            setLogoutLoading(true);
+            const csrfToken = csrfTokenRef.current;
+            sessionGenerationRef.current += 1;
+            settingsRequestSeqRef.current += 1;
+            try {
+              await performAdminRequest(
+                "/server-admin/logout",
+                { method: "POST" },
+                csrfToken,
+              );
+              message.success("已退出登录");
+            } catch (error) {
+              if (error && error.status === 403) {
+                message.error("安全令牌已失效，本地登录状态已清除");
+              } else if (!error || error.status !== 401) {
+                message.error((error && error.message) || "退出登录失败，本地登录状态已清除");
+              }
+            } finally {
+              csrfTokenRef.current = null;
+              clearLocalAdminState();
+              endAdminMutation();
+              setLogoutLoading(false);
+            }
           }
 
           async function handleSave(values) {
+            if (!beginAdminMutation()) return;
             setSaveLoading(true);
+            const generation = sessionGenerationRef.current;
+            const sequence = ++settingsRequestSeqRef.current;
             try {
-              const next = await readJson("/server-admin/settings", {
+              const next = await request("/server-admin/settings", {
                 method: "PATCH",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({
                   ...values,
                   announcements: announcements,
+                  chatFeatures: normalizeChatFeatures(values.chatFeatures),
                 }),
-              });
+              }, generation);
+              if (!isCurrentRequest(
+                generation,
+                sessionGenerationRef.current,
+                sequence,
+                settingsRequestSeqRef.current,
+              )) {
+                return;
+              }
               applySettingsSnapshot(next, "save");
               message.success("设置已保存");
             } catch (error) {
-              message.error(error.message || "保存失败");
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error(error.message || "保存失败");
+              }
             } finally {
+              endAdminMutation();
               setSaveLoading(false);
             }
           }
@@ -601,7 +932,56 @@ export function renderServerAdminPage(serviceVersion: string) {
             await handleSave(settingsForm.getFieldsValue());
           }
 
+          async function executeClearHistory() {
+            if (!beginAdminMutation()) return;
+            setClearLoading(true);
+            const generation = sessionGenerationRef.current;
+            settingsRequestSeqRef.current += 1;
+            try {
+              const result = await request(
+                "/server-admin/chat/clear-history",
+                { method: "POST" },
+                generation,
+              );
+              if (!isCurrentRequest(generation, sessionGenerationRef.current)) return;
+              const next = { ...settingsRef.current, metrics: result.metrics };
+              settingsRef.current = next;
+              setSettings(next);
+              message.success("聊天历史已清空");
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error(error.message || "清空聊天历史失败");
+              }
+            } finally {
+              endAdminMutation();
+              setClearLoading(false);
+            }
+          }
+
+          function confirmClearHistory() {
+            if (clearConfirmOpenRef.current || adminMutationInFlightRef.current) return;
+            clearConfirmOpenRef.current = true;
+            Modal.confirm({
+              title: "清空服务器聊天历史？",
+              content: "现有服务器频道历史将立即清空，此操作无法撤销。",
+              okText: "确认清空",
+              okButtonProps: { danger: true },
+              cancelText: "取消",
+              onOk: async function () {
+                try {
+                  await executeClearHistory();
+                } finally {
+                  clearConfirmOpenRef.current = false;
+                }
+              },
+              onCancel: function () {
+                clearConfirmOpenRef.current = false;
+              },
+            });
+          }
+
           async function handleManualRefresh() {
+            if (adminMutationInFlightRef.current) return;
             if (draftDirtyRef.current && typeof window !== "undefined" && typeof window.confirm === "function") {
               const confirmed = window.confirm("当前有未保存的修改。重新加载会覆盖左侧设置和公告草稿，是否继续？");
               if (!confirmed) {
@@ -613,6 +993,7 @@ export function renderServerAdminPage(serviceVersion: string) {
           }
 
           function addAnnouncement() {
+            if (adminMutationInFlightRef.current) return;
             markDraftDirty();
             setAnnouncements(function (current) {
               return current.concat([createAnnouncementDraft({
@@ -625,6 +1006,7 @@ export function renderServerAdminPage(serviceVersion: string) {
           }
 
           function updateAnnouncement(index, patch) {
+            if (adminMutationInFlightRef.current) return;
             markDraftDirty();
             setAnnouncements(function (current) {
               return current.map(function (item, itemIndex) {
@@ -634,6 +1016,7 @@ export function renderServerAdminPage(serviceVersion: string) {
           }
 
           function moveAnnouncement(index, direction) {
+            if (adminMutationInFlightRef.current) return;
             markDraftDirty();
             setAnnouncements(function (current) {
               const nextIndex = index + direction;
@@ -649,6 +1032,7 @@ export function renderServerAdminPage(serviceVersion: string) {
           }
 
           function removeAnnouncement(index) {
+            if (adminMutationInFlightRef.current) return;
             markDraftDirty();
             setAnnouncements(function (current) {
               return current.filter(function (_item, itemIndex) {
@@ -702,6 +1086,14 @@ export function renderServerAdminPage(serviceVersion: string) {
             );
           }
 
+          if (!settings) {
+            return h(
+              "div",
+              { className: "login-shell" },
+              h(Spin, { size: "large", tip: "正在加载服务器设置..." })
+            );
+          }
+
           return h(
             ConfigProvider,
             {
@@ -733,7 +1125,7 @@ export function renderServerAdminPage(serviceVersion: string) {
                     "div",
                     { className: "page-actions" },
                     h(Badge, { status: "processing", text: "已登录" }),
-                    h(Button, { onClick: handleLogout }, "退出")
+                    h(Button, { onClick: handleLogout, loading: logoutLoading, disabled: adminMutationInFlight }, "退出")
                   )
                 )
               ),
@@ -776,12 +1168,14 @@ export function renderServerAdminPage(serviceVersion: string) {
                               {
                               form: settingsForm,
                               layout: "vertical",
+                              disabled: adminMutationInFlight,
                               onFinish: handleSave,
                               onValuesChange: function () { markDraftDirty(); },
                               initialValues: {
                                 displayName: settings.displayName || "",
                                 publicListingEnabled: Boolean(settings.publicListingEnabled),
                                 bandwidthCapacityMbps: settings.bandwidthCapacityMbps,
+                                chatFeatures: normalizeChatFeatures(settings.chatFeatures),
                               },
                             },
                             h(Form.Item, { name: "displayName", label: "显示名称" }, h(Input, { placeholder: "留空则使用默认名称", maxLength: 64 })),
@@ -807,14 +1201,50 @@ export function renderServerAdminPage(serviceVersion: string) {
                               },
                               h(Switch, { checkedChildren: "公开", unCheckedChildren: "私有" })
                             ),
+                            h(Title, { level: 5, style: { marginTop: 4, marginBottom: 8 } }, "聊天治理（持久化开关）"),
+                            h(
+                              "div",
+                              { className: "feature-grid" },
+                              h(
+                                Form.Item,
+                                { name: ["chatFeatures", "serverChatEnabled"], label: "服务器频道", valuePropName: "checked" },
+                                h(Switch, { checkedChildren: "开启", unCheckedChildren: "关闭" })
+                              ),
+                              h(
+                                Form.Item,
+                                { name: ["chatFeatures", "richContentEnabled"], label: "富内容", valuePropName: "checked" },
+                                h(Switch, { checkedChildren: "开启", unCheckedChildren: "关闭" })
+                              ),
+                              h(
+                                Form.Item,
+                                { name: ["chatFeatures", "emojiEnabled"], label: "Emoji", valuePropName: "checked" },
+                                h(Switch, { disabled: chatControlState.emojiEnabled, checkedChildren: "开启", unCheckedChildren: "关闭" })
+                              ),
+                              h(
+                                Form.Item,
+                                { name: ["chatFeatures", "itemRefsEnabled"], label: "物品引用", valuePropName: "checked" },
+                                h(Switch, { disabled: chatControlState.itemRefsEnabled, checkedChildren: "开启", unCheckedChildren: "关闭" })
+                              ),
+                              h(
+                                Form.Item,
+                                { name: ["chatFeatures", "roomChatV2Enabled"], label: "房间富聊天 v2", valuePropName: "checked" },
+                                h(Switch, { checkedChildren: "开启", unCheckedChildren: "关闭" })
+                              ),
+                              h(
+                                Form.Item,
+                                { name: ["chatFeatures", "roomCombatRefsEnabled"], label: "房间战斗引用", valuePropName: "checked" },
+                                h(Switch, { disabled: chatControlState.roomCombatRefsEnabled, checkedChildren: "开启", unCheckedChildren: "关闭" })
+                              )
+                            ),
                             h(
                               Form.Item,
                               { style: { marginBottom: 0 } },
                               h(
                                 Space,
-                                { size: 12 },
-                                h(Button, { type: "primary", htmlType: "submit", loading: saveLoading }, "保存设置"),
-                                h(Button, { onClick: function () { void handleManualRefresh(); }, loading: settingsLoading }, "重新加载配置")
+                                { size: 12, className: "settings-actions" },
+                                h(Button, { type: "primary", htmlType: "submit", loading: saveLoading, disabled: adminMutationInFlight }, "保存设置"),
+                                h(Button, { onClick: function () { void handleManualRefresh(); }, loading: settingsLoading, disabled: adminMutationInFlight }, "重新加载配置"),
+                                h(Button, { danger: true, onClick: confirmClearHistory, loading: clearLoading, disabled: adminMutationInFlight }, "清空聊天历史")
                               )
                             )
                           )
@@ -827,9 +1257,9 @@ export function renderServerAdminPage(serviceVersion: string) {
                           title: h("div", { className: "section-title" }, h("span", null, "大厅公告")),
                           extra: h(
                             Space,
-                            { size: 8 },
-                            h(Button, { onClick: function () { void saveAnnouncements(); }, loading: saveLoading }, "保存公告"),
-                            h(Button, { type: "primary", onClick: addAnnouncement }, "新增公告")
+                            { size: 8, className: "announcement-actions" },
+                            h(Button, { onClick: function () { void saveAnnouncements(); }, loading: saveLoading, disabled: adminMutationInFlight }, "保存公告"),
+                            h(Button, { type: "primary", onClick: addAnnouncement, disabled: adminMutationInFlight }, "新增公告")
                           ),
                         },
                         h(
@@ -961,6 +1391,24 @@ export function renderServerAdminPage(serviceVersion: string) {
                         h(Descriptions.Item, { label: "有效容量" }, formatMbps(settings.resolvedCapacityMbps)),
                         h(Descriptions.Item, { label: "当前利用率" }, formatRatio(settings.bandwidthUtilizationRatio)),
                         h(Descriptions.Item, { label: "容量来源" }, renderCapacitySource(settings.capacitySource || "unknown"))
+                        ,h(Descriptions.Item, { label: "服务器频道有效版本" }, formatFeatureVersions(settings.serverFeatures))
+                        ,h(Descriptions.Item, { label: "房间聊天有效版本" }, formatFeatureVersions(settings.roomFeatures))
+                        ,h(Descriptions.Item, { label: "服务器聊天连接" }, formatMetricCount(settings.metrics && settings.metrics.serverConnectionCount))
+                        ,h(Descriptions.Item, { label: "房间聊天连接" }, formatMetricCount(settings.metrics && settings.metrics.roomConnectionCount))
+                        ,h(Descriptions.Item, { label: "服务器保留历史" }, formatMetricCount(settings.metrics && settings.metrics.serverRetainedHistoryCount))
+                        ,h(Descriptions.Item, { label: "历史 epoch" }, formatMetricCount(settings.metrics && settings.metrics.historyEpoch))
+                        ,h(Descriptions.Item, { label: "服务器接受消息" }, formatMetricCount(settings.metrics && settings.metrics.serverAcceptedMessages))
+                        ,h(Descriptions.Item, { label: "服务器拒绝消息" }, formatMetricCount(settings.metrics && settings.metrics.serverRejectedMessages))
+                        ,h(Descriptions.Item, { label: "房间接受消息" }, formatMetricCount(settings.metrics && settings.metrics.roomAcceptedMessages))
+                        ,h(Descriptions.Item, { label: "房间拒绝消息" }, formatMetricCount(settings.metrics && settings.metrics.roomRejectedMessages))
+                        ,h(Descriptions.Item, { label: "服务器拒绝率" }, formatRejectionRate(
+                          settings.metrics && settings.metrics.serverAcceptedMessages,
+                          settings.metrics && settings.metrics.serverRejectedMessages,
+                        ))
+                        ,h(Descriptions.Item, { label: "房间拒绝率" }, formatRejectionRate(
+                          settings.metrics && settings.metrics.roomAcceptedMessages,
+                          settings.metrics && settings.metrics.roomRejectedMessages,
+                        ))
                       )
                     )
                   )

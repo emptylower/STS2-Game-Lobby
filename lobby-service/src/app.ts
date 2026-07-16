@@ -18,7 +18,14 @@ import { CreateRoomBandwidthGuard } from "./bandwidth-guard.js";
 import { assertRelayCreateReady, assertRelayJoinReady } from "./join-guard.js";
 import { RoomRelayManager } from "./relay.js";
 import { cleanupExpiredRooms } from "./room-cleanup.js";
-import { signServerAdminSession, verifyServerAdminPassword, verifySignedServerAdminSession } from "./server-admin-auth.js";
+import {
+  createServerAdminCsrfToken,
+  digestServerAdminCsrfToken,
+  signServerAdminSession,
+  verifyServerAdminCsrfToken,
+  verifyServerAdminPassword,
+  verifySignedServerAdminSession,
+} from "./server-admin-auth.js";
 import { ServerAdminStateStore } from "./server-admin-state.js";
 import { renderServerAdminPage } from "./server-admin-ui.js";
 import {
@@ -139,6 +146,8 @@ interface ServerAdminSession {
   id: string;
   username: string;
   expiresAt: number;
+  csrfToken: string;
+  csrfDigest: Buffer;
 }
 
 
@@ -278,6 +287,10 @@ export async function createLobbyService(
 
   const app = express();
   app.disable("x-powered-by");
+  app.use("/server-admin", (_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  });
   app.use(express.json({ limit: "32kb" }));
   app.use((req, res, next) => {
     const startedAt = Date.now();
@@ -646,12 +659,13 @@ export async function createLobbyService(
         throw new HttpError(401, "invalid_server_admin_credentials", "用户名或密码不正确。");
       }
 
-      const session = createServerAdminSession(username);
-      setServerAdminCookie(res, session.id);
+      const { session, csrfToken } = createServerAdminSession(username);
+      setServerAdminCookie(req, res, session.id);
       res.json({
         id: session.id,
         username: session.username,
         expiresAt: new Date(session.expiresAt).toISOString(),
+        csrfToken,
       });
     } catch (error) {
       next(error);
@@ -661,8 +675,9 @@ export async function createLobbyService(
   app.post("/server-admin/logout", (req, res, next) => {
     try {
       const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
       serverAdminSessions.delete(session.id);
-      clearServerAdminCookie(res);
+      clearServerAdminCookie(req, res);
       res.status(204).send();
     } catch (error) {
       next(error);
@@ -676,6 +691,7 @@ export async function createLobbyService(
         id: session.id,
         username: session.username,
         expiresAt: new Date(session.expiresAt).toISOString(),
+        csrfToken: session.csrfToken,
       });
     } catch (error) {
       next(error);
@@ -693,7 +709,8 @@ export async function createLobbyService(
 
   app.patch("/server-admin/settings", (req, res, next) => {
     (async () => {
-      requireServerAdminSession(req);
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
       const body = req.body as {
         displayName?: string;
         publicListingEnabled?: boolean;
@@ -738,7 +755,8 @@ export async function createLobbyService(
 
   app.post("/server-admin/chat/clear-history", (req, res, next) => {
     (async () => {
-      requireServerAdminSession(req);
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
       const historyEpoch = await enqueueServerAdminMutation(async () => {
         await dependencies.beforeServerAdminMutation?.("clear-history");
         return chatGateway.clearHistory();
@@ -1568,13 +1586,16 @@ export async function createLobbyService(
   }
 
   function createServerAdminSession(username: string) {
+    const csrfToken = createServerAdminCsrfToken();
     const session: ServerAdminSession = {
       id: `session_${randomUUID()}`,
       username,
       expiresAt: Date.now() + env.serverAdminSessionTtlMs,
+      csrfToken,
+      csrfDigest: digestServerAdminCsrfToken(csrfToken),
     };
     serverAdminSessions.set(session.id, session);
-    return session;
+    return { session, csrfToken };
   }
 
   function cleanupExpiredServerAdminSessions(now = Date.now()) {
@@ -1603,13 +1624,39 @@ export async function createLobbyService(
     return session;
   }
 
-  function setServerAdminCookie(res: Response, sessionId: string) {
-    const token = signServerAdminSession(sessionId, env.serverAdminSessionSecret!);
-    res.setHeader("Set-Cookie", `sts2_server_admin_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(env.serverAdminSessionTtlMs / 1000)}`);
+  function requireServerAdminCsrf(req: Request, session: ServerAdminSession): void {
+    const header = req.headers["x-csrf-token"];
+    const token = Array.isArray(header) ? undefined : header;
+    if (!verifyServerAdminCsrfToken(token, session.csrfDigest)) {
+      throw new HttpError(403, "server_admin_csrf_invalid", "安全令牌无效，请重新登录。");
+    }
   }
 
-  function clearServerAdminCookie(res: Response) {
-    res.setHeader("Set-Cookie", "sts2_server_admin_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+  function setServerAdminCookie(req: Request, res: Response, sessionId: string) {
+    const token = signServerAdminSession(sessionId, env.serverAdminSessionSecret!);
+    res.setHeader("Set-Cookie", `sts2_server_admin_session=${token}; ${serverAdminCookieAttributes(req, Math.floor(env.serverAdminSessionTtlMs / 1000))}`);
+  }
+
+  function clearServerAdminCookie(req: Request, res: Response) {
+    res.setHeader("Set-Cookie", `sts2_server_admin_session=; ${serverAdminCookieAttributes(req, 0)}`);
+  }
+
+  function serverAdminCookieAttributes(req: Request, maxAge: number): string {
+    return `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${isReliableHttpsRequest(req) ? "; Secure" : ""}`;
+  }
+
+  function isReliableHttpsRequest(req: Request): boolean {
+    if (req.secure) return true;
+    const remoteIp = requestIp(req);
+    const trustedProxy = remoteIp.length > 0
+      && env.chat.trustedProxyCidrs.some((candidate) => ipMatchesCidr(remoteIp, candidate));
+    if (!trustedProxy) return false;
+    const header = req.headers["x-forwarded-proto"];
+    const value = (Array.isArray(header) ? header[0] : header)
+      ?.split(",", 1)[0]
+      ?.trim()
+      .toLowerCase();
+    return value === "https";
   }
 
   function resolveAdvertisedRelayHost(req: Request) {

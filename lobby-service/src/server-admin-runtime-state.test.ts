@@ -128,8 +128,23 @@ test("server admin settings PATCH returns runtime fields without persisting them
   assert.equal(response.peerRuntimeState, "joined");
 
   const persisted = JSON.parse(readFileSync(started.stateFile, "utf8")) as Record<string, unknown>;
-  assert.equal(Object.prototype.hasOwnProperty.call(persisted, "peerNetworkEnabled"), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(persisted, "peerRuntimeState"), false);
+  for (const runtimeKey of [
+    "peerNetworkEnabled",
+    "peerRuntimeState",
+    "serverFeatures",
+    "roomFeatures",
+    "metrics",
+    "serverConnectionCount",
+    "roomConnectionCount",
+    "serverRetainedHistoryCount",
+    "historyEpoch",
+    "serverAcceptedMessages",
+    "serverRejectedMessages",
+    "roomAcceptedMessages",
+    "roomRejectedMessages",
+  ]) {
+    assert.equal(Object.prototype.hasOwnProperty.call(persisted, runtimeKey), false, runtimeKey);
+  }
 });
 
 test("CLI process exits cleanly on SIGTERM", async () => {
@@ -264,7 +279,7 @@ async function stopLobbyServer(started: StartedServer) {
 }
 
 async function getSettings(started: StartedServer): Promise<{ peerNetworkEnabled: boolean; peerRuntimeState: PeerRuntimeState }> {
-  const cookie = await login(started.baseUrl);
+  const { cookie } = await login(started.baseUrl);
   const response = await fetch(`${started.baseUrl}/server-admin/settings`, {
     headers: { Cookie: cookie },
   });
@@ -277,12 +292,13 @@ async function patchSettings(
   started: StartedServer,
   body: { displayName: string; publicListingEnabled: boolean; announcements: unknown[] },
 ): Promise<{ peerNetworkEnabled: boolean; peerRuntimeState: PeerRuntimeState }> {
-  const cookie = await login(started.baseUrl);
+  const { cookie, csrfToken } = await login(started.baseUrl);
   const response = await fetch(`${started.baseUrl}/server-admin/settings`, {
     method: "PATCH",
     headers: {
       "content-type": "application/json",
       Cookie: cookie,
+      "x-csrf-token": csrfToken,
     },
     body: JSON.stringify(body),
   });
@@ -291,7 +307,7 @@ async function patchSettings(
   return JSON.parse(text) as { peerNetworkEnabled: boolean; peerRuntimeState: PeerRuntimeState };
 }
 
-async function login(baseUrl: string): Promise<string> {
+async function login(baseUrl: string): Promise<{ cookie: string; csrfToken: string }> {
   const response = await fetch(`${baseUrl}/server-admin/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -301,7 +317,12 @@ async function login(baseUrl: string): Promise<string> {
   assert.equal(response.status, 200, text);
   const setCookie = response.headers.get("set-cookie");
   assert.ok(setCookie, "expected login response to set a cookie");
-  return setCookie.split(";", 1)[0]!;
+  const body = JSON.parse(text) as { csrfToken?: unknown };
+  assert.equal(typeof body.csrfToken, "string");
+  return {
+    cookie: setCookie.split(";", 1)[0]!,
+    csrfToken: body.csrfToken as string,
+  };
 }
 
 async function waitForCliReady(child: ChildProcess, getLogs: () => string): Promise<void> {

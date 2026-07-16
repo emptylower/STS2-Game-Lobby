@@ -2046,9 +2046,10 @@ test("server admin chat governance persists before ordered websocket state and c
       body: JSON.stringify({ username: "admin", password }),
     });
     assert.equal(login.status, 200);
+    const loginBody = await login.json() as { csrfToken: string };
     const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
     assert.ok(cookie);
-    const authHeaders = { cookie };
+    const authHeaders = { cookie, "x-csrf-token": loginBody.csrfToken };
 
     const initial = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
       headers: authHeaders,
@@ -2364,9 +2365,14 @@ test("server admin mutation queue recovers after a gateway broadcast failure", a
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ username: "admin", password }),
     });
+    const loginBody = await login.json() as { csrfToken: string };
     const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
     assert.ok(cookie);
-    const headers = { cookie, "content-type": "application/json" };
+    const headers = {
+      cookie,
+      "content-type": "application/json",
+      "x-csrf-token": loginBody.csrfToken,
+    };
 
     const failed = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
       method: "PATCH",
@@ -2391,7 +2397,7 @@ test("server admin mutation queue recovers after a gateway broadcast failure", a
     assert.equal(recoveredBody.chatFeatures.serverChatEnabled, false);
     const clear = await fetch(
       `http://127.0.0.1:${address.port}/server-admin/chat/clear-history`,
-      { method: "POST", headers: { cookie } },
+      { method: "POST", headers: { cookie, "x-csrf-token": loginBody.csrfToken } },
     );
     assert.equal(clear.status, 200);
     assert.deepEqual(registry.attemptedTypes, [
@@ -2403,4 +2409,275 @@ test("server admin mutation queue recovers after a gateway broadcast failure", a
     await service.close();
     cleanupTempDir(config);
   }
+});
+
+test("server admin CSRF protects every mutation without leaking tokens", async () => {
+  const password = "csrf-integration-password";
+  const config = testConfig({
+    port: 0,
+    serverAdminPasswordHash: hashServerAdminPassword(password),
+    serverAdminSessionSecret: "csrf-integration-secret",
+  });
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => logs.push(args.map(String).join(" "));
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  try {
+    const html = await fetch(`${baseUrl}/server-admin`);
+    assert.equal(html.headers.get("cache-control"), "no-store");
+
+    async function login() {
+      const response = await fetch(`${baseUrl}/server-admin/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "admin", password }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      const body = await response.json() as { csrfToken: string };
+      const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
+      assert.ok(cookie);
+      assert.match(body.csrfToken, /^[A-Za-z0-9_-]{43}$/);
+      assert.equal(response.headers.get("set-cookie")?.includes(body.csrfToken), false);
+      return { cookie, csrfToken: body.csrfToken };
+    }
+
+    async function mutation(
+      path: "/server-admin/settings" | "/server-admin/chat/clear-history" | "/server-admin/logout",
+      cookie?: string,
+      csrfToken?: string,
+    ) {
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (cookie) headers.cookie = cookie;
+      if (csrfToken) headers["x-csrf-token"] = csrfToken;
+      const response = await fetch(`${baseUrl}${path}`, {
+        method: path === "/server-admin/settings" ? "PATCH" : "POST",
+        headers,
+        ...(path === "/server-admin/settings"
+          ? { body: JSON.stringify({ chatFeatures: { serverChatEnabled: true } }) }
+          : {}),
+      });
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      const text = await response.text();
+      return {
+        response,
+        text,
+        body: text ? JSON.parse(text) as Record<string, unknown> : {},
+      };
+    }
+
+    const sessionA = await login();
+    const sessionB = await login();
+    const firstTab = await fetch(`${baseUrl}/server-admin/session`, {
+      headers: { cookie: sessionA.cookie },
+    });
+    const secondTab = await fetch(`${baseUrl}/server-admin/session`, {
+      headers: { cookie: sessionA.cookie },
+    });
+    assert.equal(firstTab.headers.get("cache-control"), "no-store");
+    const firstTabBody = await firstTab.json() as { csrfToken: string };
+    const secondTabBody = await secondTab.json() as { csrfToken: string };
+    assert.equal(firstTabBody.csrfToken, sessionA.csrfToken);
+    assert.equal(secondTabBody.csrfToken, sessionA.csrfToken);
+
+    for (const path of [
+      "/server-admin/settings",
+      "/server-admin/chat/clear-history",
+      "/server-admin/logout",
+    ] as const) {
+      const withoutSession = await mutation(path, undefined, sessionA.csrfToken);
+      assert.equal(withoutSession.response.status, 401);
+      assert.equal(withoutSession.body.code, "server_admin_auth_required");
+
+      for (const csrfToken of [undefined, "wrong-token", sessionB.csrfToken]) {
+        const rejected = await mutation(path, sessionA.cookie, csrfToken);
+        assert.equal(rejected.response.status, 403);
+        assert.equal(rejected.body.code, "server_admin_csrf_invalid");
+      }
+    }
+
+    const unchanged = await fetch(`${baseUrl}/server-admin/settings`, {
+      headers: { cookie: sessionA.cookie },
+    });
+    const unchangedText = await unchanged.text();
+    const unchangedBody = JSON.parse(unchangedText) as {
+      chatFeatures: { serverChatEnabled: boolean };
+      metrics: { historyEpoch: number };
+    };
+    assert.equal(unchanged.status, 200);
+    assert.equal(unchangedBody.chatFeatures.serverChatEnabled, false);
+    assert.equal(unchangedBody.metrics.historyEpoch, 0);
+
+    const validPatch = await mutation(
+      "/server-admin/settings",
+      sessionA.cookie,
+      firstTabBody.csrfToken,
+    );
+    assert.equal(validPatch.response.status, 200);
+    const validClear = await mutation(
+      "/server-admin/chat/clear-history",
+      sessionA.cookie,
+      secondTabBody.csrfToken,
+    );
+    assert.equal(validClear.response.status, 200);
+    assert.equal(validClear.body.historyEpoch, 1);
+
+    for (const secret of [sessionA.csrfToken, sessionB.csrfToken]) {
+      assert.equal(validPatch.text.includes(secret), false);
+      assert.equal(validClear.text.includes(secret), false);
+      assert.equal(unchangedText.includes(secret), false);
+    }
+    const persistedText = readFileSync(config.serverAdminStateFile, "utf8");
+    assert.equal(persistedText.includes(sessionA.csrfToken), false);
+    assert.equal(persistedText.includes(sessionB.csrfToken), false);
+
+    const logout = await mutation("/server-admin/logout", sessionA.cookie, sessionA.csrfToken);
+    assert.equal(logout.response.status, 204);
+    const afterLogout = await mutation(
+      "/server-admin/settings",
+      sessionA.cookie,
+      sessionA.csrfToken,
+    );
+    assert.equal(afterLogout.response.status, 401);
+    assert.equal(afterLogout.body.code, "server_admin_auth_required");
+
+    const replacement = await login();
+    const staleToken = await mutation(
+      "/server-admin/settings",
+      replacement.cookie,
+      sessionA.csrfToken,
+    );
+    assert.equal(staleToken.response.status, 403);
+    assert.equal(staleToken.body.code, "server_admin_csrf_invalid");
+
+    const logText = logs.join("\n");
+    assert.equal(logText.includes(sessionA.csrfToken), false);
+    assert.equal(logText.includes(sessionB.csrfToken), false);
+    assert.equal(logText.includes(replacement.csrfToken), false);
+  } finally {
+    console.log = originalLog;
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("malformed server admin JSON is no-store and cannot mutate authenticated state", async () => {
+  const password = "malformed-admin-password";
+  const config = testConfig({
+    port: 0,
+    serverAdminPasswordHash: hashServerAdminPassword(password),
+    serverAdminSessionSecret: "malformed-admin-secret",
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  try {
+    async function malformed(
+      path: string,
+      method: "PATCH" | "POST",
+      headers: Record<string, string> = {},
+    ) {
+      const response = await fetch(`${baseUrl}${path}`, {
+        method,
+        headers: { "content-type": "application/json", ...headers },
+        body: "{",
+      });
+      assert.equal(response.status, 400, path);
+      assert.equal(response.headers.get("cache-control"), "no-store", path);
+      assert.deepEqual(await response.json(), {
+        code: "invalid_request",
+        message: "请求体必须是有效的 JSON。",
+      });
+      return response;
+    }
+
+    await malformed("/server-admin/login", "POST");
+    await malformed("/server-admin/settings", "PATCH");
+    await malformed("/server-admin/chat/clear-history", "POST");
+    await malformed("/server-admin/logout", "POST");
+
+    const login = await fetch(`${baseUrl}/server-admin/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password }),
+    });
+    assert.equal(login.status, 200);
+    const loginBody = await login.json() as { csrfToken: string };
+    const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+    assert.ok(cookie);
+    const authHeaders = { cookie, "x-csrf-token": loginBody.csrfToken };
+
+    const before = await fetch(`${baseUrl}/server-admin/settings`, {
+      headers: { cookie },
+    });
+    const beforeBody = await before.json() as {
+      chatFeatures: Record<string, boolean>;
+      metrics: { historyEpoch: number };
+    };
+
+    await malformed("/server-admin/settings", "PATCH", authHeaders);
+    await malformed("/server-admin/chat/clear-history", "POST", authHeaders);
+    const malformedLogout = await malformed("/server-admin/logout", "POST", authHeaders);
+    assert.equal(malformedLogout.headers.get("set-cookie"), null);
+
+    const session = await fetch(`${baseUrl}/server-admin/session`, {
+      headers: { cookie },
+    });
+    assert.equal(session.status, 200, "malformed logout must not delete the session");
+    const after = await fetch(`${baseUrl}/server-admin/settings`, {
+      headers: { cookie },
+    });
+    const afterBody = await after.json() as {
+      chatFeatures: Record<string, boolean>;
+      metrics: { historyEpoch: number };
+    };
+    assert.deepEqual(afterBody.chatFeatures, beforeBody.chatFeatures);
+    assert.equal(afterBody.metrics.historyEpoch, beforeBody.metrics.historyEpoch);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("server admin cookie trusts forwarded HTTPS only from configured proxies", async () => {
+  const password = "secure-cookie-password";
+  const base = testConfig({
+    port: 0,
+    serverAdminPasswordHash: hashServerAdminPassword(password),
+    serverAdminSessionSecret: "secure-cookie-secret",
+  });
+
+  async function loginCookie(config: LobbyServiceConfig) {
+    const service = await createLobbyService(config);
+    const address = await service.start();
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/server-admin/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-proto": "https" },
+        body: JSON.stringify({ username: "admin", password }),
+      });
+      assert.equal(response.status, 200);
+      return response.headers.get("set-cookie") ?? "";
+    } finally {
+      await service.close();
+      cleanupTempDir(config);
+    }
+  }
+
+  const untrusted = await loginCookie(base);
+  assert.match(untrusted, /HttpOnly; SameSite=Lax/);
+  assert.equal(/; Secure(?:;|$)/.test(untrusted), false);
+
+  const trustedBase = testConfig({
+    port: 0,
+    serverAdminPasswordHash: hashServerAdminPassword(password),
+    serverAdminSessionSecret: "secure-cookie-secret",
+  });
+  const trusted = await loginCookie({
+    ...trustedBase,
+    chat: { ...trustedBase.chat, trustedProxyCidrs: ["127.0.0.0/8"] },
+  });
+  assert.match(trusted, /; Secure(?:;|$)/);
 });
