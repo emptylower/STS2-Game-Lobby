@@ -9,7 +9,7 @@ GODOT_BIN="${GODOT_BIN:-$(command -v godot451-mono || command -v godot || true)}
 INSTALL_SCRIPT="$ROOT_DIR/scripts/install-sts2-lan-connect-macos.sh"
 DEFAULT_BUILD_OUTPUT_DIR="$PROJECT_DIR/release/.build_mod_output/$ASSEMBLY_NAME"
 MOD_OUTPUT_DIR="${STS2_MODS_DIR:-$DEFAULT_BUILD_OUTPUT_DIR}"
-BUILD_LOCK_DIR="$PROJECT_DIR/release/.build_lock"
+BUILD_LOCK_DIR="${STS2_BUILD_LOCK_DIR:-$PROJECT_DIR/release/.build_lock}"
 GODOT_LOG_FILE="${GODOT_LOG_FILE:-${TMPDIR:-/tmp}/sts2_lan_connect_build_${$}.log}"
 PCK_SOURCE="$PROJECT_DIR/build/$ASSEMBLY_NAME.pck"
 DLL_SOURCE="$PROJECT_DIR/.godot/mono/temp/bin/Debug/$ASSEMBLY_NAME.dll"
@@ -176,7 +176,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-mkdir -p "$PROJECT_DIR/release"
+mkdir -p "$(dirname "$BUILD_LOCK_DIR")"
 
 if ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; then
   die "Another sts2_lan_connect build/package step is already running. Re-run this script after the other process exits."

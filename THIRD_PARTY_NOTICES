@@ -18,3 +18,9 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 Lucide is derived from Feather Icons (https://feathericons.com/).
+
+sts2_typing Compatibility Note
+------------------------------
+STS2 LAN Connect does not bundle, link, or runtime-depend on sts2_typing.
+No substantive sts2_typing source code was copied into this project, so no
+sts2_typing MIT attribution is included as a bundled-code license notice.

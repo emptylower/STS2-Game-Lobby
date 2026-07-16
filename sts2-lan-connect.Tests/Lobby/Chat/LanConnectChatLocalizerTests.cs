@@ -28,6 +28,14 @@ public sealed class LanConnectChatLocalizerTests
         Lucide is derived from Feather Icons (https://feathericons.com/).
         """;
 
+    private const string Sts2TypingCompatibilityNote = """
+        sts2_typing Compatibility Note
+        ------------------------------
+        STS2 LAN Connect does not bundle, link, or runtime-depend on sts2_typing.
+        No substantive sts2_typing source code was copied into this project, so no
+        sts2_typing MIT attribution is included as a bundled-code license notice.
+        """;
+
     private static readonly string[] ExpectedKeys =
     [
         "chat.emoji.button",
@@ -319,7 +327,8 @@ public sealed class LanConnectChatLocalizerTests
         {
             Assert.Equal(1, CountOccurrences(notice, required));
         }
-        Assert.DoesNotContain("sts2_typing", notice, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, CountOccurrences(notice, Sts2TypingCompatibilityNote));
+        Assert.DoesNotContain("sts2_typing MIT License", notice, StringComparison.OrdinalIgnoreCase);
     }
 
     private static int CountOccurrences(string text, string value)
