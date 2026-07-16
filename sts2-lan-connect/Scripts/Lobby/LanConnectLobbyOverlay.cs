@@ -1478,6 +1478,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _serverChatPanel = new LanConnectBasicChatPanel(LanConnectChatUiComposition.Icons)
         {
             Name = "LobbyServerChatPanel",
+            ChatVisualStyle = LanConnectChatVisualStyle.LobbySidebar,
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill
         };

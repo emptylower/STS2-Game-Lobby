@@ -127,7 +127,9 @@ internal sealed class LanConnectLucideIconLoader
                 return false;
             }
 
-            string html = "#" + color.ToHtml();
+            // Godot's SVG rasterizer accepts six-digit colors reliably, while
+            // eight-digit #RRGGBBAA strokes can decode to a fully transparent image.
+            string html = "#" + color.ToHtml(false);
             foreach (XAttribute attribute in document.Descendants().Attributes())
             {
                 attribute.Value = CurrentColorToken.Replace(attribute.Value, html);

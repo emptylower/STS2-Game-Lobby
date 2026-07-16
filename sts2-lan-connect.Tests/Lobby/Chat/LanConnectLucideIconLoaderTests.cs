@@ -43,7 +43,7 @@ public sealed class LanConnectLucideIconLoaderTests
         loader.Get("smile", 20, color);
 
         string decoded = Assert.Single(decoder.DecodedSvg);
-        string html = "#" + color.ToHtml();
+        string html = "#" + color.ToHtml(false);
         Assert.Contains($"stroke=\"{html}\"", decoded, StringComparison.Ordinal);
         Assert.Contains($"fill:{html}", decoded, StringComparison.Ordinal);
         Assert.Contains(">currentColor</", decoded, StringComparison.Ordinal);

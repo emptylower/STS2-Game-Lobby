@@ -20,6 +20,7 @@ public sealed class LanConnectEmojiPickerTests
             Texture2D icon = loader.Get(iconName, 20, Colors.White);
             AssertThat(icon.GetWidth()).IsEqual(20);
             AssertThat(icon.GetHeight()).IsEqual(20);
+            AssertThat(HasVisiblePixel(icon.GetImage())).IsTrue();
         }
 
         Texture2D missing = loader.Get("missing-icon", 20, Colors.Black);

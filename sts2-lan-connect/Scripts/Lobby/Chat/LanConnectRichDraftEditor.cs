@@ -29,18 +29,26 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         string BudgetText);
 
     private const float MinimumEditorWidth = 220f;
+    private const float MinimumLobbyEditorWidth = 176f;
     private const float MinimumTextRunWidth = 72f;
     private const float MaximumTextRunWidth = 260f;
     private const float EntityChipWidth = 112f;
     private const float EntityChipHeight = 34f;
     private const float TextLineHeight = 22f;
-    private static readonly Color TextStrongColor = new(0.94f, 0.91f, 0.84f, 1f);
-    private static readonly Color TextMutedColor = new(0.68f, 0.65f, 0.6f, 1f);
-    private static readonly Color AccentColor = new(0.88f, 0.58f, 0.17f, 1f);
+    private static readonly Color DarkTextStrongColor = new(0.94f, 0.91f, 0.84f, 1f);
+    private static readonly Color DarkTextMutedColor = new(0.68f, 0.65f, 0.6f, 1f);
+    private static readonly Color DarkAccentColor = new(0.88f, 0.58f, 0.17f, 1f);
+    private static readonly Color LobbyTextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);
+    private static readonly Color LobbyTextMutedColor = new(0.46f, 0.36f, 0.31f, 1f);
+    private static readonly Color LobbyAccentColor = new(0.87f, 0.41f, 0.00f, 1f);
+    private static readonly Color LobbyInputColor = new(0.95f, 0.92f, 0.86f, 1f);
+    private static readonly Color LobbySecondaryColor = new(0.93f, 0.89f, 0.82f, 1f);
+    private static readonly Color LobbyBorderColor = new(0.80f, 0.65f, 0.53f, 1f);
 
     private readonly object _bindingSync = new();
     private readonly LanConnectChatLocalizer _localizer;
     private readonly Func<string?> _localeProvider;
+    private readonly LanConnectChatVisualStyle _visualStyle;
     private LanConnectRichDraft? _draft;
     private Action<long>? _draftContentChangedHandler;
     private bool _draftContentChangedSubscribed;
@@ -49,6 +57,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     private string _senderName = string.Empty;
     private Func<LanConnectDraftRun, string> _accessibleLabel;
     private Func<LanConnectDraftRun, string> _copyLabel;
+    private PanelContainer? _surface;
     private VBoxContainer? _stack;
     private HFlowContainer? _flow;
     private Label? _budgetLabel;
@@ -80,13 +89,22 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     internal LanConnectRichDraftEditor(
         LanConnectChatLocalizer localizer,
-        Func<string?> localeProvider)
+        Func<string?> localeProvider,
+        LanConnectChatVisualStyle visualStyle = LanConnectChatVisualStyle.DarkOverlay)
     {
         _localizer = localizer ?? throw new ArgumentNullException(nameof(localizer));
         _localeProvider = localeProvider ?? throw new ArgumentNullException(nameof(localeProvider));
+        _visualStyle = visualStyle;
         _accessibleLabel = DefaultAccessibleLabel;
         _copyLabel = DefaultCopyLabel;
     }
+
+    internal LanConnectChatVisualStyle ChatVisualStyle => _visualStyle;
+
+    private bool UsesLobbyStyle => _visualStyle == LanConnectChatVisualStyle.LobbySidebar;
+    private Color TextStrongColor => UsesLobbyStyle ? LobbyTextStrongColor : DarkTextStrongColor;
+    private Color TextMutedColor => UsesLobbyStyle ? LobbyTextMutedColor : DarkTextMutedColor;
+    private Color AccentColor => UsesLobbyStyle ? LobbyAccentColor : DarkAccentColor;
 
     internal event Action? SubmitRequested;
 
@@ -227,7 +245,9 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     internal void SetCompactLayout(bool compact)
     {
-        CustomMinimumSize = new Vector2(MinimumEditorWidth, compact ? 48f : 54f);
+        CustomMinimumSize = UsesLobbyStyle
+            ? new Vector2(MinimumLobbyEditorWidth, 42f)
+            : new Vector2(MinimumEditorWidth, compact ? 48f : 54f);
     }
 
     internal void RefreshFromDraft(bool preserveFocus = true)
@@ -410,7 +430,8 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             return;
         }
         Name = LanConnectConstants.ChatRichDraftEditorName;
-        CustomMinimumSize = new Vector2(MinimumEditorWidth, 54f);
+        float minimumEditorWidth = UsesLobbyStyle ? MinimumLobbyEditorWidth : MinimumEditorWidth;
+        CustomMinimumSize = new Vector2(minimumEditorWidth, UsesLobbyStyle ? 42f : 54f);
         SizeFlagsHorizontal = SizeFlags.ExpandFill;
         MouseFilter = MouseFilterEnum.Pass;
 
@@ -418,14 +439,31 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill
         };
-        _stack.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         _stack.AddThemeConstantOverride("separation", 3);
-        AddChild(_stack);
+        if (UsesLobbyStyle)
+        {
+            _surface = new PanelContainer
+            {
+                Name = "ChatDraftSurface",
+                MouseFilter = MouseFilterEnum.Pass
+            };
+            _surface.AddThemeStyleboxOverride(
+                "panel",
+                CreateStyle(LobbyInputColor, LobbyBorderColor, borderWidth: 2, contentMargin: 3));
+            AddChild(_surface);
+            _surface.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+            _surface.AddChild(_stack);
+        }
+        else
+        {
+            AddChild(_stack);
+            _stack.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+        }
 
         _flow = new HFlowContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(MinimumEditorWidth, 38f),
+            CustomMinimumSize = new Vector2(minimumEditorWidth, UsesLobbyStyle ? 28f : 38f),
             Alignment = FlowContainer.AlignmentMode.Begin
         };
         _flow.AddThemeConstantOverride("h_separation", 4);
@@ -442,6 +480,8 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             AccessibilityName = Localize("chat.accessibility.message_budget")
         };
         _budgetLabel.AddThemeFontSizeOverride("font_size", 11);
+        _budgetLabel.AddThemeColorOverride("font_color", TextMutedColor);
+        _budgetLabel.Visible = !UsesLobbyStyle;
         _stack.AddChild(_budgetLabel);
     }
 
@@ -511,7 +551,11 @@ internal sealed partial class LanConnectRichDraftEditor : Control
                 ? LanConnectConstants.ChatDraftInputName
                 : LanConnectConstants.ChatDraftRunPrefix + runIndex,
             Text = run.Text,
-            CustomMinimumSize = new Vector2(estimatedWidth, 12f + lines * TextLineHeight),
+            PlaceholderText = textIndex == 0 ? Localize("chat.input.placeholder") : string.Empty,
+            CustomMinimumSize = new Vector2(
+                estimatedWidth,
+                UsesLobbyStyle ? 28f : 12f + lines * TextLineHeight),
+            SizeFlagsHorizontal = UsesLobbyStyle ? SizeFlags.ExpandFill : SizeFlags.Fill,
             FocusMode = _editable ? FocusModeEnum.All : FocusModeEnum.None,
             Editable = _editable,
             WrapMode = TextEdit.LineWrappingMode.Boundary,
@@ -525,7 +569,12 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         ApplyTextRunStyle(editor);
         editor.Connect(TextEdit.SignalName.TextChanged, Callable.From(() => OnTextRunChanged(editor, runIndex, run.Text)));
         editor.Connect(TextEdit.SignalName.CaretChanged, Callable.From(() => OnTextCaretChanged(editor, runIndex)));
-        editor.Connect(Control.SignalName.FocusEntered, Callable.From(CancelDeferredFocusRestore));
+        editor.Connect(Control.SignalName.FocusEntered, Callable.From(() =>
+        {
+            CancelDeferredFocusRestore();
+            SetLobbySurfaceFocused(true);
+        }));
+        editor.Connect(Control.SignalName.FocusExited, Callable.From(() => SetLobbySurfaceFocused(false)));
         editor.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(input => OnTextGuiInput(editor, runIndex, input)));
         return editor;
     }
@@ -547,7 +596,12 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         };
         chip.SetMeta("run_index", runIndex);
         ApplyEntityChipStyle(chip);
-        chip.Connect(Control.SignalName.FocusEntered, Callable.From(CancelDeferredFocusRestore));
+        chip.Connect(Control.SignalName.FocusEntered, Callable.From(() =>
+        {
+            CancelDeferredFocusRestore();
+            SetLobbySurfaceFocused(true);
+        }));
+        chip.Connect(Control.SignalName.FocusExited, Callable.From(() => SetLobbySurfaceFocused(false)));
         chip.Connect(
             Control.SignalName.GuiInput,
             Callable.From<InputEvent>(input => OnEntityGuiInput(chip, runIndex, input)));
@@ -1410,10 +1464,26 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     private string Localize(string key) => _localizer.Get(CurrentLocale, key);
 
-    private static void ApplyTextRunStyle(TextEdit input)
+    private void ApplyTextRunStyle(TextEdit input)
     {
         input.AddThemeColorOverride("font_color", TextStrongColor);
         input.AddThemeColorOverride("font_placeholder_color", TextMutedColor);
+        if (UsesLobbyStyle)
+        {
+            StyleBoxFlat transparent = CreateStyle(Colors.Transparent, Colors.Transparent, borderWidth: 0, contentMargin: 0);
+            input.AddThemeStyleboxOverride("normal", transparent);
+            input.AddThemeStyleboxOverride("focus", CreateStyle(
+                Colors.Transparent,
+                Colors.Transparent,
+                borderWidth: 0,
+                contentMargin: 0));
+            input.AddThemeStyleboxOverride("read_only", CreateStyle(
+                new Color(LobbySecondaryColor, 0.65f),
+                Colors.Transparent,
+                borderWidth: 0,
+                contentMargin: 0));
+            return;
+        }
         input.AddThemeStyleboxOverride(
             "normal",
             CreateStyle(new Color(0.11f, 0.11f, 0.13f, 0.98f), new Color(0.34f, 0.32f, 0.29f, 1f)));
@@ -1425,10 +1495,14 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             CreateStyle(new Color(0.09f, 0.09f, 0.1f, 0.9f), new Color(0.28f, 0.27f, 0.25f, 1f)));
     }
 
-    private static void ApplyEntityChipStyle(Button chip)
+    private void ApplyEntityChipStyle(Button chip)
     {
-        Color background = new(0.18f, 0.16f, 0.14f, 0.98f);
-        Color border = new(0.42f, 0.36f, 0.27f, 1f);
+        Color background = UsesLobbyStyle
+            ? LobbySecondaryColor
+            : new Color(0.18f, 0.16f, 0.14f, 0.98f);
+        Color border = UsesLobbyStyle
+            ? LobbyBorderColor
+            : new Color(0.42f, 0.36f, 0.27f, 1f);
         chip.AddThemeColorOverride("font_color", TextStrongColor);
         chip.AddThemeColorOverride("font_disabled_color", TextMutedColor);
         chip.AddThemeStyleboxOverride("normal", CreateStyle(background, border));
@@ -1437,10 +1511,33 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         chip.AddThemeStyleboxOverride("focus", CreateStyle(background, AccentColor, borderWidth: 2));
         chip.AddThemeStyleboxOverride(
             "disabled",
-            CreateStyle(new Color(0.1f, 0.1f, 0.11f, 0.9f), new Color(0.28f, 0.27f, 0.25f, 1f)));
+            CreateStyle(
+                UsesLobbyStyle ? new Color(LobbySecondaryColor, 0.62f) : new Color(0.1f, 0.1f, 0.11f, 0.9f),
+                UsesLobbyStyle ? new Color(LobbyBorderColor, 0.55f) : new Color(0.28f, 0.27f, 0.25f, 1f)));
     }
 
-    private static StyleBoxFlat CreateStyle(Color background, Color border, int borderWidth = 1) => new()
+    private void SetLobbySurfaceFocused(bool focused)
+    {
+        if (!UsesLobbyStyle || _surface == null || !GodotObject.IsInstanceValid(_surface))
+        {
+            return;
+        }
+        _surface.AddThemeStyleboxOverride(
+            "panel",
+            CreateStyle(
+                focused ? LobbySurfaceFocusColor() : LobbyInputColor,
+                focused ? AccentColor : LobbyBorderColor,
+                borderWidth: 2,
+                contentMargin: 3));
+    }
+
+    private static Color LobbySurfaceFocusColor() => new(0.99f, 0.97f, 0.93f, 1f);
+
+    private static StyleBoxFlat CreateStyle(
+        Color background,
+        Color border,
+        int borderWidth = 1,
+        int contentMargin = 8) => new()
     {
         BgColor = background,
         BorderColor = border,
@@ -1452,9 +1549,9 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         CornerRadiusTopRight = 4,
         CornerRadiusBottomLeft = 4,
         CornerRadiusBottomRight = 4,
-        ContentMarginLeft = 8,
-        ContentMarginRight = 8,
-        ContentMarginTop = 5,
-        ContentMarginBottom = 5
+        ContentMarginLeft = contentMargin,
+        ContentMarginRight = contentMargin,
+        ContentMarginTop = contentMargin == 0 ? 0 : Math.Max(3, contentMargin - 3),
+        ContentMarginBottom = contentMargin == 0 ? 0 : Math.Max(3, contentMargin - 3)
     };
 }

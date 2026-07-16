@@ -20,6 +20,11 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
     internal const string ButtonPrefix = "ChatEmoji_";
     internal const int Columns = 6;
 
+    private static readonly Color LobbySurfaceColor = new(0.99f, 0.97f, 0.93f, 1f);
+    private static readonly Color LobbySecondaryColor = new(0.93f, 0.89f, 0.82f, 1f);
+    private static readonly Color LobbyAccentColor = new(0.87f, 0.41f, 0.00f, 1f);
+    private static readonly Color LobbyBorderColor = new(0.80f, 0.65f, 0.53f, 1f);
+
     private readonly List<Button> _buttons = [];
     private LanConnectRichDraftEditor? _editor;
     private IReadOnlyList<LanConnectEmojiDescriptor> _emojis = Array.Empty<LanConnectEmojiDescriptor>();
@@ -36,6 +41,11 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
     private bool _openQueuedAfterExplicitHide;
     private long _explicitHideGeneration;
     private int _lastFocusedIndex;
+
+    internal LanConnectChatVisualStyle ChatVisualStyle { get; init; } =
+        LanConnectChatVisualStyle.DarkOverlay;
+
+    private bool UsesLobbyStyle => ChatVisualStyle == LanConnectChatVisualStyle.LobbySidebar;
 
     internal event Action<string>? Inserted;
 
@@ -266,6 +276,10 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
     {
         Name = PickerName;
         Unresizable = true;
+        if (UsesLobbyStyle)
+        {
+            AddThemeStyleboxOverride("panel", CreatePickerPanelStyle());
+        }
         BuildGrid();
         Hide();
         PopupHide += OnPopupHide;
@@ -322,6 +336,7 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
                 Text = string.Empty,
                 Icon = _icon(emoji.LucideIcon),
                 ExpandIcon = true,
+                IconAlignment = HorizontalAlignment.Center,
                 TooltipText = label,
                 AccessibilityName = label,
                 CustomMinimumSize = new Vector2(38, 38),
@@ -329,6 +344,10 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
                 MouseDefaultCursorShape = Control.CursorShape.PointingHand
             };
             button.SetMeta("emoji_index", index);
+            if (UsesLobbyStyle)
+            {
+                ApplyLobbyButtonStyle(button);
+            }
             button.Connect(
                 Control.SignalName.FocusEntered,
                 Callable.From(() => _lastFocusedIndex = capturedIndex));
@@ -530,4 +549,59 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
         _previousFocus = null;
         _openQueuedAfterExplicitHide = false;
     }
+
+    private static void ApplyLobbyButtonStyle(Button button)
+    {
+        button.AddThemeStyleboxOverride(
+            "normal",
+            CreatePickerButtonStyle(LobbySurfaceColor, new Color(LobbyBorderColor, 0.72f), 1));
+        button.AddThemeStyleboxOverride(
+            "hover",
+            CreatePickerButtonStyle(LobbySecondaryColor, LobbyAccentColor, 2));
+        button.AddThemeStyleboxOverride(
+            "pressed",
+            CreatePickerButtonStyle(LobbySecondaryColor.Darkened(0.05f), LobbyAccentColor, 2));
+        button.AddThemeStyleboxOverride(
+            "focus",
+            CreatePickerButtonStyle(LobbySurfaceColor, LobbyAccentColor, 2));
+    }
+
+    private static StyleBoxFlat CreatePickerPanelStyle() => new()
+    {
+        BgColor = LobbySurfaceColor,
+        BorderColor = LobbyBorderColor,
+        BorderWidthLeft = 2,
+        BorderWidthTop = 2,
+        BorderWidthRight = 2,
+        BorderWidthBottom = 2,
+        CornerRadiusTopLeft = 4,
+        CornerRadiusTopRight = 4,
+        CornerRadiusBottomLeft = 4,
+        CornerRadiusBottomRight = 4,
+        ContentMarginLeft = 10,
+        ContentMarginTop = 10,
+        ContentMarginRight = 10,
+        ContentMarginBottom = 10
+    };
+
+    private static StyleBoxFlat CreatePickerButtonStyle(
+        Color background,
+        Color border,
+        int borderWidth) => new()
+    {
+        BgColor = background,
+        BorderColor = border,
+        BorderWidthLeft = borderWidth,
+        BorderWidthTop = borderWidth,
+        BorderWidthRight = borderWidth,
+        BorderWidthBottom = borderWidth,
+        CornerRadiusTopLeft = 4,
+        CornerRadiusTopRight = 4,
+        CornerRadiusBottomLeft = 4,
+        CornerRadiusBottomRight = 4,
+        ContentMarginLeft = 6,
+        ContentMarginTop = 6,
+        ContentMarginRight = 6,
+        ContentMarginBottom = 6
+    };
 }

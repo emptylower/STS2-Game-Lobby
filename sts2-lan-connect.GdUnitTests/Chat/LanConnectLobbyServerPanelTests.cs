@@ -104,6 +104,46 @@ public sealed class LanConnectLobbyServerPanelTests
     }
 
     [TestCase]
+    public async Task Lobby_chat_uses_light_sidebar_surface_without_changing_default_room_style()
+    {
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready);
+        fixture.ServerState.AppendConfirmedForTests("message", "A", "hello", 1, false);
+        await fixture.Runner.AwaitIdleFrame();
+
+        LanConnectBasicChatPanel panel = fixture.Overlay.ServerChatPanelForTests;
+        AssertThat(panel.ChatVisualStyle).IsEqual(LanConnectChatVisualStyle.LobbySidebar);
+        Label title = Find<Label>(panel, "ChatChannelTitle");
+        AssertThat(title.GetThemeColor("font_color").R).IsLess(0.4f);
+
+        LanConnectRichDraftEditor draft = Find<LanConnectRichDraftEditor>(
+            panel,
+            LanConnectConstants.ChatRichDraftEditorName);
+        AssertThat(draft.ChatVisualStyle).IsEqual(LanConnectChatVisualStyle.LobbySidebar);
+        PanelContainer draftSurface = Find<PanelContainer>(draft, "ChatDraftSurface");
+        StyleBoxFlat draftStyle = (StyleBoxFlat)draftSurface.GetThemeStylebox("panel");
+        AssertThat(draftStyle.BgColor.R).IsGreater(0.9f);
+        AssertThat(draftStyle.BorderColor.R).IsGreater(0.7f);
+        Label budget = Find<Label>(draft, LanConnectConstants.ChatDraftBudgetName);
+        AssertThat(budget.Visible).IsFalse();
+        AssertThat(panel.TestState.DraftRect.Size.Y).IsLessEqual(44f);
+        AssertThat(panel.TestState.SendRect.Size.Y).IsLessEqual(44f);
+
+        PanelContainer message = Find<PanelContainer>(panel, "ChatMessageRow0");
+        StyleBoxFlat messageStyle = (StyleBoxFlat)message.GetThemeStylebox("panel");
+        AssertThat(messageStyle.BgColor.A).IsEqualApprox(0f, 0.01f);
+        AssertThat(messageStyle.BorderWidthBottom).IsEqual(1);
+
+        Button emoji = Find<Button>(panel, LanConnectEmojiPicker.ButtonPrefix + "smile");
+        StyleBoxFlat emojiStyle = (StyleBoxFlat)emoji.GetThemeStylebox("normal");
+        AssertThat(emojiStyle.BgColor.R).IsGreater(0.9f);
+
+        LanConnectBasicChatPanel defaultPanel = AutoFree(new LanConnectBasicChatPanel())!;
+        AssertThat(defaultPanel.ChatVisualStyle).IsEqual(LanConnectChatVisualStyle.DarkOverlay);
+    }
+
+    [TestCase]
     public async Task Server_context_rotation_rebinds_the_existing_panel_to_the_new_state()
     {
         using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
@@ -391,6 +431,10 @@ public sealed class LanConnectLobbyServerPanelTests
         state.SetPresentationForTests(LanConnectServerChatPresentation.Ready);
         return state;
     }
+
+    private static T Find<T>(Node root, string name) where T : Node =>
+        root.FindChild(name, recursive: true, owned: false) as T ??
+        throw new InvalidOperationException($"Missing {typeof(T).Name} node: {name}");
 }
 
 internal sealed class LobbyOverlayFixture : IDisposable

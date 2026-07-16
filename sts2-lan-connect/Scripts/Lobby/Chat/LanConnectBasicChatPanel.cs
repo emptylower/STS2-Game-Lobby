@@ -6,6 +6,12 @@ using MegaCrit.Sts2.Core.Helpers;
 
 namespace Sts2LanConnect.Scripts;
 
+internal enum LanConnectChatVisualStyle
+{
+    DarkOverlay,
+    LobbySidebar
+}
+
 internal readonly record struct LanConnectNamedControlRect(string Name, Rect2 Rect);
 
 internal readonly record struct LanConnectRoomCombatRenderContext(
@@ -71,11 +77,21 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         long ContextGeneration,
         string StableKey);
 
-    private static readonly Color TextStrongColor = new(0.94f, 0.91f, 0.84f, 1f);
-    private static readonly Color TextMutedColor = new(0.68f, 0.65f, 0.6f, 1f);
-    private static readonly Color AccentColor = new(0.88f, 0.58f, 0.17f, 1f);
-    private static readonly Color DangerColor = new(0.94f, 0.38f, 0.34f, 1f);
-    private static readonly Color WarningColor = new(0.94f, 0.7f, 0.26f, 1f);
+    private static readonly Color DarkTextStrongColor = new(0.94f, 0.91f, 0.84f, 1f);
+    private static readonly Color DarkTextMutedColor = new(0.68f, 0.65f, 0.6f, 1f);
+    private static readonly Color DarkAccentColor = new(0.88f, 0.58f, 0.17f, 1f);
+    private static readonly Color DarkDangerColor = new(0.94f, 0.38f, 0.34f, 1f);
+    private static readonly Color DarkWarningColor = new(0.94f, 0.7f, 0.26f, 1f);
+    private static readonly Color LobbyTextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);
+    private static readonly Color LobbyTextMutedColor = new(0.46f, 0.36f, 0.31f, 1f);
+    private static readonly Color LobbyAccentColor = new(0.87f, 0.41f, 0.00f, 1f);
+    private static readonly Color LobbyDangerColor = new(0.80f, 0.15f, 0.18f, 1f);
+    private static readonly Color LobbyWarningColor = new(0.72f, 0.34f, 0.02f, 1f);
+    private static readonly Color LobbySurfaceColor = new(0.99f, 0.97f, 0.93f, 1f);
+    private static readonly Color LobbySecondaryColor = new(0.93f, 0.89f, 0.82f, 1f);
+    private static readonly Color LobbyInputColor = new(0.95f, 0.92f, 0.86f, 1f);
+    private static readonly Color LobbyBorderColor = new(0.80f, 0.65f, 0.53f, 1f);
+    private static readonly Color LobbyPrimaryForegroundColor = new(0.15f, 0.05f, 0.00f, 1f);
 
     private readonly LanConnectLucideIconLoader _icons;
     private readonly Func<LanConnectItemRun, LanConnectResolvedItem> _resolveItem;
@@ -121,6 +137,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private Action? _itemLinkPostInsertForTests;
     private int _visibilityPublishSuppressionDepth;
     private bool _publishVisibilityWhenSuppressionEnds;
+
+    internal LanConnectChatVisualStyle ChatVisualStyle { get; init; } =
+        LanConnectChatVisualStyle.DarkOverlay;
+
+    private bool UsesLobbyStyle => ChatVisualStyle == LanConnectChatVisualStyle.LobbySidebar;
+    private Color TextStrongColor => UsesLobbyStyle ? LobbyTextStrongColor : DarkTextStrongColor;
+    private Color TextMutedColor => UsesLobbyStyle ? LobbyTextMutedColor : DarkTextMutedColor;
+    private Color AccentColor => UsesLobbyStyle ? LobbyAccentColor : DarkAccentColor;
+    private Color DangerColor => UsesLobbyStyle ? LobbyDangerColor : DarkDangerColor;
+    private Color WarningColor => UsesLobbyStyle ? LobbyWarningColor : DarkWarningColor;
 
     internal sealed class VisibilityPublishScope(LanConnectBasicChatPanel owner) : IDisposable
     {
@@ -640,7 +666,20 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         titleRow.AddThemeConstantOverride("separation", 10);
         AddChild(titleRow);
 
-        _titleLabel = CreateLabel(Localize("chat.title.server"), 16, TextStrongColor);
+        if (UsesLobbyStyle)
+        {
+            titleRow.AddChild(new TextureRect
+            {
+                Name = "ChatChannelTitleIcon",
+                Texture = _icons.Get("message-circle", 18, AccentColor),
+                ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+                StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+                CustomMinimumSize = new Vector2(18, 18),
+                MouseFilter = MouseFilterEnum.Ignore
+            });
+        }
+
+        _titleLabel = CreateLabel(DisplayText(Localize("chat.title.server")), 16, TextStrongColor);
         _titleLabel.Name = "ChatChannelTitle";
         _titleLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         titleRow.AddChild(_titleLabel);
@@ -676,6 +715,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _messagesScroll.GetVScrollBar().Connect(
             Godot.Range.SignalName.ValueChanged,
             Callable.From<double>(OnScrollChanged));
+        if (UsesLobbyStyle)
+        {
+            ApplyLobbyScrollBarStyle(_messagesScroll.GetVScrollBar());
+        }
 
         _newMessagesButton = CreateButton(string.Empty, accent: false);
         _newMessagesButton.Name = LanConnectConstants.ChatNewMessagesButtonName;
@@ -685,10 +728,13 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         AddChild(_newMessagesButton);
 
         HBoxContainer inputRow = new();
-        inputRow.AddThemeConstantOverride("separation", 8);
+        inputRow.AddThemeConstantOverride("separation", UsesLobbyStyle ? 6 : 8);
         AddChild(inputRow);
 
-        _draftEditor = new LanConnectRichDraftEditor(_localizer, () => CurrentLocale)
+        _draftEditor = new LanConnectRichDraftEditor(
+            _localizer,
+            () => CurrentLocale,
+            ChatVisualStyle)
         {
             Name = LanConnectConstants.ChatRichDraftEditorName,
             SizeFlagsHorizontal = SizeFlags.ExpandFill
@@ -703,7 +749,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _emojiButton.ExpandIcon = true;
         _emojiButton.TooltipText = Localize("chat.tooltip.emoji_picker");
         _emojiButton.AccessibilityName = Localize("chat.emoji.button");
-        _emojiButton.CustomMinimumSize = new Vector2(38, 38);
+        _emojiButton.CustomMinimumSize = new Vector2(UsesLobbyStyle ? 42 : 38, UsesLobbyStyle ? 42 : 38);
+        _emojiButton.SizeFlagsVertical = SizeFlags.ExpandFill;
         _emojiButton.Visible = false;
         _emojiButton.Connect(
             Button.SignalName.Pressed,
@@ -713,10 +760,17 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _sendButton = CreateButton(Localize("chat.action.send"), accent: true);
         _sendButton.AccessibilityName = Localize("chat.action.send");
         _sendButton.Name = LanConnectConstants.ChatSendButtonName;
-        _sendButton.Icon = _icons.Get("send", 18, TextStrongColor);
+        _sendButton.Icon = _icons.Get(
+            "send",
+            18,
+            UsesLobbyStyle ? LobbyPrimaryForegroundColor : TextStrongColor);
         _sendButton.ExpandIcon = true;
-        _sendButton.CustomMinimumSize = new Vector2(74, 38);
-        _sendButton.Connect(Button.SignalName.Pressed, Callable.From(() => _ = SendDraftAsync()));
+        _sendButton.CustomMinimumSize = new Vector2(UsesLobbyStyle ? 80 : 74, UsesLobbyStyle ? 42 : 38);
+        _sendButton.SizeFlagsVertical = SizeFlags.ExpandFill;
+        _sendButton.Connect(Button.SignalName.Pressed, Callable.From(() =>
+        {
+            _ = SendDraftAsync();
+        }));
         inputRow.AddChild(_sendButton);
 
         _unknownConfirmation = new ConfirmationDialog
@@ -729,10 +783,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         };
         _unknownConfirmation.Connect(
             ConfirmationDialog.SignalName.Confirmed,
-            Callable.From(() => _ = SendConfirmedUnknownAsync()));
+            Callable.From(() =>
+            {
+                _ = SendConfirmedUnknownAsync();
+            }));
         AddChild(_unknownConfirmation);
 
-        _emojiPicker = new LanConnectEmojiPicker();
+        _emojiPicker = new LanConnectEmojiPicker
+        {
+            ChatVisualStyle = ChatVisualStyle
+        };
         _emojiPicker.Bind(
             _draftEditor,
             LanConnectChatEmojiSet.Version1,
@@ -915,6 +975,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         int index)
     {
         PanelContainer row = new();
+        row.Name = $"ChatMessageRow{index}";
         row.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         row.AddThemeStyleboxOverride("panel", CreatePanelStyle(message.IsLocal));
 
@@ -976,7 +1037,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                     Callable.From(() => _messageFocusRestoreGeneration++));
                 retryButton.Connect(
                     Button.SignalName.Pressed,
-                    Callable.From(() => _ = RetryMessageAsync(message, stableKey, retryButton)));
+                    Callable.From(() =>
+                    {
+                        _ = RetryMessageAsync(message, stableKey, retryButton);
+                    }));
                 deliveryRow.AddChild(retryButton);
             }
         }
@@ -1228,12 +1292,12 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         return chip;
     }
 
-    private static PanelContainer ItemChip(string label)
+    private PanelContainer ItemChip(string label)
     {
         PanelContainer chip = new();
         StyleBoxFlat style = new()
         {
-            BgColor = new Color(0.18f, 0.17f, 0.15f, 1f),
+            BgColor = UsesLobbyStyle ? LobbySecondaryColor : new Color(0.18f, 0.17f, 0.15f, 1f),
             BorderColor = AccentColor,
             CornerRadiusTopLeft = 5,
             CornerRadiusTopRight = 5,
@@ -1640,9 +1704,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     {
         if (_titleLabel != null && GodotObject.IsInstanceValid(_titleLabel))
         {
-            _titleLabel.Text = _state?.Channel == LanConnectChatChannel.Room
+            _titleLabel.Text = DisplayText(_state?.Channel == LanConnectChatChannel.Room
                 ? Localize("chat.title.room")
-                : Localize("chat.title.server");
+                : Localize("chat.title.server"));
         }
         if (_emojiButton != null && GodotObject.IsInstanceValid(_emojiButton))
         {
@@ -1651,7 +1715,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         if (_sendButton != null && GodotObject.IsInstanceValid(_sendButton))
         {
-            _sendButton.Text = Localize("chat.action.send");
+            _sendButton.Text = DisplayText(Localize("chat.action.send"));
             _sendButton.AccessibilityName = Localize("chat.action.send");
         }
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
@@ -1765,9 +1829,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             new SendOperationKey(_state, _state.ContextGeneration));
         if (_titleLabel != null && GodotObject.IsInstanceValid(_titleLabel))
         {
-            _titleLabel.Text = _state.Channel == LanConnectChatChannel.Room
+            _titleLabel.Text = DisplayText(_state.Channel == LanConnectChatChannel.Room
                 ? Localize("chat.title.room")
-                : Localize("chat.title.server");
+                : Localize("chat.title.server"));
         }
         _draftEditor.Editable = editable;
         LanConnectChatFeatureVersions features = _state.EnabledRichFeatures;
@@ -2105,20 +2169,47 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         return label;
     }
 
-    private static Button CreateButton(string text, bool accent)
+    private Button CreateButton(string text, bool accent)
     {
         Button button = new()
         {
-            Text = text,
+            Text = DisplayText(text),
             FocusMode = FocusModeEnum.All,
             MouseDefaultCursorShape = CursorShape.PointingHand
         };
-        Color background = accent ? new Color(0.34f, 0.23f, 0.08f, 0.98f) : new Color(0.14f, 0.14f, 0.16f, 0.96f);
-        Color border = accent ? AccentColor : new Color(0.36f, 0.34f, 0.31f, 1f);
-        button.AddThemeStyleboxOverride("normal", CreateButtonStyle(background, border));
-        button.AddThemeStyleboxOverride("hover", CreateButtonStyle(background.Lightened(0.08f), AccentColor));
-        button.AddThemeStyleboxOverride("pressed", CreateButtonStyle(background.Darkened(0.06f), AccentColor));
-        button.AddThemeColorOverride("font_color", TextStrongColor);
+        Color background = UsesLobbyStyle
+            ? accent ? AccentColor : LobbySurfaceColor
+            : accent ? new Color(0.34f, 0.23f, 0.08f, 0.98f) : new Color(0.14f, 0.14f, 0.16f, 0.96f);
+        Color border = UsesLobbyStyle
+            ? accent ? AccentColor.Darkened(0.18f) : LobbyBorderColor
+            : accent ? AccentColor : new Color(0.36f, 0.34f, 0.31f, 1f);
+        Color foreground = UsesLobbyStyle && accent ? LobbyPrimaryForegroundColor : TextStrongColor;
+        int borderWidth = UsesLobbyStyle ? 2 : 1;
+        button.AddThemeStyleboxOverride("normal", CreateButtonStyle(background, border, borderWidth));
+        button.AddThemeStyleboxOverride(
+            "hover",
+            CreateButtonStyle(
+                UsesLobbyStyle && !accent ? LobbySecondaryColor : background.Lightened(0.08f),
+                AccentColor,
+                borderWidth));
+        button.AddThemeStyleboxOverride(
+            "pressed",
+            CreateButtonStyle(background.Darkened(0.06f), AccentColor, borderWidth));
+        button.AddThemeStyleboxOverride(
+            "focus",
+            CreateButtonStyle(background, AccentColor, 2));
+        button.AddThemeStyleboxOverride(
+            "disabled",
+            CreateButtonStyle(
+                UsesLobbyStyle ? new Color(LobbySecondaryColor, 0.72f) : background.Darkened(0.08f),
+                UsesLobbyStyle ? new Color(LobbyBorderColor, 0.65f) : border,
+                borderWidth));
+        button.AddThemeColorOverride("font_color", foreground);
+        button.AddThemeColorOverride("font_hover_color", foreground);
+        button.AddThemeColorOverride("font_pressed_color", foreground);
+        button.AddThemeColorOverride("font_focus_color", foreground);
+        button.AddThemeColorOverride("font_disabled_color", new Color(TextMutedColor, 0.72f));
+        button.AddThemeFontSizeOverride("font_size", UsesLobbyStyle ? 15 : 14);
         return button;
     }
 
@@ -2178,16 +2269,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             ? control.GetGlobalRect()
             : default;
 
-    private static StyleBoxFlat CreateButtonStyle(Color background, Color border)
+    private static StyleBoxFlat CreateButtonStyle(Color background, Color border, int borderWidth = 1)
     {
         StyleBoxFlat style = new()
         {
             BgColor = background,
             BorderColor = border,
-            BorderWidthLeft = 1,
-            BorderWidthTop = 1,
-            BorderWidthRight = 1,
-            BorderWidthBottom = 1,
+            BorderWidthLeft = borderWidth,
+            BorderWidthTop = borderWidth,
+            BorderWidthRight = borderWidth,
+            BorderWidthBottom = borderWidth,
             CornerRadiusTopLeft = 6,
             CornerRadiusTopRight = 6,
             CornerRadiusBottomLeft = 6,
@@ -2200,8 +2291,25 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         return style;
     }
 
-    private static StyleBoxFlat CreatePanelStyle(bool local)
+    private StyleBoxFlat CreatePanelStyle(bool local)
     {
+        if (UsesLobbyStyle)
+        {
+            return new StyleBoxFlat
+            {
+                BgColor = local ? new Color(LobbyAccentColor, 0.08f) : Colors.Transparent,
+                BorderColor = local ? LobbyAccentColor : new Color(LobbyBorderColor, 0.62f),
+                BorderWidthLeft = local ? 3 : 0,
+                BorderWidthTop = 0,
+                BorderWidthRight = 0,
+                BorderWidthBottom = 1,
+                ContentMarginLeft = local ? 10 : 6,
+                ContentMarginTop = 8,
+                ContentMarginRight = 6,
+                ContentMarginBottom = 9
+            };
+        }
+
         StyleBoxFlat style = new()
         {
             BgColor = local ? new Color(0.19f, 0.16f, 0.1f, 0.96f) : new Color(0.12f, 0.12f, 0.14f, 0.96f),
@@ -2220,5 +2328,24 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             ContentMarginBottom = 8
         };
         return style;
+    }
+
+    private string DisplayText(string text) =>
+        UsesLobbyStyle ? LanConnectUiText.NormalizeForDisplay(text) : text;
+
+    private static void ApplyLobbyScrollBarStyle(ScrollBar scrollBar)
+    {
+        scrollBar.AddThemeStyleboxOverride(
+            "scroll",
+            CreateButtonStyle(LobbyInputColor, new Color(LobbyBorderColor, 0.55f)));
+        scrollBar.AddThemeStyleboxOverride(
+            "grabber",
+            CreateButtonStyle(LobbyBorderColor, LobbyBorderColor));
+        scrollBar.AddThemeStyleboxOverride(
+            "grabber_highlight",
+            CreateButtonStyle(LobbyAccentColor, LobbyAccentColor));
+        scrollBar.AddThemeStyleboxOverride(
+            "grabber_pressed",
+            CreateButtonStyle(LobbyAccentColor.Darkened(0.08f), LobbyAccentColor));
     }
 }
