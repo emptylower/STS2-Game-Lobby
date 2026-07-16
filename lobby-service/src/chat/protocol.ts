@@ -96,6 +96,7 @@ const TARGET_REF_SEGMENT_ALLOWED_KEYS = new Set([
 const EMOJI_SET_1_IDS = new Set<string>(EMOJI_SET_1);
 const MODEL_ID_PATTERN = /^[A-Za-z0-9._-]{1,160}$/;
 const OPAQUE_ASCII_ID_PATTERN = /^[\x20-\x7e]{1,128}$/;
+export const MONSTER_TARGET_REFS_ENABLED = false;
 // config.ts permits snapshotLimit up to 1000. If every message needs its own
 // chunk, valid indices span 0..999; reserve the widest supported index.
 const MAX_CONFIGURED_SNAPSHOT_LIMIT = 1000;
@@ -300,6 +301,7 @@ function canonicalizeContent(
   let requiresEmoji = false;
   let requiresItemRef = false;
   let requiresCombatRef = false;
+  let requiresMonsterTarget = false;
 
   for (const segment of input.segments) {
     if (!isPlainObject(segment)) {
@@ -454,6 +456,7 @@ function canonicalizeContent(
       if (segment.targetKind === "player" && !roomContext.peerPlayerNetIds.has(segment.targetKey)) {
         throw new ChatProtocolError("invalid_content", "player target must be a current room peer");
       }
+      requiresMonsterTarget ||= segment.targetKind === "monster";
       requiresCombatRef = true;
       entityCount += 1;
       canonicalSegments.push({
@@ -502,6 +505,12 @@ function canonicalizeContent(
     );
   }
 
+  if (requiresMonsterTarget && !MONSTER_TARGET_REFS_ENABLED) {
+    throw new ChatProtocolError(
+      "feature_disabled",
+      "monster target references require a verified network-replicated stable ID API",
+    );
+  }
   if (requiresEmoji && (features.richContentVersion !== 1 || features.emojiSetVersion !== 1)) {
     throw new ChatProtocolError("feature_disabled", "emoji segments are not enabled");
   }

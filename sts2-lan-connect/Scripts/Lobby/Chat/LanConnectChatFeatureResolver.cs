@@ -4,6 +4,8 @@ namespace Sts2LanConnect.Scripts;
 
 internal static class LanConnectChatFeatureResolver
 {
+    internal const bool MonsterTargetRefsEnabled = false;
+
     private static readonly LanConnectChatFeatureVersions AllDeclared = new(1, 1, 1, 1);
 
     internal static LanConnectChatFeatureVersions Resolve(LanConnectChatFeatureInput input)
@@ -74,8 +76,12 @@ internal static class LanConnectChatFeatureResolver
                 case LanConnectPowerStateSegment when
                     enabled.RichContentVersion == 1 && enabled.CombatRefVersion == 1:
                     break;
-                case LanConnectTargetRefSegment { TargetKind: "player" } when
-                    enabled.RichContentVersion == 1 && enabled.CombatRefVersion == 1:
+                case LanConnectTargetRefSegment target when
+                    (target.TargetKind == "monster"
+                        ? MonsterTargetRefsEnabled
+                        : target.TargetKind == "player") &&
+                    enabled.RichContentVersion == 1 &&
+                    enabled.CombatRefVersion == 1:
                     break;
                 default:
                     return false;

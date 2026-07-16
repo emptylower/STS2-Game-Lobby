@@ -18,6 +18,10 @@ internal readonly record struct LanConnectPlayerTargetCaptureCandidate(
     string PlayerNetId,
     string RoomSessionId);
 
+internal readonly record struct LanConnectMonsterTargetCaptureCandidate(
+    object Monster,
+    string RoomSessionId);
+
 internal interface ILanConnectRoomCombatContext
 {
     string ActiveRoomSessionId { get; }
@@ -45,6 +49,7 @@ internal sealed class LanConnectRoomCombatReferenceResolver
 {
     private readonly ILanConnectRoomCombatContext _context;
     private readonly LanConnectChatLocalizer _localizer;
+    private readonly LanConnectMonsterTargetIdPrototype _monsterTargets = new(adapter: null);
 
     internal LanConnectRoomCombatReferenceResolver(
         ILanConnectRoomCombatContext context,
@@ -102,6 +107,30 @@ internal sealed class LanConnectRoomCombatReferenceResolver
             run = new LanConnectCombatRun(new LanConnectTargetRefSegment(
                 "player",
                 candidate.PlayerNetId,
+                candidate.RoomSessionId));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal bool TryCreateMonsterTargetRun(
+        LanConnectMonsterTargetCaptureCandidate candidate,
+        out LanConnectCombatRun run)
+    {
+        run = null!;
+        try
+        {
+            if (!MatchesActiveSession(candidate.RoomSessionId) ||
+                !_monsterTargets.TryGetStableId(candidate.Monster, out string stableId))
+            {
+                return false;
+            }
+            run = new LanConnectCombatRun(new LanConnectTargetRefSegment(
+                "monster",
+                stableId,
                 candidate.RoomSessionId));
             return true;
         }

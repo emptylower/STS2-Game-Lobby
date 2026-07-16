@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatContent } from "./protocol.js";
 import {
+  MONSTER_TARGET_REFS_ENABLED,
   resolveEnabledFeatures,
   supportsContent,
   type ChatFeatureVersions,
@@ -140,7 +141,7 @@ test("supportsContent checks the whole message without stripping segments", () =
   assert.equal(content.segments.length, 3);
 });
 
-test("supportsContent routes power and player targets by combat while monster stays disabled", () => {
+test("monster target gate keeps monster disabled while power and player use combat", () => {
   const power: ChatContent = {
     formatVersion: 1,
     segments: [{
@@ -172,6 +173,7 @@ test("supportsContent routes power and player targets by combat while monster st
   const combatEnabled = resolve({ channel: "room" });
   const combatDisabled = { ...combatEnabled, combatRefVersion: 0 as const };
 
+  assert.equal(MONSTER_TARGET_REFS_ENABLED, false);
   assert.equal(supportsContent(power, combatEnabled), true);
   assert.equal(supportsContent(player, combatEnabled), true);
   assert.equal(supportsContent(power, combatDisabled), false);

@@ -1,4 +1,6 @@
-import type { ChatContent } from "./protocol.js";
+import { MONSTER_TARGET_REFS_ENABLED, type ChatContent } from "./protocol.js";
+
+export { MONSTER_TARGET_REFS_ENABLED };
 
 export interface ChatFeatureVersions {
   richContentVersion: 0 | 1;
@@ -100,9 +102,10 @@ export function supportsContent(
         }
         break;
       case "target_ref":
-        // Monster references stay on the exact legacy fallback until a stable ID exists.
         if (
-          segment.targetKind !== "player"
+          (segment.targetKind === "monster"
+            ? !MONSTER_TARGET_REFS_ENABLED
+            : segment.targetKind !== "player")
           || features.richContentVersion !== 1
           || features.combatRefVersion !== 1
         ) {

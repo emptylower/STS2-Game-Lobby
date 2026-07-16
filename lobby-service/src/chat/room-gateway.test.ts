@@ -1205,6 +1205,94 @@ test("room v2 replays cached errors and conflicts on changed content", () => {
   assert.equal(sender.frames.some((frame) => frame.type === "room_chat_message"), false);
 });
 
+test("monster target gate caches feature-disabled before chat state without limiter or broadcast", () => {
+  let chatEnabled = true;
+  let generatedIds = 0;
+  const gateway = createGateway({
+    ...combatGatewayOptions,
+    connectionBurst: 1,
+    connectionRefillMs: 60_000,
+    context: (roomId) => ({
+      roomId,
+      roomSessionId: "session-1",
+      chatEnabled,
+      peerPlayerNetIds: new Set(["net:alice", "net:bob"]),
+    }),
+    randomUuid: () => {
+      generatedIds += 1;
+      return `00000000-0000-4000-8000-${String(generatedIds).padStart(12, "0")}`;
+    },
+  });
+  const sender = peer("monster-gate-sender");
+  const recipient = peer("monster-gate-recipient");
+  gateway.registerPeer(sender.registration);
+  gateway.registerPeer(recipient.registration);
+  gateway.handleControlEnvelope("monster-gate-sender", hello("Alice", "net:alice"));
+  gateway.handleControlEnvelope("monster-gate-recipient", hello("Bob", "net:bob"));
+  sender.frames.length = 0;
+  recipient.frames.length = 0;
+
+  const clientMessageId = "23232323-2323-4232-8232-232323232323";
+  const monsterContent = {
+    formatVersion: 1,
+    segments: [{
+      kind: "target_ref",
+      targetKind: "monster",
+      targetKey: "monster:1",
+      roomSessionId: "session-1",
+    }],
+  };
+  gateway.handleControlEnvelope(
+    "monster-gate-sender",
+    roomSend(clientMessageId, monsterContent),
+  );
+  const originalError = sender.frames.at(-1);
+  assert.equal(originalError?.code, "feature_disabled");
+  assert.equal(generatedIds, 0);
+  assert.equal(recipient.frames.length, 0);
+  assert.equal(sender.frames.some((frame) => frame.type === "room_chat_ack"), false);
+  assert.equal(sender.frames.some((frame) => frame.type === "room_chat_message"), false);
+
+  gateway.handleControlEnvelope(
+    "monster-gate-sender",
+    roomSend(clientMessageId, monsterContent),
+  );
+  assert.deepEqual(sender.frames.at(-1), originalError);
+
+  gateway.handleControlEnvelope("monster-gate-sender", roomSend(clientMessageId, {
+    ...monsterContent,
+    segments: [{ ...monsterContent.segments[0], targetKey: "monster:2" }],
+  }));
+  assert.equal(sender.frames.at(-1)?.code, "duplicate_message");
+  assert.equal(generatedIds, 0);
+  assert.equal(recipient.frames.length, 0);
+
+  chatEnabled = false;
+  gateway.handleControlEnvelope("monster-gate-sender", roomSend(
+    "24242424-2424-4242-8242-242424242424",
+    monsterContent,
+  ));
+  assert.equal(sender.frames.at(-1)?.code, "feature_disabled");
+  assert.equal(generatedIds, 0);
+  assert.equal(recipient.frames.length, 0);
+
+  chatEnabled = true;
+  gateway.handleControlEnvelope("monster-gate-sender", roomSend(
+    "25252525-2525-4252-8252-252525252525",
+    textContent("first valid message"),
+  ));
+  assert.equal(sender.frames.some((frame) => frame.type === "room_chat_ack"), true);
+  assert.equal(recipient.frames.at(-1)?.type, "room_chat_message");
+  assert.equal(generatedIds, 1);
+
+  gateway.handleControlEnvelope("monster-gate-sender", roomSend(
+    "26262626-2626-4262-8262-262626262626",
+    textContent("second valid message"),
+  ));
+  assert.equal(sender.frames.at(-1)?.code, "rate_limited");
+  assert.equal(generatedIds, 1);
+});
+
 test("room peer registration enforces global and per-room bounds and releases capacity", () => {
   const gateway = createGateway({ maxPeersTotal: 2, maxPeersPerRoom: 1 });
   const roomOne = peer("room-one");

@@ -14,6 +14,7 @@ import {
   type EnabledRichFeatures,
   measureChatWireBytes,
   measureRoomChatWireBytes,
+  MONSTER_TARGET_REFS_ENABLED,
   projectChatWireEnvelopes,
   renderPlainTextFallback,
   renderLegacyRoomFallback,
@@ -465,16 +466,79 @@ test("canonicalizes strict room combat references and preserves deterministic fi
         applierPlayerNetId: "net:applier",
       },
       { kind: "target_ref", targetKind: "player", targetKey: "net:target", roomSessionId: "session-1" },
-      { kind: "target_ref", targetKind: "monster", targetKey: "monster-1", roomSessionId: "session-1" },
     ],
   }, allRoomFeatures, roomContext);
 
-  assert.equal(renderPlainTextFallback(canonical), "[Power][Player][Monster]");
+  assert.equal(renderPlainTextFallback(canonical), "[Power][Player]");
   assert.equal(
     deterministicContentJson(canonical),
-    '{"formatVersion":1,"segments":[{"kind":"power_state","modelId":"MegaCrit.Strength","amount":-32768,"roomSessionId":"session-1","ownerPlayerNetId":"net:owner","applierPlayerNetId":"net:applier"},{"kind":"target_ref","targetKind":"player","targetKey":"net:target","roomSessionId":"session-1"},{"kind":"target_ref","targetKind":"monster","targetKey":"monster-1","roomSessionId":"session-1"}]}',
+    '{"formatVersion":1,"segments":[{"kind":"power_state","modelId":"MegaCrit.Strength","amount":-32768,"roomSessionId":"session-1","ownerPlayerNetId":"net:owner","applierPlayerNetId":"net:applier"},{"kind":"target_ref","targetKind":"player","targetKey":"net:target","roomSessionId":"session-1"}]}',
   );
   assert.doesNotThrow(() => assertRoomContentContext(canonical, roomContext));
+});
+
+test("monster target gate stays feature-disabled without verified network ID proof", () => {
+  assert.equal(MONSTER_TARGET_REFS_ENABLED, false);
+  const monster = {
+    kind: "target_ref",
+    targetKind: "monster",
+    targetKey: "monster-1",
+    roomSessionId: "session-1",
+  };
+  assert.throws(
+    () => canonicalizeRoomContent({
+      formatVersion: 1,
+      segments: [monster],
+    }, allRoomFeatures, roomContext),
+    hasCode("feature_disabled"),
+  );
+  for (const segment of [
+    {
+      kind: "target_ref",
+      targetKind: "monster",
+      targetKey: "",
+      roomSessionId: "session-1",
+    },
+    {
+      kind: "target_ref",
+      targetKind: "monster",
+      targetKey: "monster-1",
+      roomSessionId: "stale-session",
+    },
+    {
+      kind: "target_ref",
+      targetKind: "monster",
+      targetKey: "monster-1",
+      roomSessionId: "session-1",
+      localNodePath: "/root/Combat/Monster",
+    },
+  ]) {
+    assert.throws(
+      () => canonicalizeRoomContent({
+        formatVersion: 1,
+        segments: [segment],
+      }, allRoomFeatures, roomContext),
+      hasCode("invalid_content"),
+    );
+  }
+  for (const segments of [
+    [monster, { kind: "future_segment", value: 1 }],
+    [monster, { kind: "emoji", emojiId: "heart", label: "leak" }],
+    [monster, ...Array.from({ length: 12 }, () => ({ kind: "emoji", emojiId: "heart" }))],
+    [monster, { kind: "text", text: "x".repeat(301) }],
+  ]) {
+    assert.throws(
+      () => canonicalizeRoomContent({ formatVersion: 1, segments }, allRoomFeatures, roomContext),
+      hasCode("invalid_content"),
+    );
+  }
+  assert.doesNotThrow(() => canonicalizeRoomContent({
+    formatVersion: 1,
+    segments: [
+      { kind: "power_state", modelId: "MegaCrit.Strength", amount: 1, roomSessionId: "session-1" },
+      { kind: "target_ref", targetKind: "player", targetKey: "net:target", roomSessionId: "session-1" },
+    ],
+  }, allRoomFeatures, roomContext));
 });
 
 test("rejects invalid room combat schema, authority and feature gates", () => {

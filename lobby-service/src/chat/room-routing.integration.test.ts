@@ -347,9 +347,21 @@ test("real room service routes each whole combat message by recipient capability
       "[Player]",
       new Set(["sender", "full", "noItem"]),
     );
-    await sendCase(
-      "55555555-5555-4555-8555-555555555555",
-      {
+    const monsterClientMessageId = "55555555-5555-4555-8555-555555555555";
+    const monsterStarts = new Map(allPeers.map((peer) => [peer.name, peer.frames.length]));
+    const monsterErrorPromise = waitForFrame(
+      sender,
+      monsterStarts.get(sender.name)!,
+      (frame) => frame.type === "room_chat_error"
+        && frame.clientMessageId === monsterClientMessageId,
+    );
+    sender.socket.send(JSON.stringify({
+      type: "room_chat_v2",
+      protocolVersion: 1,
+      clientMessageId: monsterClientMessageId,
+      roomId: created.roomId,
+      roomSessionId: created.roomSessionId,
+      content: {
         formatVersion: 1,
         segments: [{
           kind: "target_ref",
@@ -358,9 +370,25 @@ test("real room service routes each whole combat message by recipient capability
           roomSessionId: created.roomSessionId,
         }],
       },
-      "[Monster]",
-      new Set(),
-    );
+    }));
+    const monsterError = await monsterErrorPromise;
+    assert.equal(monsterError.code, "feature_disabled");
+
+    const monsterBarrier = allPeers.map((peer) => {
+      const start = peer.frames.length;
+      const pong = waitForFrame(peer, start, (frame) => frame.type === "pong");
+      peer.socket.send(JSON.stringify({ type: "ping" }));
+      return pong;
+    });
+    await Promise.all(monsterBarrier);
+    for (const peer of allPeers) {
+      const framesAfterMonster = peer.frames.slice(monsterStarts.get(peer.name)!);
+      assert.equal(framesAfterMonster.some((frame) => (
+        frame.type === "room_chat_ack"
+        || frame.type === "room_chat_message"
+        || frame.type === "room_chat"
+      )), false, `${peer.name} monster delivery`);
+    }
   } finally {
     for (const peer of peers) peer.socket.terminate();
     await service.close();
