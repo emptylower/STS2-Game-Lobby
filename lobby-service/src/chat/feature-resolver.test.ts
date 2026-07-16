@@ -3,6 +3,7 @@ import test from "node:test";
 import type { ChatContent } from "./protocol.js";
 import {
   MONSTER_TARGET_REFS_ENABLED,
+  governanceToFeatureVersions,
   resolveEnabledFeatures,
   supportsContent,
   type ChatFeatureVersions,
@@ -40,6 +41,45 @@ test("rich zero forces dependent features to zero", () => {
   assert.deepEqual(resolve({
     compiled: { ...allVersions, richContentVersion: 0 },
   }), allOff);
+});
+
+test("governance mapping centralizes configured and admin version inputs", () => {
+  const governance = {
+    serverChatEnabled: true,
+    richContentEnabled: true,
+    emojiEnabled: false,
+    itemRefsEnabled: true,
+    roomChatV2Enabled: true,
+    roomCombatRefsEnabled: true,
+  };
+  assert.deepEqual(governanceToFeatureVersions(governance, "server"), {
+    richContentVersion: 1,
+    emojiSetVersion: 0,
+    itemRefVersion: 1,
+    combatRefVersion: 0,
+  });
+  assert.deepEqual(governanceToFeatureVersions(governance, "room"), {
+    richContentVersion: 1,
+    emojiSetVersion: 0,
+    itemRefVersion: 1,
+    combatRefVersion: 1,
+  });
+});
+
+test("persisted child values remain intact while rich dependency clears effective versions", () => {
+  const persisted = {
+    serverChatEnabled: true,
+    richContentEnabled: false,
+    emojiEnabled: true,
+    itemRefsEnabled: true,
+    roomChatV2Enabled: true,
+    roomCombatRefsEnabled: true,
+  };
+  const mapped = governanceToFeatureVersions(persisted, "room");
+  assert.equal(persisted.emojiEnabled, true);
+  assert.equal(persisted.itemRefsEnabled, true);
+  assert.equal(persisted.roomCombatRefsEnabled, true);
+  assert.deepEqual(resolve({ channel: "room", admin: mapped }), allOff);
 });
 
 test("admin overrides configured values while compiled support remains authoritative", () => {

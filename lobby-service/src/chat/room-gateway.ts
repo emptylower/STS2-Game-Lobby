@@ -50,6 +50,18 @@ export interface RoomChatGatewayOptions {
   ipLimiterMaxKeys?: number;
 }
 
+export interface RoomChatGovernanceState {
+  configuredFeatures: ChatFeatureVersions;
+  roomV2Enabled: boolean;
+  adminFeatures?: Partial<ChatFeatureVersions>;
+}
+
+export interface RoomChatGatewayMetrics {
+  connectionCount: number;
+  acceptedMessages: number;
+  rejectedMessages: number;
+}
+
 export class RoomChatGatewayError extends Error {
   constructor(
     readonly code: "server_busy",
@@ -107,9 +119,12 @@ const DEFAULT_MAX_PEERS_PER_ROOM = 32;
 
 export class RoomChatGateway {
   private readonly compiledFeatures: ChatFeatureVersions;
-  private readonly configuredFeatures: ChatFeatureVersions;
-  private readonly adminFeatures?: Partial<ChatFeatureVersions>;
-  private readonly roomV2Enabled: boolean;
+  private configuredFeatures: ChatFeatureVersions;
+  private adminFeatures: Partial<ChatFeatureVersions> | undefined;
+  private roomV2Enabled: boolean;
+  private desiredConfiguredFeatures: ChatFeatureVersions;
+  private desiredAdminFeatures: Partial<ChatFeatureVersions> | undefined;
+  private desiredRoomV2Enabled: boolean;
   private readonly getRoomChatContext: (roomId: string) => RoomChatContext | undefined;
   private readonly now: () => number;
   private readonly randomUuid: () => string;
@@ -119,14 +134,22 @@ export class RoomChatGateway {
   private readonly ipLimiter: SlidingWindowLimiter;
   private readonly peers = new Map<string, PeerState>();
   private readonly peersByRoom = new Map<string, Set<string>>();
+  private governanceRevision = 0;
+  private events: Promise<void> = Promise.resolve();
+  private queuedEventCount = 0;
+  private acceptedMessages = 0;
+  private rejectedMessages = 0;
 
   constructor(options: RoomChatGatewayOptions) {
     this.compiledFeatures = { ...(options.compiledFeatures ?? PHASE_3_CHAT_FEATURES) };
     this.configuredFeatures = { ...(options.configuredFeatures ?? PHASE_3_CHAT_FEATURES) };
+    this.desiredConfiguredFeatures = { ...this.configuredFeatures };
     if (options.adminFeatures !== undefined) {
       this.adminFeatures = { ...options.adminFeatures };
+      this.desiredAdminFeatures = { ...options.adminFeatures };
     }
     this.roomV2Enabled = options.roomV2Enabled ?? true;
+    this.desiredRoomV2Enabled = this.roomV2Enabled;
     this.getRoomChatContext = options.getRoomChatContext;
     this.now = options.now ?? Date.now;
     this.randomUuid = options.randomUuid ?? randomUUID;
@@ -206,6 +229,32 @@ export class RoomChatGateway {
     this.ipLimiter.cleanup(Number.MAX_SAFE_INTEGER);
   }
 
+  setGovernance(state: RoomChatGovernanceState): Promise<void> {
+    const revision = ++this.governanceRevision;
+    this.desiredConfiguredFeatures = { ...state.configuredFeatures };
+    this.desiredAdminFeatures = state.adminFeatures === undefined
+      ? undefined
+      : { ...state.adminFeatures };
+    this.desiredRoomV2Enabled = state.roomV2Enabled;
+    return this.enqueueEvent(() => {
+      if (revision !== this.governanceRevision) return;
+      this.configuredFeatures = { ...state.configuredFeatures };
+      this.adminFeatures = state.adminFeatures === undefined
+        ? undefined
+        : { ...state.adminFeatures };
+      this.roomV2Enabled = state.roomV2Enabled;
+      this.broadcastReadyState();
+    });
+  }
+
+  getMetrics(): RoomChatGatewayMetrics {
+    return {
+      connectionCount: this.peers.size,
+      acceptedMessages: this.acceptedMessages,
+      rejectedMessages: this.rejectedMessages,
+    };
+  }
+
   getLockedIdentity(connectionSessionId: string): LockedRoomChatIdentity | null {
     const identity = this.peers.get(connectionSessionId)?.identity;
     return identity ? { ...identity } : null;
@@ -231,11 +280,20 @@ export class RoomChatGateway {
       return true;
     }
     if (envelope.type === "room_chat_v2") {
+      if (this.queuedEventCount > 0) {
+        void this.enqueueEvent(
+          () => this.handleRoomChatV2(peer, envelope, rawEnvelope),
+        ).catch(() => undefined);
+        return true;
+      }
       this.handleRoomChatV2(peer, envelope, rawEnvelope);
       return true;
     }
     if (envelope.type === "room_chat") {
-      return !this.consumeRoomMessageRate(peer).allowed;
+      const accepted = this.consumeRoomMessageRate(peer).allowed;
+      if (accepted) this.acceptedMessages += 1;
+      else this.rejectedMessages += 1;
+      return !accepted;
     }
     return false;
   }
@@ -325,7 +383,7 @@ export class RoomChatGateway {
       protocolVersion: 1,
       roomId: peer.roomId,
       roomSessionId: context.roomSessionId,
-      enabledFeatures: this.resolveFeatures(peer, peer, context.chatEnabled),
+      enabledFeatures: this.resolveDesiredFeatures(peer, peer, context.chatEnabled),
     });
   }
 
@@ -534,6 +592,7 @@ export class RoomChatGateway {
       message,
     };
     this.storeDedupe(peer, envelope.clientMessageId, canonicalJson, ack);
+    this.acceptedMessages += 1;
     peer.send(ack);
 
     const roomPeerIds = this.peersByRoom.get(peer.roomId) ?? [];
@@ -585,6 +644,51 @@ export class RoomChatGateway {
       sender: sender.declaredFeatures,
       receiver: receiver.declaredFeatures,
     });
+  }
+
+  private resolveDesiredFeatures(
+    sender: PeerState,
+    receiver: PeerState,
+    channelEnabled: boolean,
+  ): ChatFeatureVersions {
+    return resolveEnabledFeatures({
+      channel: "room",
+      compiled: this.compiledFeatures,
+      configured: this.desiredConfiguredFeatures,
+      ...(this.desiredAdminFeatures === undefined ? {} : { admin: this.desiredAdminFeatures }),
+      channelEnabled,
+      roomV2Enabled: this.desiredRoomV2Enabled,
+      sender: sender.declaredFeatures,
+      receiver: receiver.declaredFeatures,
+    });
+  }
+
+  private broadcastReadyState(): void {
+    for (const peer of this.peers.values()) {
+      if (!peer.helloComplete || !peer.roomV2Capable) continue;
+      const context = this.activeContext(peer);
+      if (!context) continue;
+      try {
+        peer.send({
+          type: "room_chat_ready",
+          protocolVersion: 1,
+          roomId: peer.roomId,
+          roomSessionId: context.roomSessionId,
+          enabledFeatures: this.resolveFeatures(peer, peer, context.chatEnabled),
+        });
+      } catch {
+        // Governance updates are best effort per socket; one stale adapter must not block the rest.
+      }
+    }
+  }
+
+  private enqueueEvent(event: () => void | Promise<void>): Promise<void> {
+    this.queuedEventCount += 1;
+    const result = this.events.then(event);
+    this.events = result.catch(() => undefined).finally(() => {
+      this.queuedEventCount -= 1;
+    });
+    return result;
   }
 
   private activeContext(
@@ -652,6 +756,7 @@ export class RoomChatGateway {
   ): void {
     const frame = createErrorFrame(code, clientMessageId, retryAfterMs);
     this.storeDedupe(peer, clientMessageId, canonicalJson, frame);
+    this.rejectedMessages += 1;
     peer.send(frame);
   }
 
@@ -686,20 +791,22 @@ export class RoomChatGateway {
     peer: PeerState,
     code: ChatProtocolErrorCode,
     clientMessageId: string,
+    countRejected = true,
   ): void {
+    if (countRejected) this.rejectedMessages += 1;
     peer.send(createErrorFrame(code, clientMessageId));
   }
 
   private rejectHello(peer: PeerState, close: boolean): void {
     if (peer.terminal) return;
     if (!close) {
-      this.sendError(peer, "protocol_mismatch", "");
+      this.sendError(peer, "protocol_mismatch", "", false);
       return;
     }
 
     peer.terminal = true;
     try {
-      this.sendError(peer, "protocol_mismatch", "");
+      this.sendError(peer, "protocol_mismatch", "", false);
     } catch {
       // Protocol errors are best effort; the terminal close must still run once.
     }

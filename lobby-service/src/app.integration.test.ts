@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,48 @@ import { WebSocket } from "ws";
 import { createLobbyService } from "./app.js";
 import { ChatPeerRegistry } from "./chat/peer-registry.js";
 import { loadLobbyServiceConfig, type LobbyServiceConfig } from "./config.js";
+import { hashServerAdminPassword } from "./server-admin-auth.js";
+
+class FailOnceStateBroadcastRegistry extends ChatPeerRegistry {
+  failNextStateBroadcast = true;
+  readonly attemptedTypes: string[] = [];
+
+  override broadcast(frame: object): void {
+    const type = String((frame as { type?: unknown }).type);
+    this.attemptedTypes.push(type);
+    if (type === "chat_state" && this.failNextStateBroadcast) {
+      this.failNextStateBroadcast = false;
+      throw new Error("injected state broadcast failure");
+    }
+    super.broadcast(frame);
+  }
+}
+
+function createServerAdminMutationBarrier() {
+  let armed: {
+    kind: "settings" | "clear-history";
+    entered(): void;
+    release: Promise<void>;
+  } | undefined;
+  return {
+    beforeMutation: async (kind: "settings" | "clear-history") => {
+      if (armed?.kind !== kind) return;
+      const current = armed;
+      armed = undefined;
+      current.entered();
+      await current.release;
+    },
+    arm(kind: "settings" | "clear-history") {
+      assert.equal(armed, undefined, "only one admin mutation barrier may be armed");
+      let entered!: () => void;
+      let release!: () => void;
+      const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+      const releasePromise = new Promise<void>((resolve) => { release = resolve; });
+      armed = { kind, entered, release: releasePromise };
+      return { entered: enteredPromise, release };
+    },
+  };
+}
 
 function testConfig(overrides: Partial<LobbyServiceConfig> = {}): LobbyServiceConfig {
   const tempDir = mkdtempSync(join(tmpdir(), "sts2-lobby-app-"));
@@ -1230,7 +1272,10 @@ test("control websocket closes frames over the configured payload before routing
 
 test("chat websocket redeems a ticket once and delivers ready, snapshot, ack, and self-broadcast", async () => {
   const base = testConfig({ port: 0 });
-  const config = { ...base, chat: { ...base.chat, enabled: true } };
+  const config = {
+    ...base,
+    chat: { ...base.chat, features: { ...base.chat.features, serverChatEnabled: true } },
+  };
   const service = await createLobbyService(config);
   const address = await service.start();
   let socket: WebSocket | undefined;
@@ -1371,7 +1416,10 @@ test("chat websocket allows exactly one concurrent redemption of a ticket", asyn
 
 test("chat websocket assembles fragmented text into one JSON message", async () => {
   const base = testConfig({ port: 0 });
-  const config = { ...base, chat: { ...base.chat, enabled: true } };
+  const config = {
+    ...base,
+    chat: { ...base.chat, features: { ...base.chat.features, serverChatEnabled: true } },
+  };
   const service = await createLobbyService(config);
   const address = await service.start();
   let socket: WebSocket | undefined;
@@ -1461,7 +1509,10 @@ test("chat websocket closes text payloads over 8 KiB with 1009", async () => {
 
 test("chat websocket receives a server heartbeat and remains usable after automatic pong", async () => {
   const base = testConfig({ port: 0 });
-  const config = { ...base, chat: { ...base.chat, enabled: true } };
+  const config = {
+    ...base,
+    chat: { ...base.chat, features: { ...base.chat.features, serverChatEnabled: true } },
+  };
   const chatPeerRegistry = new ChatPeerRegistry({
     pingIntervalMs: 100,
     pongTimeoutMs: 800,
@@ -1950,6 +2001,405 @@ test("POST /chat/tickets/ omits client IP from logs for the equivalent trailing-
     );
   } finally {
     console.log = originalLog;
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("server admin chat governance persists before ordered websocket state and clears history", async () => {
+  const password = "governance-test-password";
+  const base = testConfig({
+    port: 0,
+    serverAdminPasswordHash: hashServerAdminPassword(password),
+    serverAdminSessionSecret: "governance-session-secret",
+  });
+  const config: LobbyServiceConfig = {
+    ...base,
+    chat: {
+      ...base.chat,
+      features: { ...base.chat.features, serverChatEnabled: true },
+    },
+  };
+  const mutationBarrier = createServerAdminMutationBarrier();
+  const service = await createLobbyService(config, {
+    beforeServerAdminMutation: mutationBarrier.beforeMutation,
+  });
+  const address = await service.start();
+  let socket: WebSocket | undefined;
+  try {
+    for (const [method, path] of [
+      ["GET", "/server-admin/settings"],
+      ["PATCH", "/server-admin/settings"],
+      ["POST", "/server-admin/chat/clear-history"],
+    ] as const) {
+      const unauthorized = await fetch(`http://127.0.0.1:${address.port}${path}`, {
+        method,
+        headers: { "content-type": "application/json" },
+        ...(method === "PATCH" ? { body: JSON.stringify({ chatFeatures: {} }) } : {}),
+      });
+      assert.equal(unauthorized.status, 401);
+    }
+
+    const login = await fetch(`http://127.0.0.1:${address.port}/server-admin/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password }),
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+    assert.ok(cookie);
+    const authHeaders = { cookie };
+
+    const initial = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      headers: authHeaders,
+    });
+    assert.equal(initial.status, 200);
+    const initialSettings = await initial.json() as Record<string, unknown>;
+    assert.equal((initialSettings.chatFeatures as Record<string, unknown>).serverChatEnabled, true);
+    assert.deepEqual(initialSettings.serverFeatures, {
+      richContentVersion: 1,
+      emojiSetVersion: 1,
+      itemRefVersion: 1,
+      combatRefVersion: 0,
+    });
+
+    const ticketResponse = await postChatTicket(address.port);
+    const issued = await ticketResponse.json() as { ticket: string; webSocketUrl: string };
+    socket = await openChatWebSocket(issued.webSocketUrl, issued.ticket);
+    await Promise.all([
+      waitForChatFrame(socket, (frame) => frame.type === "chat_ready"),
+      waitForChatFrame(socket, (frame) => frame.type === "chat_snapshot_end"),
+    ]);
+    const messageId = "61616161-6161-4616-8616-616161616161";
+    const messageAck = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_ack" && frame.clientMessageId === messageId,
+    );
+    const messageBroadcast = waitForChatFrame(socket, (frame) => frame.type === "chat_message");
+    socket.send(JSON.stringify({
+      type: "chat_send",
+      protocolVersion: 1,
+      channel: "server",
+      clientMessageId: messageId,
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "clear me" }] },
+    }));
+    await Promise.all([messageAck, messageBroadcast]);
+    const beforeClearResponse = await fetch(
+      `http://127.0.0.1:${address.port}/server-admin/settings`,
+      { headers: authHeaders },
+    );
+    const beforeClear = await beforeClearResponse.json() as {
+      metrics: { serverRetainedHistoryCount: number; historyEpoch: number };
+    };
+    assert.equal(beforeClear.metrics.serverRetainedHistoryCount, 1);
+    assert.equal(beforeClear.metrics.historyEpoch, 0);
+
+    let persistedServerEnabledAtState: unknown;
+    let stateReadError: unknown;
+    const stateFrame = waitForChatFrame(socket, (frame) => {
+      if (frame.type !== "chat_state") return false;
+      try {
+        const observed = JSON.parse(
+          readFileSync(config.serverAdminStateFile, "utf8"),
+        ) as Record<string, unknown>;
+        persistedServerEnabledAtState = (
+          observed.chatFeatures as Record<string, unknown>
+        ).serverChatEnabled;
+      } catch (error) {
+        stateReadError = error;
+      }
+      return true;
+    });
+    const patchResponse = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers: { ...authHeaders, "content-type": "application/json" },
+      body: JSON.stringify({
+        chatFeatures: {
+          serverChatEnabled: false,
+          richContentEnabled: false,
+          emojiEnabled: true,
+          itemRefsEnabled: true,
+          roomChatV2Enabled: false,
+          roomCombatRefsEnabled: true,
+        },
+      }),
+    });
+    assert.equal(patchResponse.status, 200);
+    const patched = await patchResponse.json() as Record<string, unknown>;
+    const persisted = JSON.parse(readFileSync(config.serverAdminStateFile, "utf8")) as Record<string, unknown>;
+    assert.equal((persisted.chatFeatures as Record<string, unknown>).serverChatEnabled, false);
+    assert.deepEqual(patched.serverFeatures, {
+      richContentVersion: 0,
+      emojiSetVersion: 0,
+      itemRefVersion: 0,
+      combatRefVersion: 0,
+    });
+    assert.equal((patched.chatFeatures as Record<string, unknown>).emojiEnabled, true);
+    assert.equal((await stateFrame).chatEnabled, false);
+    assert.equal(stateReadError, undefined);
+    assert.equal(persistedServerEnabledAtState, false);
+
+    const clearedFrameA = waitForChatFrame(socket, (frame) => frame.type === "chat_history_cleared");
+    const clearedFrameB = waitForChatFrame(socket, (frame) => frame.type === "chat_history_cleared");
+    const [clearA, clearB] = await Promise.all([
+      fetch(`http://127.0.0.1:${address.port}/server-admin/chat/clear-history`, {
+        method: "POST",
+        headers: authHeaders,
+      }),
+      fetch(`http://127.0.0.1:${address.port}/server-admin/chat/clear-history`, {
+        method: "POST",
+        headers: authHeaders,
+      }),
+    ]);
+    const clearBodies = await Promise.all([
+      clearA.json() as Promise<{
+        historyEpoch: number;
+        metrics: { serverRetainedHistoryCount: number; historyEpoch: number };
+      }>,
+      clearB.json() as Promise<{
+        historyEpoch: number;
+        metrics: { serverRetainedHistoryCount: number; historyEpoch: number };
+      }>,
+    ]);
+    const epochs = clearBodies.map((body) => body.historyEpoch);
+    assert.deepEqual(epochs.sort((left, right) => left - right), [1, 2]);
+    assert.equal(clearBodies.every((body) => body.metrics.serverRetainedHistoryCount === 0), true);
+    const clearedEpochs = (await Promise.all([clearedFrameA, clearedFrameB]))
+      .map((frame) => frame.historyEpoch as number)
+      .sort((left, right) => left - right);
+    assert.deepEqual(clearedEpochs, [1, 2]);
+
+    const metricsResponse = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      headers: authHeaders,
+    });
+    const metricsText = await metricsResponse.text();
+    const metricsSettings = JSON.parse(metricsText) as { metrics: Record<string, unknown> };
+    assert.equal(metricsSettings.metrics.serverRetainedHistoryCount, 0);
+    assert.equal(metricsSettings.metrics.historyEpoch, 2);
+    assert.deepEqual(Object.keys(metricsSettings.metrics).sort(), [
+      "historyEpoch",
+      "roomAcceptedMessages",
+      "roomConnectionCount",
+      "roomRejectedMessages",
+      "serverAcceptedMessages",
+      "serverConnectionCount",
+      "serverRejectedMessages",
+      "serverRetainedHistoryCount",
+    ]);
+    for (const forbidden of [
+      "messages", "content", "modelId", "ticket", "token", "sessionId", "senderId", "127.0.0.1",
+    ]) {
+      assert.equal(metricsText.includes(forbidden), false, forbidden);
+    }
+
+    assert.equal(Object.hasOwn(persisted, "metrics"), false);
+
+    const concurrentStateA = waitForChatFrame(socket, (frame) => frame.type === "chat_state");
+    const concurrentStateB = waitForChatFrame(socket, (frame) => frame.type === "chat_state");
+    const concurrentPatchBarrier = mutationBarrier.arm("settings");
+    const concurrentPatchA = fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers: { ...authHeaders, "content-type": "application/json" },
+      body: JSON.stringify({
+        chatFeatures: { serverChatEnabled: true, richContentEnabled: true },
+      }),
+    });
+    await concurrentPatchBarrier.entered;
+    const concurrentPatchB = fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers: { ...authHeaders, "content-type": "application/json" },
+      body: JSON.stringify({
+        chatFeatures: { serverChatEnabled: false, richContentEnabled: false },
+      }),
+    });
+    concurrentPatchBarrier.release();
+    const [concurrentResponseA, concurrentResponseB] = await Promise.all([
+      concurrentPatchA,
+      concurrentPatchB,
+    ]);
+    assert.deepEqual([concurrentResponseA.status, concurrentResponseB.status], [200, 200]);
+    const [concurrentBodyA, concurrentBodyB] = await Promise.all([
+      concurrentResponseA.json() as Promise<{ chatFeatures: { serverChatEnabled: boolean } }>,
+      concurrentResponseB.json() as Promise<{ chatFeatures: { serverChatEnabled: boolean } }>,
+    ]);
+    assert.equal(concurrentBodyA.chatFeatures.serverChatEnabled, true);
+    assert.equal(concurrentBodyB.chatFeatures.serverChatEnabled, false);
+    assert.deepEqual(
+      (await Promise.all([concurrentStateA, concurrentStateB])).map((frame) => frame.chatEnabled),
+      [true, false],
+    );
+    const persistedAfterConcurrent = JSON.parse(
+      readFileSync(config.serverAdminStateFile, "utf8"),
+    ) as { chatFeatures: { serverChatEnabled: boolean } };
+    assert.equal(persistedAfterConcurrent.chatFeatures.serverChatEnabled, false);
+
+    const enabledFrame = waitForChatFrame(socket, (frame) => frame.type === "chat_state");
+    const enableResponse = await fetch(
+      `http://127.0.0.1:${address.port}/server-admin/settings`,
+      {
+        method: "PATCH",
+        headers: { ...authHeaders, "content-type": "application/json" },
+        body: JSON.stringify({
+          chatFeatures: { serverChatEnabled: true, richContentEnabled: true },
+        }),
+      },
+    );
+    assert.equal(enableResponse.status, 200);
+    assert.equal((await enabledFrame).chatEnabled, true);
+    const orderedMessageId = "62626262-6262-4626-8626-626262626262";
+    const orderedAck = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_ack" && frame.clientMessageId === orderedMessageId,
+    );
+    const orderedBroadcast = waitForChatFrame(socket, (frame) => frame.type === "chat_message");
+    socket.send(JSON.stringify({
+      type: "chat_send",
+      protocolVersion: 1,
+      channel: "server",
+      clientMessageId: orderedMessageId,
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "ordered clear" }] },
+    }));
+    await Promise.all([orderedAck, orderedBroadcast]);
+
+    const mutationFrameA = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_state" || frame.type === "chat_history_cleared",
+    );
+    const mutationFrameB = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_state" || frame.type === "chat_history_cleared",
+    );
+    const patchClearBarrier = mutationBarrier.arm("settings");
+    const disablePatch = fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers: { ...authHeaders, "content-type": "application/json" },
+      body: JSON.stringify({ chatFeatures: { serverChatEnabled: false } }),
+    });
+    await patchClearBarrier.entered;
+    const orderedClear = fetch(
+      `http://127.0.0.1:${address.port}/server-admin/chat/clear-history`,
+      { method: "POST", headers: authHeaders },
+    );
+    patchClearBarrier.release();
+    const [disableResponse, orderedClearResponse] = await Promise.all([disablePatch, orderedClear]);
+    assert.deepEqual([disableResponse.status, orderedClearResponse.status], [200, 200]);
+    assert.deepEqual(
+      (await Promise.all([mutationFrameA, mutationFrameB])).map((frame) => frame.type),
+      ["chat_state", "chat_history_cleared"],
+    );
+    const orderedClearBody = await orderedClearResponse.json() as {
+      historyEpoch: number;
+      metrics: { serverRetainedHistoryCount: number };
+    };
+    assert.equal(orderedClearBody.historyEpoch, 3);
+    assert.equal(orderedClearBody.metrics.serverRetainedHistoryCount, 0);
+
+    const diskBeforeFailure = readFileSync(config.serverAdminStateFile, "utf8");
+    mkdirSync(`${config.serverAdminStateFile}.tmp`);
+    const failedPatch = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers: { ...authHeaders, "content-type": "application/json" },
+      body: JSON.stringify({ chatFeatures: { serverChatEnabled: true } }),
+    });
+    assert.equal(failedPatch.status, 500);
+    assert.equal(readFileSync(config.serverAdminStateFile, "utf8"), diskBeforeFailure);
+    await assert.rejects(
+      waitForChatFrame(socket, (frame) => frame.type === "chat_state", 100),
+      /frame timeout/,
+    );
+    const afterFailedPatch = await fetch(
+      `http://127.0.0.1:${address.port}/server-admin/settings`,
+      { headers: authHeaders },
+    );
+    const afterFailedSettings = await afterFailedPatch.json() as Record<string, unknown>;
+    assert.equal(
+      (afterFailedSettings.chatFeatures as Record<string, unknown>).serverChatEnabled,
+      false,
+    );
+
+    rmSync(`${config.serverAdminStateFile}.tmp`, { recursive: true, force: true });
+    const recoveredState = waitForChatFrame(socket, (frame) => frame.type === "chat_state");
+    const recoveredPatch = await fetch(
+      `http://127.0.0.1:${address.port}/server-admin/settings`,
+      {
+        method: "PATCH",
+        headers: { ...authHeaders, "content-type": "application/json" },
+        body: JSON.stringify({ chatFeatures: { serverChatEnabled: true } }),
+      },
+    );
+    assert.equal(recoveredPatch.status, 200);
+    assert.equal((await recoveredState).chatEnabled, true);
+    const recoveredClearFrame = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_history_cleared",
+    );
+    const recoveredClear = await fetch(
+      `http://127.0.0.1:${address.port}/server-admin/chat/clear-history`,
+      { method: "POST", headers: authHeaders },
+    );
+    assert.equal(recoveredClear.status, 200);
+    assert.equal((await recoveredClearFrame).historyEpoch, 4);
+  } finally {
+    socket?.terminate();
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("server admin mutation queue recovers after a gateway broadcast failure", async () => {
+  const password = "broadcast-recovery-password";
+  const config = testConfig({
+    port: 0,
+    serverAdminPasswordHash: hashServerAdminPassword(password),
+    serverAdminSessionSecret: "broadcast-recovery-secret",
+  });
+  const registry = new FailOnceStateBroadcastRegistry();
+  const service = await createLobbyService(config, {
+    createChatPeerRegistry: () => registry,
+  });
+  const address = await service.start();
+  try {
+    const login = await fetch(`http://127.0.0.1:${address.port}/server-admin/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password }),
+    });
+    const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+    assert.ok(cookie);
+    const headers = { cookie, "content-type": "application/json" };
+
+    const failed = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ chatFeatures: { serverChatEnabled: true } }),
+    });
+    assert.equal(failed.status, 500);
+    const persistedAfterFailure = JSON.parse(
+      readFileSync(config.serverAdminStateFile, "utf8"),
+    ) as { chatFeatures: { serverChatEnabled: boolean } };
+    assert.equal(persistedAfterFailure.chatFeatures.serverChatEnabled, true);
+
+    const recovered = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ chatFeatures: { serverChatEnabled: false } }),
+    });
+    assert.equal(recovered.status, 200);
+    const recoveredBody = await recovered.json() as {
+      chatFeatures: { serverChatEnabled: boolean };
+    };
+    assert.equal(recoveredBody.chatFeatures.serverChatEnabled, false);
+    const clear = await fetch(
+      `http://127.0.0.1:${address.port}/server-admin/chat/clear-history`,
+      { method: "POST", headers: { cookie } },
+    );
+    assert.equal(clear.status, 200);
+    assert.deepEqual(registry.attemptedTypes, [
+      "chat_state",
+      "chat_state",
+      "chat_history_cleared",
+    ]);
+  } finally {
     await service.close();
     cleanupTempDir(config);
   }

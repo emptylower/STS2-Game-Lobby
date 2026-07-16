@@ -42,6 +42,20 @@ export interface ServerChatGatewayOptions {
   adminFeatures?: Partial<ChatFeatureVersions>;
 }
 
+export interface ServerChatGovernanceState {
+  chatEnabled: boolean;
+  configuredFeatures: ChatFeatureVersions;
+  adminFeatures?: Partial<ChatFeatureVersions>;
+}
+
+export interface ChatGatewayMetrics {
+  connectionCount: number;
+  retainedHistoryCount: number;
+  historyEpoch: number;
+  acceptedMessages: number;
+  rejectedMessages: number;
+}
+
 interface ConnectionState {
   readonly socket: WebSocket;
   readonly sessionId: string;
@@ -66,16 +80,21 @@ export class ServerChatGateway {
   private readonly setIntervalFn: typeof setInterval;
   private readonly clearIntervalFn: typeof clearInterval;
   private readonly compiledFeatures: ChatFeatureVersions;
-  private readonly configuredFeatures: ChatFeatureVersions;
-  private readonly adminFeatures?: Partial<ChatFeatureVersions>;
+  private configuredFeatures: ChatFeatureVersions;
+  private adminFeatures: Partial<ChatFeatureVersions> | undefined;
+  private desiredConfiguredFeatures: ChatFeatureVersions;
+  private desiredAdminFeatures: Partial<ChatFeatureVersions> | undefined;
   private readonly dedupe: ChatDedupeCache;
   private readonly connectionLimiter: TokenBucketLimiter;
   private readonly ipLimiter: SlidingWindowLimiter;
   private readonly connections = new Map<string, ConnectionState>();
   private chatEnabled: boolean;
   private desiredChatEnabled: boolean;
+  private governanceRevision = 0;
   private events: Promise<void> = Promise.resolve();
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private acceptedMessages = 0;
+  private rejectedMessages = 0;
 
   constructor(options: ServerChatGatewayOptions = {}) {
     this.peerRegistry = options.peerRegistry ?? new ChatPeerRegistry();
@@ -99,8 +118,10 @@ export class ServerChatGateway {
     this.clearIntervalFn = options.clearInterval ?? clearInterval;
     this.compiledFeatures = { ...(options.compiledFeatures ?? PHASE_3_CHAT_FEATURES) };
     this.configuredFeatures = { ...(options.configuredFeatures ?? PHASE_3_CHAT_FEATURES) };
+    this.desiredConfiguredFeatures = { ...this.configuredFeatures };
     if (options.adminFeatures !== undefined) {
       this.adminFeatures = { ...options.adminFeatures };
+      this.desiredAdminFeatures = { ...options.adminFeatures };
     }
     this.history = new ChatHistoryBuffer({
       now: this.now,
@@ -224,7 +245,7 @@ export class ServerChatGateway {
         historyEpoch: this.history.historyEpoch,
         chatEnabled: this.desiredChatEnabled,
         serverChatVersion: 1,
-        enabledFeatures: this.resolveFeatures(this.desiredChatEnabled),
+        enabledFeatures: this.resolveFeatures(this.desiredChatEnabled, true),
       });
 
       const snapshotId = this.randomUuid();
@@ -244,24 +265,37 @@ export class ServerChatGateway {
     }
   }
 
-  setState(state: { chatEnabled: boolean }): void {
+  setState(state: { chatEnabled: boolean }): Promise<void> {
+    const revision = ++this.governanceRevision;
     this.desiredChatEnabled = state.chatEnabled;
-    this.enqueueEvent(() => {
+    return this.enqueueEvent(() => {
+      if (revision !== this.governanceRevision) return;
       this.chatEnabled = state.chatEnabled;
-      this.peerRegistry.broadcast({
-        type: "chat_state",
-        protocolVersion: 1,
-        chatEnabled: this.chatEnabled,
-        enabledFeatures: this.resolveFeatures(this.chatEnabled),
-        historyEpoch: this.history.historyEpoch,
-        changedAt: new Date(this.now()).toISOString(),
-      });
+      this.broadcastState();
     });
   }
 
-  clearHistory(changedAt?: Date): void {
+  setGovernance(state: ServerChatGovernanceState): Promise<void> {
+    const revision = ++this.governanceRevision;
+    this.desiredChatEnabled = state.chatEnabled;
+    this.desiredConfiguredFeatures = { ...state.configuredFeatures };
+    this.desiredAdminFeatures = state.adminFeatures === undefined
+      ? undefined
+      : { ...state.adminFeatures };
+    return this.enqueueEvent(() => {
+      if (revision !== this.governanceRevision) return;
+      this.chatEnabled = state.chatEnabled;
+      this.configuredFeatures = { ...state.configuredFeatures };
+      this.adminFeatures = state.adminFeatures === undefined
+        ? undefined
+        : { ...state.adminFeatures };
+      this.broadcastState();
+    });
+  }
+
+  clearHistory(changedAt?: Date): Promise<number> {
     const changedAtIso = (changedAt ?? new Date(this.now())).toISOString();
-    this.enqueueEvent(() => {
+    return this.enqueueEvent(() => {
       const historyEpoch = this.history.clear();
       this.peerRegistry.broadcast({
         type: "chat_history_cleared",
@@ -269,7 +303,18 @@ export class ServerChatGateway {
         historyEpoch,
         changedAt: changedAtIso,
       });
+      return historyEpoch;
     });
+  }
+
+  getMetrics(): ChatGatewayMetrics {
+    return {
+      connectionCount: this.connections.size,
+      retainedHistoryCount: this.history.retainedCount,
+      historyEpoch: this.history.historyEpoch,
+      acceptedMessages: this.acceptedMessages,
+      rejectedMessages: this.rejectedMessages,
+    };
   }
 
   async close(): Promise<void> {
@@ -289,10 +334,12 @@ export class ServerChatGateway {
     await this.events;
   }
 
-  private enqueueEvent(event: () => void | Promise<void>, onError?: () => void): void {
-    this.events = this.events.then(event).catch(() => {
+  private enqueueEvent<T>(event: () => T | Promise<T>, onError?: () => void): Promise<T> {
+    const result = this.events.then(event);
+    this.events = result.then(() => undefined).catch(() => {
       onError?.();
     });
+    return result;
   }
 
   private startHeartbeat(): void {
@@ -314,13 +361,26 @@ export class ServerChatGateway {
     this.heartbeatTimer = null;
   }
 
-  private resolveFeatures(channelEnabled: boolean): ChatFeatureVersions {
+  private resolveFeatures(channelEnabled: boolean, desired = false): ChatFeatureVersions {
+    const configured = desired ? this.desiredConfiguredFeatures : this.configuredFeatures;
+    const admin = desired ? this.desiredAdminFeatures : this.adminFeatures;
     return resolveEnabledFeatures({
       channel: "server",
       compiled: this.compiledFeatures,
-      configured: this.configuredFeatures,
-      ...(this.adminFeatures === undefined ? {} : { admin: this.adminFeatures }),
+      configured,
+      ...(admin === undefined ? {} : { admin }),
       channelEnabled,
+    });
+  }
+
+  private broadcastState(): void {
+    this.peerRegistry.broadcast({
+      type: "chat_state",
+      protocolVersion: 1,
+      chatEnabled: this.chatEnabled,
+      enabledFeatures: this.resolveFeatures(this.chatEnabled),
+      historyEpoch: this.history.historyEpoch,
+      changedAt: new Date(this.now()).toISOString(),
     });
   }
 
@@ -484,6 +544,7 @@ export class ServerChatGateway {
       throw error;
     }
     this.history.append(message);
+    this.acceptedMessages += 1;
     this.peerRegistry.send(state.sessionId, ack);
     this.peerRegistry.broadcast({
       type: "chat_message",
@@ -505,6 +566,7 @@ export class ServerChatGateway {
     clientMessageId?: string,
     retryAfterMs?: number,
   ): void {
+    this.rejectedMessages += 1;
     const frame: ChatErrorEnvelope = {
       type: "chat_error",
       protocolVersion: 1,
@@ -565,6 +627,7 @@ export class ServerChatGateway {
       }
       throw error;
     }
+    this.rejectedMessages += 1;
     this.peerRegistry.send(state.sessionId, frame);
     console.log(
       `[chat] event=message_rejected sessionId=${state.sessionId}`

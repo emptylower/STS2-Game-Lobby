@@ -41,8 +41,10 @@ import { announceToBootstrappedPeers } from "./peer/auto-announce.js";
 import { mountMetrics } from "./peer/handlers/metrics.js";
 import { ChatPeerError, ChatPeerRegistry } from "./chat/peer-registry.js";
 import {
+  governanceToFeatureVersions,
   PHASE_4_CHAT_FEATURES,
   resolveEnabledFeatures,
+  type ChatFeatureGovernance,
 } from "./chat/feature-resolver.js";
 import { ServerChatGateway, type ServerChatGatewayOptions } from "./chat/gateway.js";
 import { RateLimitError, SlidingWindowLimiter } from "./chat/rate-limiter.js";
@@ -150,6 +152,9 @@ export interface LobbyService {
 export interface LobbyServiceDependencies {
   createChatPeerRegistry?: () => ChatPeerRegistry;
   chatGatewayOptions?: Pick<ServerChatGatewayOptions, "heartbeatTickMs">;
+  beforeServerAdminMutation?: (
+    kind: "settings" | "clear-history",
+  ) => void | Promise<void>;
 }
 
 export function createProductionDependencies(): LobbyServiceDependencies {
@@ -206,7 +211,9 @@ export async function createLobbyService(
   );
   const serverAdminStateStore = new ServerAdminStateStore(env.serverAdminStateFile, {
     publicListingEnabledDefault: env.peerPublicListingEnabledDefault,
+    chatFeaturesDefault: env.chat.features,
   });
+  const initialChatGovernance = serverAdminStateStore.getState().chatFeatures;
   const createRoomBandwidthGuard = new CreateRoomBandwidthGuard();
   const serverAdminSessions = new Map<string, ServerAdminSession>();
   const createJoinRateLimitHits = new Map<string, RateLimitBucket>();
@@ -225,9 +232,10 @@ export async function createLobbyService(
   });
   const chatGateway = new ServerChatGateway({
     peerRegistry: chatPeerRegistry,
-    chatEnabled: env.chat.enabled,
+    chatEnabled: initialChatGovernance.serverChatEnabled,
     compiledFeatures: PHASE_4_CHAT_FEATURES,
-    configuredFeatures: PHASE_4_CHAT_FEATURES,
+    configuredFeatures: governanceToFeatureVersions(env.chat.features, "server"),
+    adminFeatures: governanceToFeatureVersions(initialChatGovernance, "server"),
     maxPayloadBytes: env.chat.maxPayloadBytes,
     historyLimit: env.chat.historyLimit,
     historyTtlMs: env.chat.historyTtlMs,
@@ -246,8 +254,9 @@ export async function createLobbyService(
   });
   const roomChatGateway = new RoomChatGateway({
     compiledFeatures: PHASE_4_CHAT_FEATURES,
-    configuredFeatures: PHASE_4_CHAT_FEATURES,
-    roomV2Enabled: true,
+    configuredFeatures: governanceToFeatureVersions(env.chat.features, "room"),
+    adminFeatures: governanceToFeatureVersions(initialChatGovernance, "room"),
+    roomV2Enabled: initialChatGovernance.roomChatV2Enabled,
     getRoomChatContext: (roomId) => store.getRoomChatContext(roomId),
   });
   const reservedChatTicketsByUpgrade = new WeakMap<IncomingMessage, ReservedChatTicket>();
@@ -255,6 +264,7 @@ export async function createLobbyService(
   let gossipScheduler: GossipScheduler | null = null;
   let cleanupInterval: NodeJS.Timeout | null = null;
   let selfEntryRefreshInterval: NodeJS.Timeout | null = null;
+  let serverAdminMutations: Promise<void> = Promise.resolve();
   let started = false;
   let closed = false;
   let boundAddress: { host: string; port: number } | null = null;
@@ -689,17 +699,56 @@ export async function createLobbyService(
         publicListingEnabled?: boolean;
         bandwidthCapacityMbps?: number | null;
         announcements?: unknown;
+        chatFeatures?: unknown;
       } | undefined;
-      const settings = serverAdminStateStore.updateSettings({
-        displayName: typeof body?.displayName === "string" ? body.displayName : "",
-        publicListingEnabled: Boolean(body?.publicListingEnabled),
-        bandwidthCapacityMbps: optionalPositiveNumber(body?.bandwidthCapacityMbps, "bandwidthCapacityMbps", 100_000),
-        announcements: body?.announcements,
+      const update: Parameters<ServerAdminStateStore["updateSettings"]>[0] = {};
+      if (body && Object.hasOwn(body, "displayName")) {
+        update.displayName = typeof body.displayName === "string" ? body.displayName : "";
+      }
+      if (body && Object.hasOwn(body, "publicListingEnabled")) {
+        if (typeof body.publicListingEnabled !== "boolean") {
+          throw new InputError("publicListingEnabled 必须为布尔值。");
+        }
+        update.publicListingEnabled = body.publicListingEnabled;
+      }
+      if (body && Object.hasOwn(body, "bandwidthCapacityMbps")) {
+        update.bandwidthCapacityMbps = optionalPositiveNumber(
+          body.bandwidthCapacityMbps,
+          "bandwidthCapacityMbps",
+          100_000,
+        );
+      }
+      if (body && Object.hasOwn(body, "announcements")) {
+        update.announcements = body.announcements;
+      }
+      if (body && Object.hasOwn(body, "chatFeatures")) {
+        update.chatFeatures = parseChatFeaturesPatch(body.chatFeatures);
+      }
+      const settings = await enqueueServerAdminMutation(async () => {
+        await dependencies.beforeServerAdminMutation?.("settings");
+        const committed = serverAdminStateStore.updateSettings(update);
+        await applyChatGovernance(committed.chatFeatures);
+        return committed;
       });
       res.json(buildServerAdminSettingsResponse(settings));
     })().catch((error) => {
       next(error);
     });
+  });
+
+  app.post("/server-admin/chat/clear-history", (req, res, next) => {
+    (async () => {
+      requireServerAdminSession(req);
+      const historyEpoch = await enqueueServerAdminMutation(async () => {
+        await dependencies.beforeServerAdminMutation?.("clear-history");
+        return chatGateway.clearHistory();
+      });
+      res.json({
+        ok: true,
+        historyEpoch,
+        metrics: buildChatMetrics(),
+      });
+    })().catch(next);
   });
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -1599,7 +1648,86 @@ export async function createLobbyService(
       relayActiveRooms: relayTrafficSnapshot.activeRooms,
       relayActiveHosts: relayTrafficSnapshot.activeHosts,
       relayActiveClients: relayTrafficSnapshot.activeClients,
+      serverFeatures: resolveAdminFeatures(settings.chatFeatures, "server"),
+      roomFeatures: resolveAdminFeatures(settings.chatFeatures, "room"),
+      metrics: buildChatMetrics(),
     };
+  }
+
+  function resolveAdminFeatures(
+    governance: ChatFeatureGovernance,
+    channel: "server" | "room",
+  ) {
+    return resolveEnabledFeatures({
+      channel,
+      compiled: PHASE_4_CHAT_FEATURES,
+      configured: governanceToFeatureVersions(env.chat.features, channel),
+      admin: governanceToFeatureVersions(governance, channel),
+      channelEnabled: channel === "server" ? governance.serverChatEnabled : true,
+      roomV2Enabled: governance.roomChatV2Enabled,
+    });
+  }
+
+  function buildChatMetrics() {
+    const server = chatGateway.getMetrics();
+    const room = roomChatGateway.getMetrics();
+    return {
+      serverConnectionCount: server.connectionCount,
+      roomConnectionCount: room.connectionCount,
+      serverRetainedHistoryCount: server.retainedHistoryCount,
+      historyEpoch: server.historyEpoch,
+      serverAcceptedMessages: server.acceptedMessages,
+      serverRejectedMessages: server.rejectedMessages,
+      roomAcceptedMessages: room.acceptedMessages,
+      roomRejectedMessages: room.rejectedMessages,
+    };
+  }
+
+  async function applyChatGovernance(governance: ChatFeatureGovernance) {
+    const transitions = await Promise.allSettled([
+      chatGateway.setGovernance({
+        chatEnabled: governance.serverChatEnabled,
+        configuredFeatures: governanceToFeatureVersions(env.chat.features, "server"),
+        adminFeatures: governanceToFeatureVersions(governance, "server"),
+      }),
+      roomChatGateway.setGovernance({
+        configuredFeatures: governanceToFeatureVersions(env.chat.features, "room"),
+        adminFeatures: governanceToFeatureVersions(governance, "room"),
+        roomV2Enabled: governance.roomChatV2Enabled,
+      }),
+    ]);
+    const failure = transitions.find(
+      (transition): transition is PromiseRejectedResult => transition.status === "rejected",
+    );
+    if (failure) throw failure.reason;
+  }
+
+  function enqueueServerAdminMutation<T>(mutation: () => T | Promise<T>): Promise<T> {
+    const result = serverAdminMutations.then(mutation);
+    serverAdminMutations = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  function parseChatFeaturesPatch(value: unknown): Partial<ChatFeatureGovernance> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new InputError("chatFeatures 必须为对象。");
+    }
+    const allowed = new Set<keyof ChatFeatureGovernance>([
+      "serverChatEnabled",
+      "richContentEnabled",
+      "emojiEnabled",
+      "itemRefsEnabled",
+      "roomChatV2Enabled",
+      "roomCombatRefsEnabled",
+    ]);
+    const output: Partial<ChatFeatureGovernance> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      if (!allowed.has(key as keyof ChatFeatureGovernance) || typeof entry !== "boolean") {
+        throw new InputError(`chatFeatures.${key} 必须为受支持的布尔开关。`);
+      }
+      output[key as keyof ChatFeatureGovernance] = entry;
+    }
+    return output;
   }
 
   function getPeerRuntimeState(publicListingEnabled: boolean): PeerRuntimeState {

@@ -69,6 +69,11 @@ export class ChatHistoryBuffer {
     return this.epoch;
   }
 
+  get retainedCount(): number {
+    this.cleanup();
+    return this.entries.length;
+  }
+
   append(message: CanonicalChatMessage): void {
     this.cleanup();
     this.entries.push({

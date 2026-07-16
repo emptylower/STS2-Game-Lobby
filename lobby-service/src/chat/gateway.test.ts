@@ -60,6 +60,20 @@ class ThrowingSnapshotRegistry extends ChatPeerRegistry {
   }
 }
 
+class ThrowingBroadcastRegistry extends ChatPeerRegistry {
+  failNextBroadcast = false;
+  readonly attemptedTypes: string[] = [];
+
+  override broadcast(frame: object): void {
+    this.attemptedTypes.push(String((frame as { type?: unknown }).type));
+    if (this.failNextBroadcast) {
+      this.failNextBroadcast = false;
+      throw new Error("injected broadcast failure");
+    }
+    super.broadcast(frame);
+  }
+}
+
 const ticket: ReservedChatTicket = {
   id: "reservation-1",
   protocolVersion: 1,
@@ -711,6 +725,167 @@ test("state changes and history clears remain ordered after an accepting peer sn
   });
   assert.equal(all[4]?.historyEpoch, 1);
   assert.equal(all[4]?.changedAt, "2026-07-13T04:05:06.000Z");
+});
+
+test("ordered governance exposes desired state to newcomers and current state to queued sends", async () => {
+  const existing = new FakeSocket();
+  const gateway = new ServerChatGateway({
+    chatEnabled: true,
+    compiledFeatures: richFeatures,
+    configuredFeatures: richFeatures,
+  });
+  gateway.accept(existing as unknown as WebSocket, ticket);
+  await settle(existing);
+  const existingStart = existing.sent.length;
+
+  const transition = gateway.setGovernance({
+    chatEnabled: false,
+    configuredFeatures: richFeatures,
+    adminFeatures: { ...richFeatures, emojiSetVersion: 0 },
+  });
+  const newcomer = new FakeSocket();
+  gateway.accept(newcomer as unknown as WebSocket, { ...ticket, id: "newcomer" });
+  assert.equal(frames(newcomer)[0]?.chatEnabled, false);
+  assert.deepEqual(frames(newcomer)[0]?.enabledFeatures, {
+    richContentVersion: 0,
+    emojiSetVersion: 0,
+    itemRefVersion: 0,
+    combatRefVersion: 0,
+  });
+
+  existing.emit(
+    "message",
+    chatSend("14141414-1414-4414-8414-141414141414", "queued after disable"),
+    false,
+  );
+  await transition;
+  await settle(existing, newcomer);
+
+  assert.deepEqual(frames(existing).slice(existingStart).map((frame) => frame.type), [
+    "chat_state",
+    "chat_error",
+  ]);
+  assert.equal(frames(existing).at(-1)?.code, "chat_disabled");
+  await gateway.close();
+});
+
+test("superseded setState and governance promises resolve without broadcasting stale state", async () => {
+  const existing = new FakeSocket();
+  const gateway = new ServerChatGateway({
+    chatEnabled: true,
+    compiledFeatures: richFeatures,
+    configuredFeatures: richFeatures,
+  });
+  gateway.accept(existing as unknown as WebSocket, ticket);
+  await settle(existing);
+  const existingStart = existing.sent.length;
+
+  const stale = gateway.setState({ chatEnabled: false });
+  const current = gateway.setGovernance({
+    chatEnabled: true,
+    configuredFeatures: richFeatures,
+    adminFeatures: { ...richFeatures, emojiSetVersion: 0 },
+  });
+  const newcomer = new FakeSocket();
+  gateway.accept(newcomer as unknown as WebSocket, { ...ticket, id: "revision-newcomer" });
+
+  await Promise.all([stale, current]);
+  await settle(existing, newcomer);
+  const expectedFeatures = {
+    richContentVersion: 1,
+    emojiSetVersion: 0,
+    itemRefVersion: 1,
+    combatRefVersion: 0,
+  };
+  assert.deepEqual(frames(existing).slice(existingStart), [{
+    type: "chat_state",
+    protocolVersion: 1,
+    chatEnabled: true,
+    enabledFeatures: expectedFeatures,
+    historyEpoch: 0,
+    changedAt: frames(existing).at(-1)?.changedAt,
+  }]);
+  assert.deepEqual(
+    frames(newcomer)
+      .filter((frame) => frame.type === "chat_ready" || frame.type === "chat_state")
+      .map((frame) => ({ chatEnabled: frame.chatEnabled, enabledFeatures: frame.enabledFeatures })),
+    [
+      { chatEnabled: true, enabledFeatures: expectedFeatures },
+      { chatEnabled: true, enabledFeatures: expectedFeatures },
+    ],
+  );
+  await gateway.close();
+});
+
+test("queued broadcast failure does not poison later governance or history clears", async () => {
+  const registry = new ThrowingBroadcastRegistry();
+  const gateway = new ServerChatGateway({
+    peerRegistry: registry,
+    chatEnabled: true,
+    compiledFeatures: richFeatures,
+    configuredFeatures: richFeatures,
+  });
+  registry.failNextBroadcast = true;
+
+  await assert.rejects(
+    gateway.setGovernance({
+      chatEnabled: false,
+      configuredFeatures: richFeatures,
+      adminFeatures: richFeatures,
+    }),
+    /injected broadcast failure/,
+  );
+  const recoveredGovernance = gateway.setGovernance({
+    chatEnabled: true,
+    configuredFeatures: richFeatures,
+    adminFeatures: { ...richFeatures, itemRefVersion: 0 },
+  });
+  const recoveredClear = gateway.clearHistory();
+  assert.deepEqual(await Promise.all([recoveredGovernance, recoveredClear]), [undefined, 1]);
+  assert.deepEqual(registry.attemptedTypes, [
+    "chat_state",
+    "chat_state",
+    "chat_history_cleared",
+  ]);
+  await gateway.close();
+});
+
+test("server metrics count commits and conflicts once while dedupe replay is free", async () => {
+  const gateway = new ServerChatGateway({ chatEnabled: true });
+  const socket = new FakeSocket();
+  gateway.accept(socket as unknown as WebSocket, ticket);
+  await settle(socket);
+  const id = "15151515-1515-4515-8515-151515151515";
+
+  socket.emit("message", chatSend(id, "first"), false);
+  await settle(socket);
+  socket.emit("message", chatSend(id, "first"), false);
+  await settle(socket);
+  socket.emit("message", chatSend(id, "conflict"), false);
+  await settle(socket);
+
+  assert.deepEqual(gateway.getMetrics(), {
+    connectionCount: 1,
+    retainedHistoryCount: 1,
+    historyEpoch: 0,
+    acceptedMessages: 1,
+    rejectedMessages: 1,
+  });
+  const [firstEpoch, secondEpoch] = await Promise.all([
+    gateway.clearHistory(),
+    gateway.clearHistory(),
+  ]);
+  await settle(socket);
+  assert.deepEqual([firstEpoch, secondEpoch], [1, 2]);
+  assert.deepEqual(
+    frames(socket)
+      .filter((frame) => frame.type === "chat_history_cleared")
+      .map((frame) => frame.historyEpoch),
+    [1, 2],
+  );
+  assert.equal(gateway.getMetrics().retainedHistoryCount, 0);
+  assert.equal(gateway.getMetrics().historyEpoch, 2);
+  await gateway.close();
 });
 
 test("chat_state includes current history epoch and fake-clock event time", async () => {

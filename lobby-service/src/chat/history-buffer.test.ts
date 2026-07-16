@@ -276,6 +276,19 @@ test("snapshot respects snapshotLimit independently of retained history", () => 
     history.snapshot().map((m) => m.messageId),
     ids(20, 24),
   );
+  assert.equal(history.retainedCount, 20);
+});
+
+test("retainedCount applies TTL cleanup and reports historyLimit rather than snapshotLimit", () => {
+  const ctx = makeHistory({ historyLimit: 4, snapshotLimit: 1, historyTtlMs: 1000 });
+  for (let index = 0; index < 6; index += 1) {
+    ctx.history.append(message(index));
+  }
+  assert.equal(ctx.history.retainedCount, 4);
+  assert.equal(ctx.history.snapshot().length, 1);
+
+  ctx.advance(1001);
+  assert.equal(ctx.history.retainedCount, 0);
 });
 
 test("buildSnapshot messages are newest-first-within-limit chronological order", () => {

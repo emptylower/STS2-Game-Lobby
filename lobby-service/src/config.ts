@@ -1,4 +1,5 @@
 import type { ConnectionStrategy } from "./store.js";
+import type { ChatFeatureGovernance } from "./chat/feature-resolver.js";
 
 export type LobbyServiceConfigErrorCode =
   | "invalid_boolean"
@@ -19,7 +20,7 @@ export class LobbyServiceConfigError extends Error {
 }
 
 export interface ChatConfig {
-  enabled: boolean;
+  features: ChatFeatureSettings;
   historyLimit: number;
   historyTtlMs: number;
   snapshotLimit: number;
@@ -34,6 +35,8 @@ export interface ChatConfig {
   connectionRefillMs: number;
   slowClientBytes: number;
 }
+
+export type ChatFeatureSettings = ChatFeatureGovernance;
 
 export interface LobbyServiceConfig {
   host: string;
@@ -138,7 +141,14 @@ function loadChatConfig(source: NodeJS.ProcessEnv): ChatConfig {
   }
 
   return {
-    enabled: parseBoolean(source, "SERVER_CHAT_ENABLED", false),
+    features: {
+      serverChatEnabled: parseBoolean(source, "SERVER_CHAT_ENABLED", false),
+      richContentEnabled: parseBoolean(source, "SERVER_CHAT_RICH_CONTENT_ENABLED", true),
+      emojiEnabled: parseBoolean(source, "SERVER_CHAT_EMOJI_ENABLED", true),
+      itemRefsEnabled: parseBoolean(source, "SERVER_CHAT_ITEM_REFS_ENABLED", true),
+      roomChatV2Enabled: parseBoolean(source, "ROOM_CHAT_V2_ENABLED", true),
+      roomCombatRefsEnabled: parseBoolean(source, "ROOM_CHAT_COMBAT_REFS_ENABLED", true),
+    },
     historyLimit,
     historyTtlMs: parseInteger(source, "SERVER_CHAT_HISTORY_TTL_HOURS", 24, 1, 168) * 60 * 60 * 1000,
     snapshotLimit,

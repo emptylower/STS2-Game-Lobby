@@ -9,6 +9,15 @@ export interface ChatFeatureVersions {
   combatRefVersion: 0 | 1;
 }
 
+export interface ChatFeatureGovernance {
+  serverChatEnabled: boolean;
+  richContentEnabled: boolean;
+  emojiEnabled: boolean;
+  itemRefsEnabled: boolean;
+  roomChatV2Enabled: boolean;
+  roomCombatRefsEnabled: boolean;
+}
+
 export interface ResolveFeatureInput {
   channel: "server" | "room";
   compiled: ChatFeatureVersions;
@@ -40,6 +49,18 @@ export const PHASE_4_CHAT_FEATURES: Readonly<ChatFeatureVersions> = Object.freez
   itemRefVersion: 1,
   combatRefVersion: 1,
 });
+
+export function governanceToFeatureVersions(
+  governance: ChatFeatureGovernance,
+  channel: "server" | "room",
+): ChatFeatureVersions {
+  return {
+    richContentVersion: governance.richContentEnabled ? 1 : 0,
+    emojiSetVersion: governance.emojiEnabled ? 1 : 0,
+    itemRefVersion: governance.itemRefsEnabled ? 1 : 0,
+    combatRefVersion: channel === "room" && governance.roomCombatRefsEnabled ? 1 : 0,
+  };
+}
 
 const ALL_DECLARED_VERSIONS: Readonly<ChatFeatureVersions> = Object.freeze({
   richContentVersion: 1,

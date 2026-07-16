@@ -1821,6 +1821,219 @@ test("hello rejects unpaired surrogate names", () => {
   assert.equal(gateway.getLockedIdentity("bad-name"), null);
 });
 
+test("ordered room governance updates only active v2 peers and queues later sends", async () => {
+  const gateway = createGateway({
+    compiledFeatures: allVersions,
+    configuredFeatures: allVersions,
+  });
+  const existing = peer("governance-existing");
+  const legacy = peer("governance-legacy");
+  gateway.registerPeer(existing.registration);
+  gateway.registerPeer(legacy.registration);
+  gateway.handleControlEnvelope(existing.registration.connectionSessionId, hello("Alice", "net:alice"));
+  gateway.handleControlEnvelope(legacy.registration.connectionSessionId, {
+    type: "client_hello",
+    roomId: "room-1",
+    controlChannelId: "control-1",
+    role: "client",
+    playerName: "Legacy",
+    playerNetId: "net:legacy",
+  });
+  existing.frames.length = 0;
+  legacy.frames.length = 0;
+
+  const transition = gateway.setGovernance({
+    configuredFeatures: allVersions,
+    adminFeatures: allVersions,
+    roomV2Enabled: false,
+  });
+  const newcomer = peer("governance-newcomer");
+  gateway.registerPeer(newcomer.registration);
+  gateway.handleControlEnvelope(newcomer.registration.connectionSessionId, hello("New", "net:new"));
+  assert.deepEqual(newcomer.frames.at(-1)?.enabledFeatures, {
+    richContentVersion: 0,
+    emojiSetVersion: 0,
+    itemRefVersion: 0,
+    combatRefVersion: 0,
+  });
+
+  gateway.handleControlEnvelope(existing.registration.connectionSessionId, roomSend(
+    "22222222-2222-4222-8222-222222222222",
+    textContent("queued after disable"),
+  ));
+  await transition;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(existing.frames.map((frame) => frame.type), [
+    "room_chat_ready",
+    "room_chat_error",
+  ]);
+  assert.equal(existing.frames.at(-1)?.code, "chat_disabled");
+  assert.deepEqual(legacy.frames, []);
+  assert.equal(gateway.handleControlEnvelope(legacy.registration.connectionSessionId, {
+    type: "room_chat",
+    messageText: "legacy remains available",
+  }), false);
+  assert.deepEqual(gateway.getMetrics(), {
+    connectionCount: 3,
+    acceptedMessages: 1,
+    rejectedMessages: 1,
+  });
+});
+
+test("room governance broadcast isolates a throwing peer and still updates the rest", async () => {
+  const gateway = createGateway({
+    compiledFeatures: allVersions,
+    configuredFeatures: allVersions,
+  });
+  let throwingSends = 0;
+  const throwing = peer("governance-throwing", "client", {
+    send: () => {
+      throwingSends += 1;
+      if (throwingSends > 1) throw new Error("injected send failure");
+    },
+  });
+  const healthy = peer("governance-healthy");
+  gateway.registerPeer(throwing.registration);
+  gateway.registerPeer(healthy.registration);
+  gateway.handleControlEnvelope(throwing.registration.connectionSessionId, hello("Throwing", "net:throwing"));
+  gateway.handleControlEnvelope(healthy.registration.connectionSessionId, hello("Healthy", "net:healthy"));
+  healthy.frames.length = 0;
+
+  await assert.doesNotReject(gateway.setGovernance({
+    configuredFeatures: allVersions,
+    adminFeatures: { ...allVersions, emojiSetVersion: 0 },
+    roomV2Enabled: true,
+  }));
+
+  assert.equal(throwingSends, 2);
+  assert.equal(healthy.frames.length, 1);
+  assert.equal(healthy.frames[0]?.type, "room_chat_ready");
+  assert.deepEqual(healthy.frames[0]?.enabledFeatures, {
+    richContentVersion: 1,
+    emojiSetVersion: 0,
+    itemRefVersion: 1,
+    combatRefVersion: 1,
+  });
+});
+
+test("superseded room governance resolves without broadcasting the stale ready state", async () => {
+  const gateway = createGateway({
+    compiledFeatures: allVersions,
+    configuredFeatures: allVersions,
+  });
+  const existing = peer("room-revision-existing");
+  gateway.registerPeer(existing.registration);
+  gateway.handleControlEnvelope(existing.registration.connectionSessionId, hello("Existing", "net:existing"));
+  existing.frames.length = 0;
+
+  const stale = gateway.setGovernance({
+    configuredFeatures: allVersions,
+    adminFeatures: allVersions,
+    roomV2Enabled: false,
+  });
+  const current = gateway.setGovernance({
+    configuredFeatures: allVersions,
+    adminFeatures: { ...allVersions, emojiSetVersion: 0 },
+    roomV2Enabled: true,
+  });
+  const newcomer = peer("room-revision-newcomer");
+  gateway.registerPeer(newcomer.registration);
+  gateway.handleControlEnvelope(newcomer.registration.connectionSessionId, hello("New", "net:new"));
+
+  await Promise.all([stale, current]);
+  const expectedFeatures = {
+    richContentVersion: 1,
+    emojiSetVersion: 0,
+    itemRefVersion: 1,
+    combatRefVersion: 1,
+  };
+  assert.deepEqual(existing.frames.map((frame) => frame.enabledFeatures), [expectedFeatures]);
+  assert.deepEqual(
+    newcomer.frames
+      .filter((frame) => frame.type === "room_chat_ready")
+      .map((frame) => frame.enabledFeatures),
+    [expectedFeatures, expectedFeatures],
+  );
+});
+
+test("queued room ack failure does not poison later governance or sends", async () => {
+  const gateway = createGateway({
+    compiledFeatures: allVersions,
+    configuredFeatures: allVersions,
+  });
+  const sender = peer("queued-failure-sender");
+  const failedId = "24242424-2424-4424-8424-242424242424";
+  sender.registration.send = (frame) => {
+    sender.frames.push(frame);
+    if (frame.type === "room_chat_ack" && frame.clientMessageId === failedId) {
+      throw new Error("injected queued ack failure");
+    }
+  };
+  gateway.registerPeer(sender.registration);
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, hello("Sender", "net:sender"));
+  sender.frames.length = 0;
+
+  const firstGovernance = gateway.setGovernance({
+    configuredFeatures: allVersions,
+    adminFeatures: allVersions,
+    roomV2Enabled: true,
+  });
+  gateway.handleControlEnvelope(
+    sender.registration.connectionSessionId,
+    roomSend(failedId, textContent("first fails at ack")),
+  );
+  const secondGovernance = gateway.setGovernance({
+    configuredFeatures: allVersions,
+    adminFeatures: { ...allVersions, emojiSetVersion: 0 },
+    roomV2Enabled: true,
+  });
+  const recoveredId = "25252525-2525-4525-8525-252525252526";
+  gateway.handleControlEnvelope(
+    sender.registration.connectionSessionId,
+    roomSend(recoveredId, textContent("second succeeds")),
+  );
+
+  await Promise.all([firstGovernance, secondGovernance]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    sender.frames.some(
+      (frame) => frame.type === "room_chat_ack" && frame.clientMessageId === recoveredId,
+    ),
+    true,
+  );
+  assert.equal(
+    sender.frames.some(
+      (frame) => frame.type === "room_chat_message"
+        && (frame.message as Record<string, unknown>).plainTextFallback === "second succeeds",
+    ),
+    true,
+  );
+  assert.deepEqual(gateway.getMetrics(), {
+    connectionCount: 1,
+    acceptedMessages: 2,
+    rejectedMessages: 0,
+  });
+});
+
+test("room metrics count accepted and conflict once without counting replay", () => {
+  const gateway = createGateway();
+  const sender = peer("metrics-sender");
+  gateway.registerPeer(sender.registration);
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, hello("Alice", "net:alice"));
+  const id = "23232323-2323-4323-8323-232323232323";
+
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, roomSend(id, textContent("first")));
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, roomSend(id, textContent("first")));
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, roomSend(id, textContent("conflict")));
+
+  assert.deepEqual(gateway.getMetrics(), {
+    connectionCount: 1,
+    acceptedMessages: 1,
+    rejectedMessages: 1,
+  });
+});
+
 function clientId(index: number): string {
   return `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
 }

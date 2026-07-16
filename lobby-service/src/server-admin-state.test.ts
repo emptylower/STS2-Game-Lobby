@@ -1,9 +1,26 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { ServerAdminStateStore } from "./server-admin-state.js";
+import type { ChatFeatureGovernance } from "./chat/feature-resolver.js";
+
+const chatDefaults: ChatFeatureGovernance = {
+  serverChatEnabled: false,
+  richContentEnabled: true,
+  emojiEnabled: true,
+  itemRefsEnabled: true,
+  roomChatV2Enabled: true,
+  roomCombatRefsEnabled: true,
+};
+
+function createStore(path: string, features: ChatFeatureGovernance = chatDefaults) {
+  return new ServerAdminStateStore(path, {
+    publicListingEnabledDefault: true,
+    chatFeaturesDefault: features,
+  });
+}
 
 function createTempStatePath() {
   const directory = mkdtempSync(join(tmpdir(), "sts2-server-admin-state-"));
@@ -48,7 +65,7 @@ test("server admin state normalizes announcement records on load", () => {
       "utf8",
     );
 
-    const store = new ServerAdminStateStore(temp.path);
+    const store = createStore(temp.path);
     const settings = store.getSettingsView();
 
     assert.equal(settings.announcements.length, 2);
@@ -73,7 +90,7 @@ test("server admin state normalizes announcement records on load", () => {
 test("server admin state persists announcement updates across reloads", () => {
   const temp = createTempStatePath();
   try {
-    const store = new ServerAdminStateStore(temp.path);
+    const store = createStore(temp.path);
     store.updateSettings({
       displayName: "公开服",
       publicListingEnabled: true,
@@ -97,13 +114,138 @@ test("server admin state persists announcement updates across reloads", () => {
       ],
     });
 
-    const reloaded = new ServerAdminStateStore(temp.path);
+    const reloaded = createStore(temp.path);
     const settings = reloaded.getSettingsView();
 
     assert.equal(settings.announcements.length, 2);
     assert.equal(settings.announcements[0]?.id, "update-1");
     assert.equal(settings.announcements[1]?.type, "event");
     assert.deepEqual(reloaded.getPublicAnnouncements(), [settings.announcements[0]]);
+  } finally {
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("no state file uses all environment chat defaults", () => {
+  const temp = createTempStatePath();
+  try {
+    assert.deepEqual(createStore(temp.path).getState().chatFeatures, chatDefaults);
+  } finally {
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy and partial chat state inherit defaults per key without losing existing fields", () => {
+  const temp = createTempStatePath();
+  try {
+    writeFileSync(temp.path, JSON.stringify({
+      displayName: "Legacy",
+      publicListingEnabled: false,
+      bandwidthCapacityMbps: 88,
+      announcements: [{ title: "Keep", body: "Keep body" }],
+      extraMetadata: { region: "test" },
+      chatFeatures: {
+        serverChatEnabled: true,
+        richContentEnabled: "wrong",
+        emojiEnabled: false,
+      },
+    }), "utf8");
+    const state = createStore(temp.path).getState();
+
+    assert.equal(state.displayName, "Legacy");
+    assert.equal(state.publicListingEnabled, false);
+    assert.equal(state.bandwidthCapacityMbps, 88);
+    assert.equal(state.announcements.length, 1);
+    assert.deepEqual(state.extraMetadata, { region: "test" });
+    assert.deepEqual(state.chatFeatures, {
+      ...chatDefaults,
+      serverChatEnabled: true,
+      emojiEnabled: false,
+    });
+  } finally {
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("wrong-type chat feature object falls back to every environment default", () => {
+  const temp = createTempStatePath();
+  const defaults: ChatFeatureGovernance = {
+    serverChatEnabled: true,
+    richContentEnabled: false,
+    emojiEnabled: false,
+    itemRefsEnabled: false,
+    roomChatV2Enabled: false,
+    roomCombatRefsEnabled: false,
+  };
+  try {
+    writeFileSync(temp.path, JSON.stringify({
+      displayName: "Keep",
+      chatFeatures: "wrong",
+    }), "utf8");
+
+    const state = createStore(temp.path, defaults).getState();
+    assert.equal(state.displayName, "Keep");
+    assert.deepEqual(state.chatFeatures, defaults);
+  } finally {
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("complete persisted chat state wins over opposite defaults after restart", () => {
+  const temp = createTempStatePath();
+  const persisted: ChatFeatureGovernance = {
+    serverChatEnabled: true,
+    richContentEnabled: false,
+    emojiEnabled: true,
+    itemRefsEnabled: false,
+    roomChatV2Enabled: true,
+    roomCombatRefsEnabled: false,
+  };
+  const opposite = Object.fromEntries(
+    Object.entries(persisted).map(([key, value]) => [key, !value]),
+  ) as unknown as ChatFeatureGovernance;
+  try {
+    createStore(temp.path, opposite).updateSettings({ chatFeatures: persisted });
+    assert.deepEqual(createStore(temp.path, opposite).getState().chatFeatures, persisted);
+  } finally {
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("chat feature reads are defensive clones and partial patches preserve siblings", () => {
+  const temp = createTempStatePath();
+  try {
+    const store = createStore(temp.path);
+    const leaked = store.getState();
+    leaked.chatFeatures.richContentEnabled = false;
+    assert.equal(store.getState().chatFeatures.richContentEnabled, true);
+
+    store.patch({ chatFeatures: { serverChatEnabled: true } });
+    assert.deepEqual(store.getState().chatFeatures, {
+      ...chatDefaults,
+      serverChatEnabled: true,
+    });
+  } finally {
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("write failure leaves memory disk and prior settings unchanged", () => {
+  const temp = createTempStatePath();
+  try {
+    const store = createStore(temp.path);
+    store.updateSettings({ displayName: "Before", chatFeatures: { serverChatEnabled: true } });
+    const memoryBefore = store.getState();
+    const diskBefore = readFileSync(temp.path, "utf8");
+    mkdirSync(`${temp.path}.tmp`);
+
+    assert.throws(() => store.updateSettings({
+      displayName: "After",
+      chatFeatures: { richContentEnabled: false },
+    }));
+
+    assert.deepEqual(store.getState(), memoryBefore);
+    assert.equal(readFileSync(temp.path, "utf8"), diskBefore);
   } finally {
     rmSync(temp.directory, { recursive: true, force: true });
   }

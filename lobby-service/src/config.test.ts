@@ -73,7 +73,14 @@ test("loadLobbyServiceConfig applies phase 1 chat defaults", () => {
   const chat = loadLobbyServiceConfig({}).chat;
 
   assert.deepEqual(chat, {
-    enabled: false,
+    features: {
+      serverChatEnabled: false,
+      richContentEnabled: true,
+      emojiEnabled: true,
+      itemRefsEnabled: true,
+      roomChatV2Enabled: true,
+      roomCombatRefsEnabled: true,
+    },
     historyLimit: 100,
     historyTtlMs: 86_400_000,
     snapshotLimit: 50,
@@ -116,17 +123,36 @@ test("loadLobbyServiceConfig rejects malformed boolean values", () => {
   );
 });
 
-test("loadLobbyServiceConfig accepts true and false chat booleans", () => {
-  assert.equal(loadLobbyServiceConfig({ SERVER_CHAT_ENABLED: "true" }).chat.enabled, true);
-  assert.equal(loadLobbyServiceConfig({ SERVER_CHAT_ENABLED: "false" }).chat.enabled, false);
+test("loadLobbyServiceConfig accepts true and false governance booleans", () => {
+  const settings = [
+    ["SERVER_CHAT_ENABLED", "serverChatEnabled"],
+    ["SERVER_CHAT_RICH_CONTENT_ENABLED", "richContentEnabled"],
+    ["SERVER_CHAT_EMOJI_ENABLED", "emojiEnabled"],
+    ["SERVER_CHAT_ITEM_REFS_ENABLED", "itemRefsEnabled"],
+    ["ROOM_CHAT_V2_ENABLED", "roomChatV2Enabled"],
+    ["ROOM_CHAT_COMBAT_REFS_ENABLED", "roomCombatRefsEnabled"],
+  ] as const;
+  for (const [environmentKey, property] of settings) {
+    assert.equal(loadLobbyServiceConfig({ [environmentKey]: "true" }).chat.features[property], true);
+    assert.equal(loadLobbyServiceConfig({ [environmentKey]: "false" }).chat.features[property], false);
+  }
 });
 
-test("loadLobbyServiceConfig rejects non-literal chat booleans", () => {
-  for (const value of ["TRUE", "1", "yes", " true ", ""]) {
-    assert.throws(
-      () => loadLobbyServiceConfig({ SERVER_CHAT_ENABLED: value }),
-      /Invalid boolean value for SERVER_CHAT_ENABLED/,
-    );
+test("loadLobbyServiceConfig rejects non-literal governance booleans", () => {
+  for (const environmentKey of [
+    "SERVER_CHAT_ENABLED",
+    "SERVER_CHAT_RICH_CONTENT_ENABLED",
+    "SERVER_CHAT_EMOJI_ENABLED",
+    "SERVER_CHAT_ITEM_REFS_ENABLED",
+    "ROOM_CHAT_V2_ENABLED",
+    "ROOM_CHAT_COMBAT_REFS_ENABLED",
+  ]) {
+    for (const value of ["TRUE", "1", "yes", " true ", ""]) {
+      assert.throws(
+        () => loadLobbyServiceConfig({ [environmentKey]: value }),
+        new RegExp(`Invalid boolean value for ${environmentKey}`),
+      );
+    }
   }
 });
 
