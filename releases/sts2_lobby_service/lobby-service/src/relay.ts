@@ -242,13 +242,19 @@ class RoomRelaySession {
 export class RoomRelayManager {
   private readonly sessions = new Map<string, RoomRelaySession>();
   private readonly portsInUse = new Set<number>();
-  private readonly cleanupTimer: NodeJS.Timeout;
+  private cleanupTimer: NodeJS.Timeout | null = null;
   private readonly bandwidthMeter = new RollingBandwidthMeter(30_000);
 
   constructor(
     private readonly config: RelayManagerConfig,
     private readonly logEvent: (event: RelayLogEvent) => void,
-  ) {
+  ) {}
+
+  start() {
+    if (this.cleanupTimer) {
+      return;
+    }
+
     this.cleanupTimer = setInterval(() => {
       for (const session of this.sessions.values()) {
         session.cleanup();
@@ -341,7 +347,10 @@ export class RoomRelayManager {
   }
 
   close() {
-    clearInterval(this.cleanupTimer);
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
     for (const session of this.sessions.values()) {
       session.close();
     }

@@ -1,4 +1,6 @@
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+
+const SERVER_ADMIN_CSRF_BYTES = 32;
 
 export function hashServerAdminPassword(password: string) {
   const salt = randomBytes(16).toString("hex");
@@ -47,4 +49,21 @@ export function verifySignedServerAdminSession(token: string | undefined, secret
   }
 
   return sessionId;
+}
+
+export function createServerAdminCsrfToken(): string {
+  return randomBytes(SERVER_ADMIN_CSRF_BYTES).toString("base64url");
+}
+
+export function digestServerAdminCsrfToken(token: string): Buffer {
+  return createHash("sha256").update(token, "utf8").digest();
+}
+
+export function verifyServerAdminCsrfToken(
+  token: string | undefined,
+  expectedDigest: Buffer,
+): boolean {
+  const actualDigest = digestServerAdminCsrfToken(token ?? "");
+  return expectedDigest.length === actualDigest.length
+    && timingSafeEqual(actualDigest, expectedDigest);
 }

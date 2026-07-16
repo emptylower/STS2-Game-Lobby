@@ -11,6 +11,27 @@ StartLimitBurst=5
 [Service]
 Type=simple
 WorkingDirectory=/opt/sts2-lobby/lobby-service
+# Parser defaults are explicit here; the later EnvironmentFile remains the
+# operator override surface.
+Environment="SERVER_CHAT_ENABLED=false"
+Environment="SERVER_CHAT_RICH_CONTENT_ENABLED=true"
+Environment="SERVER_CHAT_EMOJI_ENABLED=true"
+Environment="SERVER_CHAT_ITEM_REFS_ENABLED=true"
+Environment="ROOM_CHAT_V2_ENABLED=true"
+Environment="ROOM_CHAT_COMBAT_REFS_ENABLED=true"
+Environment="SERVER_CHAT_HISTORY_LIMIT=100"
+Environment="SERVER_CHAT_HISTORY_TTL_HOURS=24"
+Environment="SERVER_CHAT_SNAPSHOT_LIMIT=50"
+Environment="SERVER_CHAT_MAX_PAYLOAD_BYTES=8192"
+Environment="SERVER_CHAT_MAX_CONNECTIONS_PER_IP=10"
+Environment="SERVER_CHAT_MAX_CONNECTIONS_TOTAL=500"
+Environment="SERVER_CHAT_MAX_PENDING_TICKETS=2000"
+Environment="SERVER_CHAT_TRUSTED_PROXY_CIDRS="
+Environment="SERVER_CHAT_TICKET_REQUESTS_PER_MINUTE=20"
+Environment="SERVER_CHAT_IP_MESSAGES_PER_MINUTE=30"
+Environment="SERVER_CHAT_CONNECTION_BURST=5"
+Environment="SERVER_CHAT_CONNECTION_REFILL_MS=2000"
+Environment="SERVER_CHAT_SLOW_CLIENT_BYTES=262144"
 EnvironmentFile=/opt/sts2-lobby/lobby-service/.env
 ExecStart=/usr/bin/npm start
 Restart=always

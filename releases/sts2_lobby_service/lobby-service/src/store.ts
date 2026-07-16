@@ -94,8 +94,16 @@ export interface RoomSettings {
   chatEnabled: boolean;
 }
 
+export interface RoomChatContext {
+  readonly roomId: string;
+  readonly roomSessionId: string;
+  readonly chatEnabled: boolean;
+  readonly peerPlayerNetIds: ReadonlySet<string>;
+}
+
 export interface HostSession {
   roomId: string;
+  roomSessionId: string;
   controlChannelId: string;
   hostToken: string;
   relayState: RelayState;
@@ -152,6 +160,7 @@ export interface StoreConfig {
 
 export interface CreateRoomResult {
   roomId: string;
+  roomSessionId: string;
   controlChannelId: string;
   hostToken: string;
   heartbeatIntervalSeconds: number;
@@ -162,10 +171,16 @@ export interface CreateRoomResult {
 export interface JoinRoomResult {
   ticketId: string;
   roomId: string;
+  roomSessionId: string;
   issuedAt: Date;
   expiresAt: Date;
   room: RoomSummary;
   connectionPlan: ConnectionPlan;
+}
+
+export interface LobbyStoreDependencies {
+  id?(): string;
+  peerPlayerNetIds?(roomId: string, roomSessionId: string): ReadonlySet<string>;
 }
 
 export interface ModMismatchDetails {
@@ -191,8 +206,10 @@ export class LobbyStore {
   private readonly tickets = new Map<string, JoinTicket>();
   private readonly hostSessions = new Map<string, HostSession>();
   private readonly config: Required<StoreConfig>;
+  private readonly id: () => string;
+  private readonly peerPlayerNetIds: (roomId: string, roomSessionId: string) => ReadonlySet<string>;
 
-  constructor(config: StoreConfig) {
+  constructor(config: StoreConfig, deps: LobbyStoreDependencies = {}) {
     this.config = {
       heartbeatTimeoutMs: config.heartbeatTimeoutMs,
       ticketTtlMs: config.ticketTtlMs,
@@ -200,6 +217,8 @@ export class LobbyStore {
       strictModVersionCheck: config.strictModVersionCheck ?? true,
       connectionStrategy: config.connectionStrategy ?? "direct-first",
     };
+    this.id = deps.id ?? (() => randomUUID());
+    this.peerPlayerNetIds = deps.peerPlayerNetIds ?? (() => new Set<string>());
   }
 
   listRooms(now = new Date()): RoomSummary[] {
@@ -222,8 +241,9 @@ export class LobbyStore {
   }
 
   createRoom(input: CreateRoomInput, remoteAddress: string, now = new Date()): CreateRoomResult {
-    const roomId = randomUUID();
-    const controlChannelId = randomUUID();
+    const roomId = this.id();
+    const controlChannelId = this.id();
+    const roomSessionId = this.id();
     const hostToken = randomToken();
     const password = input.password?.trim();
     const modList = normalizeModList(input.modList ?? []);
@@ -260,6 +280,7 @@ export class LobbyStore {
 
     const hostSession: HostSession = {
       roomId,
+      roomSessionId,
       controlChannelId,
       hostToken,
       relayState: "disabled",
@@ -273,6 +294,7 @@ export class LobbyStore {
 
     return {
       roomId,
+      roomSessionId,
       controlChannelId,
       hostToken,
       heartbeatIntervalSeconds: Math.max(3, Math.floor(this.config.heartbeatTimeoutMs / 3000)),
@@ -350,7 +372,7 @@ export class LobbyStore {
 
     const connectionPlan = buildConnectionPlan(room, hostSession, this.config.connectionStrategy);
     const ticket: JoinTicket = {
-      ticketId: randomUUID(),
+      ticketId: this.id(),
       roomId,
       issuedAt: now,
       expiresAt: new Date(now.getTime() + this.config.ticketTtlMs),
@@ -361,6 +383,7 @@ export class LobbyStore {
     return {
       ticketId: ticket.ticketId,
       roomId,
+      roomSessionId: hostSession.roomSessionId,
       issuedAt: ticket.issuedAt,
       expiresAt: ticket.expiresAt,
       room: this.toRoomSummary(room),
@@ -509,6 +532,23 @@ export class LobbyStore {
     }
 
     return { ...hostSession.roomSettings };
+  }
+
+  getRoomChatContext(roomId: string): RoomChatContext | undefined {
+    const room = this.rooms.get(roomId);
+    const hostSession = this.hostSessions.get(roomId);
+    if (!room || !hostSession) {
+      return undefined;
+    }
+
+    return {
+      roomId: hostSession.roomId,
+      roomSessionId: hostSession.roomSessionId,
+      chatEnabled: hostSession.roomSettings.chatEnabled,
+      peerPlayerNetIds: new Set(
+        this.peerPlayerNetIds(hostSession.roomId, hostSession.roomSessionId),
+      ),
+    };
   }
 
   private requireRoom(roomId: string) {

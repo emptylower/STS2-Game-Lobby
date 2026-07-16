@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import type { ChatFeatureGovernance } from "./chat/feature-resolver.js";
 
 export type ServerAnnouncementType = "update" | "event" | "warning" | "info";
 
@@ -22,6 +23,7 @@ export interface ServerAdminState {
   capacitySource: string;
   announcements: ServerAnnouncement[];
   extraMetadata: Record<string, string>;
+  chatFeatures: ChatFeatureGovernance;
 }
 
 export interface ServerAdminSettingsView {
@@ -33,15 +35,25 @@ export interface ServerAdminSettingsView {
   capacitySource: string;
   announcements: ServerAnnouncement[];
   extraMetadata: Record<string, string>;
+  chatFeatures: ChatFeatureGovernance;
+}
+
+export interface ServerAdminStateDefaults {
+  publicListingEnabledDefault?: boolean;
+  chatFeaturesDefault: ChatFeatureGovernance;
 }
 
 export class ServerAdminStateStore {
   private readonly stateFilePath: string;
   private state: ServerAdminState;
 
-  constructor(stateFilePath: string, defaults?: { publicListingEnabledDefault?: boolean }) {
+  constructor(stateFilePath: string, defaults: ServerAdminStateDefaults) {
     this.stateFilePath = resolve(stateFilePath);
-    this.state = loadState(this.stateFilePath, defaults?.publicListingEnabledDefault ?? true);
+    this.state = loadState(
+      this.stateFilePath,
+      defaults.publicListingEnabledDefault ?? true,
+      defaults.chatFeaturesDefault,
+    );
   }
 
   getState() {
@@ -58,28 +70,39 @@ export class ServerAdminStateStore {
       capacitySource: this.state.capacitySource,
       announcements: this.state.announcements.map(cloneAnnouncement),
       extraMetadata: { ...this.state.extraMetadata },
+      chatFeatures: { ...this.state.chatFeatures },
     };
   }
 
   updateSettings(next: {
-    displayName: string;
-    publicListingEnabled: boolean;
+    displayName?: string;
+    publicListingEnabled?: boolean;
     bandwidthCapacityMbps?: number | null | undefined;
     announcements?: unknown;
     extraMetadata?: Record<string, string> | undefined;
+    chatFeatures?: Partial<ChatFeatureGovernance> | undefined;
   }) {
-    this.state.displayName = sanitizeText(next.displayName, 64);
-    this.state.publicListingEnabled = next.publicListingEnabled;
+    const staged = cloneState(this.state);
+    if (next.displayName !== undefined) {
+      staged.displayName = sanitizeText(next.displayName, 64);
+    }
+    if (next.publicListingEnabled !== undefined) {
+      staged.publicListingEnabled = next.publicListingEnabled;
+    }
     if (next.bandwidthCapacityMbps !== undefined) {
-      this.state.bandwidthCapacityMbps = sanitizeOptionalMbps(next.bandwidthCapacityMbps);
+      staged.bandwidthCapacityMbps = sanitizeOptionalMbps(next.bandwidthCapacityMbps);
     }
     if (next.announcements !== undefined) {
-      this.state.announcements = sanitizeAnnouncements(next.announcements);
+      staged.announcements = sanitizeAnnouncements(next.announcements);
     }
-    if (next.extraMetadata) {
-      this.state.extraMetadata = sanitizeMetadata(next.extraMetadata);
+    if (next.extraMetadata !== undefined) {
+      staged.extraMetadata = sanitizeMetadata(next.extraMetadata);
     }
-    this.save();
+    if (next.chatFeatures !== undefined) {
+      staged.chatFeatures = mergeChatFeatures(staged.chatFeatures, next.chatFeatures);
+    }
+    this.save(staged);
+    this.state = staged;
     return this.getSettingsView();
   }
 
@@ -89,8 +112,10 @@ export class ServerAdminStateStore {
       .map(cloneAnnouncement);
   }
 
-  patch(patch: Partial<ServerAdminState>) {
-    this.state = {
+  patch(patch: Partial<Omit<ServerAdminState, "chatFeatures">> & {
+    chatFeatures?: Partial<ChatFeatureGovernance>;
+  }) {
+    const staged: ServerAdminState = {
       ...this.state,
       ...patch,
       displayName: patch.displayName != null ? sanitizeText(patch.displayName, 64) : this.state.displayName,
@@ -110,23 +135,31 @@ export class ServerAdminStateStore {
         ? sanitizeAnnouncements(patch.announcements)
         : this.state.announcements,
       extraMetadata: patch.extraMetadata != null ? sanitizeMetadata(patch.extraMetadata) : this.state.extraMetadata,
+      chatFeatures: patch.chatFeatures != null
+        ? mergeChatFeatures(this.state.chatFeatures, patch.chatFeatures)
+        : this.state.chatFeatures,
     };
-    this.save();
+    this.save(staged);
+    this.state = staged;
     return this.getState();
   }
 
-  private save() {
+  private save(next: ServerAdminState) {
     mkdirSync(dirname(this.stateFilePath), { recursive: true });
     const tempFilePath = `${this.stateFilePath}.tmp`;
-    writeFileSync(tempFilePath, JSON.stringify(this.state, null, 2), "utf8");
+    writeFileSync(tempFilePath, JSON.stringify(next, null, 2), "utf8");
     renameSync(tempFilePath, this.stateFilePath);
   }
 }
 
-function loadState(path: string, publicListingDefault: boolean): ServerAdminState {
+function loadState(
+  path: string,
+  publicListingDefault: boolean,
+  chatFeaturesDefault: ChatFeatureGovernance,
+): ServerAdminState {
   try {
     const raw = readFileSync(path, "utf8");
-    return normalizeState(JSON.parse(raw), publicListingDefault);
+    return normalizeState(JSON.parse(raw), publicListingDefault, chatFeaturesDefault);
   } catch {
     return {
       displayName: "",
@@ -137,11 +170,16 @@ function loadState(path: string, publicListingDefault: boolean): ServerAdminStat
       capacitySource: "unknown",
       announcements: [],
       extraMetadata: {},
+      chatFeatures: { ...chatFeaturesDefault },
     };
   }
 }
 
-function normalizeState(value: unknown, publicListingDefault: boolean): ServerAdminState {
+function normalizeState(
+  value: unknown,
+  publicListingDefault: boolean,
+  chatFeaturesDefault: ChatFeatureGovernance,
+): ServerAdminState {
   const data = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return {
     displayName: sanitizeText(typeof data.displayName === "string" ? data.displayName : "", 64),
@@ -154,7 +192,36 @@ function normalizeState(value: unknown, publicListingDefault: boolean): ServerAd
     capacitySource: sanitizeCapacitySource(typeof data.capacitySource === "string" ? data.capacitySource : "unknown"),
     announcements: sanitizeAnnouncements(data.announcements),
     extraMetadata: sanitizeMetadata(data.extraMetadata),
+    chatFeatures: normalizeChatFeatures(data.chatFeatures, chatFeaturesDefault),
   };
+}
+
+function normalizeChatFeatures(
+  value: unknown,
+  defaults: ChatFeatureGovernance,
+): ChatFeatureGovernance {
+  const data = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    serverChatEnabled: booleanOrDefault(data.serverChatEnabled, defaults.serverChatEnabled),
+    richContentEnabled: booleanOrDefault(data.richContentEnabled, defaults.richContentEnabled),
+    emojiEnabled: booleanOrDefault(data.emojiEnabled, defaults.emojiEnabled),
+    itemRefsEnabled: booleanOrDefault(data.itemRefsEnabled, defaults.itemRefsEnabled),
+    roomChatV2Enabled: booleanOrDefault(data.roomChatV2Enabled, defaults.roomChatV2Enabled),
+    roomCombatRefsEnabled: booleanOrDefault(data.roomCombatRefsEnabled, defaults.roomCombatRefsEnabled),
+  };
+}
+
+function mergeChatFeatures(
+  current: ChatFeatureGovernance,
+  patch: Partial<ChatFeatureGovernance>,
+): ChatFeatureGovernance {
+  return normalizeChatFeatures(patch, current);
+}
+
+function booleanOrDefault(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 function sanitizeMetadata(value: unknown) {

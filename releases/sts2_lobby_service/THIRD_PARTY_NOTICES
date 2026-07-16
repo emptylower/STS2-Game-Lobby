@@ -1,0 +1,33 @@
+Lucide Icons
+------------
+Copyright (c) 2025 Lucide Contributors
+Copyright (c) 2013-2022 Cole Bemis
+
+ISC License
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+Lucide is derived from Feather Icons (https://feathericons.com/).
+
+sts2_typing Compatibility Note
+------------------------------
+STS2 LAN Connect does not bundle, link, or runtime-depend on sts2_typing.
+No substantive sts2_typing source code was copied into this project, so no
+sts2_typing MIT attribution is included as a bundled-code license notice.
+
+Ark Pixel Font (test-only fixture)
+----------------------------------
+Copyright (c) 2021, TakWolf (https://takwolf.com).
+The fixed zh_cn screenshot-test font is distributed under the SIL Open Font
+License, Version 1.1. Its complete license is stored at
+sts2-lan-connect.GdUnitTests/TestAssets/Fonts/ARK_PIXEL_FONT_OFL.txt.
