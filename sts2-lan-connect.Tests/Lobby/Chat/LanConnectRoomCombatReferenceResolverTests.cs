@@ -150,7 +150,8 @@ public sealed class LanConnectRoomCombatReferenceResolverTests
         LanConnectResolvedCombatReference resolvedPower = resolver.Resolve(power, "en");
         LanConnectResolvedCombatReference resolvedPlayer = resolver.Resolve(player, "en");
         Assert.Equal(LanConnectResolvedCombatReferenceStatus.Resolved, resolvedPower.Status);
-        Assert.Equal("Strength", resolvedPower.Label);
+        Assert.Equal("Strength -2", resolvedPower.Label);
+        Assert.Contains("Amount: -2", resolvedPower.Description, StringComparison.Ordinal);
         Assert.Equal(LanConnectResolvedCombatReferenceStatus.Resolved, resolvedPlayer.Status);
         Assert.Equal("Silent", resolvedPlayer.Label);
 
@@ -158,6 +159,53 @@ public sealed class LanConnectRoomCombatReferenceResolverTests
         context.Peers.Remove("net:target");
         Assert.Equal("未知能力", resolver.Resolve(power, "zh-CN").Label);
         Assert.Equal("目标已不可用", resolver.Resolve(player, "zh-CN").Label);
+    }
+
+    [Fact]
+    public void Power_resolution_uses_wire_amount_and_live_owner_applier_names()
+    {
+        FakeContext context = ReadyContext();
+        context.Names["net:owner"] = "Ironclad";
+        context.Names["net:applier"] = "Silent";
+        LanConnectRoomCombatReferenceResolver resolver = new(context, new LanConnectChatLocalizer());
+        LanConnectCombatRun run = new(new LanConnectPowerStateSegment(
+            "MegaCrit.Strength",
+            7,
+            "session-1",
+            "net:owner",
+            "net:applier"));
+
+        LanConnectResolvedCombatReference resolved = resolver.Resolve(run, "en");
+
+        Assert.Equal(LanConnectResolvedCombatReferenceStatus.Resolved, resolved.Status);
+        Assert.Equal("Strength +7", resolved.Label);
+        Assert.Contains("Amount: +7", resolved.Description, StringComparison.Ordinal);
+        Assert.Contains("Owner: Ironclad", resolved.Description, StringComparison.Ordinal);
+        Assert.Contains("Applied by: Silent", resolved.Description, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("net:owner")]
+    [InlineData("net:applier")]
+    public void Missing_or_throwing_live_peer_name_degrades_entire_power_segment(string missingPeer)
+    {
+        FakeContext context = ReadyContext();
+        context.Names["net:owner"] = "Ironclad";
+        context.Names["net:applier"] = "Silent";
+        context.Names.Remove(missingPeer);
+        LanConnectRoomCombatReferenceResolver resolver = new(context, new LanConnectChatLocalizer());
+        LanConnectCombatRun run = new(new LanConnectPowerStateSegment(
+            "MegaCrit.Strength",
+            2,
+            "session-1",
+            "net:owner",
+            "net:applier"));
+
+        Assert.Equal("Unknown power", resolver.Resolve(run, "en").Label);
+
+        context.Names[missingPeer] = "Restored";
+        context.ThrowOnName = true;
+        Assert.Equal("未知能力", resolver.Resolve(run, "zh-CN").Label);
     }
 
     [Fact]
@@ -249,6 +297,8 @@ public sealed class LanConnectRoomCombatReferenceResolverTests
 
         internal bool Throw { get; set; }
 
+        internal bool ThrowOnName { get; set; }
+
         public bool IsCurrentPeer(string playerNetId)
         {
             ThrowIfRequested();
@@ -257,6 +307,10 @@ public sealed class LanConnectRoomCombatReferenceResolverTests
 
         public bool TryGetCurrentPeerName(string playerNetId, out string name)
         {
+            if (ThrowOnName)
+            {
+                throw new InvalidOperationException("name resolution failed");
+            }
             ThrowIfRequested();
             return Names.TryGetValue(playerNetId, out name!);
         }

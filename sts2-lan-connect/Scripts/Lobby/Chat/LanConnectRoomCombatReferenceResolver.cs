@@ -178,10 +178,7 @@ internal sealed class LanConnectRoomCombatReferenceResolver
                 case LanConnectPowerStateSegment power when
                     CanCommit(run) &&
                     _context.TryResolveLocalPower(power.ModelId, out LanConnectLocalPowerReference localPower):
-                    return new LanConnectResolvedCombatReference(
-                        LanConnectResolvedCombatReferenceStatus.Resolved,
-                        localPower.Title,
-                        localPower.Description);
+                    return ResolvePower(power, localPower, locale);
                 case LanConnectPowerStateSegment:
                     return UnknownPower(locale);
                 case LanConnectTargetRefSegment { TargetKind: "player" } target when
@@ -213,6 +210,59 @@ internal sealed class LanConnectRoomCombatReferenceResolver
 
     private bool OptionalPeerIsCurrent(string? playerNetId) =>
         string.IsNullOrEmpty(playerNetId) || _context.IsCurrentPeer(playerNetId);
+
+    private LanConnectResolvedCombatReference ResolvePower(
+        LanConnectPowerStateSegment power,
+        LanConnectLocalPowerReference localPower,
+        string? locale)
+    {
+        string amount = power.Amount > 0
+            ? $"+{power.Amount}"
+            : power.Amount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        List<string> descriptionLines =
+        [
+            localPower.Description,
+            _localizer.Format(locale, "chat.power.amount", amount)
+        ];
+        if (!TryAppendPeerDescription(
+                descriptionLines,
+                power.OwnerPlayerNetId,
+                locale,
+                "chat.power.owner") ||
+            !TryAppendPeerDescription(
+                descriptionLines,
+                power.ApplierPlayerNetId,
+                locale,
+                "chat.power.applier"))
+        {
+            return UnknownPower(locale);
+        }
+
+        return new LanConnectResolvedCombatReference(
+            LanConnectResolvedCombatReferenceStatus.Resolved,
+            _localizer.Format(locale, "chat.power.label", localPower.Title, amount),
+            string.Join('\n', descriptionLines));
+    }
+
+    private bool TryAppendPeerDescription(
+        List<string> descriptionLines,
+        string? playerNetId,
+        string? locale,
+        string labelKey)
+    {
+        if (string.IsNullOrEmpty(playerNetId))
+        {
+            return true;
+        }
+        if (!_context.IsCurrentPeer(playerNetId) ||
+            !_context.TryGetCurrentPeerName(playerNetId, out string name) ||
+            string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+        descriptionLines.Add(_localizer.Format(locale, labelKey, name));
+        return true;
+    }
 
     private static bool IsPrintableAsciiId(string? value) =>
         !string.IsNullOrEmpty(value) &&

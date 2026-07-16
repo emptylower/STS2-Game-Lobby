@@ -8,6 +8,23 @@ namespace Sts2LanConnect.Scripts;
 
 internal readonly record struct LanConnectNamedControlRect(string Name, Rect2 Rect);
 
+internal readonly record struct LanConnectRoomCombatRenderContext(
+    LanConnectRoomCombatReferenceResolver Resolver,
+    string Locale,
+    string ModFingerprint,
+    string RoomSessionId,
+    string PeerTargetDirectoryFingerprint,
+    bool FreshReady)
+{
+    internal string StableFingerprint => string.Join(
+        "\u001f",
+        Locale ?? string.Empty,
+        ModFingerprint ?? string.Empty,
+        RoomSessionId ?? string.Empty,
+        PeerTargetDirectoryFingerprint ?? string.Empty,
+        FreshReady ? "ready" : "not-ready");
+}
+
 internal readonly record struct LanConnectBasicChatPanelTestState(
     int MessageCount,
     int PendingCount,
@@ -65,8 +82,11 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private readonly Func<LanConnectItemResolverContext>? _resolverContextProvider;
     private readonly LanConnectChatLocalizer _localizer;
     private readonly Func<string?> _localeProvider;
+    private Func<LanConnectRoomCombatRenderContext?>? _combatRenderContextProvider;
     private LanConnectItemResolverContext _resolverContext;
     private bool _resolverContextInitialized;
+    private LanConnectRoomCombatRenderContext? _combatRenderContext;
+    private bool _combatRenderContextInitialized;
     private string _observedLocale = string.Empty;
     private LanConnectChatChannelState? _state;
     private Func<string, Task>? _send;
@@ -283,9 +303,11 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             ResetForContextChange();
         }
         bool resolverContextChanged = UpdateResolverContext();
+        bool combatContextChanged = UpdateCombatRenderContext();
         bool localeChanged = UpdateLocalizedLocale();
         if (_state != null &&
-            (resolverContextChanged || localeChanged || _state.Revision != _renderedRevision))
+            (resolverContextChanged || combatContextChanged || localeChanged ||
+             _state.Revision != _renderedRevision))
         {
             Refresh();
         }
@@ -366,6 +388,25 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         if (_draftEditor != null)
         {
             ApplyBoundState();
+        }
+    }
+
+    internal void ConfigureCombatRendering(
+        Func<LanConnectRoomCombatRenderContext?>? contextProvider)
+    {
+        if (Equals(_combatRenderContextProvider, contextProvider))
+        {
+            return;
+        }
+        _combatRenderContextProvider = contextProvider;
+        _combatRenderContext = null;
+        _combatRenderContextInitialized = false;
+        _renderedRevision = -1;
+        _renderedMessageFingerprint = null;
+        UpdateCombatRenderContext();
+        if (_state != null && IsInsideTree())
+        {
+            Refresh();
         }
     }
 
@@ -687,6 +728,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
 
         UpdateResolverContext();
+        UpdateCombatRenderContext();
         UpdateLocalizedLocale();
 
         _draftEditor.Bind(
@@ -918,12 +960,31 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         for (int index = 0; index < segments.Count; index++)
         {
-            Control run = BuildMessageRun(segments[index]);
+            LanConnectChatSegment segment = segments[index];
+            Control run;
+            try
+            {
+                run = BuildMessageRun(segment);
+            }
+            catch
+            {
+                run = BuildMessageRunFallback(segment);
+            }
             run.Name = $"ChatMessageRun{index}";
             runs.AddChild(run);
         }
         return runs;
     }
+
+    private Control BuildMessageRunFallback(LanConnectChatSegment segment) => segment switch
+    {
+        LanConnectPowerStateSegment => UnknownItemChip(Localize("chat.unknown_power")),
+        LanConnectTargetRefSegment => UnknownItemChip(Localize("chat.target_expired")),
+        LanConnectItemRefSegment item => UnknownItemChip(UnknownItemLabel(UnknownResolvedItem(item.ItemType))),
+        LanConnectTextSegment text => CreateLabel(text.Text, 14, TextStrongColor),
+        LanConnectEmojiSegment => UnknownItemChip(Localize("chat.unknown_emoji")),
+        _ => UnknownItemChip(Localize("chat.unknown_content"))
+    };
 
     private Control BuildMessageRun(LanConnectChatSegment segment)
     {
@@ -960,9 +1021,119 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 };
             case LanConnectItemRefSegment item:
                 return BuildItemRun(item);
+            case LanConnectPowerStateSegment power:
+                return BuildCombatRun(new LanConnectCombatRun(power));
+            case LanConnectTargetRefSegment target:
+                return BuildCombatRun(new LanConnectCombatRun(target));
             default:
                 return UnknownItemChip(Localize("chat.unknown_content"));
         }
+    }
+
+    private Control BuildCombatRun(LanConnectCombatRun run)
+    {
+        LanConnectResolvedCombatReference resolved = ResolveCombat(run);
+        if (resolved.Status != LanConnectResolvedCombatReferenceStatus.Resolved ||
+            string.IsNullOrWhiteSpace(resolved.Label))
+        {
+            return CombatFallbackChip(resolved.Label, run);
+        }
+
+        PanelContainer chip = ItemChip(resolved.Label);
+        chip.SetMeta("lan_connect_resolved_combat", true);
+        ApplyResolvedCombatChip(chip, resolved);
+        chip.MouseFilter = MouseFilterEnum.Stop;
+        chip.MouseEntered += () => RefreshCombatChipAtHover(chip, run);
+        return chip;
+    }
+
+    private void RefreshCombatChipAtHover(PanelContainer chip, LanConnectCombatRun run)
+    {
+        if (!GodotObject.IsInstanceValid(chip))
+        {
+            return;
+        }
+        LanConnectResolvedCombatReference resolved = ResolveCombat(run);
+        if (resolved.Status == LanConnectResolvedCombatReferenceStatus.Resolved &&
+            !string.IsNullOrWhiteSpace(resolved.Label))
+        {
+            chip.SetMeta("lan_connect_resolved_combat", true);
+            chip.MouseFilter = MouseFilterEnum.Stop;
+            ApplyResolvedCombatChip(chip, resolved);
+            return;
+        }
+
+        chip.RemoveMeta("lan_connect_resolved_combat");
+        chip.MouseFilter = MouseFilterEnum.Ignore;
+        ApplyCombatChipText(chip, FallbackCombatLabel(resolved.Label, run));
+        chip.AccessibilityName = FallbackCombatLabel(resolved.Label, run);
+        chip.TooltipText = Localize("chat.preview_unavailable");
+    }
+
+    private static void ApplyResolvedCombatChip(
+        PanelContainer chip,
+        LanConnectResolvedCombatReference resolved)
+    {
+        ApplyCombatChipText(chip, resolved.Label);
+        chip.AccessibilityName = string.IsNullOrWhiteSpace(resolved.Description)
+            ? resolved.Label
+            : $"{resolved.Label}. {resolved.Description}";
+        chip.TooltipText = resolved.Description;
+    }
+
+    private static void ApplyCombatChipText(PanelContainer chip, string text)
+    {
+        if (chip.GetChildCount() > 0 && chip.GetChild(0) is Label label)
+        {
+            label.Text = text;
+        }
+    }
+
+    private Control CombatFallbackChip(string? resolvedLabel, LanConnectCombatRun run)
+    {
+        string label = FallbackCombatLabel(resolvedLabel, run);
+        PanelContainer chip = UnknownItemChip(label);
+        chip.SetMeta("lan_connect_combat_fallback", true);
+        return chip;
+    }
+
+    private string FallbackCombatLabel(string? resolvedLabel, LanConnectCombatRun run)
+    {
+        if (!string.IsNullOrWhiteSpace(resolvedLabel))
+        {
+            return resolvedLabel;
+        }
+        return Localize(run.Segment is LanConnectPowerStateSegment
+            ? "chat.unknown_power"
+            : "chat.target_expired");
+    }
+
+    private LanConnectResolvedCombatReference ResolveCombat(LanConnectCombatRun run)
+    {
+        try
+        {
+            LanConnectRoomCombatRenderContext? context = _combatRenderContextProvider?.Invoke();
+            if (context is { FreshReady: true } current)
+            {
+                _combatRenderContext = current;
+                _combatRenderContextInitialized = true;
+                return current.Resolver.Resolve(run, current.Locale);
+            }
+        }
+        catch
+        {
+            // A failed live context affects this segment only.
+        }
+
+        string fallback = Localize(run.Segment is LanConnectPowerStateSegment
+            ? "chat.unknown_power"
+            : "chat.target_expired");
+        return new LanConnectResolvedCombatReference(
+            run.Segment is LanConnectPowerStateSegment
+                ? LanConnectResolvedCombatReferenceStatus.UnknownPower
+                : LanConnectResolvedCombatReferenceStatus.TargetExpired,
+            fallback,
+            fallback);
     }
 
     private Control BuildItemRun(LanConnectItemRefSegment item)
@@ -1367,6 +1538,37 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         if (changed)
         {
             _itemPreview?.Invalidate(LanConnectItemPreviewInvalidation.ContextCleared);
+            _renderedRevision = -1;
+            _renderedMessageFingerprint = null;
+        }
+        return changed;
+    }
+
+    private bool UpdateCombatRenderContext()
+    {
+        LanConnectRoomCombatRenderContext? next;
+        try
+        {
+            next = _combatRenderContextProvider?.Invoke();
+        }
+        catch
+        {
+            next = null;
+        }
+        string previousFingerprint = _combatRenderContext?.StableFingerprint ?? string.Empty;
+        string nextFingerprint = next?.StableFingerprint ?? string.Empty;
+        if (_combatRenderContextInitialized &&
+            string.Equals(previousFingerprint, nextFingerprint, StringComparison.Ordinal))
+        {
+            _combatRenderContext = next;
+            return false;
+        }
+
+        bool changed = _combatRenderContextInitialized;
+        _combatRenderContext = next;
+        _combatRenderContextInitialized = true;
+        if (changed)
+        {
             _renderedRevision = -1;
             _renderedMessageFingerprint = null;
         }
@@ -1794,6 +1996,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         StringBuilder builder = new();
         AppendFingerprint(builder, _resolverContext.Locale);
         AppendFingerprint(builder, _resolverContext.ModFingerprint);
+        AppendFingerprint(builder, _combatRenderContext?.StableFingerprint);
         for (int index = 0; index < messages.Count; index++)
         {
             ServerChatMessageState message = messages[index];

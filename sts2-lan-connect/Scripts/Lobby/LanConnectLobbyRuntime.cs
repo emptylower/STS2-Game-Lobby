@@ -25,6 +25,167 @@ internal readonly record struct LanConnectRoomChatSendDecision(
     string LegacyText,
     string DisabledReason);
 
+internal sealed record LanConnectPreparedPlayerNameSnapshot(
+    IReadOnlyList<LobbyPlayerNameEntry> Entries,
+    IReadOnlySet<ulong> PeerIds);
+
+internal sealed class LanConnectRoomSessionAuthority
+{
+    private readonly object _sync = new();
+    private Action? _afterOptimisticCheckForTests;
+
+    internal Action? AfterOptimisticCheckForTests
+    {
+        set => Interlocked.Exchange(ref _afterOptimisticCheckForTests, value);
+    }
+
+    internal void RunExclusive(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        lock (_sync)
+        {
+            action();
+        }
+    }
+
+    internal bool TryMutate(
+        Func<object?> activeSession,
+        object candidateSession,
+        Func<bool> candidateIsClosing,
+        Action mutation)
+    {
+        ArgumentNullException.ThrowIfNull(activeSession);
+        ArgumentNullException.ThrowIfNull(candidateSession);
+        ArgumentNullException.ThrowIfNull(candidateIsClosing);
+        ArgumentNullException.ThrowIfNull(mutation);
+        if (!IsCurrent(activeSession, candidateSession, candidateIsClosing, requireOpen: true))
+        {
+            return false;
+        }
+
+        Interlocked.Exchange(ref _afterOptimisticCheckForTests, null)?.Invoke();
+        lock (_sync)
+        {
+            if (!IsCurrentUnsafe(activeSession, candidateSession, candidateIsClosing, requireOpen: true))
+            {
+                return false;
+            }
+            mutation();
+            return true;
+        }
+    }
+
+    internal bool TryCleanupCurrent(
+        Func<object?> activeSession,
+        object candidateSession,
+        Action cleanup)
+    {
+        ArgumentNullException.ThrowIfNull(activeSession);
+        ArgumentNullException.ThrowIfNull(candidateSession);
+        ArgumentNullException.ThrowIfNull(cleanup);
+        lock (_sync)
+        {
+            if (!ReferenceEquals(activeSession(), candidateSession))
+            {
+                return false;
+            }
+            cleanup();
+            return true;
+        }
+    }
+
+    internal async Task<bool> SendIfCurrentAsync(
+        Func<object?> activeSession,
+        object candidateSession,
+        Func<bool> candidateIsClosing,
+        Func<Task> send)
+    {
+        Task? sendTask = null;
+        bool started = TryMutate(
+            activeSession,
+            candidateSession,
+            candidateIsClosing,
+            () => sendTask = send());
+        if (!started || sendTask == null)
+        {
+            return false;
+        }
+
+        await sendTask;
+        return IsCurrent(activeSession, candidateSession, candidateIsClosing, requireOpen: true);
+    }
+
+    private bool IsCurrent(
+        Func<object?> activeSession,
+        object candidateSession,
+        Func<bool> candidateIsClosing,
+        bool requireOpen)
+    {
+        lock (_sync)
+        {
+            return IsCurrentUnsafe(activeSession, candidateSession, candidateIsClosing, requireOpen);
+        }
+    }
+
+    private static bool IsCurrentUnsafe(
+        Func<object?> activeSession,
+        object candidateSession,
+        Func<bool> candidateIsClosing,
+        bool requireOpen) =>
+        ReferenceEquals(activeSession(), candidateSession) &&
+        (!requireOpen || !candidateIsClosing());
+}
+
+internal sealed class LanConnectLegacyControlEnvelopeOrchestrator(
+    LanConnectRoomSessionAuthority authority)
+{
+    private readonly LanConnectRoomSessionAuthority _authority = authority ??
+        throw new ArgumentNullException(nameof(authority));
+
+    internal async Task<bool> ApplyHostedPlayerNameSyncAsync(
+        Func<object?> activeSession,
+        object candidateSession,
+        Func<bool> candidateIsClosing,
+        Action upsertDirectory,
+        Func<Task> broadcastSnapshot)
+    {
+        if (!_authority.TryMutate(
+                activeSession,
+                candidateSession,
+                candidateIsClosing,
+                upsertDirectory))
+        {
+            return false;
+        }
+        return await _authority.SendIfCurrentAsync(
+            activeSession,
+            candidateSession,
+            candidateIsClosing,
+            broadcastSnapshot);
+    }
+
+    internal bool ApplyJoinedPlayerNameSnapshot<TSnapshot>(
+        Func<object?> activeSession,
+        object candidateSession,
+        Func<bool> candidateIsClosing,
+        Func<TSnapshot> prepareSnapshot,
+        Action<TSnapshot> replacePeerAndNameDirectory)
+    {
+        TSnapshot snapshot = prepareSnapshot();
+        return _authority.TryMutate(
+            activeSession,
+            candidateSession,
+            candidateIsClosing,
+            () => replacePeerAndNameDirectory(snapshot));
+    }
+
+    internal bool CleanupCurrentGeneration(
+        Func<object?> activeSession,
+        object candidateSession,
+        Action cleanup) =>
+        _authority.TryCleanupCurrent(activeSession, candidateSession, cleanup);
+}
+
 internal sealed partial class LanConnectLobbyRuntime :
     Node,
     ILanConnectRoomLifecycle,
@@ -58,6 +219,16 @@ internal sealed partial class LanConnectLobbyRuntime :
     private bool _itemLinkCaptureRouteOnlyForTests;
     private string? _chatRoomId;
     private string? _chatRoomSessionId;
+    private IReadOnlySet<ulong> _joinedRoomPeerIds = new HashSet<ulong>();
+    private readonly LanConnectProductionItemResolverContextProvider _combatLocalContextProvider = new();
+    private LanConnectRoomCombatReferenceResolver? _combatReferenceResolver;
+    private readonly LanConnectRoomSessionAuthority _roomSessionAuthority = new();
+    private readonly LanConnectLegacyControlEnvelopeOrchestrator _legacyControlEnvelopeOrchestrator;
+
+    internal LanConnectLobbyRuntime()
+    {
+        _legacyControlEnvelopeOrchestrator = new(_roomSessionAuthority);
+    }
 
     internal static LanConnectLobbyRuntime? Instance { get; private set; }
 
@@ -68,7 +239,9 @@ internal sealed partial class LanConnectLobbyRuntime :
     internal bool HasActiveRoomSession => _activeSession != null || _activeClientSession != null;
 
     string ILanConnectRoomCombatContext.ActiveRoomSessionId =>
-        _activeSession?.RoomSessionId ?? _activeClientSession?.RoomSessionId ?? string.Empty;
+        TryGetActiveCombatRoom(out _, out string roomSessionId, out _)
+            ? roomSessionId
+            : string.Empty;
 
     bool ILanConnectRoomCombatContext.IsCurrentPeer(string playerNetId) =>
         IsCurrentRoomPeer(playerNetId);
@@ -84,6 +257,12 @@ internal sealed partial class LanConnectLobbyRuntime :
         }
         try
         {
+            string? directoryName = LanConnectLobbyPlayerNameDirectory.TryGetPlayerName(peerId);
+            if (!string.IsNullOrWhiteSpace(directoryName))
+            {
+                name = directoryName;
+                return true;
+            }
             INetGameService? netService = _activeSession != null
                 ? _activeSession.NetService
                 : _activeClientSession?.NetService;
@@ -117,27 +296,101 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     internal event Action? ChatStateChanged;
 
-    private bool IsCurrentRoomPeer(string playerNetId)
+    internal LanConnectRoomCombatRenderContext GetRoomCombatRenderContext()
     {
+        LanConnectItemResolverContext localContext = _combatLocalContextProvider.Current;
+        bool freshReady = TryGetActiveCombatRoom(
+            out string roomId,
+            out string roomSessionId,
+            out IReadOnlyCollection<ulong> peerIds);
         string activeRoomSessionId = _activeSession?.RoomSessionId ??
             _activeClientSession?.RoomSessionId ?? string.Empty;
-        if (string.IsNullOrEmpty(activeRoomSessionId) ||
-            !string.Equals(activeRoomSessionId, _chatRoomSessionId, StringComparison.Ordinal) ||
-            !ulong.TryParse(playerNetId, out ulong peerId))
+        string peerDirectoryFingerprint = freshReady
+            ? BuildCombatPeerDirectoryFingerprint(roomId, peerIds)
+            : string.Empty;
+        return new LanConnectRoomCombatRenderContext(
+            _combatReferenceResolver ??= new LanConnectRoomCombatReferenceResolver(this),
+            localContext.Locale,
+            localContext.ModFingerprint,
+            string.IsNullOrEmpty(roomSessionId) ? activeRoomSessionId : roomSessionId,
+            peerDirectoryFingerprint,
+            freshReady);
+    }
+
+    private bool IsCurrentRoomPeer(string playerNetId)
+    {
+        if (!ulong.TryParse(playerNetId, out ulong peerId) ||
+            !TryGetActiveCombatRoom(out _, out _, out IReadOnlyCollection<ulong> peerIds))
         {
             return false;
         }
+        return peerIds.Contains(peerId);
+    }
+
+    private bool TryGetActiveCombatRoom(
+        out string roomId,
+        out string roomSessionId,
+        out IReadOnlyCollection<ulong> peerIds)
+    {
+        roomId = string.Empty;
+        roomSessionId = string.Empty;
+        peerIds = Array.Empty<ulong>();
         HostedRoomSession? hosted = _activeSession;
         if (hosted != null && !hosted.IsClosing && hosted.NetService.IsConnected)
         {
-            return peerId == hosted.NetService.NetId || hosted.ConnectedPeerIds.Contains(peerId);
+            roomId = hosted.RoomId;
+            roomSessionId = hosted.RoomSessionId;
+            if (!IsFreshCombatReady(hosted.ControlClient.LatestRoomChatReady, roomId, roomSessionId))
+            {
+                return false;
+            }
+            peerIds = hosted.GetCurrentPeerIds();
+            return true;
         }
         JoinedClientSession? joined = _activeClientSession;
         if (joined == null || joined.IsClosing || !joined.NetService.IsConnected)
         {
             return false;
         }
-        return peerId == joined.NetService.NetId || peerId == joined.NetService.HostNetId;
+        roomId = joined.RoomId;
+        roomSessionId = joined.RoomSessionId;
+        if (!IsFreshCombatReady(joined.ControlClient.LatestRoomChatReady, roomId, roomSessionId))
+        {
+            return false;
+        }
+        peerIds = _joinedRoomPeerIds.ToArray();
+        return true;
+    }
+
+    private static bool IsFreshCombatReady(
+        LanConnectRoomChatReadyEnvelope? ready,
+        string roomId,
+        string roomSessionId) =>
+        ready != null &&
+        MatchesRoomGeneration(ready.RoomId, ready.RoomSessionId, roomId, roomSessionId) &&
+        ready.EnabledFeatures.RichContentVersion == 1 &&
+        ready.EnabledFeatures.CombatRefVersion == 1;
+
+    private static string BuildCombatPeerDirectoryFingerprint(
+        string roomId,
+        IEnumerable<ulong> peerIds)
+    {
+        List<LobbyPlayerNameEntry> names = LanConnectLobbyPlayerNameDirectory.BuildSnapshot(roomId);
+        Dictionary<string, string> namesById = names.ToDictionary(
+            static entry => entry.PlayerNetId,
+            static entry => entry.PlayerName,
+            StringComparer.Ordinal);
+        return string.Join(
+            "\u001e",
+            peerIds
+                .OrderBy(static peerId => peerId)
+                .Select(peerId =>
+                {
+                    string id = peerId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    namesById.TryGetValue(id, out string? name);
+                    string normalizedName = name ?? string.Empty;
+                    return $"{id.Length}:{id}:{normalizedName.Length}:{normalizedName}";
+                }));
     }
 
     private sealed record PendingHostRestart(
@@ -321,10 +574,10 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     public void AttachHostedRoom(NetHostGameService netService, LobbyApiClient apiClient, LobbyCreateRoomResponse registration, LanConnectHostedRoomMetadata metadata)
     {
-        HostedRoomSession? previousHostedSession = _activeSession;
-        JoinedClientSession? previousClientSession = _activeClientSession;
-        string? previousChatRoomId = _chatRoomId;
-        string? previousChatRoomSessionId = _chatRoomSessionId;
+        HostedRoomSession? previousHostedSession = null;
+        JoinedClientSession? previousClientSession = null;
+        string? previousChatRoomId = null;
+        string? previousChatRoomSessionId = null;
 
         HostedRoomSession session = new(netService, apiClient, registration, metadata);
         session.SetEnvelopeHandler(envelope => OnHostedControlEnvelope(session, envelope));
@@ -379,31 +632,42 @@ internal sealed partial class LanConnectLobbyRuntime :
             session.ControlClient,
             GetChatCoordinator(),
             () => ReferenceEquals(_activeSession, session) && !session.IsClosing);
-        _activeSession = session;
-        EnterChatRoom(
-            registration.RoomId,
-            registration.RoomSessionId,
-            previousChatRoomId,
-            previousChatRoomSessionId,
-            () =>
-            {
-                if (previousHostedSession != null)
+        _roomSessionAuthority.RunExclusive(() =>
+        {
+            previousHostedSession = _activeSession;
+            previousClientSession = _activeClientSession;
+            previousChatRoomId = _chatRoomId;
+            previousChatRoomSessionId = _chatRoomSessionId;
+            _activeSession = session;
+            _joinedRoomPeerIds = new HashSet<ulong>();
+            EnterChatRoom(
+                registration.RoomId,
+                registration.RoomSessionId,
+                previousChatRoomId,
+                previousChatRoomSessionId,
+                () =>
                 {
-                    GD.Print($"sts2_lan_connect lobby runtime: replacing existing hosted room {previousHostedSession.RoomId} with {registration.RoomId}");
-                    TaskHelper.RunSafely(CloseHostedRoomAsync(previousHostedSession, suppressErrors: true));
-                }
-                if (previousClientSession != null)
-                {
-                    TaskHelper.RunSafely(CloseJoinedClientAsync(previousClientSession));
-                }
-            });
+                    if (previousHostedSession != null)
+                    {
+                        GD.Print($"sts2_lan_connect lobby runtime: replacing existing hosted room {previousHostedSession.RoomId} with {registration.RoomId}");
+                        TaskHelper.RunSafely(CloseHostedRoomAsync(previousHostedSession, suppressErrors: true));
+                    }
+                    if (previousClientSession != null)
+                    {
+                        TaskHelper.RunSafely(CloseJoinedClientAsync(previousClientSession));
+                    }
+                });
+            LanConnectLobbyPlayerNameDirectory.BeginRoom(registration.RoomId);
+            LanConnectLobbyPlayerNameDirectory.Upsert(
+                registration.RoomId,
+                netService.NetId,
+                LanConnectConfig.GetEffectivePlayerDisplayName());
+        });
         _timeUntilHeartbeat = 0d;
         LanConnectProtocolProfiles.SetActiveProfile(registration.Room.ProtocolProfile, registration.Room.MaxPlayers, "attach_hosted_room");
         GD.Print(
             $"sts2_lan_connect lobby runtime: attached hosted room roomId={registration.RoomId}, roomName='{metadata.RoomName}', source={metadata.PublishSource}, saveKey={(metadata.SaveKey ?? "<none>")}");
         LanConnectSaveDiagnostics.LogNow("attach_hosted_room", $"roomId={registration.RoomId}, publishSource={metadata.PublishSource}, saveKey={(metadata.SaveKey ?? "<none>")}");
-        LanConnectLobbyPlayerNameDirectory.BeginRoom(registration.RoomId);
-        LanConnectLobbyPlayerNameDirectory.Upsert(registration.RoomId, netService.NetId, LanConnectConfig.GetEffectivePlayerDisplayName());
         netService.Disconnected += session.OnDisconnected;
         netService.ClientConnected += session.OnClientCountChanged;
         netService.ClientDisconnected += session.OnClientDisconnected;
@@ -421,9 +685,9 @@ internal sealed partial class LanConnectLobbyRuntime :
             return;
         }
 
-        JoinedClientSession? previousClientSession = _activeClientSession;
-        string? previousChatRoomId = _chatRoomId;
-        string? previousChatRoomSessionId = _chatRoomSessionId;
+        JoinedClientSession? previousClientSession = null;
+        string? previousChatRoomId = null;
+        string? previousChatRoomSessionId = null;
 
         JoinedClientSession session = new(
             netService,
@@ -485,22 +749,32 @@ internal sealed partial class LanConnectLobbyRuntime :
             session.ControlClient,
             GetChatCoordinator(),
             () => ReferenceEquals(_activeClientSession, session) && !session.IsClosing);
-        _activeClientSession = session;
-        EnterChatRoom(
-            joinResponse.Room.RoomId,
-            joinResponse.RoomSessionId,
-            previousChatRoomId,
-            previousChatRoomSessionId,
-            () =>
-            {
-                if (previousClientSession != null)
+        _roomSessionAuthority.RunExclusive(() =>
+        {
+            previousClientSession = _activeClientSession;
+            previousChatRoomId = _chatRoomId;
+            previousChatRoomSessionId = _chatRoomSessionId;
+            _activeClientSession = session;
+            _joinedRoomPeerIds = new HashSet<ulong>();
+            EnterChatRoom(
+                joinResponse.Room.RoomId,
+                joinResponse.RoomSessionId,
+                previousChatRoomId,
+                previousChatRoomSessionId,
+                () =>
                 {
-                    TaskHelper.RunSafely(CloseJoinedClientAsync(previousClientSession));
-                }
-            });
+                    if (previousClientSession != null)
+                    {
+                        TaskHelper.RunSafely(CloseJoinedClientAsync(previousClientSession));
+                    }
+                });
+            LanConnectLobbyPlayerNameDirectory.BeginRoom(joinResponse.Room.RoomId);
+            LanConnectLobbyPlayerNameDirectory.Upsert(
+                joinResponse.Room.RoomId,
+                netService.NetId,
+                LanConnectConfig.GetEffectivePlayerDisplayName());
+        });
         LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, joinResponse.Room.MaxPlayers, "attach_joined_client");
-        LanConnectLobbyPlayerNameDirectory.BeginRoom(joinResponse.Room.RoomId);
-        LanConnectLobbyPlayerNameDirectory.Upsert(joinResponse.Room.RoomId, netService.NetId, LanConnectConfig.GetEffectivePlayerDisplayName());
         netService.Disconnected += session.OnDisconnected;
         TaskHelper.RunSafely(ConnectJoinedClientControlAsync(session));
         _pendingClientReconnect = null;
@@ -643,12 +917,20 @@ internal sealed partial class LanConnectLobbyRuntime :
         bool suppressErrors,
         CancellationToken cancellationToken = default)
     {
-        if (session.IsClosing)
+        bool beginClose = false;
+        _roomSessionAuthority.RunExclusive(() =>
+        {
+            if (!session.IsClosing)
+            {
+                session.IsClosing = true;
+                beginClose = true;
+            }
+        });
+        if (!beginClose)
         {
             return;
         }
 
-        session.IsClosing = true;
         GD.Print($"sts2_lan_connect lobby runtime: deleting hosted room roomId={session.RoomId}");
         try
         {
@@ -670,35 +952,52 @@ internal sealed partial class LanConnectLobbyRuntime :
         finally
         {
             session.Dispose();
-            if (ReferenceEquals(_activeSession, session))
+            bool cleared = _legacyControlEnvelopeOrchestrator.CleanupCurrentGeneration(
+                () => _activeSession,
+                session,
+                () =>
+                {
+                    _activeSession = null;
+                    _joinedRoomPeerIds = new HashSet<ulong>();
+                    LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
+                    LeaveChatRoomIfIdle();
+                    ResetProtocolProfileIfIdle($"close_hosted_room:{session.RoomId}");
+                });
+            if (cleared)
             {
-                _activeSession = null;
                 GD.Print($"sts2_lan_connect lobby runtime: hosted room cleared roomId={session.RoomId}");
             }
-
-            LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
-            LeaveChatRoomIfIdle();
-            ResetProtocolProfileIfIdle($"close_hosted_room:{session.RoomId}");
         }
     }
 
     private Task CloseJoinedClientAsync(JoinedClientSession session)
     {
-        if (session.IsClosing)
+        bool beginClose = false;
+        _roomSessionAuthority.RunExclusive(() =>
+        {
+            if (!session.IsClosing)
+            {
+                session.IsClosing = true;
+                beginClose = true;
+            }
+        });
+        if (!beginClose)
         {
             return Task.CompletedTask;
         }
 
-        session.IsClosing = true;
         session.Dispose();
-        if (ReferenceEquals(_activeClientSession, session))
-        {
-            _activeClientSession = null;
-        }
-
-        LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
-        LeaveChatRoomIfIdle();
-        ResetProtocolProfileIfIdle($"close_joined_client:{session.RoomId}");
+        _legacyControlEnvelopeOrchestrator.CleanupCurrentGeneration(
+            () => _activeClientSession,
+            session,
+            () =>
+            {
+                _activeClientSession = null;
+                _joinedRoomPeerIds = new HashSet<ulong>();
+                LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
+                LeaveChatRoomIfIdle();
+                ResetProtocolProfileIfIdle($"close_joined_client:{session.RoomId}");
+            });
         return Task.CompletedTask;
     }
 
@@ -1233,6 +1532,29 @@ internal sealed partial class LanConnectLobbyRuntime :
         return _activeSession?.ConnectedPeerIds ?? (IReadOnlyCollection<ulong>)Array.Empty<ulong>();
     }
 
+    private void BroadcastHostedPlayerNameSnapshot(HostedRoomSession session)
+    {
+        TaskHelper.RunSafely(SendHostedPlayerNameSnapshotAsync(session));
+    }
+
+    private async Task SendHostedPlayerNameSnapshotAsync(HostedRoomSession session)
+    {
+        try
+        {
+            await _roomSessionAuthority.SendIfCurrentAsync(
+                () => _activeSession,
+                session,
+                () => session.IsClosing || !session.ControlClient.IsConnected,
+                () => session.ControlClient.SendAsync(
+                    BuildPlayerNameSnapshotEnvelope(session.RoomId, session.GetCurrentPeerIds()),
+                    CancellationToken.None));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"sts2_lan_connect failed to refresh player name snapshot for room {session.RoomId}: {ex.Message}");
+        }
+    }
+
     private void OnRunSaved()
     {
         LanConnectSaveDiagnostics.LogNow("save_event:before_persist");
@@ -1267,10 +1589,19 @@ internal sealed partial class LanConnectLobbyRuntime :
                     return;
                 }
 
-                LanConnectLobbyPlayerNameDirectory.Upsert(session.RoomId, playerNetId, envelope.PlayerName);
                 try
                 {
-                    await session.ControlClient.SendAsync(BuildPlayerNameSnapshotEnvelope(session.RoomId), CancellationToken.None);
+                    await _legacyControlEnvelopeOrchestrator.ApplyHostedPlayerNameSyncAsync(
+                        () => _activeSession,
+                        session,
+                        () => session.IsClosing,
+                        () => LanConnectLobbyPlayerNameDirectory.Upsert(
+                            session.RoomId,
+                            playerNetId,
+                            envelope.PlayerName),
+                        () => session.ControlClient.SendAsync(
+                            BuildPlayerNameSnapshotEnvelope(session.RoomId, session.GetCurrentPeerIds()),
+                            CancellationToken.None));
                 }
                 catch (Exception ex)
                 {
@@ -1279,20 +1610,26 @@ internal sealed partial class LanConnectLobbyRuntime :
 
                 break;
             case "room_chat":
-                TryAppendRemoteChatMessage(session.RoomId, envelope);
+                TryMutateHostedControlSession(
+                    session,
+                    () => TryAppendRemoteChatMessage(session.RoomId, envelope));
                 break;
             case "room_settings":
                 if (envelope.ChatEnabled.HasValue)
                 {
-                    ApplyRoomChatEnabled(envelope.ChatEnabled.Value);
+                    TryMutateHostedControlSession(
+                        session,
+                        () => ApplyRoomChatEnabled(envelope.ChatEnabled.Value));
                 }
 
                 break;
             case "player_kicked":
-                AppendChatMessage(session.RoomId, $"system-kick-{Guid.NewGuid():N}",
-                    "系统", null,
-                    $"玩家 {envelope.TargetPlayerName ?? envelope.TargetPlayerNetId} 已被移出房间。",
-                    DateTimeOffset.UtcNow, isLocal: false);
+                TryMutateHostedControlSession(
+                    session,
+                    () => AppendChatMessage(session.RoomId, $"system-kick-{Guid.NewGuid():N}",
+                        "系统", null,
+                        $"玩家 {envelope.TargetPlayerName ?? envelope.TargetPlayerNetId} 已被移出房间。",
+                        DateTimeOffset.UtcNow, isLocal: false));
                 break;
         }
     }
@@ -1302,51 +1639,94 @@ internal sealed partial class LanConnectLobbyRuntime :
         switch (envelope.Type)
         {
             case "player_name_snapshot":
-                LanConnectLobbyPlayerNameDirectory.UpsertSnapshot(session.RoomId, envelope.PlayerNames);
+            {
+                _legacyControlEnvelopeOrchestrator.ApplyJoinedPlayerNameSnapshot(
+                    () => _activeClientSession,
+                    session,
+                    () => session.IsClosing,
+                    () => PrepareJoinedPlayerNameSnapshot(envelope.PlayerNames),
+                    snapshot =>
+                    {
+                        LanConnectLobbyPlayerNameDirectory.ReplaceSnapshot(session.RoomId, snapshot.Entries);
+                        _joinedRoomPeerIds = snapshot.PeerIds;
+                    });
                 break;
+            }
             case "player_name_sync":
                 if (ulong.TryParse(envelope.PlayerNetId, out ulong playerNetId) && !string.IsNullOrWhiteSpace(envelope.PlayerName))
                 {
-                    LanConnectLobbyPlayerNameDirectory.Upsert(session.RoomId, playerNetId, envelope.PlayerName);
+                    TryMutateJoinedControlSession(
+                        session,
+                        () => LanConnectLobbyPlayerNameDirectory.Upsert(
+                            session.RoomId,
+                            playerNetId,
+                            envelope.PlayerName));
                 }
 
                 break;
             case "room_chat":
-                TryAppendRemoteChatMessage(session.RoomId, envelope);
+                TryMutateJoinedControlSession(
+                    session,
+                    () => TryAppendRemoteChatMessage(session.RoomId, envelope));
                 break;
             case "kicked":
-                Log.Info($"sts2_lan_connect: kicked from room {session.RoomId}, reason={envelope.Reason}");
-                // Disconnect ENet FIRST so the game doesn't show "主机离开了游戏"
-                try
-                {
-                    session.NetService.Disconnect(MegaCrit.Sts2.Core.Entities.Multiplayer.NetError.Quit, now: true);
-                }
-                catch (Exception ex)
-                {
-                    Log.Warn($"sts2_lan_connect: kicked ENet disconnect failed: {ex.Message}");
-                }
+                TryMutateJoinedControlSession(
+                    session,
+                    () =>
+                    {
+                        Log.Info($"sts2_lan_connect: kicked from room {session.RoomId}, reason={envelope.Reason}");
+                        // Disconnect ENet FIRST so the game doesn't show "主机离开了游戏"
+                        try
+                        {
+                            session.NetService.Disconnect(MegaCrit.Sts2.Core.Entities.Multiplayer.NetError.Quit, now: true);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warn($"sts2_lan_connect: kicked ENet disconnect failed: {ex.Message}");
+                        }
 
-                TaskHelper.RunSafely(CloseJoinedClientAsync(session));
-                LanConnectPopupUtil.ShowInfo(envelope.Message ?? "你已被房主移出房间。");
+                        TaskHelper.RunSafely(CloseJoinedClientAsync(session));
+                        LanConnectPopupUtil.ShowInfo(envelope.Message ?? "你已被房主移出房间。");
+                    });
                 break;
             case "room_settings":
                 if (envelope.ChatEnabled.HasValue)
                 {
-                    ApplyRoomChatEnabled(envelope.ChatEnabled.Value);
+                    TryMutateJoinedControlSession(
+                        session,
+                        () => ApplyRoomChatEnabled(envelope.ChatEnabled.Value));
                 }
 
                 break;
             case "player_kicked":
-                AppendChatMessage(session.RoomId, $"system-kick-{Guid.NewGuid():N}",
-                    "系统", null,
-                    $"玩家 {envelope.TargetPlayerName ?? envelope.TargetPlayerNetId} 已被移出房间。",
-                    DateTimeOffset.UtcNow, isLocal: false);
+                TryMutateJoinedControlSession(
+                    session,
+                    () => AppendChatMessage(session.RoomId, $"system-kick-{Guid.NewGuid():N}",
+                        "系统", null,
+                        $"玩家 {envelope.TargetPlayerName ?? envelope.TargetPlayerNetId} 已被移出房间。",
+                        DateTimeOffset.UtcNow, isLocal: false));
                 break;
             case "restart_prepare":
-                TaskHelper.RunSafely(HandleRestartPrepareAsync(session, envelope));
+                TryMutateJoinedControlSession(
+                    session,
+                    () => TaskHelper.RunSafely(HandleRestartPrepareAsync(session, envelope)));
                 break;
         }
     }
+
+    private bool TryMutateHostedControlSession(HostedRoomSession session, Action mutation) =>
+        _roomSessionAuthority.TryMutate(
+            () => _activeSession,
+            session,
+            () => session.IsClosing,
+            mutation);
+
+    private bool TryMutateJoinedControlSession(JoinedClientSession session, Action mutation) =>
+        _roomSessionAuthority.TryMutate(
+            () => _activeClientSession,
+            session,
+            () => session.IsClosing,
+            mutation);
 
     private async Task TryStartPendingHostRestartAsync(NMultiplayerSubmenu submenu, PendingHostRestart pending)
     {
@@ -2007,15 +2387,75 @@ internal sealed partial class LanConnectLobbyRuntime :
         };
     }
 
-    private static LobbyControlEnvelope BuildPlayerNameSnapshotEnvelope(string roomId)
+    internal static LobbyControlEnvelope BuildPlayerNameSnapshotEnvelope(
+        string roomId,
+        IEnumerable<ulong> currentPeerIds)
     {
         return new LobbyControlEnvelope
         {
             Type = "player_name_snapshot",
             RoomId = roomId,
             Role = "host",
-            PlayerNames = LanConnectLobbyPlayerNameDirectory.BuildSnapshot(roomId)
+            PlayerNames = FilterCurrentRoomPeerNames(
+                LanConnectLobbyPlayerNameDirectory.BuildSnapshot(roomId),
+                currentPeerIds)
         };
+    }
+
+    internal static List<LobbyPlayerNameEntry> FilterCurrentRoomPeerNames(
+        IEnumerable<LobbyPlayerNameEntry> entries,
+        IEnumerable<ulong> currentPeerIds)
+    {
+        HashSet<string> allowed = currentPeerIds
+            .Select(static peerId => peerId.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            .ToHashSet(StringComparer.Ordinal);
+        return entries
+            .Where(entry => allowed.Contains(entry.PlayerNetId))
+            .OrderBy(static entry => entry.PlayerNetId, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    internal static HashSet<ulong> NormalizeRoomPeerDirectory(
+        IEnumerable<LobbyPlayerNameEntry>? entries)
+    {
+        HashSet<ulong> peers = [];
+        if (entries == null)
+        {
+            return peers;
+        }
+        foreach (LobbyPlayerNameEntry entry in entries)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.PlayerName) &&
+                ulong.TryParse(
+                    entry.PlayerNetId,
+                    System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out ulong peerId))
+            {
+                peers.Add(peerId);
+            }
+        }
+        return peers;
+    }
+
+    internal static LanConnectPreparedPlayerNameSnapshot PrepareJoinedPlayerNameSnapshot(
+        IEnumerable<LobbyPlayerNameEntry?>? entries)
+    {
+        List<LobbyPlayerNameEntry> snapshot = [];
+        foreach (LobbyPlayerNameEntry? entry in entries ?? Array.Empty<LobbyPlayerNameEntry>())
+        {
+            if (entry == null)
+            {
+                continue;
+            }
+            snapshot.Add(new LobbyPlayerNameEntry
+            {
+                PlayerNetId = entry.PlayerNetId,
+                PlayerName = entry.PlayerName
+            });
+        }
+        HashSet<ulong> peers = NormalizeRoomPeerDirectory(snapshot);
+        return new LanConnectPreparedPlayerNameSnapshot(snapshot, peers);
     }
 
     private sealed class HostedRoomSession
@@ -2092,6 +2532,15 @@ internal sealed partial class LanConnectLobbyRuntime :
             return connected;
         }
 
+        public IReadOnlyCollection<ulong> GetCurrentPeerIds()
+        {
+            HashSet<ulong> current = new(_connectedPeerIds)
+            {
+                NetService.NetId
+            };
+            return current;
+        }
+
         public void OnDisconnected(NetErrorInfo _)
         {
             if (IsClosing)
@@ -2112,6 +2561,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             if (LanConnectLobbyRuntime.Instance != null)
             {
                 LanConnectLobbyRuntime.Instance._timeUntilHeartbeat = 0d;
+                LanConnectLobbyRuntime.Instance.BroadcastHostedPlayerNameSnapshot(this);
             }
         }
 
@@ -2121,6 +2571,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             if (LanConnectLobbyRuntime.Instance != null)
             {
                 LanConnectLobbyRuntime.Instance._timeUntilHeartbeat = 0d;
+                LanConnectLobbyRuntime.Instance.BroadcastHostedPlayerNameSnapshot(this);
             }
         }
 

@@ -100,6 +100,38 @@ internal static class LanConnectLobbyPlayerNameDirectory
         LanConnectRemoteLobbyPlayerPatches.QueueRefreshAll();
     }
 
+    public static void ReplaceSnapshot(string roomId, IEnumerable<LobbyPlayerNameEntry>? entries)
+    {
+        if (string.IsNullOrWhiteSpace(roomId))
+        {
+            return;
+        }
+
+        Dictionary<ulong, string> replacement = new();
+        foreach (LobbyPlayerNameEntry entry in entries ?? Array.Empty<LobbyPlayerNameEntry>())
+        {
+            if (!TryParseNetId(entry.PlayerNetId, out ulong netId) ||
+                string.IsNullOrWhiteSpace(entry.PlayerName))
+            {
+                continue;
+            }
+
+            replacement[netId] = LanConnectConfig.SanitizePlayerDisplayName(entry.PlayerName);
+        }
+        lock (Sync)
+        {
+            _activeRoomId = roomId;
+            ActiveRoomNames.Clear();
+            foreach ((ulong netId, string playerName) in replacement)
+            {
+                ActiveRoomNames[netId] = playerName;
+            }
+            ApplyUnsafe();
+        }
+
+        LanConnectRemoteLobbyPlayerPatches.QueueRefreshAll();
+    }
+
     public static List<LobbyPlayerNameEntry> BuildSnapshot(string roomId)
     {
         lock (Sync)

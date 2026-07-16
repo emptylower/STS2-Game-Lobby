@@ -56,6 +56,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private LanConnectDualChatState? _testChat;
     private Func<LanConnectChatChannel, string, Task>? _testSend;
     private Func<LanConnectChatChannel, string, Task>? _testRetry;
+    private Func<LanConnectRoomCombatRenderContext?>? _testCombatContextProvider;
+    private LanConnectLobbyRuntime? _combatContextRuntime;
     private bool _pinned;
     private long _testMessageId;
     private bool _dragPointerDown;
@@ -276,6 +278,15 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         RefreshFromSource();
     }
 
+    internal void ConfigureCombatRenderingForTests(
+        Func<LanConnectRoomCombatRenderContext?> contextProvider)
+    {
+        _testCombatContextProvider = contextProvider ??
+            throw new ArgumentNullException(nameof(contextProvider));
+        _combatContextRuntime = null;
+        _chatPanel?.ConfigureCombatRendering(_testCombatContextProvider);
+    }
+
     internal async Task OpenForTests()
     {
         OpenPanel();
@@ -438,11 +449,13 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             CustomMinimumSize = new Vector2(0, 390)
         };
         body.AddChild(_chatPanel);
+        RefreshCombatRenderingProvider();
         ApplyViewportBounds();
     }
 
     private void RefreshFromSource()
     {
+        RefreshCombatRenderingProvider();
         LanConnectDualChatState? chat = ResolveChat();
         bool hasRoom = chat?.ActiveRoomId != null;
         if (_root != null)
@@ -637,6 +650,34 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         BindSelectedChannel(chat);
         RefreshTabStyles(chat);
         RefreshBadges(chat);
+    }
+
+    private void RefreshCombatRenderingProvider()
+    {
+        if (_chatPanel == null)
+        {
+            return;
+        }
+        if (_testCombatContextProvider != null)
+        {
+            _chatPanel.ConfigureCombatRendering(_testCombatContextProvider);
+            return;
+        }
+
+        LanConnectLobbyRuntime? runtime = LanConnectLobbyRuntime.Instance;
+        if (ReferenceEquals(_combatContextRuntime, runtime))
+        {
+            return;
+        }
+        _combatContextRuntime = runtime;
+        if (runtime == null)
+        {
+            _chatPanel.ConfigureCombatRendering(null);
+        }
+        else
+        {
+            _chatPanel.ConfigureCombatRendering(() => runtime.GetRoomCombatRenderContext());
+        }
     }
 
     private Task SendAsync(LanConnectChatChannel channel, string text)
