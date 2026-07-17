@@ -445,15 +445,17 @@ Gate 证据（2026-07-17）：客户端 manifest/assembly/file/informational ver
 
 ### Phase 8：测试服务器、实机验收与正式发布
 
-- [ ] 使用候选 service 包部署 `ssh sub2api-tencent` 的 `/opt/sts2-lobby-test`。
-- [ ] 保留 `.env`、状态文件和 0.5.0 回滚包；测试节点显式开启 `MOD_SYNC_ENABLED=true`。
-- [ ] 验证 `/health`、`/probe`、预检隐私、房间、控制 WS、聊天和 UDP relay。
+- [x] 使用候选 service 包部署 `ssh sub2api-tencent` 的 `/opt/sts2-lobby-test`。
+- [x] 保留 `.env`、状态文件和 0.5.0 回滚包；测试节点显式开启 `MOD_SYNC_ENABLED=true`。
+- [x] 验证 `/health`、`/probe`、预检隐私、房间、控制 WS、聊天和 UDP relay。
 - [ ] 两台 Steam 客户端执行验收矩阵。
 - [ ] Android 执行 unsupported/manual fallback 验收。
 - [ ] 用户确认实测后才合并 `main`、创建 `v0.5.1` tag、上传两个新资产。
 - [ ] 不覆盖 `v0.5.0` Release。
 
 Gate：远程 main、tag、Release 资产和本地包 SHA-256 一致；测试服务重启后仍健康。
+
+Phase 8 部分证据（2026-07-17）：候选 service 已原子部署到 `/opt/sts2-lobby-test`，保留原 `.env`、完整旧 live tree、权限收紧的 `0.5.0` 回滚包和候选归档；服务重启后 `/health` 健康，`/probe` 返回 `modSyncProtocolVersion=1` 与 `modSyncEnabled=true`。真实测试节点 smoke 覆盖 HTTP、隐私、密码、预检、游戏版本硬拦截、控制 WebSocket、服务器/房间聊天和 UDP relay，临时房间与脚本均已清理，日志未泄露 MOD 名、ID、密码或 token。0.109.0 首轮实机发现 `ModManifest.dependencies=null` 被误判为缺失成员，并确认真实 Workshop 字段为 `workshopId`；修复提交 `3f12eee` 增加真实游戏程序集契约测试，新的确定性客户端候选 SHA-256 为 `a68b1a355bee142e7608013cf6bfa193599b655a6c51b169f1080e27b5d5c5d1`，两次构建目录 `diff -qr` 为空，`verify-release.sh --artifacts-only` 通过。当前 gate 仍未通过：受限执行环境禁止 VSTest/GdUnit loopback、SteamCMD IPC、正式游戏目录和用户配置写入；本机也没有 0.107.1/0.108.0 内容缓存、第二台 Steam 客户端或 Android 设备，因此不得合并 main、创建 tag 或发布 Release。
 
 ## 9. 测试矩阵
 
