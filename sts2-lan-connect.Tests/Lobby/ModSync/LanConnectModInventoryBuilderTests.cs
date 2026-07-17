@@ -159,16 +159,30 @@ public sealed class LanConnectModInventoryBuilderTests
     }
 
     [Fact]
-    public void Runtime_metadata_matches_the_0_109_0_inventory_contract()
+    public void Runtime_metadata_matches_the_supported_version_inventory_contract()
     {
-        using FileStream stream = File.OpenRead(ResolveGameAssemblyPath());
+        string assemblyPath = ResolveGameAssemblyPath();
+        using FileStream stream = File.OpenRead(assemblyPath);
         using PEReader peReader = new(stream);
         MetadataReader metadata = peReader.GetMetadataReader();
 
         AssertFields(metadata, "MegaCrit.Sts2.Core.Modding", "ModManifest",
             "id", "version", "affectsGameplay", "dependencies");
         AssertFields(metadata, "MegaCrit.Sts2.Core.Modding", "Mod",
-            "manifest", "state", "modSource", "path", "workshopId");
+            "manifest", "state", "modSource", "path");
+
+        HashSet<string> modFields = ReadFields(metadata, "MegaCrit.Sts2.Core.Modding", "Mod");
+        switch (ResolveGameVersion(assemblyPath))
+        {
+            case "v0.107.1":
+                Assert.DoesNotContain("workshopId", modFields);
+                break;
+            case "v0.109.0":
+                Assert.Contains("workshopId", modFields);
+                break;
+            default:
+                throw new InvalidOperationException("The runtime metadata contract has not been locked for this game version.");
+        }
     }
 
     [Fact]
@@ -360,24 +374,49 @@ public sealed class LanConnectModInventoryBuilderTests
         return Path.Combine(root, "SlayTheSpire2.app", "Contents", "Resources", architecture, "sts2.dll");
     }
 
+    private static string ResolveGameVersion(string assemblyPath)
+    {
+        string dataDirectory = Path.GetDirectoryName(assemblyPath)
+            ?? throw new InvalidOperationException("The game assembly path has no parent directory.");
+        string[] candidates =
+        [
+            Path.Combine(dataDirectory, "release_info.json"),
+            Path.GetFullPath(Path.Combine(dataDirectory, "..", "release_info.json")),
+            Path.GetFullPath(Path.Combine(dataDirectory, "..", "..", "release_info.json"))
+        ];
+        string releaseInfoPath = candidates.FirstOrDefault(File.Exists)
+            ?? throw new FileNotFoundException("Could not locate release_info.json for the game assembly.");
+        using JsonDocument releaseInfo = JsonDocument.Parse(File.ReadAllText(releaseInfoPath));
+        return releaseInfo.RootElement.GetProperty("version").GetString()
+            ?? throw new InvalidDataException("release_info.json has no version value.");
+    }
+
     private static void AssertFields(
         MetadataReader metadata,
         string typeNamespace,
         string typeName,
         params string[] expectedFields)
     {
-        TypeDefinition definition = metadata.TypeDefinitions
-            .Select(metadata.GetTypeDefinition)
-            .Single(type => metadata.GetString(type.Namespace) == typeNamespace
-                && metadata.GetString(type.Name) == typeName);
-        HashSet<string> fields = definition.GetFields()
-            .Select(handle => metadata.GetString(metadata.GetFieldDefinition(handle).Name))
-            .ToHashSet(StringComparer.Ordinal);
+        HashSet<string> fields = ReadFields(metadata, typeNamespace, typeName);
 
         foreach (string expected in expectedFields)
         {
             Assert.Contains(expected, fields);
         }
+    }
+
+    private static HashSet<string> ReadFields(
+        MetadataReader metadata,
+        string typeNamespace,
+        string typeName)
+    {
+        TypeDefinition definition = metadata.TypeDefinitions
+            .Select(metadata.GetTypeDefinition)
+            .Single(type => metadata.GetString(type.Namespace) == typeNamespace
+                && metadata.GetString(type.Name) == typeName);
+        return definition.GetFields()
+            .Select(handle => metadata.GetString(metadata.GetFieldDefinition(handle).Name))
+            .ToHashSet(StringComparer.Ordinal);
     }
 
     private sealed class SharedFixture
