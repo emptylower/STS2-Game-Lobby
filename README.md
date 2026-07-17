@@ -47,6 +47,7 @@
 - 房间聊天升级为富聊天，支持 Emoji、卡牌 / 遗物 / 药水引用，以及安全降级的战斗状态引用
 - 大厅频道使用与主界面一致的浅色侧栏，房间内聊天继续使用深色浮层；输入区与 Emoji 面板完成实机布局和纹理修复
 - 同一个 v0.5.0 客户端包兼容游戏 `0.107.1`、`0.108.0` 与 `0.109.0`，并修复 Android 输入时系统键盘反复重启的问题
+- 同一房间的所有玩家必须使用完全相同的游戏版本；版本不同会在加入阶段直接提示，非联机相关 MOD 差异仍可按 relaxed 策略兼容
 - lobby-service 新增聊天 ticket、限流、历史缓冲、房间 generation 隔离与 `/server-admin` 六项治理开关
 - v0.5.0 客户端应配套 v0.5.0 lobby-service 使用；旧客户端仅保留 legacy 文本与房间控制兼容，不获得完整富聊天能力
 
@@ -214,6 +215,7 @@ Each `lobby-service` node advertises itself to peers via the built-in peer-annou
 - Upgrades room chat with Emoji, card/relic/potion references, and safely degraded combat references.
 - Gives lobby chat a native light sidebar while retaining the dark in-room overlay, with corrected composer sizing and Emoji rasterization.
 - Supports game versions `0.107.1`, `0.108.0`, and `0.109.0` with the same v0.5.0 client package and prevents Android IME restarts while editing rich drafts.
+- Requires every player in a room to use the exact same game version; mismatches now fail with an actionable join message while relaxed MOD compatibility remains available.
 - Adds chat tickets, rate limits, bounded history, room-generation isolation, and six persisted governance controls to `lobby-service`.
 - Pair the v0.5.0 client with the v0.5.0 lobby service for the complete feature set. Older clients retain legacy text/control compatibility only.
 

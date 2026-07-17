@@ -225,17 +225,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         }
 
         string localVersion = LanConnectBuildInfo.GetGameVersion();
-        if (!string.Equals(initialMessage.version, localVersion, StringComparison.Ordinal))
-        {
-            if (!_relaxedCompatibility)
-            {
-                throw new ClientConnectionFailedException(
-                    $"游戏版本不匹配。房间版本：{initialMessage.version}；当前客户端版本：{localVersion}。",
-                    new NetErrorInfo(ConnectionFailureReason.VersionMismatch));
-            }
-
-            _logger.Warn($"Ignoring game version mismatch because relaxed profile is enabled. Host={initialMessage.version} Local={localVersion}");
-        }
+        ValidateGameVersion(initialMessage.version, localVersion);
 
         List<string> localMods = LanConnectBuildInfo.GetModList();
         List<string> hostMods = GetGameplayAffectingMods(initialMessage);
@@ -288,6 +278,26 @@ internal sealed class LanConnectLobbyManagedJoinFlow
                 $"房主报告了连接兼容性错误：{declaredCompatibilityFailure.Value}",
                 new NetErrorInfo(declaredCompatibilityFailure.Value));
         }
+    }
+
+    internal static void ValidateGameVersion(string hostVersion, string localVersion)
+    {
+        string? mismatchMessage = GetGameVersionMismatchMessage(hostVersion, localVersion);
+        if (mismatchMessage == null)
+        {
+            return;
+        }
+
+        throw new ClientConnectionFailedException(
+            mismatchMessage,
+            new NetErrorInfo(ConnectionFailureReason.VersionMismatch));
+    }
+
+    internal static string? GetGameVersionMismatchMessage(string hostVersion, string localVersion)
+    {
+        return string.Equals(hostVersion, localVersion, StringComparison.Ordinal)
+            ? null
+            : $"游戏版本不匹配，无法加入房间。房主版本：{hostVersion}；当前版本：{localVersion}。请让所有玩家使用完全相同的游戏版本后重试。";
     }
 
     private static List<string> GetGameplayAffectingMods(InitialGameInfoMessage initialMessage)
