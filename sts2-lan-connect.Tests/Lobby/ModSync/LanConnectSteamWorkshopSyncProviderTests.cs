@@ -1,9 +1,27 @@
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using Sts2LanConnect.Scripts;
 
 namespace Sts2LanConnect.Tests.Lobby.ModSync;
 
 public sealed class LanConnectSteamWorkshopSyncProviderTests
 {
+    [Fact]
+    public void Native_provider_has_no_AutoModSubscriber_runtime_dependency()
+    {
+        using var assemblyStream = File.OpenRead(typeof(LanConnectSteamWorkshopSyncProvider).Assembly.Location);
+        using var peReader = new PEReader(assemblyStream);
+        MetadataReader metadata = peReader.GetMetadataReader();
+
+        Assert.DoesNotContain(
+            metadata.AssemblyReferences.Select(handle => metadata.GetAssemblyReference(handle)),
+            reference => metadata.GetString(reference.Name).Contains("AutoModSubscriber", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            metadata.TypeDefinitions.Select(handle => metadata.GetTypeDefinition(handle)),
+            type => metadata.GetString(type.Name).Contains("AutoModSubscriber", StringComparison.OrdinalIgnoreCase)
+                || metadata.GetString(type.Namespace).Contains("AutoModSubscriber", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public async Task Job_transitions_pending_validating_subscribing_downloading_waiting_install_installed()
     {

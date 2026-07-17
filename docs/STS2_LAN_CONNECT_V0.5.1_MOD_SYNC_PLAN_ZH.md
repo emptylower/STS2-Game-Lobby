@@ -417,13 +417,15 @@ Gate 证据（2026-07-17）：Phase 5 focused xUnit 33/33；完整 xUnit 662 通
 
 ### Phase 6：AMS 可选适配与安全审计
 
-- [ ] 抽象 provider 后再决定是否增加 AMS reflection adapter。
-- [ ] 反射必须按完整签名、返回类型和参数可赋值性解析。
-- [ ] AMS 缺失、旧版、字段已被其他 MOD 占用时不得覆盖或崩溃。
-- [ ] 完成 payload fuzz、Workshop ID 欺骗、重复 dependency、超大清单和并发预检测试。
-- [ ] 在 `THIRD_PARTY_NOTICES` 和 release notes 中署名 PR #38 的设计贡献。
+- [x] 抽象 provider 后完成决策：v0.5.1 不增加 AMS reflection adapter。
+- [x] 审计完整反射签名、返回类型和参数可赋值性；AMS host sidecar map 不满足本机权威 inventory 语义，因此没有反射代码进入产品。
+- [x] 生产代码不读取或写入 AMS handler，AMS 缺失、旧版或 handler 已被其他 MOD 占用均不影响原生 provider。
+- [x] 完成 payload fuzz、Workshop ID 欺骗、重复 dependency、超大清单和并发预检测试。
+- [x] 在 `THIRD_PARTY_NOTICES` 和 release notes 中署名 PR #38 的设计贡献。
 
 Gate：AMS 不是 v0.5.1 发布阻塞项；原生 provider 独立完成所有核心能力。
+
+Gate 证据（2026-07-17）：审计 AutoModSubscriber `595356c` 的公开接口，确认 `ModWorkshopMap.TryGet(string, out ulong)` 是客户端接收房主 initial info 后填充的 host sidecar map，不是本机 MOD 清单的权威来源；产品程序集无 AutoModSubscriber 引用或类型，产品源码不注册或覆盖 `ExternalDialogHandler`。Phase 6 focused xUnit 39/39、服务端安全 focused 23/23；完整 xUnit 663 通过、1 个既有双客户端原型跳过；lobby-service check 与 427/427 测试通过；完整 GdUnit TRX 224/224；客户端正式构建 0 警告。新增 576 轮受控恶意 payload 校验、Workshop ID Unicode/空白欺骗、24 路并发预检确定性与无 ticket/房间变更断言；既有测试继续覆盖 dependency 去重/环、65 项超限与 payload byte 上限。
 
 建议提交：`fix(mod-sync): harden provider boundaries and untrusted metadata`
 

@@ -95,7 +95,19 @@ test("validator rejects id version dependency and payload overflow", () => {
 });
 
 test("validator rejects invalid workshop ids and preserves decimal strings", () => {
-  for (const workshopFileId of ["", "0", "00", "-1", "+1", "1.0", "abc", "1".repeat(21)]) {
+  for (const workshopFileId of [
+    "",
+    "0",
+    "00",
+    "-1",
+    "+1",
+    " 1",
+    "1 ",
+    "１",
+    "1.0",
+    "abc",
+    "1".repeat(21),
+  ]) {
     assert.throws(
       () => validateModInventory([descriptor({ source: "steam_workshop", workshopFileId })]),
       hasValidationCode,
@@ -109,6 +121,37 @@ test("validator rejects invalid workshop ids and preserves decimal strings", () 
     () => validateModInventory([descriptor({ source: "steam_workshop", workshopFileId: 3747497501 as unknown as string })]),
     hasValidationCode,
   );
+});
+
+test("validator fuzz rejects untrusted payload shapes with controlled errors", () => {
+  const malformed: unknown[] = [
+    null,
+    undefined,
+    true,
+    1,
+    "[]",
+    {},
+    [null],
+    [new Date()],
+    [descriptor({ id: "bad\u0000id" })],
+    [descriptor({ version: "bad\u0085version" })],
+    [descriptor({ role: "GAMEPLAY" as "gameplay" })],
+    [descriptor({ source: "https://invalid.example/mod.zip" as "unknown" })],
+    [descriptor({ workshopFileId: "1e3", source: "steam_workshop" })],
+    [{ ...descriptor(), dependencies: { length: 0 } }],
+    [{ ...descriptor(), nested: { downloadUrl: "https://invalid.example/private.zip" } }],
+    Array.from({ length: 65 }, (_, index) => descriptor({ id: `oversize.${index}` })),
+    [descriptor({ dependencies: Array.from({ length: 17 }, (_, index) => `dep.${index}`) })],
+  ];
+  const nullPrototype = Object.create(null) as Record<string, unknown>;
+  Object.assign(nullPrototype, descriptor({ id: "null.prototype" }), { downloadUrl: "file:///tmp/mod.dll" });
+  malformed.push([nullPrototype]);
+
+  for (let round = 0; round < 32; round += 1) {
+    for (const payload of malformed) {
+      assert.throws(() => validateModInventory(payload), hasValidationCode);
+    }
+  }
 });
 
 test("canonical JSON uses cross-runtime property order and UTF-8 text", () => {

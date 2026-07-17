@@ -31,3 +31,14 @@ Copyright (c) 2021, TakWolf (https://takwolf.com).
 The fixed zh_cn screenshot-test font is distributed under the SIL Open Font
 License, Version 1.1. Its complete license is stored at
 sts2-lan-connect.GdUnitTests/TestAssets/Fonts/ARK_PIXEL_FONT_OFL.txt.
+
+v0.5.1 MOD Synchronization Design Contribution
+-----------------------------------------------
+The player-facing AutoModSubscriber integration concept and Workshop mapping
+fallback were informed by STS2-Game-Lobby pull request #38 from Jianbao233
+(@Bilibili我叫煎包):
+https://github.com/emptylower/STS2-Game-Lobby/pull/38
+
+The replacement implementation was written independently. It does not copy the
+pull request's source code, bundle AutoModSubscriber, take over its external UI
+handler, or create a runtime dependency on AutoModSubscriber.

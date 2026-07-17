@@ -212,10 +212,9 @@ Canonical 规则：descriptor 按清理后的 `id` 做 Ordinal 升序；dependen
 
 ### 4.7 安全、兼容与发布（Phase 6-7）
 
-- `Ams_adapter_resolves_TryGet_string_out_ulong_by_full_signature`
-- `Ams_adapter_rejects_wrong_return_parameter_and_assignability_shapes`
-- `Ams_adapter_does_not_overwrite_an_existing_external_handler`
-- `Ams_missing_or_old_versions_do_not_break_native_provider`
+- `Ams_decision_audit_rejects_host_sidecar_map_as_local_preflight_inventory_source`
+- `Native_provider_has_no_AutoModSubscriber_runtime_dependency`
+- `Production_does_not_register_or_overwrite_AMS_ExternalDialogHandler`
 - `Fuzz_validator_never_leaks_inventory_or_crashes_on_untrusted_json`
 - `Concurrent_preflights_do_not_mutate_room_or_issue_tickets`
 - `Package_contains_no_game_dll_steamworks_dll_or_unapproved_binary`

@@ -306,3 +306,33 @@ test("preflight logs only counts and hash without inventory password or tokens",
   assert.match(output, /missingWorkshop=1/);
   assert.doesNotMatch(output, /host\.workshop|shared\.dependency|3747497501|room-secret/);
 });
+
+test("concurrent preflights are deterministic and never mutate rooms or issue tickets", async () => {
+  const config = testConfig({
+    port: 0,
+    createJoinRateLimitMaxRequests: 100,
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  try {
+    const created = await createRoom(address.port);
+    const beforeResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`);
+    const before = await beforeResponse.json() as Array<Record<string, unknown>>;
+
+    const responses = await Promise.all(Array.from({ length: 24 }, () =>
+      preflight(address.port, created.roomId)));
+    assert.deepEqual(responses.map((response) => response.status), Array(24).fill(200));
+    const bodies = await Promise.all(responses.map((response) => response.json() as Promise<Record<string, unknown>>));
+    const canonical = JSON.stringify(bodies[0]);
+    assert.ok(bodies.every((body) => JSON.stringify(body) === canonical));
+    assert.ok(bodies.every((body) => !Object.hasOwn(body, "ticketId") && !Object.hasOwn(body, "hostToken")));
+
+    const afterResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`);
+    const after = await afterResponse.json() as Array<Record<string, unknown>>;
+    assert.deepEqual(after, before);
+    assert.equal(Object.hasOwn(after[0]!, "hostModInventory"), false);
+  } finally {
+    await service.close();
+    cleanup(config);
+  }
+});
