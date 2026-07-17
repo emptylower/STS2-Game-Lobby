@@ -102,6 +102,39 @@ public sealed class LanConnectRichDraftEditorTests
     }
 
     [TestCase]
+    public async Task Consecutive_native_text_edits_keep_the_same_focused_control()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText("ab");
+        LanConnectRichDraftEditor editor = AutoFree(new LanConnectRichDraftEditor())!;
+        editor.Bind(draft, new(1, 1, 1, 0), "Ironclad", AccessibleLabel);
+        using ISceneRunner runner = ISceneRunner.Load(editor, autoFree: true);
+        await runner.AwaitIdleFrame();
+        TextEdit input = AssertTextRun(editor, "ab");
+        input.GrabFocus();
+        input.SetCaretColumn(2);
+
+        input.Text = "abc";
+        input.EmitSignal(TextEdit.SignalName.TextChanged);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(editor.FocusTarget).IsSame(input);
+        AssertThat(editor.GetViewport().GuiGetFocusOwner()).IsSame(input);
+        AssertThat(input.IsQueuedForDeletion()).IsFalse();
+        AssertThat(draft.ToCompatibilityText()).IsEqual("abc");
+
+        input.Text = "ab";
+        input.EmitSignal(TextEdit.SignalName.TextChanged);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(editor.FocusTarget).IsSame(input);
+        AssertThat(editor.GetViewport().GuiGetFocusOwner()).IsSame(input);
+        AssertThat(input.IsQueuedForDeletion()).IsFalse();
+        AssertThat(draft.ToCompatibilityText()).IsEqual("ab");
+    }
+
+    [TestCase]
     public async Task Boundary_backspace_removes_one_whole_entity_and_merges_text_runs()
     {
         LanConnectRichDraft draft = LanConnectRichDraft.FromRuns(

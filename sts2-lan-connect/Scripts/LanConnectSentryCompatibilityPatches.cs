@@ -27,7 +27,7 @@ internal static class LanConnectSentryCompatibilityPatches
         }
 
         TryPatch(
-            AccessTools.Method(typeof(SentryService), nameof(SentryService.DisableGdExtensionIfModded)),
+            AccessTools.Method(typeof(SentryService), "DisableGdExtensionIfModded"),
             nameof(DisableGdExtensionIfModdedPrefix),
             "SentryService.DisableGdExtensionIfModded");
 

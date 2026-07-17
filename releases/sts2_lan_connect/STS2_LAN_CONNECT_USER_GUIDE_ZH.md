@@ -15,6 +15,8 @@
 - 大厅右侧新增 `频道聊天`，连接当前大厅服务器后即可收发消息，不需要先加入房间
 - 频道聊天历史只保存在当前服务器进程内，服务重启后清空，也不会同步到其他大厅节点
 - 房间聊天支持 Emoji、卡牌 / 遗物 / 药水引用，以及安全降级的战斗状态引用；旧客户端只能看到兼容文本
+- 同一个 v0.5.0 客户端包兼容游戏 `0.107.1`、`0.108.0` 与 `0.109.0`
+- Android 富聊天输入不会在每次输入或删除后重启系统键盘
 - 完整聊天能力要求客户端和大厅服务都升级到 `0.5.0`
 
 ## 进入大厅
@@ -207,6 +209,8 @@
 - The lobby sidebar now includes server-channel chat for the currently selected lobby node; joining a room is not required.
 - Server-channel history is node-local process memory, disappears on restart, and is not replicated to other lobby nodes.
 - Room chat supports Emoji, card/relic/potion references, and safely degraded combat references. Older clients receive compatibility text only.
+- The same v0.5.0 client package supports game versions `0.107.1`, `0.108.0`, and `0.109.0`.
+- Rich-chat edits on Android no longer restart the system keyboard after each insertion or deletion.
 - The complete chat feature set requires both the v0.5.0 client and v0.5.0 lobby service.
 
 ## Entering the Lobby

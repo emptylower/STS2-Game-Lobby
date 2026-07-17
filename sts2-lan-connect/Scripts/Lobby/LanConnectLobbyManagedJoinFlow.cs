@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Godot;
@@ -74,7 +75,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             NetService.Disconnected += OnDisconnected;
 
             _connectCompletion = new TaskCompletionSource<InitialGameInfoMessage>();
-            NetErrorInfo? connectError = await initializer.Connect(NetService, CancelToken.Token);
+            NetErrorInfo? connectError = await ConnectAsync(initializer, NetService, CancelToken.Token);
             if (connectError.HasValue)
             {
                 _logger.Info($"Connection failed before handshake: {connectError}");
@@ -139,6 +140,63 @@ internal sealed class LanConnectLobbyManagedJoinFlow
                 NetService.Disconnected -= OnDisconnected;
             }
         }
+    }
+
+    private static async Task<NetErrorInfo?> ConnectAsync(
+        IClientConnectionInitializer initializer,
+        NetClientGameService netService,
+        CancellationToken cancellationToken)
+    {
+        MethodInfo connectMethod = ResolveCompatibleConnectMethod(
+            typeof(IClientConnectionInitializer),
+            netService.GetType());
+
+        object? connectTask;
+        try
+        {
+            connectTask = connectMethod.Invoke(initializer, [netService, cancellationToken]);
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException != null)
+        {
+            ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+            throw;
+        }
+
+        if (connectTask is not Task task)
+        {
+            throw new InvalidOperationException(
+                $"Connection initializer returned an unsupported result from {connectMethod}.");
+        }
+
+        await task;
+        object? result = task.GetType().GetProperty("Result", BindingFlags.Instance | BindingFlags.Public)?.GetValue(task);
+        return result switch
+        {
+            null => null,
+            NetErrorInfo error => error,
+            _ => throw new InvalidOperationException(
+                $"Connection initializer returned unsupported error data of type {result.GetType().FullName}.")
+        };
+    }
+
+    internal static MethodInfo ResolveCompatibleConnectMethod(Type initializerContractType, Type netServiceType)
+    {
+        MethodInfo? connectMethod = initializerContractType
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(static method => string.Equals(method.Name, "Connect", StringComparison.Ordinal))
+            .Where(static method => typeof(Task).IsAssignableFrom(method.ReturnType))
+            .SingleOrDefault(method =>
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                return parameters.Length == 2
+                    && parameters[0].ParameterType.IsAssignableFrom(netServiceType)
+                    && parameters[1].ParameterType == typeof(CancellationToken);
+            });
+
+        return connectMethod
+            ?? throw new MissingMethodException(
+                initializerContractType.FullName,
+                $"Connect({netServiceType.FullName}, {typeof(CancellationToken).FullName})");
     }
 
     private void ValidateInitialMessage(InitialGameInfoMessage initialMessage)

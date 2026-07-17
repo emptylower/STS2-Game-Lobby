@@ -23,7 +23,7 @@ internal sealed class LanConnectSkipRelicGameAction : GameAction
 
     protected override Task ExecuteAction()
     {
-        RunManager.Instance.TreasureRoomRelicSynchronizer.OnPicked(_player, -1);
+        TreasurePatches.InvokeRemoteSkipVote(RunManager.Instance.TreasureRoomRelicSynchronizer, _player);
         return Task.CompletedTask;
     }
 

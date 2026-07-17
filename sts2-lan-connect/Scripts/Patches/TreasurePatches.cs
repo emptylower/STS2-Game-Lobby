@@ -51,74 +51,99 @@ internal static class TreasurePatches
     private static readonly FieldInfo? VotesChangedEventField = AccessTools.Field(typeof(TreasureRoomRelicSynchronizer), "VotesChanged");
     private static readonly FieldInfo? RelicsAwardedEventField = AccessTools.Field(typeof(TreasureRoomRelicSynchronizer), "RelicsAwarded");
     private static readonly MethodInfo? EndRelicVotingMethod = AccessTools.Method(typeof(TreasureRoomRelicSynchronizer), "EndRelicVoting");
+    private static readonly MethodInfo? PickRelicLocallyMethod = AccessTools.Method(typeof(TreasureRoomRelicSynchronizer), "PickRelicLocally");
+    private static readonly MethodInfo? SkipRelicLocallyMethod = AccessTools.Method(typeof(TreasureRoomRelicSynchronizer), "SkipRelicLocally");
+    private static readonly MethodInfo? OnPickedMethod = AccessTools.Method(typeof(TreasureRoomRelicSynchronizer), "OnPicked");
 
     private static readonly HashSet<TreasureRoomRelicSynchronizer> LocalVotePendingStates = new();
     private static readonly HashSet<TreasureRoomRelicSynchronizer> LocalSkipLockedStates = new();
 
     public static void Apply(Harmony harmony)
     {
+        int applied = 0;
+        int skipped = 0;
+        int failed = 0;
+
         MethodInfo? initRelics = AccessTools.Method(typeof(NTreasureRoomRelicCollection), nameof(NTreasureRoomRelicCollection.InitializeRelics));
-        if (initRelics != null)
-        {
-            harmony.Patch(initRelics,
-                prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(InitializeRelicsPrefix)),
-                postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(InitializeRelicsPostfix)));
-            harmony.Patch(initRelics,
-                postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(InitializeSkipPostfix)));
-        }
+        TryPatch("InitializeRelics.layout", initRelics,
+            prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(InitializeRelicsPrefix)),
+            postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(InitializeRelicsPostfix)));
+        TryPatch("InitializeRelics.skip", initRelics,
+            postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(InitializeSkipPostfix)));
 
         MethodInfo? defaultFocus = AccessTools.PropertyGetter(typeof(NTreasureRoomRelicCollection), "DefaultFocusedControl");
-        if (defaultFocus != null)
-        {
-            harmony.Patch(defaultFocus, prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(DefaultFocusPrefix)));
-        }
+        TryPatch("DefaultFocusedControl", defaultFocus,
+            prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(DefaultFocusPrefix)));
 
         MethodInfo? ready = AccessTools.Method(typeof(NTreasureRoomRelicCollection), nameof(NTreasureRoomRelicCollection._Ready));
-        if (ready != null)
-        {
-            harmony.Patch(ready, postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(ReadyPostfix)));
-        }
+        TryPatch("_Ready", ready,
+            postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(ReadyPostfix)));
 
         MethodInfo? setEnabled = AccessTools.Method(typeof(NTreasureRoomRelicCollection), nameof(NTreasureRoomRelicCollection.SetSelectionEnabled));
-        if (setEnabled != null)
-        {
-            harmony.Patch(setEnabled, postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(SetSelectionEnabledPostfix)));
-        }
+        TryPatch("SetSelectionEnabled", setEnabled,
+            postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(SetSelectionEnabledPostfix)));
 
         MethodInfo? exitTree = AccessTools.Method(typeof(NTreasureRoomRelicCollection), "_ExitTree");
-        if (exitTree != null)
-        {
-            harmony.Patch(exitTree, prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(ExitTreePrefix)));
-        }
+        TryPatch("_ExitTree", exitTree,
+            prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(ExitTreePrefix)));
 
-        MethodInfo? pickLocally = AccessTools.Method(typeof(TreasureRoomRelicSynchronizer), "PickRelicLocally");
-        if (pickLocally != null)
+        bool usesNativeNullableSkip = UsesNativeNullableSkip(PickRelicLocallyMethod);
+        if (usesNativeNullableSkip)
         {
-            harmony.Patch(pickLocally, prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(PickRelicLocallyPrefix)));
+            skipped += 2;
+            Log.Info("sts2_lan_connect gameplay: treasure native nullable skip detected; legacy vote patches are not required.");
+        }
+        else
+        {
+            TryPatch("PickRelicLocally", PickRelicLocallyMethod,
+                prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(PickRelicLocallyPrefix)));
         }
 
         MethodInfo? beginPicking = AccessTools.Method(typeof(TreasureRoomRelicSynchronizer), nameof(TreasureRoomRelicSynchronizer.BeginRelicPicking));
-        if (beginPicking != null)
-        {
-            harmony.Patch(beginPicking,
-                postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(BeginRelicPickingPostfix)));
-            harmony.Patch(beginPicking,
-                postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(BeginRelicPickingStrawberryPostfix)));
-        }
+        TryPatch("BeginRelicPicking.sync", beginPicking,
+            postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(BeginRelicPickingPostfix)));
+        TryPatch("BeginRelicPicking.strawberry", beginPicking,
+            postfix: new HarmonyMethod(typeof(TreasurePatches), nameof(BeginRelicPickingStrawberryPostfix)));
 
         MethodInfo? completeNoRelics = AccessTools.Method(typeof(TreasureRoomRelicSynchronizer), "CompleteWithNoRelics");
-        if (completeNoRelics != null)
+        TryPatch("CompleteWithNoRelics", completeNoRelics,
+            prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(CompleteNoRelicsPrefix)));
+
+        if (!usesNativeNullableSkip)
         {
-            harmony.Patch(completeNoRelics, prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(CompleteNoRelicsPrefix)));
+            TryPatch("OnPicked", OnPickedMethod,
+                prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(OnPickedPrefix)));
         }
 
-        MethodInfo? onPicked = AccessTools.Method(typeof(TreasureRoomRelicSynchronizer), nameof(TreasureRoomRelicSynchronizer.OnPicked));
-        if (onPicked != null)
-        {
-            harmony.Patch(onPicked, prefix: new HarmonyMethod(typeof(TreasurePatches), nameof(OnPickedPrefix)));
-        }
+        Log.Info($"sts2_lan_connect gameplay: treasure patches applied={applied}, skipped={skipped}, failed={failed}.");
 
-        Log.Info("sts2_lan_connect gameplay: treasure patches applied.");
+        void TryPatch(string name, MethodInfo? target, HarmonyMethod? prefix = null, HarmonyMethod? postfix = null)
+        {
+            if (target == null)
+            {
+                skipped++;
+                Log.Warn($"sts2_lan_connect gameplay: treasure patch target missing: {name}.");
+                return;
+            }
+
+            try
+            {
+                harmony.Patch(target, prefix: prefix, postfix: postfix);
+                applied++;
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                Log.Error($"sts2_lan_connect gameplay: treasure patch failed: {name}: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
+
+    internal static bool UsesNativeNullableSkip(MethodInfo? pickRelicLocallyMethod)
+    {
+        ParameterInfo[]? parameters = pickRelicLocallyMethod?.GetParameters();
+        return parameters is { Length: 1 }
+            && Nullable.GetUnderlyingType(parameters[0].ParameterType) == typeof(int);
     }
 
     // ReSharper disable UnusedMember.Local UnusedParameter.Local
@@ -415,7 +440,7 @@ internal static class TreasurePatches
         }
 
         collection.SetSelectionEnabled(isEnabled: false);
-        synchronizer.PickRelicLocally(SkipVoteIndex);
+        InvokeSkipRelicLocally(synchronizer);
     }
 
     private static List<NTreasureRoomRelicHolder>? GetHoldersInUse(NTreasureRoomRelicCollection collection)
@@ -461,6 +486,44 @@ internal static class TreasurePatches
         {
             SyncPredictedVoteField.SetValue(sync, vote ?? -1);
         }
+    }
+
+    internal static void InvokeRemoteSkipVote(TreasureRoomRelicSynchronizer sync, Player player)
+    {
+        InvokeVoteMethod(OnPickedMethod, sync, player);
+    }
+
+    private static void InvokeSkipRelicLocally(TreasureRoomRelicSynchronizer sync)
+    {
+        if (SkipRelicLocallyMethod != null)
+        {
+            SkipRelicLocallyMethod.Invoke(sync, null);
+            return;
+        }
+
+        InvokeVoteMethod(PickRelicLocallyMethod, sync);
+    }
+
+    private static void InvokeVoteMethod(MethodInfo? method, TreasureRoomRelicSynchronizer sync, params object?[] leadingArguments)
+    {
+        if (method == null)
+        {
+            throw new MissingMethodException(typeof(TreasureRoomRelicSynchronizer).FullName, "treasure vote method");
+        }
+
+        ParameterInfo[] parameters = method.GetParameters();
+        if (parameters.Length != leadingArguments.Length + 1)
+        {
+            throw new MissingMethodException(typeof(TreasureRoomRelicSynchronizer).FullName, method.Name);
+        }
+
+        object?[] arguments = new object?[parameters.Length];
+        Array.Copy(leadingArguments, arguments, leadingArguments.Length);
+        Type voteType = parameters[^1].ParameterType;
+        arguments[^1] = Nullable.GetUnderlyingType(voteType) == typeof(int)
+            ? null
+            : SkipVoteIndex;
+        method.Invoke(sync, arguments);
     }
 
     private static void ClearLocalVoteState(TreasureRoomRelicSynchronizer sync)

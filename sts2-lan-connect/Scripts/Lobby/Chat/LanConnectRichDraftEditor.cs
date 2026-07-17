@@ -566,8 +566,6 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         int textIndex,
         bool expandToFill)
     {
-        int lines = Math.Clamp(run.Text.Count(character => character == '\n') + 1, 1, 3);
-        float estimatedWidth = Math.Clamp(44f + run.Text.Length * 7f, MinimumTextRunWidth, MaximumTextRunWidth);
         TextEdit editor = new()
         {
             Name = textIndex == 0
@@ -575,9 +573,6 @@ internal sealed partial class LanConnectRichDraftEditor : Control
                 : LanConnectConstants.ChatDraftRunPrefix + runIndex,
             Text = run.Text,
             PlaceholderText = textIndex == 0 ? Localize("chat.input.placeholder") : string.Empty,
-            CustomMinimumSize = new Vector2(
-                estimatedWidth,
-                UsesLobbyStyle ? 28f : 12f + lines * TextLineHeight),
             SizeFlagsHorizontal = UsesLobbyStyle || expandToFill
                 ? SizeFlags.ExpandFill
                 : SizeFlags.Fill,
@@ -591,8 +586,10 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             AccessibilityName = Localize("chat.accessibility.message_text")
         };
         editor.SetMeta("run_index", runIndex);
+        editor.SetMeta("draft_text", run.Text);
+        UpdateTextRunMinimumSize(editor, run.Text);
         ApplyTextRunStyle(editor);
-        editor.Connect(TextEdit.SignalName.TextChanged, Callable.From(() => OnTextRunChanged(editor, runIndex, run.Text)));
+        editor.Connect(TextEdit.SignalName.TextChanged, Callable.From(() => OnTextRunChanged(editor, runIndex)));
         editor.Connect(TextEdit.SignalName.CaretChanged, Callable.From(() => OnTextCaretChanged(editor, runIndex)));
         editor.Connect(Control.SignalName.FocusEntered, Callable.From(() =>
         {
@@ -633,12 +630,24 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         return chip;
     }
 
-    private void OnTextRunChanged(TextEdit editor, int runIndex, string previousText)
+    private void UpdateTextRunMinimumSize(TextEdit editor, string text)
+    {
+        int lines = Math.Clamp(text.Count(character => character == '\n') + 1, 1, 3);
+        float estimatedWidth = Math.Clamp(44f + text.Length * 7f, MinimumTextRunWidth, MaximumTextRunWidth);
+        editor.CustomMinimumSize = new Vector2(
+            estimatedWidth,
+            UsesLobbyStyle ? 28f : 12f + lines * TextLineHeight);
+    }
+
+    private void OnTextRunChanged(TextEdit editor, int runIndex)
     {
         if (_draft == null || _reconciling || _handlingChildChange)
         {
             return;
         }
+        string previousText = editor.HasMeta("draft_text")
+            ? editor.GetMeta("draft_text").AsString()
+            : editor.Text;
         string nextText = editor.Text;
         int prefix = CommonPrefix(previousText, nextText);
         int suffix = CommonSuffix(previousText, nextText, prefix);
@@ -661,7 +670,23 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         {
             _handlingChildChange = false;
         }
-        ReconcileControls(preserveFocus: _restoreFocus);
+        IReadOnlyList<LanConnectDraftRun> runs = _draft.Runs;
+        bool canKeepNativeEditor = !replaceDocumentSelection &&
+                                   runIndex >= 0 &&
+                                   runIndex < runs.Count &&
+                                   runs[runIndex] is LanConnectTextRun text &&
+                                   string.Equals(text.Text, nextText, StringComparison.Ordinal);
+        if (!canKeepNativeEditor)
+        {
+            ReconcileControls(preserveFocus: _restoreFocus);
+            return;
+        }
+
+        editor.SetMeta("draft_text", nextText);
+        UpdateTextRunMinimumSize(editor, nextText);
+        UpdateMinimumSizeForDraft(runs);
+        _renderedDraftRevision = _draft.ContentRevision;
+        _restoreFocus = false;
     }
 
     private void OnTextCaretChanged(TextEdit editor, int runIndex)
