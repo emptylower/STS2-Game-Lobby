@@ -1,6 +1,6 @@
 # STS2 LAN Connect v0.5.1 MOD 自动同步升级计划
 
-> 状态：执行中（Phase 0 已通过）
+> 状态：执行中（Phase 1 已通过）
 >
 > 基线：`main`，制定计划时 HEAD 为 `e79b6c9`
 >
@@ -353,10 +353,10 @@ Gate：范围、协议和测试夹具明确，没有实现代码。
 
 ### Phase 1：结构化清单与纯差异算法
 
-- [ ] 先写 C# descriptor、inventory、dependency closure、排序和限额失败测试。
-- [ ] 实现房主清单构建器及旧游戏版本运行时适配。
-- [ ] 先写 TypeScript validator/diff 的正常、越界、恶意字段和版本差异测试。
-- [ ] 实现服务端纯函数，不接 HTTP。
+- [x] 先写 C# descriptor、inventory、dependency closure、排序和限额失败测试。
+- [x] 实现房主清单构建器及旧游戏版本运行时适配。
+- [x] 先写 TypeScript validator/diff 的正常、越界、恶意字段和版本差异测试。
+- [x] 实现服务端纯函数，不接 HTTP。
 
 Gate：C#/TypeScript 对同一 fixture 产生完全一致的 canonical 差异。
 

@@ -20,6 +20,7 @@ internal static class LanConnectBuildInfo
 
     private static string? _cachedModVersion;
     private static List<string>? _cachedModList;
+    private static List<LobbyModDescriptor>? _cachedModInventory;
 
     public static string GetGameVersion()
     {
@@ -84,6 +85,29 @@ internal static class LanConnectBuildInfo
         _cachedModList = mods;
         return new List<string>(mods);
     }
+
+    public static List<LobbyModDescriptor> GetModInventory()
+    {
+        if (_cachedModInventory != null)
+        {
+            return _cachedModInventory.Select(CloneDescriptor).ToList();
+        }
+
+        _cachedModInventory = LanConnectModInventoryBuilder.BuildCurrent()
+            .Select(CloneDescriptor)
+            .ToList();
+        return _cachedModInventory.Select(CloneDescriptor).ToList();
+    }
+
+    private static LobbyModDescriptor CloneDescriptor(LobbyModDescriptor descriptor) => new()
+    {
+        Id = descriptor.Id,
+        Version = descriptor.Version,
+        Role = descriptor.Role,
+        Source = descriptor.Source,
+        WorkshopFileId = descriptor.WorkshopFileId,
+        Dependencies = descriptor.Dependencies.ToList()
+    };
 
     private static string ResolveModDirectory()
     {

@@ -19,4 +19,10 @@
   <ItemGroup>
     <ProjectReference Include="..\sts2-lan-connect\sts2_lan_connect.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\test-fixtures\mod-sync\*.json"
+          Link="TestFixtures\ModSync\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
