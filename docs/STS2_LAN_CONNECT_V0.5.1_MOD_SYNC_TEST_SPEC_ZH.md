@@ -237,7 +237,7 @@ Canonical 规则：descriptor 按清理后的 `id` 做 Ordinal 升序；dependen
 | 版本 | 来源 | Phase 0 证据 |
 |---|---|---|
 | 0.107.1 | Steam `public`，build `23811903`，macOS manifest `8653035385353091849` | Phase 8 官方 depot 下载完成；`release_info.json` 为 `v0.107.1` |
-| 0.108.0 | 历史 Steam `public-beta`，build `24032229`，macOS manifest `1977841934321910790` | 2026-07-18 已登录 Steam 控制台两次返回 manifest ACL `Access Denied`，仍待合法产物 |
+| 0.108.0 | 历史 Steam `public-beta`，build `24032229`，macOS manifest `1977841934321910790` | 2026-07-18 已登录 Steam 控制台常规重试两次，并临时启用内建 `@bClientTryRequestManifestWithoutCode=1` 精确重试一次，三次均返回 manifest ACL `Access Denied`；开关已恢复为 `0`，仍待合法产物 |
 | 0.109.0 | Steam `public-beta`，build `24251656`，macOS manifest `7169427731078769081` | 当前真实安装 `release_info.json` 为 `v0.109.0`，已完成最终候选加载 |
 
 切换分支后先复制完整游戏目录到独立只读测试目录，并记录 `release_info.json`、`sts2.dll` SHA-256 和 Steam build ID。不得把游戏文件提交或放入发布包。
