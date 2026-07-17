@@ -177,7 +177,7 @@ public sealed class LanConnectRoomRichScreenshotTests
                 AssertThat(fixture.Room.ChatPanelForTests.TestState.FailedCount).IsEqual(1);
                 AssertThat(fixture.Room.ChatPanelForTests.TestState.DeliveryUnknownCount).IsEqual(1);
                 AssertThat(fixture.RoomUnreadBadgeText.Length).IsGreaterEqual(2);
-                AssertThat(fixture.ServerUnreadBadgeText.Length).IsGreaterEqual(2);
+                AssertThat(fixture.ServerUnreadBadgeText).IsEqual("0");
                 break;
             case ScreenshotScenario.ReducedMotionFade:
                 AssertThat(fixture.Room.TestState.FadePhase).IsEqual(LanConnectRoomOverlayFadePhase.Faded);

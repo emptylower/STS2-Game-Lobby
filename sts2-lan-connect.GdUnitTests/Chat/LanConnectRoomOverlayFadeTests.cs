@@ -152,7 +152,7 @@ public sealed class LanConnectRoomOverlayFadeTests
 
     [TestCase(true)]
     [TestCase(false)]
-    public async Task Empty_state_server_remote_sequence_6732_wakes_without_derived_counts(
+    public async Task Empty_state_server_remote_sequence_6732_does_not_wake_room_overlay(
         bool serverSupported)
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
@@ -172,14 +172,15 @@ public sealed class LanConnectRoomOverlayFadeTests
         fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Server, sequence: 6732);
         fixture.Overlay.RefreshFadeForTests();
 
-        AssertVisibleWaiting(fixture.Overlay.TestState);
+        AssertThat(fixture.Overlay.TestState.PanelAlpha).IsEqual(0f);
+        AssertThat(fixture.Overlay.TestState.FadePhase).IsEqual(LanConnectRoomOverlayFadePhase.Faded);
         AssertThat(fixture.State.Server.UnreadCount).IsEqual(0);
         AssertThat(fixture.State.Server.NewMessagesBelowCount).IsEqual(0);
         AssertThat(fixture.State.Server.RemoteArrivalRevision).IsEqual(1);
     }
 
     [TestCase]
-    public async Task Unread_and_new_below_wake_immediately_and_hint_sums_both_supported_channels()
+    public async Task Room_new_below_wakes_and_hint_excludes_server_unread()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
         FakeClock clock = new();
@@ -196,8 +197,9 @@ public sealed class LanConnectRoomOverlayFadeTests
 
         AssertThat(state.PanelAlpha).IsEqual(1f);
         AssertThat(state.HintAlpha).IsEqual(0f);
-        AssertThat(state.RoomUnread + state.NewMessagesBelowCount + state.ServerUnread).IsEqual(2);
-        AssertThat(state.HintText).Contains("2");
+        AssertThat(state.NewMessagesBelowCount).IsEqual(1);
+        AssertThat(state.ServerUnread).IsEqual(1);
+        AssertThat(state.HintText).Contains("1");
     }
 
     [TestCase("pending")]
@@ -399,9 +401,10 @@ public sealed class LanConnectRoomOverlayFadeTests
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport(
             new Vector2I(1280, 720),
             uiScale: 1.5f);
+        fixture.Overlay.SelectChannelForTests(LanConnectChatChannel.Server);
         for (int index = 0; index < 100; index++)
         {
-            fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Server, sequence: index + 1);
+            fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Room, sequence: index + 1);
         }
         string originalLocale = TranslationServer.GetLocale();
         try

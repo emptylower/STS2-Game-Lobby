@@ -245,9 +245,8 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     internal void SetCompactLayout(bool compact)
     {
-        CustomMinimumSize = UsesLobbyStyle
-            ? new Vector2(MinimumLobbyEditorWidth, 42f)
-            : new Vector2(MinimumEditorWidth, compact ? 48f : 54f);
+        _ = compact;
+        UpdateMinimumSizeForDraft(_draft?.Runs);
     }
 
     internal void RefreshFromDraft(bool preserveFocus = true)
@@ -431,7 +430,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         }
         Name = LanConnectConstants.ChatRichDraftEditorName;
         float minimumEditorWidth = UsesLobbyStyle ? MinimumLobbyEditorWidth : MinimumEditorWidth;
-        CustomMinimumSize = new Vector2(minimumEditorWidth, UsesLobbyStyle ? 42f : 54f);
+        CustomMinimumSize = new Vector2(minimumEditorWidth, 42f);
         SizeFlagsHorizontal = SizeFlags.ExpandFill;
         MouseFilter = MouseFilterEnum.Pass;
 
@@ -463,7 +462,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         _flow = new HFlowContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(minimumEditorWidth, UsesLobbyStyle ? 28f : 38f),
+            CustomMinimumSize = new Vector2(minimumEditorWidth, UsesLobbyStyle ? 28f : 34f),
             Alignment = FlowContainer.AlignmentMode.Begin
         };
         _flow.AddThemeConstantOverride("h_separation", 4);
@@ -481,7 +480,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         };
         _budgetLabel.AddThemeFontSizeOverride("font_size", 11);
         _budgetLabel.AddThemeColorOverride("font_color", TextMutedColor);
-        _budgetLabel.Visible = !UsesLobbyStyle;
+        _budgetLabel.Visible = false;
         _stack.AddChild(_budgetLabel);
     }
 
@@ -511,13 +510,18 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             }
 
             IReadOnlyList<LanConnectDraftRun> runs = _draft.Runs;
+            UpdateMinimumSizeForDraft(runs);
             int textIndex = 0;
             for (int runIndex = 0; runIndex < runs.Count; runIndex++)
             {
                 LanConnectDraftRun run = runs[runIndex];
                 Control child = run switch
                 {
-                    LanConnectTextRun text => BuildTextRun(text, runIndex, textIndex++),
+                    LanConnectTextRun text => BuildTextRun(
+                        text,
+                        runIndex,
+                        textIndex++,
+                        expandToFill: runs.Count == 1),
                     _ => BuildEntityChip(run, runIndex)
                 };
                 _flow.AddChild(child);
@@ -541,7 +545,26 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         }
     }
 
-    private TextEdit BuildTextRun(LanConnectTextRun run, int runIndex, int textIndex)
+    private void UpdateMinimumSizeForDraft(IReadOnlyList<LanConnectDraftRun>? runs)
+    {
+        float minimumWidth = UsesLobbyStyle ? MinimumLobbyEditorWidth : MinimumEditorWidth;
+        float minimumHeight = 42f;
+        if (!UsesLobbyStyle && runs != null)
+        {
+            foreach (LanConnectTextRun text in runs.OfType<LanConnectTextRun>())
+            {
+                int lines = Math.Clamp(text.Text.Count(character => character == '\n') + 1, 1, 3);
+                minimumHeight = Math.Max(minimumHeight, 12f + lines * TextLineHeight);
+            }
+        }
+        CustomMinimumSize = new Vector2(minimumWidth, minimumHeight);
+    }
+
+    private TextEdit BuildTextRun(
+        LanConnectTextRun run,
+        int runIndex,
+        int textIndex,
+        bool expandToFill)
     {
         int lines = Math.Clamp(run.Text.Count(character => character == '\n') + 1, 1, 3);
         float estimatedWidth = Math.Clamp(44f + run.Text.Length * 7f, MinimumTextRunWidth, MaximumTextRunWidth);
@@ -555,7 +578,9 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             CustomMinimumSize = new Vector2(
                 estimatedWidth,
                 UsesLobbyStyle ? 28f : 12f + lines * TextLineHeight),
-            SizeFlagsHorizontal = UsesLobbyStyle ? SizeFlags.ExpandFill : SizeFlags.Fill,
+            SizeFlagsHorizontal = UsesLobbyStyle || expandToFill
+                ? SizeFlags.ExpandFill
+                : SizeFlags.Fill,
             FocusMode = _editable ? FocusModeEnum.All : FocusModeEnum.None,
             Editable = _editable,
             WrapMode = TextEdit.LineWrappingMode.Boundary,

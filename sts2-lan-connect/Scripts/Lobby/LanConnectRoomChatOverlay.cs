@@ -838,18 +838,15 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private void RefreshBadges(LanConnectDualChatState? chat)
     {
         int roomUnread = chat?.Room.UnreadCount ?? 0;
-        int serverUnread = chat?.Server.UnreadCount ?? 0;
         SetBadge(_roomUnreadBadge, roomUnread);
-        SetBadge(_serverUnreadBadge, serverUnread);
-        bool serverSelectable = chat?.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
-        int total = roomUnread + (serverSelectable ? serverUnread : 0);
+        SetBadge(_serverUnreadBadge, 0);
         if (_toggleBadge != null)
         {
-            _toggleBadge.Visible = total > 0;
+            _toggleBadge.Visible = roomUnread > 0;
         }
         if (_toggleBadgeLabel != null)
         {
-            _toggleBadgeLabel.Text = BadgeText(total);
+            _toggleBadgeLabel.Text = BadgeText(roomUnread);
         }
     }
 
@@ -860,11 +857,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             return;
         }
 
-        bool serverSupported = chat?.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
         int roomUnread = chat?.Room.UnreadCount ?? 0;
         int roomNewBelow = chat?.Room.NewMessagesBelowCount ?? 0;
-        int serverUnread = serverSupported ? chat?.Server.UnreadCount ?? 0 : 0;
-        int serverNewBelow = serverSupported ? chat?.Server.NewMessagesBelowCount ?? 0 : 0;
         bool reducedMotion;
         try
         {
@@ -885,19 +879,17 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 PreviewVisible: _chatPanel?.PreviewVisible == true,
                 PickerOrConfirmationVisible: _chatPanel?.PopupVisible == true,
                 ModalVisible: HasBlockingModalOutsideOverlay(),
-                HasDeliveryBlocker:
-                    LanConnectBasicChatPanel.StateHasDeliveryBlocker(chat?.Room) ||
-                    (serverSupported && LanConnectBasicChatPanel.StateHasDeliveryBlocker(chat?.Server)),
+                HasDeliveryBlocker: LanConnectBasicChatPanel.StateHasDeliveryBlocker(chat?.Room),
                 RoomUnread: roomUnread,
-                ServerUnread: serverUnread,
+                ServerUnread: 0,
                 RoomNewBelow: roomNewBelow,
-                ServerNewBelow: serverNewBelow,
+                ServerNewBelow: 0,
                 ActivityToken: _fadeActivityToken,
                 RoomRemoteArrivalRevision: chat?.Room.RemoteArrivalRevision ?? 0,
-                ServerRemoteArrivalRevision: chat?.Server.RemoteArrivalRevision ?? 0,
+                ServerRemoteArrivalRevision: 0,
                 ReducedMotion: reducedMotion));
 
-        int hintCount = roomUnread + roomNewBelow + serverUnread + serverNewBelow;
+        int hintCount = roomUnread + roomNewBelow;
         string hintText = LanConnectChatUiComposition.Localizer.Format(
             TranslationServer.GetLocale(),
             "chat.fade.unread_hint",

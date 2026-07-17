@@ -57,9 +57,9 @@ public sealed class LanConnectChatResolutionTests
             AssertThat(fixture.Room.TestState.RoomUnread).IsGreaterEqual(10);
             AssertThat(fixture.Room.TestState.ServerUnread).IsGreaterEqual(10);
             AssertThat(fixture.RoomUnreadBadgeText.Length).IsGreaterEqual(2);
-            AssertThat(fixture.ServerUnreadBadgeText.Length).IsGreaterEqual(2);
+            AssertThat(fixture.ServerUnreadBadgeText).IsEqual("0");
             AssertThat(fixture.ToggleUnreadBadgeText)
-                .IsEqual((fixture.Room.TestState.RoomUnread + fixture.Room.TestState.ServerUnread).ToString());
+                .IsEqual(fixture.Room.TestState.RoomUnread.ToString());
             IReadOnlyList<string> overlaps = fixture.OverlappingNamedControls();
             if (overlaps.Count > 0)
             {

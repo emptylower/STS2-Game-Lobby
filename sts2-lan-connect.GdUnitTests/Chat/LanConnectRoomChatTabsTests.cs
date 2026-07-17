@@ -70,7 +70,7 @@ public sealed class LanConnectRoomChatTabsTests
     }
 
     [TestCase]
-    public async Task Reopen_uses_only_unread_then_earliest_unread_then_last_tab()
+    public async Task Reopen_uses_room_unread_then_last_tab_and_ignores_server_unread()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
         LanConnectRoomChatOverlay overlay = fixture.Overlay;
@@ -79,7 +79,8 @@ public sealed class LanConnectRoomChatTabsTests
         await overlay.CloseForTests();
         overlay.InjectRemoteForTests(LanConnectChatChannel.Server, sequence: 20);
         await overlay.OpenForTests();
-        AssertThat(overlay.TestState.SelectedChannel).IsEqual(LanConnectChatChannel.Server);
+        AssertThat(overlay.TestState.SelectedChannel).IsEqual(LanConnectChatChannel.Room);
+        AssertThat(overlay.TestState.ServerUnread).IsEqual(1);
 
         await overlay.CloseForTests();
         overlay.InjectRemoteForTests(LanConnectChatChannel.Server, sequence: 50);
@@ -129,24 +130,45 @@ public sealed class LanConnectRoomChatTabsTests
     }
 
     [TestCase]
-    public async Task Hidden_server_unread_is_excluded_from_toggle_badge_until_support_returns()
+    public async Task Server_unread_never_drives_room_toggle_or_tab_badges()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
         await fixture.Overlay.CloseForTests();
         fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Server, sequence: 20);
         await fixture.Overlay.RefreshForTests();
         Control toggleBadge = FindNode<Control>(fixture.Overlay, "ChatToggleUnreadBadge");
-        AssertThat(toggleBadge.Visible).IsTrue();
+        Control serverBadge = FindNode<Control>(fixture.Overlay, "ServerUnreadBadge");
+        AssertThat(toggleBadge.Visible).IsFalse();
+        AssertThat(serverBadge.Visible).IsFalse();
 
         fixture.State.Server.SetPresentationForTests(LanConnectServerChatPresentation.Unsupported);
         await fixture.Overlay.RefreshForTests();
         AssertThat(fixture.Overlay.TestState.ServerUnread).IsEqual(1);
         AssertThat(toggleBadge.Visible).IsFalse();
+        AssertThat(serverBadge.Visible).IsFalse();
 
         fixture.State.Server.SetPresentationForTests(LanConnectServerChatPresentation.Ready);
         await fixture.Overlay.RefreshForTests();
         AssertThat(fixture.Overlay.TestState.ServerUnread).IsEqual(1);
-        AssertThat(toggleBadge.Visible).IsTrue();
+        AssertThat(toggleBadge.Visible).IsFalse();
+        AssertThat(serverBadge.Visible).IsFalse();
+    }
+
+    [TestCase]
+    public async Task Room_draft_fills_the_input_row_without_visible_budget_microcopy()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        await fixture.Runner.AwaitIdleFrame();
+
+        LanConnectRoomChatOverlayTestState state = fixture.Overlay.TestState;
+        Label budget = FindNode<Label>(fixture.Overlay, LanConnectConstants.ChatDraftBudgetName);
+
+        AssertThat(state.DraftRect.Size.X).IsGreaterEqual(220f);
+        AssertThat(state.DraftRect.Size.Y).IsLessEqual(44f);
+        AssertThat(state.SendRect.Size.Y).IsLessEqual(44f);
+        AssertThat(budget.Visible).IsFalse();
+        AssertThat(state.DraftRect.Position.X).IsGreaterEqual(state.PanelRect.Position.X);
+        AssertThat(state.DraftRect.End.X).IsLessEqual(state.PanelRect.End.X);
     }
 
     [TestCase]

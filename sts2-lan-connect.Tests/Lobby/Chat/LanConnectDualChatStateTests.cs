@@ -43,7 +43,7 @@ public sealed class LanConnectDualChatStateTests
     }
 
     [Fact]
-    public void FirstRoomOpenDefaultsToRoomThenSelectsTheOnlyUnreadChannel()
+    public void Server_unread_never_redirects_room_overlay_from_room_tab()
     {
         LanConnectDualChatState state = CreateEnteredState();
         state.Server.AppendConfirmedForTests("server-before-first-open", "A", "server", 30, false);
@@ -55,14 +55,14 @@ public sealed class LanConnectDualChatStateTests
 
         state.CloseRoomOverlay();
 
-        Assert.Equal(LanConnectChatChannel.Server, state.OpenRoomOverlay());
-        Assert.True(state.Server.IsVisible);
-        Assert.False(state.Room.IsVisible);
-        Assert.Equal(0, state.Server.UnreadCount);
+        Assert.Equal(LanConnectChatChannel.Room, state.OpenRoomOverlay());
+        Assert.True(state.Room.IsVisible);
+        Assert.False(state.Server.IsVisible);
+        Assert.Equal(1, state.Server.UnreadCount);
     }
 
     [Fact]
-    public void BothUnreadSelectsTheChannelWithEarliestUnreadSequence()
+    public void Room_unread_wins_regardless_of_server_sequence()
     {
         LanConnectDualChatState state = EnterAndCloseOnce();
         state.Server.AppendConfirmedForTests("server", "A", "server", 50, false);
@@ -72,7 +72,7 @@ public sealed class LanConnectDualChatStateTests
     }
 
     [Fact]
-    public void EqualUnreadSequencesSelectRoomDeterministically()
+    public void Equal_unread_sequences_select_room_deterministically()
     {
         LanConnectDualChatState state = EnterAndCloseOnce();
         state.Server.AppendConfirmedForTests("server", "A", "server", 40, false);
@@ -145,7 +145,7 @@ public sealed class LanConnectDualChatStateTests
 
         state.CloseRoomOverlay();
         state.Server.AppendConfirmedForTests("server-after-room-change", "A", "server", 30, false);
-        Assert.Equal(LanConnectChatChannel.Server, state.OpenRoomOverlay());
+        Assert.Equal(LanConnectChatChannel.Room, state.OpenRoomOverlay());
     }
 
     [Fact]
@@ -175,6 +175,7 @@ public sealed class LanConnectDualChatStateTests
         state.Room.SetDraft("room");
         state.Server.SetDraft("server");
         state.Server.AppendConfirmedForTests("server", "A", "message", 30, false);
+        state.Select(LanConnectChatChannel.Server);
         Assert.Equal(LanConnectChatChannel.Server, state.OpenRoomOverlay());
         Assert.True(state.Server.IsVisible);
         long serverRevision = state.Server.Revision;
@@ -288,16 +289,16 @@ public sealed class LanConnectDualChatStateTests
     }
 
     [Fact]
-    public void OpeningMarksOnlyTheSelectedChannelRead()
+    public void Opening_last_selected_server_marks_it_read_when_room_has_no_unread()
     {
         LanConnectDualChatState state = EnterAndCloseOnce();
+        state.Select(LanConnectChatChannel.Server);
         state.Server.AppendConfirmedForTests("server", "A", "server", 30, false);
-        state.Room.AppendConfirmedForTests("room", "B", "room", 40, false);
 
         Assert.Equal(LanConnectChatChannel.Server, state.OpenRoomOverlay());
 
         Assert.Equal(0, state.Server.UnreadCount);
-        Assert.Equal(1, state.Room.UnreadCount);
+        Assert.Equal(0, state.Room.UnreadCount);
         Assert.True(state.Server.IsVisible);
         Assert.False(state.Room.IsVisible);
     }
@@ -374,6 +375,7 @@ public sealed class LanConnectDualChatStateTests
         LanConnectDualChatState state = EnterAndCloseOnce();
         state.Server.SetDraft("server");
         state.Server.AppendConfirmedForTests("server", "A", "server", 30, false);
+        state.Select(LanConnectChatChannel.Server);
         Assert.Equal(LanConnectChatChannel.Server, state.OpenRoomOverlay());
         long roomRevision = state.Room.Revision;
         long serverRevision = state.Server.Revision;

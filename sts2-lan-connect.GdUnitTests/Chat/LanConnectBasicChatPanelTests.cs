@@ -61,7 +61,7 @@ public sealed class LanConnectBasicChatPanelTests
     }
 
     [TestCase]
-    public async Task Rich_entity_draft_shows_budget_but_legacy_send_is_blocked_without_clearing()
+    public async Task Rich_entity_draft_tracks_hidden_budget_and_blocks_legacy_send_without_clearing()
     {
         LanConnectChatChannelState state = EnabledState(rich: true);
         state.RichDraft.InsertEntity(new LanConnectEmojiRun("heart"));
@@ -78,6 +78,7 @@ public sealed class LanConnectBasicChatPanelTests
         Button send = FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName);
         Label budget = FindNode<Label>(panel, LanConnectConstants.ChatDraftBudgetName);
         AssertThat(send.Disabled).IsTrue();
+        AssertThat(budget.Visible).IsFalse();
         AssertThat(budget.Text.Contains("字符 0/300 · 分段 1/32 · 实体 1/12", StringComparison.Ordinal))
             .IsTrue();
         AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)

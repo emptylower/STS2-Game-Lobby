@@ -42,7 +42,7 @@ public sealed class LanConnectRoomRichReleaseSmokeTests
             AssertThat(fixture.RoomServerState.Messages.Count(message =>
                 message.Delivery == ServerChatDeliveryState.DeliveryUnknown)).IsEqual(1);
             AssertThat(fixture.RoomUnreadBadgeText.Length).IsGreaterEqual(2);
-            AssertThat(fixture.ServerUnreadBadgeText.Length).IsGreaterEqual(2);
+            AssertThat(fixture.ServerUnreadBadgeText).IsEqual("0");
 
             string fontPath = ProjectSettings.GlobalizePath(
                 "res://TestAssets/Fonts/ark-pixel-10px-proportional-zh_cn.otf");

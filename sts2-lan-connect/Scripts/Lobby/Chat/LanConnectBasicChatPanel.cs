@@ -749,7 +749,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _emojiButton.ExpandIcon = true;
         _emojiButton.TooltipText = Localize("chat.tooltip.emoji_picker");
         _emojiButton.AccessibilityName = Localize("chat.emoji.button");
-        _emojiButton.CustomMinimumSize = new Vector2(UsesLobbyStyle ? 42 : 38, UsesLobbyStyle ? 42 : 38);
+        _emojiButton.CustomMinimumSize = new Vector2(UsesLobbyStyle ? 42 : 38, 42);
         _emojiButton.SizeFlagsVertical = SizeFlags.ExpandFill;
         _emojiButton.Visible = false;
         _emojiButton.Connect(
@@ -765,7 +765,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             18,
             UsesLobbyStyle ? LobbyPrimaryForegroundColor : TextStrongColor);
         _sendButton.ExpandIcon = true;
-        _sendButton.CustomMinimumSize = new Vector2(UsesLobbyStyle ? 80 : 74, UsesLobbyStyle ? 42 : 38);
+        _sendButton.CustomMinimumSize = new Vector2(UsesLobbyStyle ? 80 : 74, 42);
         _sendButton.SizeFlagsVertical = SizeFlags.ExpandFill;
         _sendButton.Connect(Button.SignalName.Pressed, Callable.From(() =>
         {

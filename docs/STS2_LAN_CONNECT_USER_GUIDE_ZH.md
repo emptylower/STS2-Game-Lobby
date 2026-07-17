@@ -72,7 +72,8 @@
 
 - 进入已连接房间后，右上角出现 `房间聊天` 按钮；点击后展开面板，按 `Enter` 或点 `发送` 发消息
 - 也可以按 `F8` 打开或收起聊天面板；文本输入框聚焦时不会把快捷键内容写进聊天文本
-- 面板收起时，收到新消息会显示未读角标
+- 面板收起时，收到当前房间的新消息会显示未读角标
+- 房间内仍可手动切到频道页查看大厅消息；大厅频道新消息不会触发房间角标、唤醒淡出面板或自动切页
 - 聊天面板标题栏和按钮支持长按拖动，位置保存到本地配置
 - 房间聊天走大厅控制通道，仅在当前房间内广播，不写入续局存档，也不保留历史
 - Emoji 与物品引用会按双方协商能力显示；旧版本或功能关闭时自动降级为普通文本
@@ -263,7 +264,8 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 
 - After connecting to a room, a `Room Chat` button appears in the top-right corner; click to expand the panel and send messages with `Enter` or the `Send` button
 - You can also press `F8` to open or collapse the chat panel; focused text inputs do not receive shortcut text
-- When the panel is collapsed, unread messages show a badge indicator
+- When the panel is collapsed, new messages from the current room show a badge indicator
+- The server-channel tab remains available for manual viewing in-room, but server-channel messages do not trigger room badges, wake the faded panel, or switch tabs automatically
 - The chat panel title bar and button support press-and-drag repositioning; the position is saved to local config
 - Room chat uses the lobby control channel, is broadcast only within the current room, is not written to save files, and retains no history
 - Emoji and item references follow negotiated peer capabilities and degrade to ordinary compatibility text for old clients or disabled features

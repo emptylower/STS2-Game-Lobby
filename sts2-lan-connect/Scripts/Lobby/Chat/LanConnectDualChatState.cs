@@ -131,23 +131,9 @@ internal sealed class LanConnectDualChatState
             return LanConnectChatChannel.Room;
         }
 
-        int roomUnread = Room.UnreadCount;
-        int serverUnread = Server.UnreadCount;
-        if (roomUnread > 0 && serverUnread == 0)
+        if (Room.UnreadCount > 0)
         {
             return LanConnectChatChannel.Room;
-        }
-        if (serverUnread > 0 && roomUnread == 0)
-        {
-            return LanConnectChatChannel.Server;
-        }
-        if (roomUnread > 0 && serverUnread > 0)
-        {
-            long roomFirst = Room.FirstUnreadSequence ?? long.MaxValue;
-            long serverFirst = Server.FirstUnreadSequence ?? long.MaxValue;
-            return roomFirst <= serverFirst
-                ? LanConnectChatChannel.Room
-                : LanConnectChatChannel.Server;
         }
 
         return _lastSelected;
