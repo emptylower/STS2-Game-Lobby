@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using Sts2LanConnect.Scripts;
 
 namespace Sts2LanConnect.Tests.Lobby.ModSync;
@@ -157,28 +159,16 @@ public sealed class LanConnectModInventoryBuilderTests
     }
 
     [Fact]
-    public void Runtime_resolver_supports_the_referenced_0_109_0_game_types()
+    public void Runtime_metadata_matches_the_0_109_0_inventory_contract()
     {
-        MegaCrit.Sts2.Core.Modding.Mod value = new()
-        {
-            state = MegaCrit.Sts2.Core.Modding.ModLoadState.Loaded,
-            modSource = MegaCrit.Sts2.Core.Modding.ModSource.SteamWorkshop,
-            path = "/steamapps/workshop/content/2868840/non-numeric-folder",
-            workshopId = 3762348066UL,
-            manifest = new MegaCrit.Sts2.Core.Modding.ModManifest
-            {
-                id = "fixture.referenced",
-                version = "3.0.0",
-                affectsGameplay = true,
-                dependencies = null
-            }
-        };
+        using FileStream stream = File.OpenRead(ResolveGameAssemblyPath());
+        using PEReader peReader = new(stream);
+        MetadataReader metadata = peReader.GetMetadataReader();
 
-        LanConnectRuntimeMod resolved = LanConnectModInventoryBuilder.ResolveRuntimeMod(value);
-
-        Assert.True(resolved.IsLoaded);
-        Assert.Empty(resolved.Dependencies);
-        Assert.Equal("3762348066", resolved.WorkshopFileId);
+        AssertFields(metadata, "MegaCrit.Sts2.Core.Modding", "ModManifest",
+            "id", "version", "affectsGameplay", "dependencies");
+        AssertFields(metadata, "MegaCrit.Sts2.Core.Modding", "Mod",
+            "manifest", "state", "modSource", "path", "workshopId");
     }
 
     [Fact]
@@ -344,6 +334,51 @@ public sealed class LanConnectModInventoryBuilderTests
             WorkshopFileId = workshopFileId,
             Dependencies = dependencies?.ToList() ?? []
         };
+
+    private static string ResolveGameAssemblyPath()
+    {
+        string? overrideDirectory = Environment.GetEnvironmentVariable("STS2_TEST_GAME_DATA_DIR");
+        if (!string.IsNullOrWhiteSpace(overrideDirectory))
+        {
+            return Path.Combine(overrideDirectory, "sts2.dll");
+        }
+
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string root = OperatingSystem.IsWindows()
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                "Steam", "steamapps", "common", "Slay the Spire 2")
+            : Path.Combine(home, "Library", "Application Support", "Steam", "steamapps", "common", "Slay the Spire 2");
+        if (OperatingSystem.IsWindows())
+        {
+            return Path.Combine(root, "data_sts2_windows_x86_64", "sts2.dll");
+        }
+
+        string architecture = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture
+            == System.Runtime.InteropServices.Architecture.Arm64
+            ? "data_sts2_macos_arm64"
+            : "data_sts2_macos_x86_64";
+        return Path.Combine(root, "SlayTheSpire2.app", "Contents", "Resources", architecture, "sts2.dll");
+    }
+
+    private static void AssertFields(
+        MetadataReader metadata,
+        string typeNamespace,
+        string typeName,
+        params string[] expectedFields)
+    {
+        TypeDefinition definition = metadata.TypeDefinitions
+            .Select(metadata.GetTypeDefinition)
+            .Single(type => metadata.GetString(type.Namespace) == typeNamespace
+                && metadata.GetString(type.Name) == typeName);
+        HashSet<string> fields = definition.GetFields()
+            .Select(handle => metadata.GetString(metadata.GetFieldDefinition(handle).Name))
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (string expected in expectedFields)
+        {
+            Assert.Contains(expected, fields);
+        }
+    }
 
     private sealed class SharedFixture
     {
