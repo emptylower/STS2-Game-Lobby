@@ -1,6 +1,6 @@
 # STS2 LAN Connect v0.5.1 MOD 自动同步升级计划
 
-> 状态：执行中（Phase 1 已通过）
+> 状态：执行中（Phase 2 已通过）
 >
 > 基线：`main`，制定计划时 HEAD 为 `e79b6c9`
 >
@@ -364,10 +364,10 @@ Gate：C#/TypeScript 对同一 fixture 产生完全一致的 canonical 差异。
 
 ### Phase 2：服务端私有预检
 
-- [ ] 扩展 create-room DTO 和 `Room` 私有存储，证明 `RoomSummary` 不泄露清单。
-- [ ] 新增预检路由、密码验证、速率限制和能力字段。
-- [ ] 覆盖旧 host、旧 client、feature disabled、房间关闭/已开始/密码错误。
-- [ ] 保持现有 join ticket 和 relay 流程不变。
+- [x] 扩展 create-room DTO 和 `Room` 私有存储，证明 `RoomSummary` 不泄露清单。
+- [x] 新增预检路由、密码验证、速率限制和能力字段。
+- [x] 覆盖旧 host、旧 client、feature disabled、房间关闭/已开始/密码错误。
+- [x] 保持现有 join ticket 和 relay 流程不变。
 
 Gate：服务端全量测试通过，公开 API 快照不包含 inventory。
 

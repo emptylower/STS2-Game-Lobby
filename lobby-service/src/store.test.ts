@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { LobbyStore, LobbyStoreError, type CreateRoomResult, type JoinRoomInput } from "./store.js";
+import type { LobbyModDescriptor } from "./mod-sync/protocol.js";
 
 const baseConfig = {
   heartbeatTimeoutMs: 35_000,
@@ -873,4 +874,235 @@ test("relay-only strategy omits direct candidates", () => {
 
   assert.equal(joined.connectionPlan.strategy, "relay-only");
   assert.deepEqual(joined.connectionPlan.directCandidates, []);
+});
+
+const hostModInventory: LobbyModDescriptor[] = [
+  {
+    id: "host.workshop",
+    version: "2.0.0",
+    role: "gameplay",
+    source: "steam_workshop",
+    workshopFileId: "3747497501",
+    dependencies: ["shared.dependency"],
+  },
+  {
+    id: "shared.dependency",
+    version: "1.0.0",
+    role: "dependency",
+    source: "mods_directory",
+    dependencies: [],
+  },
+];
+
+test("modPreflight stores inventory privately without mutating room or issuing a ticket", () => {
+  const store = new LobbyStore(
+    { ...baseConfig, strictModVersionCheck: false },
+    { id: sequenceIds("room", "control", "room-session", "ticket") },
+  );
+  const created = store.createRoom(
+    {
+      roomName: "私有预检房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "v0.109.0",
+      modVersion: "0.5.1",
+      hostModInventory,
+      maxPlayers: 4,
+      hostConnectionInfo: { enetPort: 33771 },
+    },
+    "203.0.113.10",
+  );
+
+  assert.equal(Object.hasOwn(created.room, "hostModInventory"), false);
+  assert.equal(Object.hasOwn(store.listRooms()[0]!, "hostModInventory"), false);
+  const before = store.listRooms()[0]!;
+  const result = store.modPreflight(created.roomId, {
+    playerName: "Guest",
+    gameVersion: "v0.109.0",
+    localMods: [],
+  });
+  const after = store.listRooms()[0]!;
+
+  assert.equal(result.hostInventoryAvailable, true);
+  assert.deepEqual(result.missingWorkshopMods.map((mod) => mod.id), ["host.workshop"]);
+  assert.deepEqual(result.missingManualMods.map((mod) => mod.id), ["shared.dependency"]);
+  assert.equal(result.canContinueRelaxed, true);
+  assert.equal(after.currentPlayers, before.currentPlayers);
+  assert.equal(after.status, before.status);
+
+  const joined = store.joinRoom(created.roomId, {
+    playerName: "Guest",
+    version: "v0.109.0",
+    modVersion: "0.5.1",
+  });
+  assert.equal(joined.ticketId, "ticket", "preflight must not consume an id or issue a ticket");
+});
+
+test("modPreflight validates room state and password before returning private differences", () => {
+  const store = new LobbyStore({ ...baseConfig, strictModVersionCheck: false });
+  const created = store.createRoom(
+    {
+      roomName: "密码预检房间",
+      password: "room-secret",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "v0.109.0",
+      modVersion: "0.5.1",
+      hostModInventory,
+      maxPlayers: 4,
+      hostConnectionInfo: { enetPort: 33771 },
+    },
+    "203.0.113.10",
+  );
+
+  assert.throws(
+    () => store.modPreflight(created.roomId, {
+      playerName: "Guest",
+      password: "wrong",
+      gameVersion: "v0.109.0",
+      localMods: [],
+    }),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "invalid_password",
+  );
+
+  store.heartbeat(created.roomId, {
+    hostToken: created.hostToken,
+    currentPlayers: 1,
+    status: "starting",
+  });
+  assert.throws(
+    () => store.modPreflight(created.roomId, {
+      playerName: "Guest",
+      password: "room-secret",
+      gameVersion: "v0.109.0",
+      localMods: [],
+    }),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "room_started",
+  );
+});
+
+test("modPreflight hard-blocks game mismatches even when all legacy checks are relaxed", () => {
+  const store = new LobbyStore({
+    ...baseConfig,
+    strictGameVersionCheck: false,
+    strictModVersionCheck: false,
+  });
+  const created = store.createRoom(
+    {
+      roomName: "跨版本预检房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "v0.108.0",
+      modVersion: "0.5.1",
+      hostModInventory,
+      maxPlayers: 4,
+      hostConnectionInfo: { enetPort: 33771 },
+    },
+    "203.0.113.10",
+  );
+
+  const result = store.modPreflight(created.roomId, {
+    playerName: "Guest",
+    gameVersion: "v0.109.0",
+    localMods: [{ ...hostModInventory[0]!, version: "different" }],
+  });
+
+  assert.equal(result.gameVersion.exactMatch, false);
+  assert.equal(result.canContinueRelaxed, false);
+  assert.deepEqual(result.missingWorkshopMods, []);
+  assert.deepEqual(result.missingManualMods, []);
+  assert.deepEqual(result.extraGameplayMods, []);
+  assert.deepEqual(result.versionMismatches, []);
+});
+
+test("modPreflight reports unavailable inventory for a v0.5.0 host", () => {
+  const store = new LobbyStore({ ...baseConfig, strictModVersionCheck: false });
+  const created = createBasicRoom(store);
+
+  const result = store.modPreflight(created.roomId, {
+    playerName: "Guest",
+    gameVersion: "1.2.3",
+    localMods: [],
+  });
+
+  assert.equal(result.hostInventoryAvailable, false);
+  assert.deepEqual(result.missingWorkshopMods, []);
+  assert.deepEqual(result.missingManualMods, []);
+});
+
+test("modPreflight disables relaxed continuation when strict mod checks are enabled", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = store.createRoom(
+    {
+      roomName: "严格预检房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "v0.109.0",
+      modVersion: "0.5.1",
+      hostModInventory,
+      maxPlayers: 4,
+      hostConnectionInfo: { enetPort: 33771 },
+    },
+    "203.0.113.10",
+  );
+
+  const result = store.modPreflight(created.roomId, {
+    playerName: "Guest",
+    gameVersion: "v0.109.0",
+    localMods: [],
+  });
+  assert.equal(result.canContinueRelaxed, false);
+});
+
+test("modPreflight rejects missing full and closed rooms without exposing inventory", () => {
+  const input = {
+    playerName: "Guest",
+    gameVersion: "v0.109.0",
+    localMods: [],
+  };
+  const missingStore = new LobbyStore(baseConfig);
+  assert.throws(
+    () => missingStore.modPreflight("missing", input),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "room_not_found",
+  );
+
+  const fullStore = new LobbyStore(baseConfig);
+  const full = fullStore.createRoom(
+    {
+      roomName: "满员房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "v0.109.0",
+      modVersion: "0.5.1",
+      hostModInventory,
+      maxPlayers: 4,
+      hostConnectionInfo: { enetPort: 33771 },
+    },
+    "203.0.113.10",
+  );
+  fullStore.heartbeat(full.roomId, { hostToken: full.hostToken, currentPlayers: 4, status: "full" });
+  assert.throws(
+    () => fullStore.modPreflight(full.roomId, input),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "room_full",
+  );
+
+  const closedStore = new LobbyStore(baseConfig);
+  const closed = closedStore.createRoom(
+    {
+      roomName: "关闭房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "v0.109.0",
+      modVersion: "0.5.1",
+      hostModInventory,
+      maxPlayers: 4,
+      hostConnectionInfo: { enetPort: 33771 },
+    },
+    "203.0.113.10",
+  );
+  closedStore.heartbeat(closed.roomId, { hostToken: closed.hostToken, currentPlayers: 1, status: "closed" });
+  assert.throws(
+    () => closedStore.modPreflight(closed.roomId, input),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "room_closed",
+  );
 });

@@ -25,6 +25,12 @@ const CHAT_TEMPLATE_DEFAULTS = {
   SERVER_CHAT_SLOW_CLIENT_BYTES: "262144",
 } as const;
 
+const MOD_SYNC_TEMPLATE_DEFAULTS = {
+  MOD_SYNC_ENABLED: "false",
+  MOD_SYNC_MAX_DESCRIPTORS: "64",
+  MOD_SYNC_MAX_PAYLOAD_BYTES: "65536",
+} as const;
+
 type TemplateFormat = "dotenv" | "systemd";
 
 function readTemplateSettings(template: string, format: TemplateFormat): Array<[string, string]> {
@@ -97,6 +103,30 @@ test("config templates define every chat setting exactly once with parser defaul
       < systemd.indexOf("EnvironmentFile="),
     "the operator EnvironmentFile must follow built-in defaults so it can override them",
   );
+});
+
+test("config templates define mod sync disabled with exact parser safety limits", () => {
+  const templates: Array<[string, string, TemplateFormat]> = [
+    ["lobby-service/.env.example", readFileSync(new URL("../.env.example", import.meta.url), "utf8"), "dotenv"],
+    ["deploy/lobby-service.env.example", readFileSync(new URL("../../deploy/lobby-service.env.example", import.meta.url), "utf8"), "dotenv"],
+    ["lobby-service/deploy/lobby-service.docker.env.example", readFileSync(new URL("../deploy/lobby-service.docker.env.example", import.meta.url), "utf8"), "dotenv"],
+    ["lobby-service/deploy/sts2-lobby.service.example", readFileSync(new URL("../deploy/sts2-lobby.service.example", import.meta.url), "utf8"), "systemd"],
+  ];
+
+  for (const [templateName, template, format] of templates) {
+    const entries = readTemplateSettings(template, format).filter(([key]) => key.startsWith("MOD_SYNC_"));
+    assert.deepEqual(
+      Object.fromEntries(entries),
+      MOD_SYNC_TEMPLATE_DEFAULTS,
+      `${templateName} must define mod sync defaults exactly once`,
+    );
+  }
+
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /MOD_SYNC_ENABLED/);
+  assert.match(readme, /默认关闭/);
+  assert.match(readme, /MOD 清单.*不.*公开.*\/rooms/s);
+  assert.match(readme, /不会.*(?:DLL|PCK|ZIP).*(?:下载|传输)/s);
 });
 
 test("README documents CREATE_ROOM_TOKEN read fallback without granting chat ticket access", () => {
@@ -376,5 +406,32 @@ test("loadLobbyServiceConfig preserves the legacy CONNECTION_STRATEGY error", ()
       error.constructor === Error &&
       error.name === "Error" &&
       error.message === "Invalid CONNECTION_STRATEGY value: unsupported",
+  );
+});
+
+test("mod sync config defaults disabled with protocol safety limits", () => {
+  const config = loadLobbyServiceConfig({});
+  assert.equal(config.modSyncEnabled, false);
+  assert.equal(config.modSyncMaxDescriptors, 64);
+  assert.equal(config.modSyncMaxPayloadBytes, 65_536);
+});
+
+test("mod sync config parses explicit enable and bounded limits", () => {
+  const config = loadLobbyServiceConfig({
+    MOD_SYNC_ENABLED: "true",
+    MOD_SYNC_MAX_DESCRIPTORS: "32",
+    MOD_SYNC_MAX_PAYLOAD_BYTES: "32768",
+  });
+  assert.equal(config.modSyncEnabled, true);
+  assert.equal(config.modSyncMaxDescriptors, 32);
+  assert.equal(config.modSyncMaxPayloadBytes, 32_768);
+
+  assert.throws(
+    () => loadLobbyServiceConfig({ MOD_SYNC_MAX_DESCRIPTORS: "65" }),
+    (error: unknown) => error instanceof LobbyServiceConfigError && error.environmentKey === "MOD_SYNC_MAX_DESCRIPTORS",
+  );
+  assert.throws(
+    () => loadLobbyServiceConfig({ MOD_SYNC_MAX_PAYLOAD_BYTES: "65537" }),
+    (error: unknown) => error instanceof LobbyServiceConfigError && error.environmentKey === "MOD_SYNC_MAX_PAYLOAD_BYTES",
   );
 });

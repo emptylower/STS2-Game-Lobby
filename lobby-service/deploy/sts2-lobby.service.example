@@ -32,6 +32,9 @@ Environment="SERVER_CHAT_IP_MESSAGES_PER_MINUTE=30"
 Environment="SERVER_CHAT_CONNECTION_BURST=5"
 Environment="SERVER_CHAT_CONNECTION_REFILL_MS=2000"
 Environment="SERVER_CHAT_SLOW_CLIENT_BYTES=262144"
+Environment="MOD_SYNC_ENABLED=false"
+Environment="MOD_SYNC_MAX_DESCRIPTORS=64"
+Environment="MOD_SYNC_MAX_PAYLOAD_BYTES=65536"
 EnvironmentFile=/opt/sts2-lobby/lobby-service/.env
 ExecStart=/usr/bin/npm start
 Restart=always
