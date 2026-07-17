@@ -389,13 +389,15 @@ Gate 证据（2026-07-17）：Phase 3 focused xUnit 25/25；完整 xUnit 618 通
 
 ### Phase 4：Steam Workshop 与选择性禁用
 
-- [ ] 先实现 fake provider 和完整状态机测试。
-- [ ] 实现 Steam metadata、subscribe、download、callback、poll、timeout、cancel、retry。
-- [ ] 实现 manifest 安装后校验。
-- [ ] 实现选择性禁用、单次持久化、失败回滚和恢复提示。
-- [ ] SteamAPI 不可用时返回结构化 unsupported，不抛启动异常。
+- [x] 先实现 fake provider 和完整状态机测试。
+- [x] 实现 Steam metadata、subscribe、download、callback、poll、timeout、cancel、retry。
+- [x] 实现 manifest 安装后校验。
+- [x] 实现选择性禁用、单次持久化、失败回滚和恢复提示。
+- [x] SteamAPI 不可用时返回结构化 unsupported，不抛启动异常。
 
 Gate：fake provider 全状态覆盖；真实 Steam harmless MOD 完成一次订阅、取消、失败和重试。
+
+Gate 证据（2026-07-17）：Phase 4 focused xUnit 26/26；完整 xUnit 644 通过、1 个既有双客户端原型跳过；GdUnit 219/219；客户端构建 0 警告。真实 Steam AppID `2868840` 对 harmless 条目 `3747497501` 返回标题 `Regent FX Omnistar`，完成 `Pending -> Validating -> Subscribing -> Downloading -> Canceled`、取消订阅、Retry attempt 2 下载、受控 manifest ID 失败，以及按实际 manifest `RegentFX 0.4.3` 完成 `WaitingInstall -> Installed`。Steam 日志确认最终 unsubscribe，本机订阅和安装目录恢复；一次性 smoke runner 已删除，正常 Steam 启动无测试入口。
 
 建议提交：`feat(client): add consent-based workshop mod synchronization`
 
