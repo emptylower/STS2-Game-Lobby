@@ -23,6 +23,14 @@
 
 同一房间内的所有玩家必须使用完全相同的游戏版本。房主和客户端版本不同时，加入流程会直接提示双方版本并中止；非联机相关 MOD 的差异仍按 `test_relaxed` 策略处理。
 
+### 富聊天引用怎么使用
+
+- 点击输入框右侧笑脸按钮可把 Emoji 插入草稿；`Enter` 发送，`Shift + Enter` 换行。
+- 插入卡牌、遗物或药水引用前，先点击游戏画面空白处让聊天输入框失去焦点，并关闭表情或物品预览。macOS 按住 `Option`、Windows/Linux 按住 `Alt`，再左键点击可见卡牌、遗物栏图标或药水栏图标。
+- 在战斗中用相同手势点击能力、增益/减益图标或玩家角色，可插入战斗状态引用。战斗引用只能发送到房间聊天；怪物目标引用当前未开放。
+- 引用可以与普通文字混排，并可用方向键、`Backspace` 和 `Delete` 编辑。桌面端将鼠标悬停在收到的物品引用上可查看本地化预览。
+- Android 纯触屏可以发送 Emoji 和查看引用；主动插入物品或战斗引用需要外接键盘、鼠标。
+
 `0.4.0` 主要改进（保留作历史参考）：大厅支持键盘 / 手柄式焦点导航，房间卡片可聚焦，`Enter` / `Space` / `ui_accept` 可加入当前聚焦房间；`Esc` 优先关闭最上层弹窗，再退出大厅；若安装 `say-the-spire2` 盲人辅助模组，客户端会软检测并把大厅焦点朗读桥接给该模组。新增 `F7` 邀请快捷键、`F8` 聊天快捷键，以及“剪贴板已有有效邀请码时跳过服务器选择器、直接弹出加入确认”的入口流程。发布包强制携带带 CF discovery 和内置 seed peers 的 `lobby-defaults.json`。
 
 `0.3.1` 主要改进（v0.3 系列，去中心化发现，保留作历史参考）：进入"游戏大厅"时弹出
@@ -160,6 +168,14 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 | Connection policy | `test_relaxed + relay-only` |
 
 `0.5.0` key changes: the lobby now has node-local server-channel chat, while room chat supports Emoji, card/relic/potion references, and generation-checked combat references with safe fallback. Lobby chat uses a native light sidebar and room chat retains its dark overlay; composer sizing, the Emoji popup, and icon rasterization were fixed in the real game. The complete feature set requires both the v0.5.0 client and v0.5.0 lobby service.
+
+### Using Rich Chat References
+
+- Use the smile button to insert Emoji. Press `Enter` to send and `Shift + Enter` for a newline.
+- Before capturing an item, click an empty part of the game view so the composer loses focus and close any emoji or item preview. Hold `Option` on macOS or `Alt` on Windows/Linux, then left-click a visible card, relic icon, or potion icon.
+- In combat, use the same gesture on a power, buff/debuff icon, or player character. Combat references are room-chat only; monster-target references are not enabled.
+- References can be mixed with text and removed with caret selection plus `Backspace` / `Delete`. Desktop users can hover received item chips for localized previews.
+- Android touch-only users can send Emoji and view references; inserting item or combat references requires an external keyboard and mouse.
 
 Historical `0.4.0` changes: keyboard/controller lobby navigation, focusable room cards, dialog-first `Esc`, optional `say-the-spire2` announcements, `F7` invite handling, `F8` room-chat toggling, clipboard invite routing, and mandatory CF discovery/seed defaults in the release package.
 

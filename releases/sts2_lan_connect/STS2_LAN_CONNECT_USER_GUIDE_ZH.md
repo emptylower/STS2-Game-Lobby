@@ -81,6 +81,14 @@
 - 房间聊天走大厅控制通道，仅在当前房间内广播，不写入续局存档，也不保留历史
 - Emoji 与物品引用会按双方协商能力显示；旧版本或功能关闭时自动降级为普通文本
 
+### 富聊天引用操作
+
+- **Emoji**：点击输入框右侧的笑脸按钮，在面板中选择表情。表情会先插入草稿，可继续输入文字，再按 `Enter` 或点击 `发送`；`Shift + Enter` 用于换行。
+- **卡牌 / 遗物 / 药水**：先点击游戏画面空白处，让聊天输入框失去焦点并关闭表情或物品预览；macOS 按住 `Option`、Windows/Linux 按住 `Alt`，再左键点击可见卡牌、遗物栏图标或药水栏图标。引用会插入当前选中频道的草稿，不会立即发送。
+- **战斗状态**：在战斗中使用同样的 `Option/Alt + 左键` 操作点击能力、增益/减益图标或玩家角色，可引用能力名称、层数、持有者、施加者或玩家。战斗状态只能分享到 `房间聊天`，不能分享到大厅 `频道聊天`；怪物目标引用当前版本尚未开放。
+- **编辑与查看**：引用可以与普通文字混排。用方向键移动光标，在引用旁按 `Backspace` / `Delete`，或选中引用后删除。收到卡牌、遗物或药水引用后，桌面端可将鼠标悬停在引用标签上查看本地化预览。
+- **Android 限制**：纯触屏目前可以发送文字和 Emoji，也可以接收并显示引用；主动插入物品或战斗引用仍依赖 `Alt + 左键`，需要外接键盘和鼠标。
+
 ## 房间管理
 
 - 房主在游戏内暂停菜单中可找到 `房间管理` 按钮（位于"百科大全"和"放弃"之间），点击后可：
@@ -275,6 +283,14 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 - The chat panel title bar and button support press-and-drag repositioning; the position is saved to local config
 - Room chat uses the lobby control channel, is broadcast only within the current room, is not written to save files, and retains no history
 - Emoji and item references follow negotiated peer capabilities and degrade to ordinary compatibility text for old clients or disabled features
+
+### Rich Chat Reference Controls
+
+- **Emoji**: click the smile button beside the composer and choose an emoji. It is inserted into the draft, so you can add text before sending with `Enter` or `Send`; use `Shift + Enter` for a newline.
+- **Cards / relics / potions**: first click an empty part of the game view so the chat composer loses focus and close any emoji or item preview. Hold `Option` on macOS or `Alt` on Windows/Linux, then left-click a visible card, relic inventory icon, or potion-slot icon. The reference is inserted into the selected channel draft and is not sent immediately.
+- **Combat state**: use the same `Option/Alt + left-click` gesture on a power, buff/debuff icon, or player character to share the power name, amount, owner, applier, or player. Combat references are room-chat only; monster-target references are not enabled in this release.
+- **Editing and viewing**: references can be mixed with ordinary text. Move the caret with the arrow keys and remove a neighboring or selected reference with `Backspace` / `Delete`. On desktop, hover a received card, relic, or potion chip to open its localized preview.
+- **Android limitation**: touch-only users can send text and Emoji and can receive references. Inserting item or combat references still requires an external keyboard and mouse for the `Alt + left-click` gesture.
 
 ## Room Management
 
