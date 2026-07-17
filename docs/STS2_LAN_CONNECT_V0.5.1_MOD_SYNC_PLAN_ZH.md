@@ -1,6 +1,6 @@
 # STS2 LAN Connect v0.5.1 MOD 自动同步升级计划
 
-> 状态：待执行
+> 状态：执行中（Phase 0 已通过）
 >
 > 基线：`main`，制定计划时 HEAD 为 `e79b6c9`
 >
@@ -344,10 +344,10 @@ expiresAtUtc
 
 ### Phase 0：基线与规格门禁
 
-- [ ] 从最新 `origin/main` 创建 `feat/mod-sync-0.5.1`，确认不包含现有未跟踪用户文件。
-- [ ] 把本计划中的 DTO、限制、错误码和平台矩阵转成测试名称清单。
-- [ ] 对 PR #38 留下 changes-requested 结论，不合并、不关闭，待替代实现完成后再处理。
-- [ ] 确认测试用 harmless Workshop MOD、双 Steam 账号和 0.107.1/0.108.0 测试产物来源。
+- [x] 从最新 `origin/main` 创建 `feat/mod-sync-0.5.1`，确认不包含现有未跟踪用户文件。
+- [x] 把本计划中的 DTO、限制、错误码和平台矩阵转成测试名称清单。
+- [x] 对 PR #38 留下 changes-requested 结论，不合并、不关闭，待替代实现完成后再处理。
+- [x] 确认测试用 harmless Workshop MOD、双 Steam 账号和 0.107.1/0.108.0 测试产物来源。
 
 Gate：范围、协议和测试夹具明确，没有实现代码。
 
