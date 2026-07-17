@@ -8,57 +8,15 @@ internal static class LanConnectModPreflightDecisionPrompt
         Node parent,
         LobbyRoomSummary room,
         LobbyModPreflightResponse response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? desiredSavePlayerNetId = null)
     {
-        ArgumentNullException.ThrowIfNull(parent);
-        ArgumentNullException.ThrowIfNull(room);
-        ArgumentNullException.ThrowIfNull(response);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        string summary = BuildDifferenceSummary(response);
-        if (!response.CanContinueRelaxed)
-        {
-            return LanConnectModPreflightDecision.Synchronize;
-        }
-
-        ConfirmationDialog dialog = new()
-        {
-            Name = "LanConnectModPreflightRelaxedConfirmation",
-            Title = "发现 gameplay MOD 差异",
-            DialogText =
-                $"加入 {room.RoomName} 前检测到以下差异：\n\n{summary}\n\n" +
-                "继续加入可能失败或导致联机状态异常。是否仍然尝试？",
-            OkButtonText = "仍然尝试加入（可能失败）",
-            CancelButtonText = "取消",
-            Exclusive = true,
-            Unresizable = true
-        };
-        TaskCompletionSource<LanConnectModPreflightDecision> completion = new(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        Callable confirm = Callable.From(() =>
-            completion.TrySetResult(LanConnectModPreflightDecision.ContinueRelaxed));
-        Callable cancel = Callable.From(() =>
-            completion.TrySetResult(LanConnectModPreflightDecision.Cancel));
-        dialog.Connect(AcceptDialog.SignalName.Confirmed, confirm);
-        dialog.Connect(AcceptDialog.SignalName.Canceled, cancel);
-        dialog.Connect(Window.SignalName.CloseRequested, cancel);
-        parent.AddChild(dialog);
-
-        using CancellationTokenRegistration registration = cancellationToken.Register(() =>
-            completion.TrySetCanceled(cancellationToken));
-        try
-        {
-            dialog.PopupCentered(new Vector2I(620, 360));
-            dialog.GetCancelButton().GrabFocus();
-            return await completion.Task;
-        }
-        finally
-        {
-            if (GodotObject.IsInstanceValid(dialog))
-            {
-                dialog.QueueFree();
-            }
-        }
+        return await LanConnectModSyncDialog.ShowAsync(
+            parent,
+            room,
+            response,
+            desiredSavePlayerNetId,
+            cancellationToken);
     }
 
     internal static string BuildDifferenceSummary(LobbyModPreflightResponse response)

@@ -197,6 +197,23 @@ public sealed class LanConnectModPreflightCoordinatorTests
         Assert.DoesNotContain("ticket", ports.Calls);
     }
 
+    [Fact]
+    public async Task JoinCoordinator_returns_restart_scheduled_without_requesting_ticket()
+    {
+        FakePorts ports = new()
+        {
+            Preflight = DifferencePreflight(canContinueRelaxed: true),
+            Decision = LanConnectModPreflightDecision.RestartScheduled
+        };
+        LanConnectModPreflightCoordinator sut = new(ports);
+
+        LanConnectModPreflightJoinResult result = await sut.JoinAsync(Request());
+
+        Assert.Equal(LanConnectModPreflightJoinOutcome.RestartScheduled, result.Outcome);
+        Assert.Equal(["probe", "preflight", "decision"], ports.Calls);
+        Assert.DoesNotContain("ticket", ports.Calls);
+    }
+
     [Theory]
     [InlineData(null, null)]
     [InlineData("invite-password", null)]

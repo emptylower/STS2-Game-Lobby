@@ -1865,7 +1865,8 @@ internal sealed partial class LanConnectLobbyRuntime :
                                     submenu,
                                     decisionRoom,
                                     response,
-                                    token)));
+                                    token,
+                                    pending.DesiredSavePlayerNetId)));
                     LanConnectModPreflightJoinResult preflightJoin = await coordinator.JoinAsync(
                         LanConnectModPreflightJoinRequest.CreateCurrent(
                             room,
@@ -1876,6 +1877,10 @@ internal sealed partial class LanConnectLobbyRuntime :
                         preflightJoin.JoinResponse == null)
                     {
                         _pendingClientReconnect = null;
+                        if (preflightJoin.Outcome == LanConnectModPreflightJoinOutcome.RestartScheduled)
+                        {
+                            return;
+                        }
                         string message = preflightJoin.Outcome == LanConnectModPreflightJoinOutcome.GameVersionMismatch
                             ? preflightJoin.Message ?? "游戏版本不匹配，已停止自动重连。"
                             : "自动重连前发现 gameplay MOD 差异，请在游戏大厅中手动处理后重新加入。";

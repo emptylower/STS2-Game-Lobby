@@ -7,7 +7,8 @@ internal enum LanConnectModPreflightDecision
 {
     Synchronize,
     Cancel,
-    ContinueRelaxed
+    ContinueRelaxed,
+    RestartScheduled
 }
 
 internal enum LanConnectModPreflightJoinOutcome
@@ -15,7 +16,8 @@ internal enum LanConnectModPreflightJoinOutcome
     TicketIssued,
     GameVersionMismatch,
     ModSynchronizationRequired,
-    Canceled
+    Canceled,
+    RestartScheduled
 }
 
 internal sealed record LanConnectModPreflightJoinRequest
@@ -167,9 +169,12 @@ internal sealed class LanConnectModPreflightCoordinator
 
         return new LanConnectModPreflightJoinResult
         {
-            Outcome = decision == LanConnectModPreflightDecision.Cancel
-                ? LanConnectModPreflightJoinOutcome.Canceled
-                : LanConnectModPreflightJoinOutcome.ModSynchronizationRequired,
+            Outcome = decision switch
+            {
+                LanConnectModPreflightDecision.Cancel => LanConnectModPreflightJoinOutcome.Canceled,
+                LanConnectModPreflightDecision.RestartScheduled => LanConnectModPreflightJoinOutcome.RestartScheduled,
+                _ => LanConnectModPreflightJoinOutcome.ModSynchronizationRequired
+            },
             Preflight = preflight
         };
     }

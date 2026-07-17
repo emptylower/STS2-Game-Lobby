@@ -403,13 +403,15 @@ Gate 证据（2026-07-17）：Phase 4 focused xUnit 26/26；完整 xUnit 644 通
 
 ### Phase 5：响应式 UI 与重启恢复
 
-- [ ] 实现各视图状态及本地化。
-- [ ] 完成下载进度、手动项、禁用选择、继续加入和取消交互。
-- [ ] 实现 pending join 原子写入、TTL、恢复和清理。
-- [ ] 复用导航锁，加入竞态回归测试。
-- [ ] 完成 GdUnit 固定 viewport、焦点、文本越界和像素边界测试。
+- [x] 实现各视图状态及本地化。
+- [x] 完成下载进度、手动项、禁用选择、继续加入和取消交互。
+- [x] 实现 pending join 原子写入、TTL、恢复和清理。
+- [x] 复用导航锁，加入竞态回归测试。
+- [x] 完成 GdUnit 固定 viewport、焦点、文本越界和像素边界测试。
 
 Gate：桌面与 Android UI 测试通过，重启后公开房间恢复及密码房重新询问通过。
+
+Gate 证据（2026-07-17）：Phase 5 focused xUnit 33/33；完整 xUnit 662 通过、1 个既有双客户端原型跳过；完整 GdUnit TRX 224/224；lobby-service check 与 425/425 测试通过；客户端正式构建 0 警告。真实 SubViewport 覆盖 1280x720、1920x1080、2560x1440、4K、Android 720x1280/1280x720、64 个长 MOD 行、九态重建、焦点、Esc、选择默认空和 framebuffer 像素，桌面与 Android PNG 已在临时目录人工复核且未提交。pending join 仅序列化计划允许的六个上下文字段和 schema version，15 分钟 TTL；公开房恢复后重新预检，密码房只恢复房间/角色槽并重新要求密码，旧 generation 清理不会删除新 pending。
 
 建议提交：`feat(ui): complete mod sync dialog and restart resume flow`
 
