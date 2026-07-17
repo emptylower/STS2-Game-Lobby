@@ -1,10 +1,10 @@
 # STS2 服务 Docker 化部署与运维指南
 
-> 本文档对应 **v0.5.0**。部署仍只需要 `lobby-service` 一个容器；v0.5.0 在 v0.4.0 去中心化架构上新增服务器频道、房间富聊天和治理开关。以前的"双服务"栈（lobby-service + server-registry + postgres）仅作历史运维参考。
+> 本文档对应 **v0.5.1**。部署仍只需要 `lobby-service` 一个容器；v0.5.1 在既有去中心化与聊天能力上新增加入前 gameplay MOD 私有预检。以前的"双服务"栈（lobby-service + server-registry + postgres）仅作历史运维参考。
 
 ## 一、当前推荐：lobby-service 单容器
 
-v0.5.0 沿用 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）聚合去中心化节点，本地不需要 PostgreSQL 或 `server-registry`。升级时应替换完整 lobby-service 包并重新构建容器，确保 chat gateway、管理面板和 env 默认值来自同一版本。
+v0.5.1 沿用 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）聚合去中心化节点，本地不需要 PostgreSQL 或 `server-registry`。升级时应替换完整 lobby-service 包并重新构建容器，确保 MOD 预检、chat gateway、管理面板和 env 默认值来自同一版本。
 
 ### 1.1 准备 env 文件
 
@@ -26,6 +26,9 @@ $EDITOR deploy/lobby-service.env
 
 - `PEER_PUBLIC_LISTING_ENABLED=false` 如果只想跑私有节点（仍在节点网络里但不公开）
 - `PEER_NETWORK_ENABLED=false` 如果完全不想加入节点网络
+- `MOD_SYNC_ENABLED=true` 只在 v0.5.1 候选测试节点开启；正式节点验收前保持默认 `false`
+
+`MOD_SYNC_MAX_DESCRIPTORS=64` 和 `MOD_SYNC_MAX_PAYLOAD_BYTES=65536` 是协议硬上限，不应调高。预检只返回差异，不签发 join ticket、不改变房间人数或状态；游戏版本不同始终拒绝。服务端不会托管或传输任何 MOD DLL、PCK、ZIP。
 
 > ⚠️ `PEER_SELF_ADDRESS` 是 v0.4.0+ 新部署最容易漏掉的一项。漏了就会在 `/server-admin` 看到"节点网络未配置"。
 

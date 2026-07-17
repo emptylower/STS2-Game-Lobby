@@ -431,13 +431,15 @@ Gate 证据（2026-07-17）：审计 AutoModSubscriber `595356c` 的公开接口
 
 ### Phase 7：版本、文档与完整回归
 
-- [ ] 客户端和服务端所有版本源从 `0.5.0` 升为 `0.5.1`。
-- [ ] 保留历史 fixture 中的 `0.5.0`、`0.4.0`、`0.2.2` 字面量。
-- [ ] 更新 CHANGELOG、README、客户端指南、部署指南、环境模板和发布说明。
-- [ ] 增加客户端与服务端包内容测试，不把游戏 DLL 或 Steamworks DLL复制进公开包。
-- [ ] 执行完整测试和 IL 外部成员引用对比。
+- [x] 客户端和服务端所有版本源从 `0.5.0` 升为 `0.5.1`。
+- [x] 保留历史 fixture 中的 `0.5.0`、`0.4.0`、`0.2.2` 字面量。
+- [x] 更新 CHANGELOG、README、客户端指南、部署指南、环境模板和发布说明。
+- [x] 增加客户端与服务端包内容测试，不把游戏 DLL 或 Steamworks DLL复制进公开包。
+- [x] 执行完整测试和 IL 外部成员引用对比。
 
 Gate：完整 `verify-release.sh` 通过，两个候选包可重复生成并验证。
+
+Gate 证据（2026-07-17）：客户端 manifest/assembly/file/informational version 与服务端 package/lock 均为 `0.5.1`，发布契约继续锁定 `0.5.0`、`0.4.0`、`0.2.2` fixture。服务端显式包清单补入 `mod-sync/diff.ts`、`protocol.ts`、`validator.ts` 三份生产文件，继续排除测试、游戏 DLL、Steamworks/Harmony/GodotSharp DLL 和非本 MOD PCK。完整 `verify-release.sh` 通过：lobby-service check 与 428/428，xUnit 663 通过及 1 个既有双客户端原型跳过，GdUnit 224/224，客户端构建 0 警告，安装 dry-run 与双包 allowlist/legal 校验通过。相对 `origin/main@66ceb72` 的 IL 审计确认新外部引用限于 Steamworks、Steam 初始化/调用结果和 MOD 设置保存；易漂移 inventory 成员仍为受约束 reflection，IL 只有 `ModManager` type token，没有 `ModManager.Mods` member call。两次独立打包目录 `diff -qr` 为空，客户端 SHA-256 `05eeb7b5318bb8d38875a328583a3ac21e8dc67ee3dbdef8ebd3549a34d9e641`，服务端 SHA-256 `cb53068e5656ba6f693a765ff16bd700f4759ba8a272f40f85bafce36acf7254`；使用 `rsync -a --checksum --delete` 同步完整 staged 镜像到 `releases/` 后再次 `diff -qr` 为空。
 
 建议提交：`release: prepare v0.5.1 mod synchronization candidate`
 

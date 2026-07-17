@@ -12,7 +12,7 @@
 
 # STS2 Lobby Service
 
-> 本文档对应 **v0.5.0**。去中心化节点网络沿用 v0.4.0 架构；v0.5.0 新增服务器频道、房间富聊天与管理面板治理开关。v0.3.x 时代的 `SERVER_REGISTRY_*` 环境变量自 v0.4.0 起已完全删除。
+> 本文档对应 **v0.5.1**。去中心化节点网络和 v0.5.0 聊天能力保持不变；v0.5.1 新增私有 gameplay MOD 预检。v0.3.x 时代的 `SERVER_REGISTRY_*` 环境变量自 v0.4.0 起已完全删除。
 
 ## 文档定位
 
@@ -21,7 +21,7 @@
 它主要回答：
 
 - 该服务负责什么、**不**负责什么
-- 当前 v0.5.0 推荐的部署路径是什么
+- 当前 v0.5.1 推荐的部署路径是什么
 - 首次部署完成后先检查哪些项目
 - 如何配置节点网络、私有访问、管理面板与客户端默认大厅
 - 需要深入查阅时，环境变量和 API 在哪里看
@@ -406,6 +406,20 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 
 说明：若客户端和房主均上报 `modList`，服务端会额外比对缺失项，并在 `mod_mismatch` 中返回差异信息。
 
+### 加入前 MOD 预检
+
+| 变量 | 说明 |
+|------|------|
+| `MOD_SYNC_ENABLED` | 是否启用 v1 私有 MOD 预检；默认关闭，候选测试节点才显式设为 `true` |
+| `MOD_SYNC_MAX_DESCRIPTORS` | 单端结构化 MOD 清单上限，默认及硬上限为 `64` |
+| `MOD_SYNC_MAX_PAYLOAD_BYTES` | canonical MOD 清单 UTF-8 字节上限，默认及硬上限为 `65536` |
+
+启用后，`/probe` 在 `capabilities` 中返回 `modSyncProtocolVersion: 1` 与 `modSyncEnabled: true`。v0.5.1 客户端可在领取 join ticket 前调用 `POST /rooms/:id/mod-preflight`；该请求不增加人数、不改变房间状态，也不签发 ticket。功能关闭或客户端协议不匹配时，接口返回 HTTP 200 的 disabled 响应，客户端继续使用 v0.5.0 加入流程。
+
+房主的 `hostModInventory` 只保存在房间私有对象中。MOD 清单不会出现在公开 `/rooms`、health、metrics、peer gossip 或聊天中；密码正确后预检才返回差异。预检无论 `STRICT_GAME_VERSION_CHECK` 如何设置都会硬拦截不同游戏版本，`STRICT_MOD_VERSION_CHECK=false` 只允许用户确认后继续尝试 MOD 差异。
+
+MOD 同步只允许客户端在明确确认后调用 Steam Workshop 订阅，以及选择性修改本机启用状态。服务端不会把 DLL、PCK、ZIP 作为下载或传输内容，也不会托管 MOD 文件；房主和任意 URL 都不能成为二进制来源。
+
 ### 房间访问收口
 
 | 变量 | 说明 |
@@ -530,7 +544,7 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 
 # STS2 Lobby Service
 
-> Targets **v0.5.0**. It retains the v0.4.0 decentralized peer network and adds server-channel chat, rich room chat, and persisted governance controls. All `SERVER_REGISTRY_*` env vars from the v0.3.x era have been inert since v0.4.0.
+> Targets **v0.5.1**. It retains the v0.4.0 decentralized peer network and v0.5.0 chat capabilities, and adds private gameplay-MOD preflight. All `SERVER_REGISTRY_*` env vars from the v0.3.x era have been inert since v0.4.0.
 
 This README is the **operator/admin guide** for `lobby-service`.
 
@@ -541,6 +555,7 @@ This README is the **operator/admin guide** for `lobby-service`.
 - Control-channel handshake and room-scoped broadcast
 - Server-channel tickets, bounded history, rate limits, and broadcast
 - Capability negotiation and legacy fallback for Emoji/item/combat references
+- Private preflight for gameplay MODs and required dependencies before join-ticket issuance
 - In-room announcements and `/server-admin` management
 - Relay fallback planning when direct ENet connection fails
 - Joins the decentralized peer network via `/peers/announce` + the Cloudflare discovery worker
@@ -552,6 +567,7 @@ This README is the **operator/admin guide** for `lobby-service`.
 - Account systems
 - Guaranteed NAT traversal
 - Any "master panel" / review backend — this has not existed since v0.4.0
+- Hosting, downloading, or relaying MOD DLL, PCK, or ZIP files
 
 ### Recommended path
 
@@ -559,7 +575,7 @@ This README is the **operator/admin guide** for `lobby-service`.
 2. Set a real public hostname or domain during install
 3. Generate `SERVER_ADMIN_PASSWORD_HASH` and `SERVER_ADMIN_SESSION_SECRET`
 4. **Manually add `PEER_SELF_ADDRESS` / `PEER_CF_DISCOVERY_BASE_URL`** to the generated `.env` (the install script may not include them yet on a fresh install)
-5. Verify `/health`, `/server-admin`, `/announcements`, `/rooms`, `/peers/health`
+5. Keep `MOD_SYNC_ENABLED=false` until candidate validation, then verify `/health`, `/probe`, `/server-admin`, `/announcements`, `/rooms`, `/peers/health`, and private preflight
 
 Recommended install command:
 
@@ -606,4 +622,4 @@ When `LOBBY_ACCESS_TOKEN` is unset, `CREATE_ROOM_TOKEN` also authorizes protecte
 
 - Environment variables: see [`../deploy/lobby-service.env.example`](../deploy/lobby-service.env.example)
 - Current deployment guide (Chinese): [`../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md)
-- Historical compatibility notes are intentionally demoted and not part of the v0.5.0 path
+- Historical compatibility notes are intentionally demoted and not part of the v0.5.1 path

@@ -10,7 +10,7 @@
 
 # STS2 游戏大厅部署指南
 
-> 本文档对应 **v0.5.0**。去中心化节点网络沿用 v0.4.0 架构；v0.5.0 新增服务器频道、房间富聊天和管理面板治理开关。如果你从 v0.3.x 升级，请同时阅读文末的 v0.4.0 架构迁移要点。
+> 本文档对应 **v0.5.1**。去中心化节点网络和 v0.5.0 聊天能力保持不变；v0.5.1 新增加入前 gameplay MOD 私有预检与 Steam Workshop 客户端同步。如果你从 v0.3.x 升级，请同时阅读文末的 v0.4.0 架构迁移要点。
 
 ## 文档定位
 
@@ -25,14 +25,16 @@
 1. [`../README.md`](../README.md)
 2. [`../lobby-service/README.md`](../lobby-service/README.md)
 
-本文只讲 **v0.5.0 怎么部署与验证**。旧的 mother registry / SERVER_REGISTRY_* 流程已经在 v0.4.0 中删除，相关内容只在文末作为升级参考保留。
+本文只讲 **v0.5.1 怎么部署与验证**。旧的 mother registry / SERVER_REGISTRY_* 流程已经在 v0.4.0 中删除，相关内容只在文末作为升级参考保留。
 
-## v0.5.0 关键变更
+## v0.5.1 关键变更
 
 - v0.4.0 的去中心化架构保持不变：`lobby-service` 通过 `PEER_SELF_ADDRESS` 公开对外地址，由 Cloudflare discovery worker 聚合；`SERVER_REGISTRY_*` 仍完全无效。
-- v0.5.0 新增服务器频道 chat ticket、历史缓冲、限流、房间富聊天能力协商和 generation 隔离。
-- `/server-admin` 新增六项聊天治理开关并写入 `SERVER_ADMIN_STATE_FILE`。部署包中的三个 env 示例已经包含对应默认值。
-- 客户端与 lobby-service 必须同步升级到 `0.5.0` 才能获得完整聊天能力；仅更新客户端无法使用服务器频道 ticket 与富聊天协商。
+- v0.5.1 新增 `POST /rooms/:id/mod-preflight`，只在密码校验后返回 gameplay MOD 差异；请求不增加人数、不改变房间状态、不签发 join ticket。
+- 房主清单仅保存在房间私有对象，不进入 `/rooms`、health、metrics、peer gossip 或聊天。服务端不托管、下载或转发 DLL、PCK、ZIP。
+- `MOD_SYNC_ENABLED` 默认 `false`。先在测试节点显式设为 `true` 并完成客户端验收；回滚时先关闭该开关，v0.5.0 与无 capability 客户端继续走原加入流程。
+- 游戏版本不同在预检中始终硬拦截，与 `STRICT_GAME_VERSION_CHECK` 无关；`STRICT_MOD_VERSION_CHECK=false` 只保留用户确认后的 MOD relaxed 继续。
+- v0.5.0 的服务器频道、富聊天与治理开关继续保留；客户端与 lobby-service 配套升级到 `0.5.1` 才能使用 MOD 预检。
 
 ## 当前推荐部署路径（主路径）
 
@@ -40,8 +42,9 @@
 2. 配置 **公网地址**（`RELAY_PUBLIC_HOST` + `PEER_SELF_ADDRESS`）、管理面板密码哈希、会话密钥
 3. 决定是否加入去中心化公开节点网络（`PEER_PUBLIC_LISTING_ENABLED` + 管理面板开关）
 4. 决定是否启用私有 / 半私有 token 收口
-5. 验证 `/health`、`/server-admin`、`/announcements`、`/rooms`、`/peers/health`
-6. 按需重新打包客户端默认大厅
+5. 在测试节点按需设置 `MOD_SYNC_ENABLED=true`，正式节点默认保持关闭直到验收完成
+6. 验证 `/health`、`/probe`、`/server-admin`、`/announcements`、`/rooms`、`/peers/health` 和私有预检
+7. 按需重新打包客户端默认大厅
 
 项目当前公共节点与发现入口：
 
@@ -414,7 +417,7 @@ CF discovery worker 还没拉到本节点的 announce，或本节点的 `PEER_SE
 
 # STS2 Game Lobby Deployment Guide
 
-> Targets **v0.5.0**. It retains the v0.4.0 decentralized peer network and adds server-channel chat, rich room chat, and persisted governance controls. If you are upgrading from v0.3.x, see the architecture migration notes at the end.
+> Targets **v0.5.1**. It retains the v0.4.0 peer network and v0.5.0 chat surface, and adds private gameplay-MOD preflight plus consent-based Steam Workshop synchronization on the client. If you are upgrading from v0.3.x, see the architecture migration notes at the end.
 
 ## Document scope
 
@@ -425,12 +428,13 @@ Prerequisite reading:
 1. [`../README.md`](../README.md)
 2. [`../lobby-service/README.md`](../lobby-service/README.md)
 
-## What changed in v0.5.0
+## What changed in v0.5.1
 
 - The v0.4.0 decentralized architecture remains: nodes advertise through `PEER_SELF_ADDRESS`, the Cloudflare discovery worker aggregates them, and all `SERVER_REGISTRY_*` variables remain inert.
-- v0.5.0 adds server-channel chat tickets, bounded history, rate limiting, rich-room capability negotiation, and room-generation isolation.
-- `/server-admin` persists six chat governance controls in `SERVER_ADMIN_STATE_FILE`; all three shipped env examples contain matching defaults.
-- Upgrade the client and lobby service together to v0.5.0. A client-only update cannot obtain server-channel tickets or negotiate the complete rich-chat feature set.
+- `POST /rooms/:id/mod-preflight` returns private gameplay-MOD differences only after password validation; it never changes occupancy or room state and never issues a join ticket.
+- Host inventories remain private room state and never enter public room lists, health, metrics, gossip, or chat. The service never hosts or transfers DLL, PCK, or ZIP content.
+- `MOD_SYNC_ENABLED` defaults to `false`. Enable it explicitly on a candidate node after deployment, and disable it first for rollback; v0.5.0 and capability-missing clients retain the legacy join path.
+- Game-version mismatches remain hard-blocked regardless of relaxed settings. Upgrade client and service together to v0.5.1 for preflight; the v0.5.0 chat surface remains compatible.
 
 ## Current recommended path
 
@@ -438,8 +442,9 @@ Prerequisite reading:
 2. Configure the public address (`RELAY_PUBLIC_HOST` + `PEER_SELF_ADDRESS`), admin password hash, and session secret
 3. Decide whether to join the decentralized public network (`PEER_PUBLIC_LISTING_ENABLED` + admin panel toggle)
 4. Decide on public vs. private/token-gated access
-5. Verify `/health`, `/server-admin`, `/announcements`, `/rooms`, `/peers/health`
-6. Repackage the client defaults if needed
+5. Enable `MOD_SYNC_ENABLED=true` only on the candidate node until acceptance is complete
+6. Verify `/health`, `/probe`, `/server-admin`, `/announcements`, `/rooms`, `/peers/health`, and private preflight
+7. Repackage the client defaults if needed
 
 ### Recommended install command
 

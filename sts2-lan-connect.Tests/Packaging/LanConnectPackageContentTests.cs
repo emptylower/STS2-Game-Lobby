@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace Sts2LanConnect.Tests.Packaging;
 
@@ -43,6 +44,14 @@ public sealed class LanConnectPackageContentTests
         string firstZip = Path.Combine(firstOutput, "sts2_lan_connect-release.zip");
         Assert.Equal(ExpectedFiles, Fixture.ListFiles(packageDirectory));
         Assert.Equal(ExpectedFiles, Fixture.ListZipFiles(firstZip));
+
+        using JsonDocument manifest = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
+        Assert.Equal("0.5.1", manifest.RootElement.GetProperty("version").GetString());
+        FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
+            Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
+        Assert.Equal("0.5.1.0", assemblyVersion.FileVersion);
+        Assert.StartsWith("0.5.1", assemblyVersion.ProductVersion, StringComparison.Ordinal);
 
         foreach (string packagePath in ExpectedFiles)
         {
@@ -106,9 +115,20 @@ public sealed class LanConnectPackageContentTests
 
     private static void AssertCleanManifest(IEnumerable<string> files)
     {
+        string[] forbiddenBinaryNames =
+        [
+            "sts2.dll",
+            "Steamworks.NET.dll",
+            "0Harmony.dll",
+            "GodotSharp.dll",
+            "GodotSharpEditor.dll"
+        ];
         foreach (string file in files)
         {
             string lower = file.ToLowerInvariant();
+            Assert.DoesNotContain(
+                forbiddenBinaryNames,
+                forbidden => string.Equals(Path.GetFileName(file), forbidden, StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain("typing.dll", lower, StringComparison.Ordinal);
             Assert.DoesNotContain("/.env", "/" + lower, StringComparison.Ordinal);
             Assert.DoesNotContain("/.git/", "/" + lower + "/", StringComparison.Ordinal);

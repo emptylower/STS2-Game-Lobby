@@ -10,6 +10,15 @@
 
 # STS2 LAN Connect 使用说明
 
+## v0.5.1 加入前 MOD 预检
+
+- 选择房间后，客户端先比较会影响联机的 gameplay MOD 与必要 dependency；普通非联机 MOD 不会提示、禁用或影响加入
+- 游戏版本不同会先直接拦截，不能通过 MOD 同步或 relaxed“仍然尝试加入”绕过
+- Steam 桌面客户端会先显示真实 Workshop 信息，只有确认后才订阅缺失项；Android、非 Steam 或 SteamAPI 不可用时只提供手动处理
+- 多余 gameplay MOD 默认不勾选，必须手动选择并二次确认才会禁用
+- 安装或禁用 MOD 后必须重启。公开房在 15 分钟内恢复并重新预检；密码房重新询问密码，客户端不会保存密码或 token
+- 客户端不会从房主、大厅服务或任意 URL 下载 DLL、PCK、ZIP
+
 ## v0.5.0 聊天升级
 
 - 大厅右侧新增 `频道聊天`，连接当前大厅服务器后即可收发消息，不需要先加入房间
@@ -189,16 +198,20 @@
 
 - 所有联机玩家必须使用完全相同版本的 STS2 LAN Connect
 - 以 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为准
+- 缺少 Workshop 项时先核对标题、发布者、大小和目标版本，再决定是否订阅
+- 缺少手动项时按列表自行安装；没有其他自动下载来源
+- 多余 gameplay MOD 默认不会禁用；选择禁用后必须二次确认并重启
+- relaxed“仍然尝试加入”只保留给 MOD 差异，游戏版本不同仍然拒绝
 
 ### 安卓端启动就弹"致命错误"
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本仓库 v0.5.0 文档对应 `0.5.0`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本仓库 v0.5.1 文档对应 `0.5.1`）
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保 `sts2_lan_connect.dll`、`sts2_lan_connect.pck` 和 `sts2_lan_connect.json` 同步更新
 - 如仍崩溃，将最新 `godot.log` 和本地调试报告一并发给开发者
 
 ### 安卓端进了主菜单，但打开多人页面 / 游戏大厅异常
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本仓库 v0.5.0 文档对应 `0.5.0`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本仓库 v0.5.1 文档对应 `0.5.1`）
 - 确认安装的是当前发布的客户端包，而非更早的旧包
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保三个文件来自同一批 release
 - 如问题仍存在，将最新 `godot.log` 和本地调试报告一并发给开发者
@@ -212,6 +225,15 @@
 <a name="english"></a>
 
 # STS2 LAN Connect User Guide
+
+## v0.5.1 MOD Preflight Before Join
+
+- Only gameplay-affecting MODs and required dependencies are compared. Ordinary unrelated MODs are not shown, disabled, or used to block joining.
+- Game-version mismatches are rejected first and cannot be bypassed by synchronization or relaxed continuation.
+- Steam desktop shows real Workshop metadata and subscribes only after consent. Android, non-Steam, and unavailable SteamAPI environments provide manual guidance only.
+- Extra gameplay MODs start unchecked and require explicit selection plus a second confirmation before disablement.
+- Restart after any MOD change. Public rooms can resume and preflight again for 15 minutes; password rooms ask for the password again. Passwords and tokens are never persisted.
+- The client never downloads DLL, PCK, or ZIP content from hosts, lobby services, or arbitrary URLs.
 
 ## v0.5.0 Chat Upgrade
 
@@ -396,13 +418,13 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 
 ### Android: "Fatal Error" on launch
 
-- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.5.0 documentation corresponds to `0.5.0`)
+- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.5.1 documentation corresponds to `0.5.1`)
 - If you installed over an older package, fully uninstall first and then reinstall to ensure `sts2_lan_connect.dll`, `sts2_lan_connect.pck`, and `sts2_lan_connect.json` are all updated together
 - If the crash persists, send the latest `godot.log` and the local debug report to the developer
 
 ### Android: Main menu loads, but multiplayer page / Game Lobby behaves abnormally
 
-- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.5.0 documentation corresponds to `0.5.0`)
+- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.5.1 documentation corresponds to `0.5.1`)
 - Confirm you installed the current release package, not an older package
 - If you installed over an older package, fully uninstall first and then reinstall to ensure all three files come from the same release batch
 - If the issue persists, send the latest `godot.log` and the local debug report to the developer
