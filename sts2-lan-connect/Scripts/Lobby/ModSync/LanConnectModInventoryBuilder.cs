@@ -20,7 +20,7 @@ internal static class LanConnectModInventoryBuilder
     private static readonly string[] StateAliases = ["state", "State", "LoadState"];
     private static readonly string[] SourceAliases = ["modSource", "ModSource", "Source"];
     private static readonly string[] PathAliases = ["path", "Path", "DirectoryPath"];
-    private static readonly string[] WorkshopIdAliases = ["workshopFileId", "WorkshopFileId", "publishedFileId", "PublishedFileId"];
+    private static readonly string[] WorkshopIdAliases = ["workshopId", "WorkshopId", "workshopFileId", "WorkshopFileId", "publishedFileId", "PublishedFileId"];
     private static readonly string[] IdAliases = ["id", "Id"];
     private static readonly string[] VersionAliases = ["version", "Version"];
     private static readonly string[] GameplayAliases = ["affectsGameplay", "AffectsGameplay"];
@@ -117,13 +117,16 @@ internal static class LanConnectModInventoryBuilder
             _ => LanConnectModSources.Unknown
         };
 
-        object dependencyValue = GetRequiredMember(manifest, DependencyAliases, "dependencies");
-        if (dependencyValue is not IEnumerable dependencyValues || dependencyValue is string)
+        if (!TryGetMember(manifest, DependencyAliases, out object? dependencyValue))
+        {
+            throw new MissingMemberException(manifest.GetType().FullName, "dependencies");
+        }
+        if (dependencyValue is string || dependencyValue is not null and not IEnumerable)
         {
             throw new InvalidOperationException("Mod manifest dependencies member must be enumerable.");
         }
         List<string> dependencies = [];
-        foreach (object? dependency in dependencyValues)
+        foreach (object? dependency in dependencyValue as IEnumerable ?? Array.Empty<object>())
         {
             if (dependency == null)
             {
@@ -162,6 +165,12 @@ internal static class LanConnectModInventoryBuilder
 
     private static object? GetOptionalMember(object instance, string[] aliases)
     {
+        TryGetMember(instance, aliases, out object? value);
+        return value;
+    }
+
+    private static bool TryGetMember(object instance, string[] aliases, out object? value)
+    {
         Type type = instance.GetType();
         List<MemberInfo> matches = [];
         foreach (string alias in aliases)
@@ -177,14 +186,16 @@ internal static class LanConnectModInventoryBuilder
         }
         if (matches.Count == 0)
         {
-            return null;
+            value = null;
+            return false;
         }
-        return matches[0] switch
+        value = matches[0] switch
         {
             FieldInfo field => field.GetValue(instance),
             PropertyInfo property => property.GetValue(instance),
             _ => null
         };
+        return true;
     }
 
     private static string? ConvertWorkshopId(object? value)

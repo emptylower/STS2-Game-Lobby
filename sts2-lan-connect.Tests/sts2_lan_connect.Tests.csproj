@@ -5,6 +5,14 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+
+    <UserHome>$([System.Environment]::GetFolderPath(System.Environment+SpecialFolder.UserProfile))</UserHome>
+    <Sts2Root Condition="'$(Sts2Root)' == '' and '$(OS)' == 'Windows_NT'">C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2</Sts2Root>
+    <Sts2Root Condition="'$(Sts2Root)' == '' and '$(OS)' != 'Windows_NT'">$(UserHome)/Library/Application Support/Steam/steamapps/common/Slay the Spire 2</Sts2Root>
+    <Sts2MacApp>$(Sts2Root)/SlayTheSpire2.app</Sts2MacApp>
+    <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and '$(OS)' == 'Windows_NT'">$(Sts2Root)\data_sts2_windows_x86_64</Sts2DataDir>
+    <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and '$(OS)' != 'Windows_NT' and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">$(Sts2MacApp)/Contents/Resources/data_sts2_macos_arm64</Sts2DataDir>
+    <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and '$(OS)' != 'Windows_NT' and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' != 'Arm64'">$(Sts2MacApp)/Contents/Resources/data_sts2_macos_x86_64</Sts2DataDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,6 +26,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\sts2-lan-connect\sts2_lan_connect.csproj" />
+    <Reference Include="sts2">
+      <HintPath>$(Sts2DataDir)/sts2.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

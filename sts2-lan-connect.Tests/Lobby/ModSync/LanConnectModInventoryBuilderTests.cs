@@ -87,6 +87,28 @@ public sealed class LanConnectModInventoryBuilderTests
     }
 
     [Fact]
+    public void Runtime_resolver_treats_declared_null_dependencies_as_empty()
+    {
+        V107Mod value = new()
+        {
+            state = V107State.Loaded,
+            modSource = V107Source.ModsDirectory,
+            path = "/game/mods/fixture",
+            manifest = new V107Manifest
+            {
+                id = "fixture.no_dependencies",
+                version = "1.0.0",
+                affectsGameplay = true,
+                dependencies = null
+            }
+        };
+
+        LanConnectRuntimeMod resolved = LanConnectModInventoryBuilder.ResolveRuntimeMod(value);
+
+        Assert.Empty(resolved.Dependencies);
+    }
+
+    [Fact]
     public void Runtime_resolver_supports_0_108_0_property_shape()
     {
         V108Mod value = new()
@@ -111,26 +133,51 @@ public sealed class LanConnectModInventoryBuilderTests
     }
 
     [Fact]
-    public void Runtime_resolver_supports_0_109_0_load_state_and_directory_shape()
+    public void Runtime_resolver_supports_0_109_0_workshop_id_field_shape()
     {
         V109Mod value = new()
         {
-            LoadState = V109State.Loaded,
-            ModSource = V109Source.SteamWorkshop,
-            DirectoryPath = "/steamapps/workshop/content/2868840/3762348066",
-            WorkshopFileId = 3762348066UL,
-            Manifest = new V108Manifest
+            state = V109State.Loaded,
+            modSource = V109Source.SteamWorkshop,
+            path = "/steamapps/workshop/content/2868840/non-numeric-folder",
+            workshopId = 3762348066UL,
+            manifest = new V107Manifest
             {
-                Id = "fixture.future",
-                Version = "3.0.0",
-                AffectsGameplay = true,
-                Dependencies = []
+                id = "fixture.current",
+                version = "3.0.0",
+                affectsGameplay = true,
+                dependencies = []
             }
         };
 
         LanConnectRuntimeMod resolved = LanConnectModInventoryBuilder.ResolveRuntimeMod(value);
 
         Assert.True(resolved.IsLoaded);
+        Assert.Equal("3762348066", resolved.WorkshopFileId);
+    }
+
+    [Fact]
+    public void Runtime_resolver_supports_the_referenced_0_109_0_game_types()
+    {
+        MegaCrit.Sts2.Core.Modding.Mod value = new()
+        {
+            state = MegaCrit.Sts2.Core.Modding.ModLoadState.Loaded,
+            modSource = MegaCrit.Sts2.Core.Modding.ModSource.SteamWorkshop,
+            path = "/steamapps/workshop/content/2868840/non-numeric-folder",
+            workshopId = 3762348066UL,
+            manifest = new MegaCrit.Sts2.Core.Modding.ModManifest
+            {
+                id = "fixture.referenced",
+                version = "3.0.0",
+                affectsGameplay = true,
+                dependencies = null
+            }
+        };
+
+        LanConnectRuntimeMod resolved = LanConnectModInventoryBuilder.ResolveRuntimeMod(value);
+
+        Assert.True(resolved.IsLoaded);
+        Assert.Empty(resolved.Dependencies);
         Assert.Equal("3762348066", resolved.WorkshopFileId);
     }
 
@@ -329,7 +376,7 @@ public sealed class LanConnectModInventoryBuilderTests
         public string id = string.Empty;
         public string version = string.Empty;
         public bool affectsGameplay;
-        public List<V107Dependency> dependencies = [];
+        public List<V107Dependency>? dependencies = [];
     }
     private sealed class V107Mod
     {
@@ -361,11 +408,11 @@ public sealed class LanConnectModInventoryBuilderTests
     private enum V109Source { ModsDirectory, SteamWorkshop }
     private sealed class V109Mod
     {
-        public V109State LoadState { get; init; }
-        public V109Source ModSource { get; init; }
-        public string DirectoryPath { get; init; } = string.Empty;
-        public ulong WorkshopFileId { get; init; }
-        public V108Manifest Manifest { get; init; } = new();
+        public V109State state;
+        public V109Source modSource;
+        public string path = string.Empty;
+        public ulong? workshopId;
+        public V107Manifest manifest = new();
     }
 
     private sealed class AmbiguousMod
