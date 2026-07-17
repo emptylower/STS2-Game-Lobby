@@ -9,4 +9,19 @@ internal static class LanConnectModSyncCapabilities
     public const int MaxDependencies = 16;
     public const int MaxPayloadBytes = 65_536;
     public const uint SteamAppId = 2_868_840;
+
+    public static LanConnectModSyncCapabilityState Resolve(LobbyProbeCapabilities? capabilities)
+    {
+        int protocolVersion = capabilities?.ModSyncProtocolVersion ?? 0;
+        bool enabled = capabilities?.ModSyncEnabled ?? false;
+        return new LanConnectModSyncCapabilityState(
+            protocolVersion,
+            enabled,
+            protocolVersion == ProtocolVersion && enabled);
+    }
 }
+
+internal readonly record struct LanConnectModSyncCapabilityState(
+    int ProtocolVersion,
+    bool Enabled,
+    bool Supported);

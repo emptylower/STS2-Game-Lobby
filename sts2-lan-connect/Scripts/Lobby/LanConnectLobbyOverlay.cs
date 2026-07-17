@@ -3768,15 +3768,65 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         try
         {
             using LobbyApiClient apiClient = LobbyApiClient.CreateConfigured();
-            LobbyJoinRoomResponse joinResponse = await apiClient.JoinRoomAsync(room.RoomId, new LobbyJoinRoomRequest
+            UpdateProgressDialog(
+                "正在检查 MOD 兼容性",
+                $"正在检查 {FormatRoomName(room.RoomName, 24)} 的游戏版本与 gameplay MOD",
+                "旧版大厅服务会自动沿用原加入流程。",
+                allowCancel: true);
+            LanConnectModPreflightCoordinator coordinator = new(
+                new LanConnectModPreflightApiPorts(
+                    apiClient,
+                    async (decisionRoom, response, token) =>
+                    {
+                        HideProgressDialog();
+                        LanConnectModPreflightDecision decision = await LanConnectModPreflightDecisionPrompt.ShowAsync(
+                            this,
+                            decisionRoom,
+                            response,
+                            token);
+                        if (decision == LanConnectModPreflightDecision.ContinueRelaxed)
+                        {
+                            ShowProgressDialog(
+                                "正在加入房间",
+                                $"已确认仍然尝试加入 {FormatRoomName(decisionRoom.RoomName, 24)}",
+                                "将保留后续握手诊断；游戏版本不匹配仍不会被绕过。",
+                                allowCancel: true);
+                        }
+                        return decision;
+                    }));
+            LanConnectModPreflightJoinResult preflightJoin = await coordinator.JoinAsync(
+                LanConnectModPreflightJoinRequest.CreateCurrent(
+                    room,
+                    password,
+                    desiredSavePlayerNetId),
+                joinCancellationSource.Token);
+            if (preflightJoin.Outcome != LanConnectModPreflightJoinOutcome.TicketIssued ||
+                preflightJoin.JoinResponse == null)
             {
-                PlayerName = LanConnectConfig.GetEffectivePlayerDisplayName(),
-                Password = string.IsNullOrWhiteSpace(password) ? null : password,
-                Version = LanConnectBuildInfo.GetGameVersion(),
-                ModVersion = LanConnectBuildInfo.GetModVersion(),
-                ModList = LanConnectBuildInfo.GetModList(),
-                DesiredSavePlayerNetId = string.IsNullOrWhiteSpace(desiredSavePlayerNetId) ? null : desiredSavePlayerNetId
-            }, joinCancellationSource.Token);
+                switch (preflightJoin.Outcome)
+                {
+                    case LanConnectModPreflightJoinOutcome.GameVersionMismatch:
+                        string mismatchMessage = preflightJoin.Message ?? "游戏版本不匹配，无法加入该房间。";
+                        ReportJoinIssue(mismatchMessage);
+                        LanConnectPopupUtil.ShowInfo(mismatchMessage);
+                        break;
+                    case LanConnectModPreflightJoinOutcome.ModSynchronizationRequired:
+                        SetStatus($"加入 {FormatRoomName(room.RoomName, 24)} 前需要处理 gameplay MOD 差异。");
+                        if (preflightJoin.Preflight != null)
+                        {
+                            LanConnectPopupUtil.ShowInfo(
+                                $"加入 {room.RoomName} 前需要先处理 gameplay MOD 差异。\n\n" +
+                                LanConnectModPreflightDecisionPrompt.BuildDifferenceSummary(preflightJoin.Preflight));
+                        }
+                        break;
+                    default:
+                        SetStatus($"已取消加入 {FormatRoomName(room.RoomName, 24)}。");
+                        break;
+                }
+                return false;
+            }
+
+            LobbyJoinRoomResponse joinResponse = preflightJoin.JoinResponse;
 
             UpdateProgressDialog(
                 "正在建立联机连接",

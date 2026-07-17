@@ -11,6 +11,14 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
         Assert.Null(LanConnectLobbyManagedJoinFlow.GetGameVersionMismatchMessage("v0.109.0", "v0.109.0"));
     }
 
+    [Theory]
+    [InlineData("v0.109.0", "0.109.0")]
+    [InlineData("V0.109.0", "v0.109.0")]
+    public void Accepts_equivalent_game_versions_with_optional_v_prefix(string host, string local)
+    {
+        Assert.Null(LanConnectLobbyManagedJoinFlow.GetGameVersionMismatchMessage(host, local));
+    }
+
     [Fact]
     public void Rejects_different_game_versions_with_actionable_message()
     {

@@ -375,13 +375,15 @@ Gate：服务端全量测试通过，公开 API 快照不包含 inventory。
 
 ### Phase 3：客户端加入前预检
 
-- [ ] 扩展 API 模型与 capability resolver。
-- [ ] 在领取 join ticket 前调用预检；旧服务端或关闭功能时回退。
-- [ ] 游戏版本不匹配沿用现有硬门禁。
-- [ ] relaxed 模式保留用户确认后的继续加入。
-- [ ] 为邀请、普通加入、续局重连使用同一个 preflight coordinator。
+- [x] 扩展 API 模型与 capability resolver。
+- [x] 在领取 join ticket 前调用预检；旧服务端或关闭功能时回退。
+- [x] 游戏版本不匹配沿用现有硬门禁。
+- [x] relaxed 模式保留用户确认后的继续加入。
+- [x] 为邀请、普通加入、续局重连使用同一个 preflight coordinator。
 
 Gate：所有加入入口行为一致，v0.5.0 服务端回退测试通过。
+
+Gate 证据（2026-07-17）：Phase 3 focused xUnit 25/25；完整 xUnit 618 通过、1 个既有双客户端原型跳过；GdUnit 219/219；客户端构建 0 警告；lobby-service check 与 425/425 测试通过。生产代码仅由 preflight coordinator adapter 领取 join ticket，缺失 capability、feature disabled 和旧 host inventory 均有回退测试。
 
 建议提交：`feat(client): gate joins through mod compatibility preflight`
 

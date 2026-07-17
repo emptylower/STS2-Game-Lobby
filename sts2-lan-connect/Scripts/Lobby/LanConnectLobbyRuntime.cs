@@ -1857,16 +1857,33 @@ internal sealed partial class LanConnectLobbyRuntime :
                         continue;
                     }
 
-                    LobbyJoinRoomResponse joinResponse = await apiClient.JoinRoomAsync(room.RoomId, new LobbyJoinRoomRequest
+                    LanConnectModPreflightCoordinator coordinator = new(
+                        new LanConnectModPreflightApiPorts(
+                            apiClient,
+                            (decisionRoom, response, token) =>
+                                LanConnectModPreflightDecisionPrompt.ShowAsync(
+                                    submenu,
+                                    decisionRoom,
+                                    response,
+                                    token)));
+                    LanConnectModPreflightJoinResult preflightJoin = await coordinator.JoinAsync(
+                        LanConnectModPreflightJoinRequest.CreateCurrent(
+                            room,
+                            pending.RoomPassword,
+                            pending.DesiredSavePlayerNetId,
+                            pending.DesiredSavePlayerNetId));
+                    if (preflightJoin.Outcome != LanConnectModPreflightJoinOutcome.TicketIssued ||
+                        preflightJoin.JoinResponse == null)
                     {
-                        PlayerName = LanConnectConfig.GetEffectivePlayerDisplayName(),
-                        Password = string.IsNullOrWhiteSpace(pending.RoomPassword) ? null : pending.RoomPassword,
-                        Version = LanConnectBuildInfo.GetGameVersion(),
-                        ModVersion = LanConnectBuildInfo.GetModVersion(),
-                        ModList = LanConnectBuildInfo.GetModList(),
-                        DesiredSavePlayerNetId = pending.DesiredSavePlayerNetId,
-                        PlayerNetId = pending.DesiredSavePlayerNetId
-                    });
+                        _pendingClientReconnect = null;
+                        string message = preflightJoin.Outcome == LanConnectModPreflightJoinOutcome.GameVersionMismatch
+                            ? preflightJoin.Message ?? "游戏版本不匹配，已停止自动重连。"
+                            : "自动重连前发现 gameplay MOD 差异，请在游戏大厅中手动处理后重新加入。";
+                        LanConnectPopupUtil.ShowInfo(message);
+                        return;
+                    }
+
+                    LobbyJoinRoomResponse joinResponse = preflightJoin.JoinResponse;
                     LobbyJoinAttemptResult joinResult = await LanConnectLobbyJoinFlow.JoinAsync(
                         stack,
                         loadingOverlay,

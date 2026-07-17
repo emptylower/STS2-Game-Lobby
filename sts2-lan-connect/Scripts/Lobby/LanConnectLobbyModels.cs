@@ -149,6 +149,10 @@ internal sealed class LobbyProbeCapabilities
 
     public int HistoryLimit { get; set; }
 
+    public int ModSyncProtocolVersion { get; set; }
+
+    public bool ModSyncEnabled { get; set; }
+
     [JsonIgnore]
     public bool SupportsTextServerChat => ServerChatVersion == 1;
 
@@ -206,6 +210,8 @@ internal sealed class LobbyCreateRoomRequest
 
     public List<string> ModList { get; set; } = new();
 
+    public List<LobbyModDescriptor>? HostModInventory { get; set; }
+
     public string? ProtocolProfile { get; set; }
 
     public int MaxPlayers { get; set; } = LanConnectConstants.DefaultMaxPlayers;
@@ -247,6 +253,47 @@ internal sealed class LobbyJoinRoomRequest
     public string? DesiredSavePlayerNetId { get; set; }
 
     public string? PlayerNetId { get; set; }
+}
+
+internal sealed class LobbyModPreflightRequest
+{
+    public string PlayerName { get; set; } = string.Empty;
+
+    public string? Password { get; set; }
+
+    public string GameVersion { get; set; } = string.Empty;
+
+    public int ModSyncProtocolVersion { get; set; } = LanConnectModSyncCapabilities.ProtocolVersion;
+
+    public List<LobbyModDescriptor> LocalMods { get; set; } = [];
+}
+
+internal sealed record LobbyModPreflightResponse
+{
+    public bool Enabled { get; init; }
+
+    public int ProtocolVersion { get; init; }
+
+    public LanConnectGameVersionComparison GameVersion { get; init; } = new();
+
+    public List<LobbyModDescriptor> MissingWorkshopMods { get; init; } = [];
+
+    public List<LobbyModDescriptor> MissingManualMods { get; init; } = [];
+
+    public List<LobbyModDescriptor> ExtraGameplayMods { get; init; } = [];
+
+    public List<LanConnectModVersionMismatch> VersionMismatches { get; init; } = [];
+
+    public bool CanContinueRelaxed { get; init; }
+
+    public bool HostInventoryAvailable { get; init; }
+
+    [JsonIgnore]
+    public bool HasModDifferences =>
+        MissingWorkshopMods.Count > 0 ||
+        MissingManualMods.Count > 0 ||
+        ExtraGameplayMods.Count > 0 ||
+        VersionMismatches.Count > 0;
 }
 
 internal sealed class LobbyDirectEndpoint
