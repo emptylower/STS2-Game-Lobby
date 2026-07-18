@@ -225,6 +225,7 @@ export async function createLobbyService(
   );
   const serverAdminStateStore = new ServerAdminStateStore(env.serverAdminStateFile, {
     publicListingEnabledDefault: env.peerPublicListingEnabledDefault,
+    modSyncEnabledDefault: env.modSyncEnabled,
     chatFeaturesDefault: env.chat.features,
   });
   const initialChatGovernance = serverAdminStateStore.getState().chatFeatures;
@@ -358,7 +359,7 @@ export async function createLobbyService(
         maxEntities: ChatMaxEntitiesPhase3,
         historyLimit: ChatHistoryLimitPhase3,
         modSyncProtocolVersion: MOD_SYNC_PROTOCOL_VERSION,
-        modSyncEnabled: env.modSyncEnabled,
+        modSyncEnabled: serverAdminStateStore.getState().modSyncEnabled,
       },
     });
   });
@@ -627,7 +628,7 @@ export async function createLobbyService(
       );
       const localMods = body.localMods;
 
-      if (!env.modSyncEnabled || protocolVersion !== MOD_SYNC_PROTOCOL_VERSION) {
+      if (!serverAdminStateStore.getState().modSyncEnabled || protocolVersion !== MOD_SYNC_PROTOCOL_VERSION) {
         res.json({
           enabled: false,
           protocolVersion: MOD_SYNC_PROTOCOL_VERSION,
@@ -792,6 +793,7 @@ export async function createLobbyService(
       const body = req.body as {
         displayName?: string;
         publicListingEnabled?: boolean;
+        modSyncEnabled?: boolean;
         bandwidthCapacityMbps?: number | null;
         announcements?: unknown;
         chatFeatures?: unknown;
@@ -805,6 +807,12 @@ export async function createLobbyService(
           throw new InputError("publicListingEnabled 必须为布尔值。");
         }
         update.publicListingEnabled = body.publicListingEnabled;
+      }
+      if (body && Object.hasOwn(body, "modSyncEnabled")) {
+        if (typeof body.modSyncEnabled !== "boolean") {
+          throw new InputError("modSyncEnabled 必须为布尔值。");
+        }
+        update.modSyncEnabled = body.modSyncEnabled;
       }
       if (body && Object.hasOwn(body, "bandwidthCapacityMbps")) {
         update.bandwidthCapacityMbps = optionalPositiveNumber(

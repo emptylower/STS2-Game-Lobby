@@ -26,7 +26,7 @@ $EDITOR deploy/lobby-service.env
 
 - `PEER_PUBLIC_LISTING_ENABLED=false` 如果只想跑私有节点（仍在节点网络里但不公开）
 - `PEER_NETWORK_ENABLED=false` 如果完全不想加入节点网络
-- `MOD_SYNC_ENABLED=true` 只在 v0.5.1 候选测试节点开启；正式节点验收前保持默认 `false`
+- `MOD_SYNC_ENABLED=true` 是新安装默认种子值；运行时请在管理面板开启或关闭 MOD 同步，保存后无需重启
 
 `MOD_SYNC_MAX_DESCRIPTORS=64` 和 `MOD_SYNC_MAX_PAYLOAD_BYTES=65536` 是协议硬上限，不应调高。预检只返回差异，不签发 join ticket、不改变房间人数或状态；游戏版本不同始终拒绝。服务端不会托管或传输任何 MOD DLL、PCK、ZIP。
 

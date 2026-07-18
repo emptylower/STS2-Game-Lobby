@@ -346,7 +346,7 @@ const CURRENT_PROBE_CAPABILITIES = {
   maxEntities: 12,
   historyLimit: 50,
   modSyncProtocolVersion: 1,
-  modSyncEnabled: false,
+  modSyncEnabled: true,
 } as const;
 
 test("GET /probe returns exact current chat capabilities", async () => {

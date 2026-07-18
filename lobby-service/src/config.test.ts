@@ -26,7 +26,7 @@ const CHAT_TEMPLATE_DEFAULTS = {
 } as const;
 
 const MOD_SYNC_TEMPLATE_DEFAULTS = {
-  MOD_SYNC_ENABLED: "false",
+  MOD_SYNC_ENABLED: "true",
   MOD_SYNC_MAX_DESCRIPTORS: "64",
   MOD_SYNC_MAX_PAYLOAD_BYTES: "65536",
 } as const;
@@ -105,7 +105,7 @@ test("config templates define every chat setting exactly once with parser defaul
   );
 });
 
-test("config templates define mod sync disabled with exact parser safety limits", () => {
+test("config templates define mod sync enabled with exact parser safety limits", () => {
   const templates: Array<[string, string, TemplateFormat]> = [
     ["lobby-service/.env.example", readFileSync(new URL("../.env.example", import.meta.url), "utf8"), "dotenv"],
     ["deploy/lobby-service.env.example", readFileSync(new URL("../../deploy/lobby-service.env.example", import.meta.url), "utf8"), "dotenv"],
@@ -124,7 +124,8 @@ test("config templates define mod sync disabled with exact parser safety limits"
 
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
   assert.match(readme, /MOD_SYNC_ENABLED/);
-  assert.match(readme, /默认关闭/);
+  assert.match(readme, /默认开启/);
+  assert.match(readme, /管理面板.*运行时真理源/s);
   assert.match(readme, /MOD 清单.*不.*公开.*\/rooms/s);
   assert.match(readme, /不会.*(?:DLL|PCK|ZIP).*(?:下载|传输)/s);
 });
@@ -409,9 +410,9 @@ test("loadLobbyServiceConfig preserves the legacy CONNECTION_STRATEGY error", ()
   );
 });
 
-test("mod sync config defaults disabled with protocol safety limits", () => {
+test("mod sync config defaults enabled with protocol safety limits", () => {
   const config = loadLobbyServiceConfig({});
-  assert.equal(config.modSyncEnabled, false);
+  assert.equal(config.modSyncEnabled, true);
   assert.equal(config.modSyncMaxDescriptors, 64);
   assert.equal(config.modSyncMaxPayloadBytes, 65_536);
 });

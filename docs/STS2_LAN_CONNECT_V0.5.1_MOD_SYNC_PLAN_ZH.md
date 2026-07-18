@@ -228,12 +228,12 @@ hostInventoryAvailable
 新增配置：
 
 ```env
-MOD_SYNC_ENABLED=false
+MOD_SYNC_ENABLED=true
 MOD_SYNC_MAX_DESCRIPTORS=64
 MOD_SYNC_MAX_PAYLOAD_BYTES=65536
 ```
 
-发布示例默认关闭；测试服务器显式开启。功能关闭后 `/probe` 报告 disabled，客户端无缝回退。
+发布示例默认开启；管理面板提供持久化运行时开关。功能关闭后 `/probe` 报告 disabled，客户端无缝回退。
 
 ### 7.3 Steam 同步引擎
 
@@ -545,7 +545,7 @@ diff -qr <staged>/ <releases>/
 
 ### 回滚
 
-- 服务端设置 `MOD_SYNC_ENABLED=false` 并重启，v0.5.1 客户端立即回退现有加入流程。
+- 服务端在管理面板关闭 MOD 同步，v0.5.1 客户端立即回退现有加入流程。
 - 保留测试节点部署前压缩备份和 0.5.0 service 包。
 - 客户端发生严重问题时重新指向 v0.5.0 Release，不移动或覆盖历史 tag。
 - pending join 文件使用版本字段；未知版本必须忽略并清理。

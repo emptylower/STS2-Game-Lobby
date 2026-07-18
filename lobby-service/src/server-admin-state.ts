@@ -17,6 +17,7 @@ export interface ServerAnnouncement {
 export interface ServerAdminState {
   displayName: string;
   publicListingEnabled: boolean;
+  modSyncEnabled: boolean;
   bandwidthCapacityMbps: number | null;
   probePeak7dCapacityMbps: number | null;
   resolvedCapacityMbps: number | null;
@@ -29,6 +30,7 @@ export interface ServerAdminState {
 export interface ServerAdminSettingsView {
   displayName: string;
   publicListingEnabled: boolean;
+  modSyncEnabled: boolean;
   bandwidthCapacityMbps: number | null;
   probePeak7dCapacityMbps: number | null;
   resolvedCapacityMbps: number | null;
@@ -40,6 +42,7 @@ export interface ServerAdminSettingsView {
 
 export interface ServerAdminStateDefaults {
   publicListingEnabledDefault?: boolean;
+  modSyncEnabledDefault?: boolean;
   chatFeaturesDefault: ChatFeatureGovernance;
 }
 
@@ -52,6 +55,7 @@ export class ServerAdminStateStore {
     this.state = loadState(
       this.stateFilePath,
       defaults.publicListingEnabledDefault ?? true,
+      defaults.modSyncEnabledDefault ?? true,
       defaults.chatFeaturesDefault,
     );
   }
@@ -64,6 +68,7 @@ export class ServerAdminStateStore {
     return {
       displayName: this.state.displayName,
       publicListingEnabled: this.state.publicListingEnabled,
+      modSyncEnabled: this.state.modSyncEnabled,
       bandwidthCapacityMbps: this.state.bandwidthCapacityMbps,
       probePeak7dCapacityMbps: this.state.probePeak7dCapacityMbps,
       resolvedCapacityMbps: this.state.resolvedCapacityMbps,
@@ -77,6 +82,7 @@ export class ServerAdminStateStore {
   updateSettings(next: {
     displayName?: string;
     publicListingEnabled?: boolean;
+    modSyncEnabled?: boolean;
     bandwidthCapacityMbps?: number | null | undefined;
     announcements?: unknown;
     extraMetadata?: Record<string, string> | undefined;
@@ -88,6 +94,9 @@ export class ServerAdminStateStore {
     }
     if (next.publicListingEnabled !== undefined) {
       staged.publicListingEnabled = next.publicListingEnabled;
+    }
+    if (next.modSyncEnabled !== undefined) {
+      staged.modSyncEnabled = next.modSyncEnabled;
     }
     if (next.bandwidthCapacityMbps !== undefined) {
       staged.bandwidthCapacityMbps = sanitizeOptionalMbps(next.bandwidthCapacityMbps);
@@ -155,15 +164,22 @@ export class ServerAdminStateStore {
 function loadState(
   path: string,
   publicListingDefault: boolean,
+  modSyncEnabledDefault: boolean,
   chatFeaturesDefault: ChatFeatureGovernance,
 ): ServerAdminState {
   try {
     const raw = readFileSync(path, "utf8");
-    return normalizeState(JSON.parse(raw), publicListingDefault, chatFeaturesDefault);
+    return normalizeState(
+      JSON.parse(raw),
+      publicListingDefault,
+      modSyncEnabledDefault,
+      chatFeaturesDefault,
+    );
   } catch {
     return {
       displayName: "",
       publicListingEnabled: publicListingDefault,
+      modSyncEnabled: modSyncEnabledDefault,
       bandwidthCapacityMbps: null,
       probePeak7dCapacityMbps: null,
       resolvedCapacityMbps: null,
@@ -178,6 +194,7 @@ function loadState(
 function normalizeState(
   value: unknown,
   publicListingDefault: boolean,
+  modSyncEnabledDefault: boolean,
   chatFeaturesDefault: ChatFeatureGovernance,
 ): ServerAdminState {
   const data = value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -186,6 +203,9 @@ function normalizeState(
     publicListingEnabled: typeof data.publicListingEnabled === "boolean"
       ? data.publicListingEnabled
       : publicListingDefault,
+    modSyncEnabled: typeof data.modSyncEnabled === "boolean"
+      ? data.modSyncEnabled
+      : modSyncEnabledDefault,
     bandwidthCapacityMbps: sanitizeOptionalMbps(typeof data.bandwidthCapacityMbps === "number" ? data.bandwidthCapacityMbps : null),
     probePeak7dCapacityMbps: sanitizeOptionalMbps(typeof data.probePeak7dCapacityMbps === "number" ? data.probePeak7dCapacityMbps : null),
     resolvedCapacityMbps: sanitizeOptionalMbps(typeof data.resolvedCapacityMbps === "number" ? data.resolvedCapacityMbps : null),

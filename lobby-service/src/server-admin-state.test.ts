@@ -15,10 +15,15 @@ const chatDefaults: ChatFeatureGovernance = {
   roomCombatRefsEnabled: true,
 };
 
-function createStore(path: string, features: ChatFeatureGovernance = chatDefaults) {
+function createStore(
+  path: string,
+  features: ChatFeatureGovernance = chatDefaults,
+  modSyncEnabledDefault = true,
+) {
   return new ServerAdminStateStore(path, {
     publicListingEnabledDefault: true,
     chatFeaturesDefault: features,
+    modSyncEnabledDefault,
   });
 }
 
@@ -130,6 +135,27 @@ test("no state file uses all environment chat defaults", () => {
   const temp = createTempStatePath();
   try {
     assert.deepEqual(createStore(temp.path).getState().chatFeatures, chatDefaults);
+  } finally {
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("no state file and legacy state inherit the configured mod sync default", () => {
+  const temp = createTempStatePath();
+  try {
+    assert.equal(createStore(temp.path, chatDefaults, true).getState().modSyncEnabled, true);
+    writeFileSync(temp.path, JSON.stringify({ displayName: "Legacy" }), "utf8");
+    assert.equal(createStore(temp.path, chatDefaults, false).getState().modSyncEnabled, false);
+  } finally {
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("server admin state persists mod sync updates across reloads", () => {
+  const temp = createTempStatePath();
+  try {
+    createStore(temp.path).updateSettings({ modSyncEnabled: false });
+    assert.equal(createStore(temp.path).getSettingsView().modSyncEnabled, false);
   } finally {
     rmSync(temp.directory, { recursive: true, force: true });
   }

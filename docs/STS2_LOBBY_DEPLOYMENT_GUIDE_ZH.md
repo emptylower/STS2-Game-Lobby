@@ -32,7 +32,7 @@
 - v0.4.0 的去中心化架构保持不变：`lobby-service` 通过 `PEER_SELF_ADDRESS` 公开对外地址，由 Cloudflare discovery worker 聚合；`SERVER_REGISTRY_*` 仍完全无效。
 - v0.5.1 新增 `POST /rooms/:id/mod-preflight`，只在密码校验后返回 gameplay MOD 差异；请求不增加人数、不改变房间状态、不签发 join ticket。
 - 房主清单仅保存在房间私有对象，不进入 `/rooms`、health、metrics、peer gossip 或聊天。服务端不托管、下载或转发 DLL、PCK、ZIP。
-- `MOD_SYNC_ENABLED` 默认 `false`。先在测试节点显式设为 `true` 并完成客户端验收；回滚时先关闭该开关，v0.5.0 与无 capability 客户端继续走原加入流程。
+- `MOD_SYNC_ENABLED` 默认 `true`，只作为首次状态种子；管理面板中的 MOD 同步开关是运行时真理源，保存后立即生效并持久化。回滚时在面板关闭该开关，v0.5.0 与无 capability 客户端继续走原加入流程。
 - 游戏版本不同在预检中始终硬拦截，与 `STRICT_GAME_VERSION_CHECK` 无关；`STRICT_MOD_VERSION_CHECK=false` 只保留用户确认后的 MOD relaxed 继续。
 - v0.5.0 的服务器频道、富聊天与治理开关继续保留；客户端与 lobby-service 配套升级到 `0.5.1` 才能使用 MOD 预检。
 
@@ -42,7 +42,7 @@
 2. 配置 **公网地址**（`RELAY_PUBLIC_HOST` + `PEER_SELF_ADDRESS`）、管理面板密码哈希、会话密钥
 3. 决定是否加入去中心化公开节点网络（`PEER_PUBLIC_LISTING_ENABLED` + 管理面板开关）
 4. 决定是否启用私有 / 半私有 token 收口
-5. 在测试节点按需设置 `MOD_SYNC_ENABLED=true`，正式节点默认保持关闭直到验收完成
+5. 在管理面板确认“加入前 MOD 兼容预检与 Workshop 自动同步”默认开启，并按需关闭
 6. 验证 `/health`、`/probe`、`/server-admin`、`/announcements`、`/rooms`、`/peers/health` 和私有预检
 7. 按需重新打包客户端默认大厅
 
@@ -433,7 +433,7 @@ Prerequisite reading:
 - The v0.4.0 decentralized architecture remains: nodes advertise through `PEER_SELF_ADDRESS`, the Cloudflare discovery worker aggregates them, and all `SERVER_REGISTRY_*` variables remain inert.
 - `POST /rooms/:id/mod-preflight` returns private gameplay-MOD differences only after password validation; it never changes occupancy or room state and never issues a join ticket.
 - Host inventories remain private room state and never enter public room lists, health, metrics, gossip, or chat. The service never hosts or transfers DLL, PCK, or ZIP content.
-- `MOD_SYNC_ENABLED` defaults to `false`. Enable it explicitly on a candidate node after deployment, and disable it first for rollback; v0.5.0 and capability-missing clients retain the legacy join path.
+- `MOD_SYNC_ENABLED` defaults to `true` and only seeds fresh or legacy state. The admin-panel MOD sync toggle is the persisted runtime source of truth; disable it there for rollback. v0.5.0 and capability-missing clients retain the legacy join path.
 - Game-version mismatches remain hard-blocked regardless of relaxed settings. Upgrade client and service together to v0.5.1 for preflight; the v0.5.0 chat surface remains compatible.
 
 ## Current recommended path
@@ -442,7 +442,7 @@ Prerequisite reading:
 2. Configure the public address (`RELAY_PUBLIC_HOST` + `PEER_SELF_ADDRESS`), admin password hash, and session secret
 3. Decide whether to join the decentralized public network (`PEER_PUBLIC_LISTING_ENABLED` + admin panel toggle)
 4. Decide on public vs. private/token-gated access
-5. Enable `MOD_SYNC_ENABLED=true` only on the candidate node until acceptance is complete
+5. Confirm the default-enabled MOD sync toggle in the admin panel and disable it only when needed
 6. Verify `/health`, `/probe`, `/server-admin`, `/announcements`, `/rooms`, `/peers/health`, and private preflight
 7. Repackage the client defaults if needed
 

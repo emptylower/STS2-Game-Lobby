@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { createLobbyService } from "../app.js";
 import { loadLobbyServiceConfig, type LobbyServiceConfig } from "../config.js";
+import { hashServerAdminPassword } from "../server-admin-auth.js";
 import type { LobbyModDescriptor } from "./protocol.js";
 
 const HOST_INVENTORY: LobbyModDescriptor[] = [
@@ -105,6 +106,72 @@ test("probe advertises exact enabled and disabled mod sync capabilities", async 
       await service.close();
       cleanup(config);
     }
+  }
+});
+
+test("server admin toggle controls probe and preflight live and persists across restart", async () => {
+  const password = "test-password";
+  const config = testConfig({
+    port: 0,
+    modSyncEnabled: true,
+    serverAdminPasswordHash: hashServerAdminPassword(password),
+    serverAdminSessionSecret: "test-session-secret",
+  });
+  const first = await createLobbyService(config);
+  const firstAddress = await first.start();
+  try {
+    const created = await createRoom(firstAddress.port);
+    const login = await fetch(`http://127.0.0.1:${firstAddress.port}/server-admin/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password }),
+    });
+    assert.equal(login.status, 200);
+    const session = await login.json() as { csrfToken: string };
+    const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+    assert.ok(cookie);
+
+    const invalidPatch = await fetch(`http://127.0.0.1:${firstAddress.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+        "x-csrf-token": session.csrfToken,
+      },
+      body: JSON.stringify({ modSyncEnabled: "false" }),
+    });
+    assert.equal(invalidPatch.status, 400);
+
+    const patch = await fetch(`http://127.0.0.1:${firstAddress.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+        "x-csrf-token": session.csrfToken,
+      },
+      body: JSON.stringify({ modSyncEnabled: false }),
+    });
+    assert.equal(patch.status, 200);
+    assert.equal((await patch.json() as { modSyncEnabled: boolean }).modSyncEnabled, false);
+
+    const probe = await fetch(`http://127.0.0.1:${firstAddress.port}/probe`);
+    const probeBody = await probe.json() as { capabilities: { modSyncEnabled: boolean } };
+    assert.equal(probeBody.capabilities.modSyncEnabled, false);
+    const disabledPreflight = await preflight(firstAddress.port, created.roomId);
+    assert.equal((await disabledPreflight.json() as { enabled: boolean }).enabled, false);
+  } finally {
+    await first.close();
+  }
+
+  const restarted = await createLobbyService(config);
+  const restartedAddress = await restarted.start();
+  try {
+    const probe = await fetch(`http://127.0.0.1:${restartedAddress.port}/probe`);
+    const body = await probe.json() as { capabilities: { modSyncEnabled: boolean } };
+    assert.equal(body.capabilities.modSyncEnabled, false);
+  } finally {
+    await restarted.close();
+    cleanup(config);
   }
 });
 

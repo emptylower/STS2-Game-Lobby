@@ -74,6 +74,7 @@ test("dirty poll merge refreshes runtime fields while preserving every editable 
   const current = {
     displayName: "draft name",
     publicListingEnabled: false,
+    modSyncEnabled: false,
     bandwidthCapacityMbps: 12,
     announcements: [{ id: "draft" }],
     chatFeatures: { richContentEnabled: false, emojiEnabled: true },
@@ -83,6 +84,7 @@ test("dirty poll merge refreshes runtime fields while preserving every editable 
   const next = {
     displayName: "remote name",
     publicListingEnabled: true,
+    modSyncEnabled: true,
     bandwidthCapacityMbps: 99,
     announcements: [{ id: "remote" }],
     chatFeatures: { richContentEnabled: true, emojiEnabled: false },
@@ -94,6 +96,7 @@ test("dirty poll merge refreshes runtime fields while preserving every editable 
     ...next,
     displayName: current.displayName,
     publicListingEnabled: current.publicListingEnabled,
+    modSyncEnabled: current.modSyncEnabled,
     bandwidthCapacityMbps: current.bandwidthCapacityMbps,
     announcements: current.announcements,
     chatFeatures: current.chatFeatures,
@@ -183,6 +186,13 @@ test("server admin page renders six nested persisted switches and effective vers
   assert.match(html, /房间聊天有效版本/);
   assert.match(html, /settings\.serverFeatures/);
   assert.match(html, /settings\.roomFeatures/);
+});
+
+test("server admin page renders a persisted mod sync switch enabled by default", () => {
+  const html = renderServerAdminPage("0.5.1");
+  assert.match(html, /name: "modSyncEnabled"/);
+  assert.match(html, /label: "加入前 MOD 兼容预检与 Workshop 自动同步"/);
+  assert.match(html, /modSyncEnabled: next\.modSyncEnabled !== false/);
 });
 
 test("server admin page renders all chat metrics, rejection rates, and guarded clear action", () => {
