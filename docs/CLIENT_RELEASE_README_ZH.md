@@ -21,6 +21,8 @@
 
 `0.5.1` 主要改进：加入前只比较 gameplay MOD 与必要 dependency。Steam 桌面客户端可在确认后订阅缺失 Workshop 项；Android、非 Steam 或 SteamAPI 不可用时只显示手动项。多余 gameplay MOD 默认不选择禁用，必须由用户选择并二次确认。任何 MOD 改动后都必须重启；客户端只在 15 分钟内恢复服务器、房间和槽位，不保存密码或 token。游戏版本不同仍直接拦截，不能通过同步或 relaxed 继续绕过。同一个客户端包兼容游戏 `0.107.1`、`0.108.0` 与 `0.109.0`，并与 v0.5.0 对端安全降级。
 
+正式版可从 [GitHub v0.5.1 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1) 下载，或在 Steam 创意工坊订阅 [游戏大厅](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。服务器列表会把 `101.35.217.99:8788` 标记为“置顶测试服”；声明兼容预检能力的服务器还会显示“支持 0.5.1+ MOD 同步”。
+
 同一房间内的所有玩家必须使用完全相同的游戏版本。房主和客户端版本不同时，加入流程会直接提示双方版本并中止；普通非联机 MOD 不进入预检、不提示、不禁用，也不影响加入。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。
 
 ### 加入前 MOD 预检
@@ -178,6 +180,8 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 | Connection policy | `test_relaxed + relay-only` |
 
 `0.5.1` preflights gameplay-affecting MODs and required dependencies before join. Steam desktop can subscribe to missing Workshop items only after consent; Android, non-Steam, and unavailable SteamAPI environments receive manual guidance. Extra gameplay MODs start unchecked and require selection plus a second confirmation before disablement. Any MOD change requires restart, and pending resume never stores passwords or tokens. Game-version mismatches remain hard-blocked. One client package supports game versions `0.107.1`, `0.108.0`, and `0.109.0`, with safe fallback for v0.5.0 peers.
+
+Get the official build from the [GitHub v0.5.1 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1) or subscribe to [游戏大厅](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) on Steam Workshop. The server picker pins `101.35.217.99:8788` as the featured test server and labels servers that advertise v0.5.1+ MOD synchronization support.
 
 ### MOD Preflight Before Join
 

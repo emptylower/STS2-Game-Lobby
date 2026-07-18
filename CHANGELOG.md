@@ -2,7 +2,7 @@
 
 本项目从 v0.5.0 起在此记录客户端 MOD 与 lobby-service 的公开版本变更。
 
-## [0.5.1] - 2026-07-17
+## [0.5.1] - 2026-07-18
 
 ### Added
 
@@ -15,6 +15,14 @@
 - 客户端 MOD 与 lobby-service 同步升级到 `0.5.1`；v0.5.0 对端缺少预检能力时安全回退原加入流程。
 - 多余 gameplay MOD 默认不选择禁用，只有用户选择并二次确认后才修改本机启用状态。
 - Android、非 Steam 与 SteamAPI 不可用环境只显示手动处理项，不尝试自动下载。
+- 服务器选择列表固定将测试节点 `101.35.217.99:8788` 排在第一位；声明 MOD 同步能力的节点显示“支持 0.5.1+ MOD 同步”。
+- Steam 创意工坊条目改名为“游戏大厅”，说明改为面向玩家的分段功能介绍。
+
+### Fixed
+
+- 兼容已发布但 `/peers/metrics` 尚未携带 MOD 字段的协议 1 节点：客户端只在字段缺失时从 `/probe` 补充能力标识。
+- 修复 MOD inventory 的 nullable dependency 与跨游戏版本 Workshop metadata 字段差异。
+- 修复聊天 delivery timeout 的取消和释放竞态。
 
 ### Security and Compatibility
 
