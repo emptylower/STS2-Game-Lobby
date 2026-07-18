@@ -153,6 +153,8 @@ internal sealed class LobbyProbeCapabilities
 
     public bool ModSyncEnabled { get; set; }
 
+    public string ModSyncMinimumClientVersion { get; set; } = string.Empty;
+
     [JsonIgnore]
     public bool SupportsTextServerChat => ServerChatVersion == 1;
 
@@ -572,4 +574,13 @@ internal sealed class PeerMetricsResponse
 
     [JsonPropertyName("createRoomGuardStatus")]
     public string CreateRoomGuardStatus { get; set; } = "allow";
+
+    [JsonPropertyName("modSyncProtocolVersion")]
+    public int ModSyncProtocolVersion { get; set; }
+
+    [JsonPropertyName("modSyncEnabled")]
+    public bool ModSyncEnabled { get; set; }
+
+    [JsonPropertyName("modSyncMinimumClientVersion")]
+    public string ModSyncMinimumClientVersion { get; set; } = string.Empty;
 }

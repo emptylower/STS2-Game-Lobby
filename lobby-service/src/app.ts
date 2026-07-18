@@ -16,7 +16,11 @@ import {
 } from "./client-ip.js";
 import { CreateRoomBandwidthGuard } from "./bandwidth-guard.js";
 import { assertRelayCreateReady, assertRelayJoinReady } from "./join-guard.js";
-import { MOD_SYNC_PROTOCOL_VERSION, type LobbyModDescriptor } from "./mod-sync/protocol.js";
+import {
+  MOD_SYNC_MINIMUM_CLIENT_VERSION,
+  MOD_SYNC_PROTOCOL_VERSION,
+  type LobbyModDescriptor,
+} from "./mod-sync/protocol.js";
 import { ModSyncValidationError, validateModInventory } from "./mod-sync/validator.js";
 import { RoomRelayManager } from "./relay.js";
 import { cleanupExpiredRooms } from "./room-cleanup.js";
@@ -360,6 +364,7 @@ export async function createLobbyService(
         historyLimit: ChatHistoryLimitPhase3,
         modSyncProtocolVersion: MOD_SYNC_PROTOCOL_VERSION,
         modSyncEnabled: serverAdminStateStore.getState().modSyncEnabled,
+        modSyncMinimumClientVersion: MOD_SYNC_MINIMUM_CLIENT_VERSION,
       },
     });
   });
@@ -1170,6 +1175,11 @@ export async function createLobbyService(
       address: peerEnv.selfAddress,
       getDisplayName: resolvePeerDisplayName,
       getPublicListing: resolvePublicListing,
+      getModSyncCapability: () => ({
+        protocolVersion: MOD_SYNC_PROTOCOL_VERSION,
+        enabled: serverAdminStateStore.getState().modSyncEnabled,
+        minimumClientVersion: MOD_SYNC_MINIMUM_CLIENT_VERSION,
+      }),
       getSnapshot: () => {
         const guard = getCreateRoomGuardSnapshot();
         return {

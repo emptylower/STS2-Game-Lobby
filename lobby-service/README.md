@@ -416,6 +416,8 @@ docker compose -f deploy/docker-compose.lobby-service.yml logs --tail 200 -f
 
 管理面板中的“加入前 MOD 兼容预检与 Workshop 自动同步”开关是运行时真理源，保存后立即生效并持久化，无需重启。`MOD_SYNC_ENABLED` 仅在状态文件尚未包含该字段时提供初始值。启用后，`/probe` 在 `capabilities` 中返回 `modSyncProtocolVersion: 1` 与 `modSyncEnabled: true`。v0.5.1 客户端可在领取 join ticket 前调用 `POST /rooms/:id/mod-preflight`；该请求不增加人数、不改变房间状态，也不签发 ticket。功能关闭或客户端协议不匹配时，接口返回 HTTP 200 的 disabled 响应，客户端继续使用 v0.5.0 加入流程。
 
+`/probe` 与 `/peers/metrics` 同时返回 `modSyncMinimumClientVersion: "0.5.1"`。服务器选择器使用 `/peers/metrics` 的实时 `modSyncProtocolVersion`、`modSyncEnabled` 和最低客户端版本显示“支持 0.5.1+ MOD 同步”；旧节点缺少字段时不显示标识。
+
 房主的 `hostModInventory` 只保存在房间私有对象中。MOD 清单不会出现在公开 `/rooms`、health、metrics、peer gossip 或聊天中；密码正确后预检才返回差异。预检无论 `STRICT_GAME_VERSION_CHECK` 如何设置都会硬拦截不同游戏版本，`STRICT_MOD_VERSION_CHECK=false` 只允许用户确认后继续尝试 MOD 差异。
 
 MOD 同步只允许客户端在明确确认后调用 Steam Workshop 订阅，以及选择性修改本机启用状态。服务端不会把 DLL、PCK、ZIP 作为下载或传输内容，也不会托管 MOD 文件；房主和任意 URL 都不能成为二进制来源。

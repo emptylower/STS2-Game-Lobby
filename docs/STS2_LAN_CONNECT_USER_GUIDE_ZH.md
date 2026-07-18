@@ -137,7 +137,7 @@
 ## 网络说明
 
 - 默认连接策略由安装包内的 `lobby-defaults.json` 决定，可选 `direct-first`、`relay-first` 或 `relay-only`
-- 公开包默认使用阿里云大厅 `47.111.146.69:8787` 作为兜底社区节点，并通过 CF 发现入口 `https://sts2-gamelobby-register.xyz` + 内置种子聚合可用服务器；旧的 `47.111.146.69:18787` 公开目录在 v0.4.0 中不再参与运行时发现
+- 公开包默认使用阿里云大厅 `47.111.146.69:8787` 作为兜底社区节点，并通过 CF 发现入口 `https://sts2-gamelobby-register.xyz` + 内置种子聚合可用服务器；测试节点 `101.35.217.99:8788` 固定排在服务器列表第一位。显示“支持 0.5.1+ MOD 同步”的服务器已实时声明加入前 gameplay MOD 预检/Workshop 同步能力；旧的 `47.111.146.69:18787` 公开目录在 v0.4.0 中不再参与运行时发现
 - 兼容矩阵当前统一规则为：
   - `4` 人房发布 `legacy_4p`，用于兼容 `0.2.2`
   - `5-8` 人房发布 `extended_8p`，仅支持 `0.2.3+`
@@ -354,7 +354,7 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 ## Network Notes
 
 - The default connection strategy is determined by `lobby-defaults.json` in the installation package: `direct-first`, `relay-first`, or `relay-only`
-- The public release defaults to the Alibaba Cloud lobby at `47.111.146.69:8787` as a fallback community node and aggregates available servers through the CF discovery worker `https://sts2-gamelobby-register.xyz` plus bundled seed peers. The legacy `47.111.146.69:18787` directory is no longer used for runtime discovery in v0.4.0
+- The public release defaults to the Alibaba Cloud lobby at `47.111.146.69:8787` as a fallback community node and aggregates available servers through the CF discovery worker `https://sts2-gamelobby-register.xyz` plus bundled seed peers. Test node `101.35.217.99:8788` is always pinned first. Servers tagged `Supports 0.5.1+ MOD Sync` have declared live gameplay-MOD preflight/Workshop sync capability. The legacy `47.111.146.69:18787` directory is no longer used for runtime discovery in v0.4.0
 - The compatibility matrix is currently unified as:
   - `4`-player rooms publish `legacy_4p` for `0.2.2` compatibility
   - `5-8`-player rooms publish `extended_8p` and require `0.2.3+`

@@ -19,17 +19,29 @@ export interface MetricsSnapshot {
   createRoomGuardStatus: "allow" | "block" | "unknown";
 }
 
+export interface ModSyncCapabilitySnapshot {
+  protocolVersion: number;
+  enabled: boolean;
+  minimumClientVersion: string;
+}
+
 interface Deps {
   identity: NodeIdentity;
   address: string;
   getDisplayName?: () => string;
   getPublicListing: () => boolean;
+  getModSyncCapability?: () => ModSyncCapabilitySnapshot;
   getSnapshot: () => MetricsSnapshot;
 }
 
 export function mountMetrics(app: Express, deps: Deps): void {
   app.get("/peers/metrics", (_req: Request, res: Response) => {
     const snapshot = deps.getSnapshot();
+    const modSync = deps.getModSyncCapability?.() ?? {
+      protocolVersion: 0,
+      enabled: false,
+      minimumClientVersion: "",
+    };
     const body: MetricsResponse = {
       address: deps.address,
       publicKey: deps.identity.publicKey,
@@ -42,6 +54,9 @@ export function mountMetrics(app: Express, deps: Deps): void {
       capacitySource: snapshot.capacitySource,
       createRoomGuardApplies: snapshot.createRoomGuardApplies,
       createRoomGuardStatus: snapshot.createRoomGuardStatus,
+      modSyncProtocolVersion: modSync.protocolVersion,
+      modSyncEnabled: modSync.enabled,
+      modSyncMinimumClientVersion: modSync.minimumClientVersion,
     };
     if (typeof snapshot.bandwidthUtilizationRatio === "number") {
       body.bandwidthUtilizationRatio = snapshot.bandwidthUtilizationRatio;

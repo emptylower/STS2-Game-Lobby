@@ -408,10 +408,7 @@ public partial class LanConnectServerSelectionDialog : Control
         if (_list == null) return;
         foreach (var child in _list.GetChildren()) child.QueueFree();
 
-        var ordered = _entries
-            .OrderByDescending(e => e.LastSuccessConnect ?? DateTime.MinValue)
-            .ThenBy(e => e.Bucket)
-            .ThenBy(e => e.Address);
+        var ordered = LanConnectServerListBootstrap.OrderForDisplay(_entries);
 
         bool any = false;
         foreach (var e in ordered)
@@ -461,9 +458,9 @@ public partial class LanConnectServerSelectionDialog : Control
 
         var card = new Button
         {
-            CustomMinimumSize = new Vector2(0f, 80f),
+            CustomMinimumSize = new Vector2(0f, 92f),
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            TooltipText = $"{e.Address}\n来源：{e.Source}\n利用率：{utilization}\n带宽：{bandwidth}",
+            TooltipText = $"{e.Address}\n来源：{e.Source}\nMOD 同步：{(e.SupportsModSyncV051Plus ? "支持 0.5.1+" : "未声明")}\n利用率：{utilization}\n带宽：{bandwidth}",
             Text = string.Empty,
         };
         ApplyServerCardStyle(card);
@@ -505,6 +502,11 @@ public partial class LanConnectServerSelectionDialog : Control
         nameLabel.AddThemeFontSizeOverride("font_size", 20);
         topRow.AddChild(nameLabel);
 
+        if (e.IsPinned)
+        {
+            topRow.AddChild(CreateServerBadge("PinnedServerBadge", "置顶测试服", AccentColor));
+        }
+
         var rttLabel = new Label
         {
             Text = rttText,
@@ -535,6 +537,14 @@ public partial class LanConnectServerSelectionDialog : Control
         roomsLabel.AddThemeFontSizeOverride("font_size", 14);
         bottomRow.AddChild(roomsLabel);
 
+        if (e.SupportsModSyncV051Plus)
+        {
+            bottomRow.AddChild(CreateServerBadge(
+                "ModSyncSupportBadge",
+                "支持 0.5.1+ MOD 同步",
+                SuccessColor));
+        }
+
         var guardLabel = new Label
         {
             Text = guardText,
@@ -547,6 +557,29 @@ public partial class LanConnectServerSelectionDialog : Control
         bottomRow.AddChild(guardLabel);
 
         return card;
+    }
+
+    internal Control BuildServerRowForTests(ServerListEntry entry) => BuildServerRow(entry);
+
+    private static Label CreateServerBadge(string name, string text, Color color)
+    {
+        Label badge = new()
+        {
+            Name = name,
+            Text = text,
+            MouseFilter = MouseFilterEnum.Ignore,
+            VerticalAlignment = VerticalAlignment.Center,
+            CustomMinimumSize = new Vector2(0f, 24f),
+        };
+        badge.AddThemeColorOverride("font_color", color);
+        badge.AddThemeFontSizeOverride("font_size", 13);
+        badge.AddThemeStyleboxOverride("normal", BuildPixelStyle(
+            new Color(color.R, color.G, color.B, 0.08f),
+            color,
+            borderWidth: 1,
+            padding: 5,
+            shadowSize: 0));
+        return badge;
     }
 
     private void OnServerRowGuiInput(string address, InputEvent inputEvent)
