@@ -10,6 +10,8 @@
 
 # STS2 LAN Connect 使用说明
 
+正式版下载：[`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1)；Steam 玩家也可直接订阅创意工坊条目 [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。通过创意工坊安装或更新后同样需要完整重启游戏。
+
 ## v0.5.1 加入前 MOD 预检
 
 - 选择房间后，客户端先比较会影响联机的 gameplay MOD 与必要 dependency；普通非联机 MOD 不会提示、禁用或影响加入
@@ -225,6 +227,8 @@
 <a name="english"></a>
 
 # STS2 LAN Connect User Guide
+
+Official download: [`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1). Steam players can also subscribe to [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330). Fully restart the game after a Workshop install or update.
 
 ## v0.5.1 MOD Preflight Before Join
 

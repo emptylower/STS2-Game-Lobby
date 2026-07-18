@@ -14,6 +14,8 @@
 
 > 本文档对应 **v0.5.1**。去中心化节点网络和 v0.5.0 聊天能力保持不变；v0.5.1 新增私有 gameplay MOD 预检。v0.3.x 时代的 `SERVER_REGISTRY_*` 环境变量自 v0.4.0 起已完全删除。
 
+正式服务端源码包见 [GitHub v0.5.1 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1) 中的 `sts2_lobby_service.zip`。
+
 ## 文档定位
 
 这份文档是 **大厅服务服主 / 运维手册**，面向准备部署、维护、排障或打包 `lobby-service` 的管理员。
@@ -547,6 +549,8 @@ MOD 同步只允许客户端在明确确认后调用 Steam Workshop 订阅，以
 # STS2 Lobby Service
 
 > Targets **v0.5.1**. It retains the v0.4.0 decentralized peer network and v0.5.0 chat capabilities, and adds private gameplay-MOD preflight. All `SERVER_REGISTRY_*` env vars from the v0.3.x era have been inert since v0.4.0.
+
+The official service source package is `sts2_lobby_service.zip` in the [GitHub v0.5.1 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1).
 
 This README is the **operator/admin guide** for `lobby-service`.
 
