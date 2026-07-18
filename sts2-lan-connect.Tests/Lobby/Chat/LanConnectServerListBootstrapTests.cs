@@ -87,6 +87,20 @@ public sealed class LanConnectServerListBootstrapTests
     }
 
     [Fact]
+    public void Protocol_one_metrics_without_minimum_client_version_keep_the_0_5_1_plus_badge()
+    {
+        ServerListEntry entry = new() { Address = LanConnectServerListBootstrap.FeaturedServerAddress };
+
+        LanConnectServerListBootstrap.ApplyMetrics(entry, new PeerMetricsResponse
+        {
+            ModSyncProtocolVersion = 1,
+            ModSyncEnabled = true
+        });
+
+        Assert.True(entry.SupportsModSyncV051Plus);
+    }
+
+    [Fact]
     public void Peer_metrics_deserializes_the_server_mod_sync_capability_contract()
     {
         PeerMetricsResponse? metrics = JsonSerializer.Deserialize<PeerMetricsResponse>(

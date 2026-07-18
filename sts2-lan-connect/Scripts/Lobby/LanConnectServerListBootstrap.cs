@@ -226,11 +226,7 @@ internal static class LanConnectServerListBootstrap
         entry.CreateRoomGuardApplies = metrics.CreateRoomGuardApplies;
         entry.CreateRoomGuardStatus = metrics.CreateRoomGuardStatus;
         entry.SupportsModSyncV051Plus = metrics.ModSyncEnabled &&
-                                               metrics.ModSyncProtocolVersion >= LanConnectModSyncCapabilities.ProtocolVersion &&
-                                               string.Equals(
-                                                   metrics.ModSyncMinimumClientVersion,
-                                                   "0.5.1",
-                                                   StringComparison.Ordinal);
+                                               metrics.ModSyncProtocolVersion >= LanConnectModSyncCapabilities.ProtocolVersion;
         if (!string.IsNullOrWhiteSpace(metrics.DisplayName)) entry.DisplayName = metrics.DisplayName;
     }
 
