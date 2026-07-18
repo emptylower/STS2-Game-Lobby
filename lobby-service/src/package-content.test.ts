@@ -54,6 +54,9 @@ const expectedFiles = [
   "lobby-service/src/client-ip.ts",
   "lobby-service/src/config.ts",
   "lobby-service/src/join-guard.ts",
+  "lobby-service/src/mod-sync/diff.ts",
+  "lobby-service/src/mod-sync/protocol.ts",
+  "lobby-service/src/mod-sync/validator.ts",
   "lobby-service/src/peer/auto-announce.ts",
   "lobby-service/src/peer/bootstrap.ts",
   "lobby-service/src/peer/gossip.ts",
@@ -180,8 +183,16 @@ function snapshotHistorical(): string[] {
 }
 
 function assertCleanManifest(files: readonly string[]): void {
+  const forbiddenBinaries = new Set([
+    "sts2.dll",
+    "steamworks.net.dll",
+    "0harmony.dll",
+    "godotsharp.dll",
+    "godotsharpeditor.dll",
+  ]);
   for (const file of files) {
     const lower = file.toLowerCase();
+    assert.equal(forbiddenBinaries.has(lower.split("/").at(-1)!), false, `forbidden binary: ${file}`);
     assert.doesNotMatch(lower, /(^|\/)typing\.dll$/);
     assert.doesNotMatch(lower, /(^|\/)\.env$/);
     assert.doesNotMatch(lower, /(^|\/)\.git(?:\/|$)/);
@@ -207,6 +218,17 @@ test("service package uses exact production allowlist and deterministic temporar
     assert.deepEqual(listFiles(packageDir), [...expectedFiles].sort());
     assert.deepEqual(zipFiles(firstZip, "sts2_lobby_service"), [...expectedFiles].sort());
     assertCleanManifest(expectedFiles);
+
+    const packageJson = JSON.parse(readFileSync(join(packageDir, "lobby-service/package.json"), "utf8")) as {
+      version?: unknown;
+    };
+    const packageLock = JSON.parse(readFileSync(join(packageDir, "lobby-service/package-lock.json"), "utf8")) as {
+      version?: unknown;
+      packages?: Record<string, { version?: unknown }>;
+    };
+    assert.equal(packageJson.version, "0.5.1");
+    assert.equal(packageLock.version, "0.5.1");
+    assert.equal(packageLock.packages?.[""]?.version, "0.5.1");
 
     for (const packagePath of expectedFiles) {
       assert.deepEqual(
@@ -256,5 +278,37 @@ test("service package rejects malformed protected traversal and symlink outputs"
     assert.deepEqual(snapshotHistorical(), before);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("release sources pin v0.5.1 while preserving v0.5.0 v0.4.0 and v0.2.2 fixtures", () => {
+  const servicePackage = JSON.parse(readFileSync(join(repositoryRoot, "lobby-service/package.json"), "utf8")) as {
+    version?: unknown;
+  };
+  const serviceLock = JSON.parse(readFileSync(join(repositoryRoot, "lobby-service/package-lock.json"), "utf8")) as {
+    version?: unknown;
+    packages?: Record<string, { version?: unknown }>;
+  };
+  const clientManifest = JSON.parse(readFileSync(join(repositoryRoot, "sts2-lan-connect/sts2_lan_connect.json"), "utf8")) as {
+    version?: unknown;
+  };
+  const clientProject = readFileSync(join(repositoryRoot, "sts2-lan-connect/sts2_lan_connect.csproj"), "utf8");
+  assert.equal(servicePackage.version, "0.5.1");
+  assert.equal(serviceLock.version, "0.5.1");
+  assert.equal(serviceLock.packages?.[""]?.version, "0.5.1");
+  assert.equal(clientManifest.version, "0.5.1");
+  assert.match(clientProject, /<Version>0\.5\.1<\/Version>/);
+  assert.match(clientProject, /<AssemblyVersion>0\.5\.1\.0<\/AssemblyVersion>/);
+
+  const serviceFixture = readFileSync(
+    join(repositoryRoot, "lobby-service/src/chat/compatibility.integration.test.ts"),
+    "utf8",
+  );
+  const clientFixture = readFileSync(
+    join(repositoryRoot, "sts2-lan-connect.Tests/Lobby/Chat/LanConnectRoomRichCompatibilityTests.cs"),
+    "utf8",
+  );
+  for (const historicalVersion of ["0.5.0", "0.4.0", "0.2.2"]) {
+    assert.match(`${serviceFixture}\n${clientFixture}`, new RegExp(`\\"${historicalVersion.replaceAll(".", "\\.")}\\"`));
   }
 });

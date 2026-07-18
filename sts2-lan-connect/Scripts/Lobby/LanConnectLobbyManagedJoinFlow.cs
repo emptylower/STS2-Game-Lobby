@@ -295,9 +295,20 @@ internal sealed class LanConnectLobbyManagedJoinFlow
 
     internal static string? GetGameVersionMismatchMessage(string hostVersion, string localVersion)
     {
-        return string.Equals(hostVersion, localVersion, StringComparison.Ordinal)
+        return string.Equals(
+                NormalizeGameVersion(hostVersion),
+                NormalizeGameVersion(localVersion),
+                StringComparison.Ordinal)
             ? null
             : $"游戏版本不匹配，无法加入房间。房主版本：{hostVersion}；当前版本：{localVersion}。请让所有玩家使用完全相同的游戏版本后重试。";
+    }
+
+    private static string NormalizeGameVersion(string? value)
+    {
+        string normalized = value?.Trim() ?? string.Empty;
+        return normalized.StartsWith('v') || normalized.StartsWith('V')
+            ? normalized[1..]
+            : normalized;
     }
 
     private static List<string> GetGameplayAffectingMods(InitialGameInfoMessage initialMessage)

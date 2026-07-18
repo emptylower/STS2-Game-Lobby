@@ -36,6 +36,26 @@ public sealed class LanConnectLobbyChatApiTests
     }
 
     [Fact]
+    public void Deserializes_mod_sync_probe_and_preflight_fixtures()
+    {
+        LobbyProbeResponse legacyProbe = Deserialize<LobbyProbeResponse>("""{"ok":true,"capabilities":{}}""");
+        Assert.Equal(0, legacyProbe.Capabilities.ModSyncProtocolVersion);
+        Assert.False(legacyProbe.Capabilities.ModSyncEnabled);
+
+        LobbyProbeResponse probe = Deserialize<LobbyProbeResponse>("""
+            {"ok":true,"capabilities":{"modSyncProtocolVersion":1,"modSyncEnabled":true}}
+            """);
+        Assert.True(probe.Capabilities.ModSyncEnabled);
+
+        LobbyModPreflightResponse preflight = Deserialize<LobbyModPreflightResponse>("""
+            {"enabled":true,"protocolVersion":1,"gameVersion":{"host":"v0.109.0","local":"v0.109.0","exactMatch":true},"missingWorkshopMods":[],"missingManualMods":[],"extraGameplayMods":[],"versionMismatches":[],"canContinueRelaxed":true,"hostInventoryAvailable":true}
+            """);
+        Assert.True(preflight.GameVersion.ExactMatch);
+        Assert.True(preflight.HostInventoryAvailable);
+        Assert.False(preflight.HasModDifferences);
+    }
+
+    [Fact]
     public void DeserializesEveryPhaseOneInboundEnvelopeFixture()
     {
         ServerChatReadyEnvelope ready = Deserialize<ServerChatReadyEnvelope>("""
@@ -202,6 +222,86 @@ public sealed class LanConnectLobbyChatApiTests
         Assert.DoesNotContain("Ironclad", diagnostics, StringComparison.Ordinal);
         Assert.DoesNotContain("create-secret", diagnostics, StringComparison.Ordinal);
         Assert.DoesNotContain("lobby-secret", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Mod_preflight_api_uses_exact_route_and_redacted_diagnostics()
+    {
+        List<string> logs = [];
+        RecordingHandler handler = new("""
+            {"enabled":true,"protocolVersion":1,"gameVersion":{"host":"v0.109.0","local":"v0.109.0","exactMatch":true},"missingWorkshopMods":[],"missingManualMods":[],"extraGameplayMods":[],"versionMismatches":[],"canContinueRelaxed":true,"hostInventoryAvailable":true}
+            """);
+        using LobbyApiClient client = new("https://lobby.example/base", "lobby-secret", "create-secret", handler, logs.Add);
+
+        LobbyModPreflightResponse response = await client.ModPreflightAsync("room /1", new LobbyModPreflightRequest
+        {
+            PlayerName = "Ironclad",
+            Password = "do-not-log",
+            GameVersion = "v0.109.0",
+            ModSyncProtocolVersion = 1,
+            LocalMods =
+            [
+                new LobbyModDescriptor
+                {
+                    Id = "private.mod",
+                    Version = "1.0.0",
+                    Role = LanConnectModRoles.Gameplay,
+                    Source = LanConnectModSources.SteamWorkshop,
+                    WorkshopFileId = "3747497501"
+                }
+            ]
+        });
+
+        Assert.True(response.Enabled);
+        RecordedRequest request = Assert.Single(handler.Requests);
+        Assert.Equal("https://lobby.example/base/rooms/room%20%2F1/mod-preflight", request.Uri);
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Equal("lobby-secret", request.LobbyToken);
+        Assert.Equal("create-secret", request.CreateToken);
+        Assert.Equal("""{"playerName":"Ironclad","password":"do-not-log","gameVersion":"v0.109.0","modSyncProtocolVersion":1,"localMods":[{"id":"private.mod","version":"1.0.0","role":"gameplay","source":"steam_workshop","workshopFileId":"3747497501","dependencies":[]}]}""", request.Body);
+
+        string diagnostics = string.Join("\n", logs);
+        Assert.Contains("localModCount=1", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("passwordSet=True", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("do-not-log", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("private.mod", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("3747497501", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Create_room_serializes_private_host_inventory_without_logging_entries()
+    {
+        List<string> logs = [];
+        RecordingHandler handler = new("""{"roomId":"room-1","room":{}}""");
+        using LobbyApiClient client = new("https://lobby.example", diagnosticSink: logs.Add, httpMessageHandler: handler);
+
+        await client.CreateRoomAsync(new LobbyCreateRoomRequest
+        {
+            RoomName = "Test",
+            HostPlayerName = "Ironclad",
+            Version = "v0.109.0",
+            ModVersion = "0.5.1",
+            MaxPlayers = 2,
+            HostConnectionInfo = new LobbyHostConnectionInfo { EnetPort = 33771 },
+            HostModInventory =
+            [
+                new LobbyModDescriptor
+                {
+                    Id = "private.host.mod",
+                    Version = "1.0.0",
+                    Role = LanConnectModRoles.Gameplay,
+                    Source = LanConnectModSources.ModsDirectory
+                }
+            ]
+        });
+
+        RecordedRequest request = Assert.Single(handler.Requests);
+        using JsonDocument body = JsonDocument.Parse(request.Body!);
+        JsonElement inventory = body.RootElement.GetProperty("hostModInventory");
+        Assert.Equal("private.host.mod", inventory[0].GetProperty("id").GetString());
+        string diagnostics = string.Join("\n", logs);
+        Assert.Contains("hostModCount=1", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("private.host.mod", diagnostics, StringComparison.Ordinal);
     }
 
     [Fact]

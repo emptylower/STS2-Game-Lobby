@@ -52,6 +52,9 @@ export interface LobbyServiceConfig {
   relayClientIdleMs: number;
   strictGameVersionCheck: boolean;
   strictModVersionCheck: boolean;
+  modSyncEnabled: boolean;
+  modSyncMaxDescriptors: number;
+  modSyncMaxPayloadBytes: number;
   connectionStrategy: ConnectionStrategy;
   publicRoomListEnabled: boolean;
   publicDetailedHealthEnabled: boolean;
@@ -101,6 +104,9 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
     relayClientIdleMs: parseLegacyInteger(source, "RELAY_CLIENT_IDLE_SECONDS", 90) * 1000,
     strictGameVersionCheck: parseLegacyBoolean(source.STRICT_GAME_VERSION_CHECK, true),
     strictModVersionCheck: parseLegacyBoolean(source.STRICT_MOD_VERSION_CHECK, true),
+    modSyncEnabled: parseBoolean(source, "MOD_SYNC_ENABLED", true),
+    modSyncMaxDescriptors: parseInteger(source, "MOD_SYNC_MAX_DESCRIPTORS", 64, 1, 64),
+    modSyncMaxPayloadBytes: parseInteger(source, "MOD_SYNC_MAX_PAYLOAD_BYTES", 65_536, 1024, 65_536),
     connectionStrategy: parseConnectionStrategy(source.CONNECTION_STRATEGY),
     publicRoomListEnabled: parseLegacyBoolean(source.PUBLIC_ROOM_LIST_ENABLED, false),
     publicDetailedHealthEnabled: parseLegacyBoolean(source.PUBLIC_DETAILED_HEALTH_ENABLED, false),

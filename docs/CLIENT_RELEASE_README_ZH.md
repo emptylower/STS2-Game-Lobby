@@ -14,14 +14,26 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.5.0` |
+| 客户端版本 | `0.5.1` |
 | 默认大厅 | `47.111.146.69:8787`（兜底社区节点，可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `test_relaxed + relay-only` |
 
-`0.5.0` 主要改进：大厅新增节点级“频道聊天”，进入大厅即可使用；房间聊天升级为富聊天，支持 Emoji、卡牌 / 遗物 / 药水引用，以及按当前房间 generation 校验并安全降级的战斗状态引用。大厅聊天采用与主界面一致的浅色侧栏，房间聊天保留深色浮层；输入框、Emoji 面板和图标渲染已完成实机修复。同一个客户端包兼容游戏 `0.107.1`、`0.108.0` 与 `0.109.0`，Android 输入时也不会因富文本控件重建而反复重启键盘。完整功能要求客户端与 `0.5.0` lobby-service 配套更新。
+`0.5.1` 主要改进：加入前只比较 gameplay MOD 与必要 dependency。Steam 桌面客户端可在确认后订阅缺失 Workshop 项；Android、非 Steam 或 SteamAPI 不可用时只显示手动项。多余 gameplay MOD 默认不选择禁用，必须由用户选择并二次确认。任何 MOD 改动后都必须重启；客户端只在 15 分钟内恢复服务器、房间和槽位，不保存密码或 token。游戏版本不同仍直接拦截，不能通过同步或 relaxed 继续绕过。同一个客户端包兼容游戏 `0.107.1`、`0.108.0` 与 `0.109.0`，并与 v0.5.0 对端安全降级。
 
-同一房间内的所有玩家必须使用完全相同的游戏版本。房主和客户端版本不同时，加入流程会直接提示双方版本并中止；非联机相关 MOD 的差异仍按 `test_relaxed` 策略处理。
+正式版可从 [GitHub v0.5.1 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1) 下载，或在 Steam 创意工坊订阅 [游戏大厅](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。服务器列表会把 `101.35.217.99:8788` 标记为“置顶测试服”；声明兼容预检能力的服务器还会显示“支持 0.5.1+ MOD 同步”。
+
+同一房间内的所有玩家必须使用完全相同的游戏版本。房主和客户端版本不同时，加入流程会直接提示双方版本并中止；普通非联机 MOD 不进入预检、不提示、不禁用，也不影响加入。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。
+
+### 加入前 MOD 预检
+
+- 缺少 Workshop gameplay MOD：查看真实 Workshop 标题、发布者和大小后，勾选并确认订阅；可取消、重试或改为手动处理。
+- 缺少手动 MOD 或 Workshop ID：按列表手动安装，客户端不会尝试其他下载来源。
+- 多出 gameplay MOD：列表默认全部不勾选；只有选中并完成二次确认后才修改本机启用状态。
+- 用户可在 relaxed 配置允许时选择“仍然尝试加入”，但该入口只适用于 MOD 差异，不能跳过游戏版本不一致。
+- 安装或禁用完成后按提示重启游戏。公开房会恢复并重新预检；密码房会再次要求密码。
+
+`0.5.0` 主要改进（保留作历史参考）：大厅新增节点级频道聊天；房间聊天升级为 Emoji、物品引用与 generation 校验的战斗状态引用，并完成 Android 输入、布局和图标修复。
 
 ### 富聊天引用怎么使用
 
@@ -162,12 +174,24 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.5.0` |
+| Client version | `0.5.1` |
 | Default lobby | `47.111.146.69:8787` fallback community node |
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `test_relaxed + relay-only` |
 
-`0.5.0` key changes: the lobby now has node-local server-channel chat, while room chat supports Emoji, card/relic/potion references, and generation-checked combat references with safe fallback. Lobby chat uses a native light sidebar and room chat retains its dark overlay; composer sizing, the Emoji popup, and icon rasterization were fixed in the real game. The complete feature set requires both the v0.5.0 client and v0.5.0 lobby service.
+`0.5.1` preflights gameplay-affecting MODs and required dependencies before join. Steam desktop can subscribe to missing Workshop items only after consent; Android, non-Steam, and unavailable SteamAPI environments receive manual guidance. Extra gameplay MODs start unchecked and require selection plus a second confirmation before disablement. Any MOD change requires restart, and pending resume never stores passwords or tokens. Game-version mismatches remain hard-blocked. One client package supports game versions `0.107.1`, `0.108.0`, and `0.109.0`, with safe fallback for v0.5.0 peers.
+
+Get the official build from the [GitHub v0.5.1 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1) or subscribe to [游戏大厅](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) on Steam Workshop. The server picker pins `101.35.217.99:8788` as the featured test server and labels servers that advertise v0.5.1+ MOD synchronization support.
+
+### MOD Preflight Before Join
+
+- Inspect real Workshop metadata before consenting to subscriptions; cancel and retry remain available.
+- Manually install items without a valid Workshop mapping. No host, lobby-service, or arbitrary-URL DLL/PCK/ZIP download is supported.
+- Extra gameplay MODs are never disabled silently. Select them explicitly and confirm again.
+- Relaxed continuation applies only to MOD differences and never bypasses the exact game-version requirement.
+- Restart after installation or disablement. Public rooms resume and preflight again; password rooms ask for the password again.
+
+Historical `0.5.0` changes: node-local server chat, rich room chat, generation-checked combat references, and Android input/layout/icon fixes.
 
 ### Using Rich Chat References
 

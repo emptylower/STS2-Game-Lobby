@@ -83,6 +83,9 @@ lobby-service/src/bandwidth-guard.ts
 lobby-service/src/client-ip.ts
 lobby-service/src/config.ts
 lobby-service/src/join-guard.ts
+lobby-service/src/mod-sync/diff.ts
+lobby-service/src/mod-sync/protocol.ts
+lobby-service/src/mod-sync/validator.ts
 lobby-service/src/relay.ts
 lobby-service/src/rolling-bandwidth.ts
 lobby-service/src/room-cleanup.ts

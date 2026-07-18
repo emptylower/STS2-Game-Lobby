@@ -670,15 +670,13 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
 
     private void CancelDeliveryTimeout(string clientMessageId)
     {
-        CancellationTokenSource? timeoutCancellation = null;
         lock (_timeoutLock)
         {
             if (_deliveryTimeouts.Remove(clientMessageId, out CancellationTokenSource? found))
             {
-                timeoutCancellation = found;
+                found.Cancel();
             }
         }
-        timeoutCancellation?.Cancel();
     }
 
     private bool TryApplyCanonicalEnvelope(
@@ -822,15 +820,13 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
 
     private void CancelAllDeliveryTimeouts()
     {
-        List<CancellationTokenSource> timeouts;
         lock (_timeoutLock)
         {
-            timeouts = _deliveryTimeouts.Values.ToList();
+            foreach (CancellationTokenSource timeout in _deliveryTimeouts.Values)
+            {
+                timeout.Cancel();
+            }
             _deliveryTimeouts.Clear();
-        }
-        foreach (CancellationTokenSource timeout in timeouts)
-        {
-            timeout.Cancel();
         }
     }
 

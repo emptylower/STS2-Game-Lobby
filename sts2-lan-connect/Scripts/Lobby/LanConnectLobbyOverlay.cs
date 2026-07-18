@@ -174,6 +174,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Label? _joinPasswordDialogErrorLabel;
     private LineEdit? _joinPasswordInput;
     private LobbyRoomSummary? _pendingPasswordJoinRoom;
+    private string? _pendingPasswordDesiredSavePlayerNetId;
     private Control? _progressDialogContainer;
     private Label? _progressDialogTitle;
     private Label? _progressDialogMessage;
@@ -236,6 +237,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private bool _testAppliedServerOverrideInitialized;
     private string? _failedServerOverride;
     private bool _serverPickerOpen;
+    private int _pendingModSyncResumeInFlight;
     private long _serverChatPresentationRevision = -1;
     private bool _testMode;
     private float? _uiScaleOverride;
@@ -564,7 +566,55 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (startConnectivity)
         {
             CheckClipboardForInviteCode();
-            TaskHelper.RunSafely(CheckConnectivityAndRefreshAsync());
+            TaskHelper.RunSafely(ResumePendingModSyncJoinOrRefreshAsync());
+        }
+    }
+
+    private async Task ResumePendingModSyncJoinOrRefreshAsync()
+    {
+        if (Interlocked.CompareExchange(ref _pendingModSyncResumeInFlight, 1, 0) != 0)
+        {
+            return;
+        }
+        try
+        {
+            LanConnectPendingModSyncJoinStore store = LanConnectPendingModSyncJoinStore.CreateDefault();
+            if (store.Load() == null)
+            {
+                await CheckConnectivityAndRefreshAsync();
+                return;
+            }
+
+            using PendingModSyncResumePorts ports = new(this);
+            LanConnectPendingModSyncResumeCoordinator coordinator = new(store, ports);
+            SetStatus("正在恢复 MOD 同步前的加入请求...");
+            LanConnectPendingModSyncResumeOutcome outcome = await coordinator.ResumeAsync();
+            switch (outcome)
+            {
+                case LanConnectPendingModSyncResumeOutcome.RoomMissing:
+                    SetStatus("原房间已不存在，已清除恢复请求。");
+                    await RefreshRoomsAsync(userInitiated: true);
+                    break;
+                case LanConnectPendingModSyncResumeOutcome.Canceled:
+                    SetStatus("已取消恢复加入，恢复请求已清除。");
+                    break;
+                case LanConnectPendingModSyncResumeOutcome.NoPending:
+                    await CheckConnectivityAndRefreshAsync();
+                    break;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus("恢复加入已取消。");
+        }
+        catch (Exception ex)
+        {
+            GD.PushWarning($"sts2_lan_connect mod_sync_resume: {ex.Message}");
+            SetStatus("暂时无法恢复加入；将在 15 分钟有效期内保留请求。");
+        }
+        finally
+        {
+            Volatile.Write(ref _pendingModSyncResumeInFlight, 0);
         }
     }
 
@@ -587,6 +637,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private bool HandleLobbyKeyInput(InputEvent inputEvent)
     {
         if (!Visible || inputEvent is not InputEventKey { Pressed: true, Echo: false } keyEvent)
+        {
+            return false;
+        }
+
+        if (FindChildren("LanConnectModSyncDialog", "Control", recursive: true, owned: false)
+            .OfType<Control>()
+            .Any(dialog => dialog.IsVisibleInTree()))
         {
             return false;
         }
@@ -3768,15 +3825,69 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         try
         {
             using LobbyApiClient apiClient = LobbyApiClient.CreateConfigured();
-            LobbyJoinRoomResponse joinResponse = await apiClient.JoinRoomAsync(room.RoomId, new LobbyJoinRoomRequest
+            UpdateProgressDialog(
+                "正在检查 MOD 兼容性",
+                $"正在检查 {FormatRoomName(room.RoomName, 24)} 的游戏版本与 gameplay MOD",
+                "旧版大厅服务会自动沿用原加入流程。",
+                allowCancel: true);
+            LanConnectModPreflightCoordinator coordinator = new(
+                new LanConnectModPreflightApiPorts(
+                    apiClient,
+                    async (decisionRoom, response, token) =>
+                    {
+                        HideProgressDialog();
+                        LanConnectModPreflightDecision decision = await LanConnectModPreflightDecisionPrompt.ShowAsync(
+                            this,
+                            decisionRoom,
+                            response,
+                            token,
+                            desiredSavePlayerNetId);
+                        if (decision == LanConnectModPreflightDecision.ContinueRelaxed)
+                        {
+                            ShowProgressDialog(
+                                "正在加入房间",
+                                $"已确认仍然尝试加入 {FormatRoomName(decisionRoom.RoomName, 24)}",
+                                "将保留后续握手诊断；游戏版本不匹配仍不会被绕过。",
+                                allowCancel: true);
+                        }
+                        return decision;
+                    }));
+            LanConnectModPreflightJoinResult preflightJoin = await coordinator.JoinAsync(
+                LanConnectModPreflightJoinRequest.CreateCurrent(
+                    room,
+                    password,
+                    desiredSavePlayerNetId),
+                joinCancellationSource.Token);
+            if (preflightJoin.Outcome != LanConnectModPreflightJoinOutcome.TicketIssued ||
+                preflightJoin.JoinResponse == null)
             {
-                PlayerName = LanConnectConfig.GetEffectivePlayerDisplayName(),
-                Password = string.IsNullOrWhiteSpace(password) ? null : password,
-                Version = LanConnectBuildInfo.GetGameVersion(),
-                ModVersion = LanConnectBuildInfo.GetModVersion(),
-                ModList = LanConnectBuildInfo.GetModList(),
-                DesiredSavePlayerNetId = string.IsNullOrWhiteSpace(desiredSavePlayerNetId) ? null : desiredSavePlayerNetId
-            }, joinCancellationSource.Token);
+                switch (preflightJoin.Outcome)
+                {
+                    case LanConnectModPreflightJoinOutcome.GameVersionMismatch:
+                        string mismatchMessage = preflightJoin.Message ?? "游戏版本不匹配，无法加入该房间。";
+                        ReportJoinIssue(mismatchMessage);
+                        LanConnectPopupUtil.ShowInfo(mismatchMessage);
+                        break;
+                    case LanConnectModPreflightJoinOutcome.ModSynchronizationRequired:
+                        SetStatus($"加入 {FormatRoomName(room.RoomName, 24)} 前需要处理 gameplay MOD 差异。");
+                        if (preflightJoin.Preflight != null)
+                        {
+                            LanConnectPopupUtil.ShowInfo(
+                                $"加入 {room.RoomName} 前需要先处理 gameplay MOD 差异。\n\n" +
+                                LanConnectModPreflightDecisionPrompt.BuildDifferenceSummary(preflightJoin.Preflight));
+                        }
+                        break;
+                    case LanConnectModPreflightJoinOutcome.RestartScheduled:
+                        SetStatus("MOD 调整已完成。退出并重新启动后会恢复本次加入。");
+                        break;
+                    default:
+                        SetStatus($"已取消加入 {FormatRoomName(room.RoomName, 24)}。");
+                        break;
+                }
+                return false;
+            }
+
+            LobbyJoinRoomResponse joinResponse = preflightJoin.JoinResponse;
 
             UpdateProgressDialog(
                 "正在建立联机连接",
@@ -3987,21 +4098,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (room.RequiresPassword)
         {
-            _pendingPasswordJoinRoom = room;
-            SetLabelText(_joinPasswordDialogTitle, $"输入 {FormatRoomName(room.RoomName, 24)} 的房间密码");
-
-            if (_joinPasswordInput != null)
-            {
-                _joinPasswordInput.Text = string.Empty;
-                _joinPasswordInput.GrabFocus();
-            }
-
-            ShowJoinPasswordError(string.Empty, visible: false);
-            if (_joinPasswordDialogContainer != null)
-            {
-                _joinPasswordDialogContainer.Visible = true;
-            }
-
+            OpenJoinPasswordDialog(room, desiredSavePlayerNetId: null);
             return;
         }
 
@@ -4026,7 +4123,39 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
-        await BeginJoinRoomAsync(_pendingPasswordJoinRoom, password);
+        LobbyRoomSummary room = _pendingPasswordJoinRoom;
+        string? desiredSavePlayerNetId = _pendingPasswordDesiredSavePlayerNetId;
+        if (desiredSavePlayerNetId != null)
+        {
+            bool joined = await JoinRoomAsync(room, password, desiredSavePlayerNetId);
+            if (joined)
+            {
+                CloseJoinPasswordDialog();
+            }
+            return;
+        }
+        await BeginJoinRoomAsync(room, password);
+    }
+
+    private void OpenJoinPasswordDialog(
+        LobbyRoomSummary room,
+        string? desiredSavePlayerNetId)
+    {
+        _pendingPasswordJoinRoom = room;
+        _pendingPasswordDesiredSavePlayerNetId = string.IsNullOrWhiteSpace(desiredSavePlayerNetId)
+            ? null
+            : desiredSavePlayerNetId;
+        SetLabelText(_joinPasswordDialogTitle, $"输入 {FormatRoomName(room.RoomName, 24)} 的房间密码");
+        if (_joinPasswordInput != null)
+        {
+            _joinPasswordInput.Text = string.Empty;
+            _joinPasswordInput.GrabFocus();
+        }
+        ShowJoinPasswordError(string.Empty, visible: false);
+        if (_joinPasswordDialogContainer != null)
+        {
+            _joinPasswordDialogContainer.Visible = true;
+        }
     }
 
     private async Task BeginCreateRoomFlowAsync()
@@ -4238,6 +4367,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         _pendingPasswordJoinRoom = null;
+        _pendingPasswordDesiredSavePlayerNetId = null;
         RestoreDialogReturnFocus();
     }
 
@@ -4604,6 +4734,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             }
 
             serverContextToken.ThrowIfCancellationRequested();
+            if (!_testMode)
+            {
+                LanConnectPendingModSyncJoinStore.CreateDefault().ClearIfServerChanged(
+                    LanConnectConfig.LobbyServerBaseUrl);
+            }
             if (_testMode)
             {
                 _testAppliedServerOverride = requestedOverride;
@@ -5243,6 +5378,71 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             _actionInFlight = false;
             UpdateActionButtons();
+        }
+    }
+
+    private sealed class PendingModSyncResumePorts(LanConnectLobbyOverlay overlay) :
+        ILanConnectPendingModSyncResumePorts,
+        IDisposable
+    {
+        private LanConnectServerContextLease? _contextLease;
+
+        public async Task RestoreServerAsync(
+            string serverBaseUrl,
+            CancellationToken cancellationToken)
+        {
+            string saved = LanConnectLobbyServerAddress.NormalizeAuthority(serverBaseUrl, nameof(serverBaseUrl));
+            string current = LanConnectLobbyServerAddress.NormalizeAuthority(
+                LanConnectConfig.LobbyServerBaseUrl,
+                nameof(LanConnectConfig.LobbyServerBaseUrl));
+            LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance ??
+                throw new InvalidOperationException("Lobby runtime is unavailable.");
+            _contextLease?.Dispose();
+            _contextLease = string.Equals(saved, current, StringComparison.OrdinalIgnoreCase)
+                ? runtime.AcquireCurrentServerContext()
+                : await runtime.SwitchLobbyServerWithContextAsync(serverBaseUrl, cancellationToken);
+            if (overlay._serverBaseUrlInput != null)
+            {
+                overlay._serverBaseUrlInput.Text = LanConnectConfig.LobbyServerBaseUrlOverride;
+            }
+            overlay.UpdateNetworkSummary();
+            overlay.UpdateActionButtons();
+        }
+
+        public async Task<IReadOnlyList<LobbyRoomSummary>> GetRoomsAsync(
+            CancellationToken cancellationToken)
+        {
+            using LobbyApiClient apiClient = LobbyApiClient.CreateConfigured();
+            return await apiClient.GetRoomsAsync(cancellationToken);
+        }
+
+        public Task<bool> RepreflightPublicJoinAsync(
+            LobbyRoomSummary room,
+            string? desiredSavePlayerNetId,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return overlay.JoinRoomAsync(
+                room,
+                password: null,
+                desiredSavePlayerNetId,
+                cancellationToken);
+        }
+
+        public Task<bool> PromptPasswordAndRepreflightAsync(
+            LobbyRoomSummary room,
+            string? desiredSavePlayerNetId,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            overlay.OpenJoinPasswordDialog(room, desiredSavePlayerNetId);
+            return Task.FromResult(true);
+        }
+
+        public void Dispose()
+        {
+            _contextLease?.Dispose();
+            _contextLease = null;
         }
     }
 

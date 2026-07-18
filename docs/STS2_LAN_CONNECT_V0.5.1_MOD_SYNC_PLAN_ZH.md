@@ -1,6 +1,6 @@
 # STS2 LAN Connect v0.5.1 MOD 自动同步升级计划
 
-> 状态：待执行
+> 状态：执行中（Phase 2 已通过）
 >
 > 基线：`main`，制定计划时 HEAD 为 `e79b6c9`
 >
@@ -228,12 +228,12 @@ hostInventoryAvailable
 新增配置：
 
 ```env
-MOD_SYNC_ENABLED=false
+MOD_SYNC_ENABLED=true
 MOD_SYNC_MAX_DESCRIPTORS=64
 MOD_SYNC_MAX_PAYLOAD_BYTES=65536
 ```
 
-发布示例默认关闭；测试服务器显式开启。功能关闭后 `/probe` 报告 disabled，客户端无缝回退。
+发布示例默认开启；管理面板提供持久化运行时开关。功能关闭后 `/probe` 报告 disabled，客户端无缝回退。
 
 ### 7.3 Steam 同步引擎
 
@@ -344,19 +344,19 @@ expiresAtUtc
 
 ### Phase 0：基线与规格门禁
 
-- [ ] 从最新 `origin/main` 创建 `feat/mod-sync-0.5.1`，确认不包含现有未跟踪用户文件。
-- [ ] 把本计划中的 DTO、限制、错误码和平台矩阵转成测试名称清单。
-- [ ] 对 PR #38 留下 changes-requested 结论，不合并、不关闭，待替代实现完成后再处理。
-- [ ] 确认测试用 harmless Workshop MOD、双 Steam 账号和 0.107.1/0.108.0 测试产物来源。
+- [x] 从最新 `origin/main` 创建 `feat/mod-sync-0.5.1`，确认不包含现有未跟踪用户文件。
+- [x] 把本计划中的 DTO、限制、错误码和平台矩阵转成测试名称清单。
+- [x] 对 PR #38 留下 changes-requested 结论，不合并、不关闭，待替代实现完成后再处理。
+- [x] 确认测试用 harmless Workshop MOD、双 Steam 账号和 0.107.1/0.108.0 测试产物来源。
 
 Gate：范围、协议和测试夹具明确，没有实现代码。
 
 ### Phase 1：结构化清单与纯差异算法
 
-- [ ] 先写 C# descriptor、inventory、dependency closure、排序和限额失败测试。
-- [ ] 实现房主清单构建器及旧游戏版本运行时适配。
-- [ ] 先写 TypeScript validator/diff 的正常、越界、恶意字段和版本差异测试。
-- [ ] 实现服务端纯函数，不接 HTTP。
+- [x] 先写 C# descriptor、inventory、dependency closure、排序和限额失败测试。
+- [x] 实现房主清单构建器及旧游戏版本运行时适配。
+- [x] 先写 TypeScript validator/diff 的正常、越界、恶意字段和版本差异测试。
+- [x] 实现服务端纯函数，不接 HTTP。
 
 Gate：C#/TypeScript 对同一 fixture 产生完全一致的 canonical 差异。
 
@@ -364,10 +364,10 @@ Gate：C#/TypeScript 对同一 fixture 产生完全一致的 canonical 差异。
 
 ### Phase 2：服务端私有预检
 
-- [ ] 扩展 create-room DTO 和 `Room` 私有存储，证明 `RoomSummary` 不泄露清单。
-- [ ] 新增预检路由、密码验证、速率限制和能力字段。
-- [ ] 覆盖旧 host、旧 client、feature disabled、房间关闭/已开始/密码错误。
-- [ ] 保持现有 join ticket 和 relay 流程不变。
+- [x] 扩展 create-room DTO 和 `Room` 私有存储，证明 `RoomSummary` 不泄露清单。
+- [x] 新增预检路由、密码验证、速率限制和能力字段。
+- [x] 覆盖旧 host、旧 client、feature disabled、房间关闭/已开始/密码错误。
+- [x] 保持现有 join ticket 和 relay 流程不变。
 
 Gate：服务端全量测试通过，公开 API 快照不包含 inventory。
 
@@ -375,75 +375,101 @@ Gate：服务端全量测试通过，公开 API 快照不包含 inventory。
 
 ### Phase 3：客户端加入前预检
 
-- [ ] 扩展 API 模型与 capability resolver。
-- [ ] 在领取 join ticket 前调用预检；旧服务端或关闭功能时回退。
-- [ ] 游戏版本不匹配沿用现有硬门禁。
-- [ ] relaxed 模式保留用户确认后的继续加入。
-- [ ] 为邀请、普通加入、续局重连使用同一个 preflight coordinator。
+- [x] 扩展 API 模型与 capability resolver。
+- [x] 在领取 join ticket 前调用预检；旧服务端或关闭功能时回退。
+- [x] 游戏版本不匹配沿用现有硬门禁。
+- [x] relaxed 模式保留用户确认后的继续加入。
+- [x] 为邀请、普通加入、续局重连使用同一个 preflight coordinator。
 
 Gate：所有加入入口行为一致，v0.5.0 服务端回退测试通过。
+
+Gate 证据（2026-07-17）：Phase 3 focused xUnit 25/25；完整 xUnit 618 通过、1 个既有双客户端原型跳过；GdUnit 219/219；客户端构建 0 警告；lobby-service check 与 425/425 测试通过。生产代码仅由 preflight coordinator adapter 领取 join ticket，缺失 capability、feature disabled 和旧 host inventory 均有回退测试。
 
 建议提交：`feat(client): gate joins through mod compatibility preflight`
 
 ### Phase 4：Steam Workshop 与选择性禁用
 
-- [ ] 先实现 fake provider 和完整状态机测试。
-- [ ] 实现 Steam metadata、subscribe、download、callback、poll、timeout、cancel、retry。
-- [ ] 实现 manifest 安装后校验。
-- [ ] 实现选择性禁用、单次持久化、失败回滚和恢复提示。
-- [ ] SteamAPI 不可用时返回结构化 unsupported，不抛启动异常。
+- [x] 先实现 fake provider 和完整状态机测试。
+- [x] 实现 Steam metadata、subscribe、download、callback、poll、timeout、cancel、retry。
+- [x] 实现 manifest 安装后校验。
+- [x] 实现选择性禁用、单次持久化、失败回滚和恢复提示。
+- [x] SteamAPI 不可用时返回结构化 unsupported，不抛启动异常。
 
 Gate：fake provider 全状态覆盖；真实 Steam harmless MOD 完成一次订阅、取消、失败和重试。
+
+Gate 证据（2026-07-17）：Phase 4 focused xUnit 26/26；完整 xUnit 644 通过、1 个既有双客户端原型跳过；GdUnit 219/219；客户端构建 0 警告。真实 Steam AppID `2868840` 对 harmless 条目 `3747497501` 返回标题 `Regent FX Omnistar`，完成 `Pending -> Validating -> Subscribing -> Downloading -> Canceled`、取消订阅、Retry attempt 2 下载、受控 manifest ID 失败，以及按实际 manifest `RegentFX 0.4.3` 完成 `WaitingInstall -> Installed`。Steam 日志确认最终 unsubscribe，本机订阅和安装目录恢复；一次性 smoke runner 已删除，正常 Steam 启动无测试入口。
 
 建议提交：`feat(client): add consent-based workshop mod synchronization`
 
 ### Phase 5：响应式 UI 与重启恢复
 
-- [ ] 实现各视图状态及本地化。
-- [ ] 完成下载进度、手动项、禁用选择、继续加入和取消交互。
-- [ ] 实现 pending join 原子写入、TTL、恢复和清理。
-- [ ] 复用导航锁，加入竞态回归测试。
-- [ ] 完成 GdUnit 固定 viewport、焦点、文本越界和像素边界测试。
+- [x] 实现各视图状态及本地化。
+- [x] 完成下载进度、手动项、禁用选择、继续加入和取消交互。
+- [x] 实现 pending join 原子写入、TTL、恢复和清理。
+- [x] 复用导航锁，加入竞态回归测试。
+- [x] 完成 GdUnit 固定 viewport、焦点、文本越界和像素边界测试。
 
 Gate：桌面与 Android UI 测试通过，重启后公开房间恢复及密码房重新询问通过。
+
+Gate 证据（2026-07-17）：Phase 5 focused xUnit 33/33；完整 xUnit 662 通过、1 个既有双客户端原型跳过；完整 GdUnit TRX 224/224；lobby-service check 与 425/425 测试通过；客户端正式构建 0 警告。真实 SubViewport 覆盖 1280x720、1920x1080、2560x1440、4K、Android 720x1280/1280x720、64 个长 MOD 行、九态重建、焦点、Esc、选择默认空和 framebuffer 像素，桌面与 Android PNG 已在临时目录人工复核且未提交。pending join 仅序列化计划允许的六个上下文字段和 schema version，15 分钟 TTL；公开房恢复后重新预检，密码房只恢复房间/角色槽并重新要求密码，旧 generation 清理不会删除新 pending。
 
 建议提交：`feat(ui): complete mod sync dialog and restart resume flow`
 
 ### Phase 6：AMS 可选适配与安全审计
 
-- [ ] 抽象 provider 后再决定是否增加 AMS reflection adapter。
-- [ ] 反射必须按完整签名、返回类型和参数可赋值性解析。
-- [ ] AMS 缺失、旧版、字段已被其他 MOD 占用时不得覆盖或崩溃。
-- [ ] 完成 payload fuzz、Workshop ID 欺骗、重复 dependency、超大清单和并发预检测试。
-- [ ] 在 `THIRD_PARTY_NOTICES` 和 release notes 中署名 PR #38 的设计贡献。
+- [x] 抽象 provider 后完成决策：v0.5.1 不增加 AMS reflection adapter。
+- [x] 审计完整反射签名、返回类型和参数可赋值性；AMS host sidecar map 不满足本机权威 inventory 语义，因此没有反射代码进入产品。
+- [x] 生产代码不读取或写入 AMS handler，AMS 缺失、旧版或 handler 已被其他 MOD 占用均不影响原生 provider。
+- [x] 完成 payload fuzz、Workshop ID 欺骗、重复 dependency、超大清单和并发预检测试。
+- [x] 在 `THIRD_PARTY_NOTICES` 和 release notes 中署名 PR #38 的设计贡献。
 
 Gate：AMS 不是 v0.5.1 发布阻塞项；原生 provider 独立完成所有核心能力。
+
+Gate 证据（2026-07-17）：审计 AutoModSubscriber `595356c` 的公开接口，确认 `ModWorkshopMap.TryGet(string, out ulong)` 是客户端接收房主 initial info 后填充的 host sidecar map，不是本机 MOD 清单的权威来源；产品程序集无 AutoModSubscriber 引用或类型，产品源码不注册或覆盖 `ExternalDialogHandler`。Phase 6 focused xUnit 39/39、服务端安全 focused 23/23；完整 xUnit 663 通过、1 个既有双客户端原型跳过；lobby-service check 与 427/427 测试通过；完整 GdUnit TRX 224/224；客户端正式构建 0 警告。新增 576 轮受控恶意 payload 校验、Workshop ID Unicode/空白欺骗、24 路并发预检确定性与无 ticket/房间变更断言；既有测试继续覆盖 dependency 去重/环、65 项超限与 payload byte 上限。
 
 建议提交：`fix(mod-sync): harden provider boundaries and untrusted metadata`
 
 ### Phase 7：版本、文档与完整回归
 
-- [ ] 客户端和服务端所有版本源从 `0.5.0` 升为 `0.5.1`。
-- [ ] 保留历史 fixture 中的 `0.5.0`、`0.4.0`、`0.2.2` 字面量。
-- [ ] 更新 CHANGELOG、README、客户端指南、部署指南、环境模板和发布说明。
-- [ ] 增加客户端与服务端包内容测试，不把游戏 DLL 或 Steamworks DLL复制进公开包。
-- [ ] 执行完整测试和 IL 外部成员引用对比。
+- [x] 客户端和服务端所有版本源从 `0.5.0` 升为 `0.5.1`。
+- [x] 保留历史 fixture 中的 `0.5.0`、`0.4.0`、`0.2.2` 字面量。
+- [x] 更新 CHANGELOG、README、客户端指南、部署指南、环境模板和发布说明。
+- [x] 增加客户端与服务端包内容测试，不把游戏 DLL 或 Steamworks DLL复制进公开包。
+- [x] 执行完整测试和 IL 外部成员引用对比。
 
 Gate：完整 `verify-release.sh` 通过，两个候选包可重复生成并验证。
+
+Gate 证据（2026-07-17）：客户端 manifest/assembly/file/informational version 与服务端 package/lock 均为 `0.5.1`，发布契约继续锁定 `0.5.0`、`0.4.0`、`0.2.2` fixture。服务端显式包清单补入 `mod-sync/diff.ts`、`protocol.ts`、`validator.ts` 三份生产文件，继续排除测试、游戏 DLL、Steamworks/Harmony/GodotSharp DLL 和非本 MOD PCK。完整 `verify-release.sh` 通过：lobby-service check 与 428/428，xUnit 663 通过及 1 个既有双客户端原型跳过，GdUnit 224/224，客户端构建 0 警告，安装 dry-run 与双包 allowlist/legal 校验通过。相对 `origin/main@66ceb72` 的 IL 审计确认新外部引用限于 Steamworks、Steam 初始化/调用结果和 MOD 设置保存；易漂移 inventory 成员仍为受约束 reflection，IL 只有 `ModManager` type token，没有 `ModManager.Mods` member call。两次独立打包目录 `diff -qr` 为空，客户端 SHA-256 `05eeb7b5318bb8d38875a328583a3ac21e8dc67ee3dbdef8ebd3549a34d9e641`，服务端 SHA-256 `cb53068e5656ba6f693a765ff16bd700f4759ba8a272f40f85bafce36acf7254`；使用 `rsync -a --checksum --delete` 同步完整 staged 镜像到 `releases/` 后再次 `diff -qr` 为空。
 
 建议提交：`release: prepare v0.5.1 mod synchronization candidate`
 
 ### Phase 8：测试服务器、实机验收与正式发布
 
-- [ ] 使用候选 service 包部署 `ssh sub2api-tencent` 的 `/opt/sts2-lobby-test`。
-- [ ] 保留 `.env`、状态文件和 0.5.0 回滚包；测试节点显式开启 `MOD_SYNC_ENABLED=true`。
-- [ ] 验证 `/health`、`/probe`、预检隐私、房间、控制 WS、聊天和 UDP relay。
+- [x] 使用候选 service 包部署 `ssh sub2api-tencent` 的 `/opt/sts2-lobby-test`。
+- [x] 保留 `.env`、状态文件和 0.5.0 回滚包；测试节点显式开启 `MOD_SYNC_ENABLED=true`。
+- [x] 验证 `/health`、`/probe`、预检隐私、房间、控制 WS、聊天和 UDP relay。
 - [ ] 两台 Steam 客户端执行验收矩阵。
 - [ ] Android 执行 unsupported/manual fallback 验收。
 - [ ] 用户确认实测后才合并 `main`、创建 `v0.5.1` tag、上传两个新资产。
 - [ ] 不覆盖 `v0.5.0` Release。
 
 Gate：远程 main、tag、Release 资产和本地包 SHA-256 一致；测试服务重启后仍健康。
+
+Phase 8 部分证据（2026-07-17 至 2026-07-18）：候选 service 已原子部署到 `/opt/sts2-lobby-test`，保留原 `.env`、完整旧 live tree、权限收紧的 `0.5.0` 回滚包和候选归档；服务重启后 `/health` 健康，`/probe` 返回 `modSyncProtocolVersion=1` 与 `modSyncEnabled=true`。真实测试节点 smoke 覆盖 HTTP、隐私、密码、预检、游戏版本硬拦截、控制 WebSocket、服务器/房间聊天和 UDP relay，日志未泄露 MOD 名、ID、密码或 token。0.109.0 首轮实机发现 `ModManifest.dependencies=null` 被误判为缺失成员，并确认真实 Workshop 字段为 `workshopId`；修复提交 `3f12eee`，测试隔离提交 `c6aef55` 使用只读 PE metadata 契约避免把游戏运行时污染 xUnit testhost。修复后的真实 0.109.0 验证覆盖：本机建房成功并达到 `relayState=ready`，退出后 DELETE 204；缺少 gameplay Workshop MOD 时显示真实 `Regent FX Omnistar` 元数据，取消不发 join ticket；用户确认 relaxed 后继续既有 public/relay 握手；v0.108.0 房间在任何 MOD 请求前硬拦截且无 relaxed；空 gameplay 清单在本机普通 SayTheSpire MOD 已加载时不弹提示并直接 join。
+
+2026-07-18 使用已登录 Steam 客户端控制台从官方 macOS depot `2868842` 下载 manifest `8653035385353091849`，控制台报告 443 个文件下载完成；使用 `rsync -a --checksum --delete` 固化 `0.107.1` build `23811903` fixture 后，原始目录 `diff -qr` 为空、App 原始签名有效，`release_info.json` 为 `v0.107.1` / commit `59260271`，arm64 `sts2.dll` SHA-256 为 `e7ceb80669bfaf5c8fccabaa126ae2bb283aba514be5b5b55612579cfd285f18`。真实 metadata 证明 0.107.1 的 `Mod` 没有 0.109.0 新增的 `workshopId` 字段，但保留数字 Workshop 路径；提交 `1d7478d` 按 `release_info.json` 对 0.107.1 与 0.109.0 分别执行严格字段契约，24/24 inventory focused tests 在 0.107.1 引用下通过。最终候选逐字节安装于该 fixture 后由 Steamworks 开发 AppID 启动，达到 0.107.1 主菜单，serialization 6/6、capacity 5/5、patch groups 6/6；真实创建房间返回 `v0.107.1`、`modVersion=0.5.1`、`hostModCount=0`、`relayState=ready`，退出 DELETE 204。相同最终候选由 Steam Library 启动于真实 0.109.0，达到主菜单并得到同样的 6/6、5/5、6/6 初始化结果。官方 SteamCMD 匿名 `app_info_print 2868840` 进一步确认当前 `public` 只指向 build `23811903`，`public-beta` 只指向 build `24251656`，没有分支指向历史 build `24032229`。该 build 的 macOS manifest `1977841934321910790` 在已登录 Steam 控制台常规重试两次，并临时启用 Steam 内建 `@bClientTryRequestManifestWithoutCode=1` 精确重试一次，三次均由 manifest request ACL 返回 `Access Denied`；开关随后已恢复为 `0`。未生成或冒充 0.108.0 fixture，因此该版本 gate 仍未通过。
+
+补充来源审计发现 Steam `content_log.txt` 记录本机曾于 2026-07-17 10:15 从官方 CDN 成功下载同一 0.108.0 manifest、完成 build `24032229` 安装并启动游戏；该时间早于本分支首个提交 17:23，不能证明 v0.5.1 候选加载。安装随后被更新覆盖，Steam staging、depotcache、HTTP cache、废纸篓与 APFS Data volume 均无可恢复的精确产物。2026-07-18 03:17 切换到本机第二个已保存 Steam 账号后精确重试同一命令，也返回 manifest request ACL `Access Denied`；测试后已恢复原账号并清空命令剪贴板。因此历史成功记录只证明官方来源曾可用，不能替代最终候选的 0.108.0 gate。
+
+玩家测试预发布准备（2026-07-18）：在缺少 0.108.0 官方产物、第二台 Steam 客户端和 Android 实机的前提下，用户授权先发布非正式 `v0.5.1-rc.1` prerelease，让玩家与服务器运营者配套安装客户端/服务端测试包；该授权不完成 Phase 8 gate，也不允许创建正式 `v0.5.1` tag、合并 main 或覆盖 v0.5.0 Release。当前源码 HEAD `82ddc8e` 完整 `verify-release.sh` 再次通过：lobby-service 428/428、xUnit 665 通过及 1 个既有双客户端原型跳过、GdUnit 224/224、客户端构建 0 警告/0 错误和双包校验通过。两次独立 RC 构建目录 `diff -qr` 为空；相对前一候选仅 DLL 的 Git informational version 从 `258708f` 更新为 `82ddc8e`，反编译 IL `diff` 为空。RC 客户端 ZIP SHA-256 为 `3663d20e29131db9814f3e2e509befdf1e9faaa1247d8910d553c5313e4045fe`，DLL 为 `2b955c3747e3fa0982e12d2d72b7d84a4ceeab76a7607cc54c6db99bfc8dcaa2`，PCK 为 `b9907bd5a1e2afc1609d589fc3f43c9943f6f0900792ca68fafc154028720597`，服务端 ZIP 仍为 `cb53068e5656ba6f693a765ff16bd700f4759ba8a272f40f85bafce36acf7254`。完整 staged release mirror 经 `rsync -a --checksum --delete` 后 `diff -qr` 为空；客户端已通过正式安装器原子安装到本机真实 0.109.0 游戏，DLL/PCK 与 RC 包逐字节一致，App 签名有效，用户配置哈希未改变。
+
+完整回归还暴露 server chat delivery timeout CTS 的取消/释放竞态；提交 `258708f` 统一锁内所有权，focused test 单次、连续 10 轮及该类 39/39 通过。随后完整 `verify-release.sh` 通过：lobby-service check 与 428/428，xUnit 665 通过及 1 个既有双客户端原型跳过，GdUnit 224/224，客户端构建 0 警告和双包校验通过。稳定 HEAD 两次客户端构建目录 `diff -qr` 为空，最终客户端 ZIP SHA-256 为 `3dcaef7c3c9512631ae17a866e8eed737c159122135376cc37ea509e5aae08c7`，DLL SHA-256 为 `a530726e3c767316016378bb2d4bf57ead219672983831753783333d24e87023`，PCK SHA-256 为 `b9907bd5a1e2afc1609d589fc3f43c9943f6f0900792ca68fafc154028720597`，服务端 ZIP SHA-256 仍为 `cb53068e5656ba6f693a765ff16bd700f4759ba8a272f40f85bafce36acf7254`；完整 staged release mirror 经 `rsync -a --checksum --delete` 后再次 `diff -qr` 为空。所有临时房间、SSH forward、本地 discovery、游戏进程和测试配置均已清理，用户公网配置恢复到原 SHA-256。当前 gate 仍未通过：尚缺 0.108.0 官方测试产物、第二台 Steam 客户端和 Android 设备，因此不得合并 main、创建 tag 或发布 Release。
+
+服务器列表能力标识增量（2026-07-18）：测试节点 `http://101.35.217.99:8788` 由客户端固定注入、规范化去重并始终排在第一位；服务端在 `/probe` 和 `/peers/metrics` 声明 MOD 同步协议、运行时开关与最低客户端版本 `0.5.1`，客户端在实时协议版本至少为 1 且同步已开启时显示“支持 0.5.1+ MOD 同步”。最低客户端版本字段用于增强能力描述，不作为协议 1 已发布节点的展示硬门槛；当已发布节点的 metrics 尚未包含 MOD 字段时，客户端只在该场景额外读取 `/probe` 并合并能力。完全未声明 MOD 同步协议的旧服务端不显示但继续兼容。TDD 覆盖空发现列表、尾斜杠去重、置顶优先级、协议 1 缺少新增最低版本字段的兼容、metrics 到 probe 的 HTTP 回退、metrics JSON DTO、管理开关实时变化和 Godot 卡片双标识。完整 `verify-release.sh` 通过：lobby-service 433/433、xUnit 672 通过及 1 个既有双客户端原型跳过、GdUnit 226/226、客户端构建 0 警告/0 错误。客户端与服务端各两次独立打包 `diff -qr` 为空；使用 `rsync -a --checksum --delete` 同步发布镜像后再次比较为空。客户端 ZIP SHA-256 为 `5c23c5d53639a90ef22648f6a374e741b456797888b66305d52ce165af24f230`，服务端 ZIP SHA-256 为 `a8fa5a4e80ba0961d36165cdad78516adb5c94ff3f292e01d9b1cce440df288b`。该增量不改变 gameplay MOD 范围、Workshop 唯一下载来源、游戏版本硬拦截或 relaxed 边界；Phase 8 尚缺的外部实机条件仍未满足。
+
+正式发布授权（2026-07-18）：发布负责人在已知 Phase 8 仍缺 0.108.0 最终候选实机重跑、第二台 Steam 客户端与 Android 实机的情况下，明确要求结束候选阶段，按“先合并远程 main、再发布无后缀 v0.5.1 Release、最后更新 Steam Workshop”的顺序正式发布。该授权是对剩余风险的接受，不把未完成项标记为测试通过，也不改变上述安全边界、自动化门禁或历史证据。正式发布不得覆盖或移动 v0.5.0 tag/资产；Workshop 条目 `3749766330` 标题改为“游戏大厅”，description 使用 Steam BBCode 分段并以玩家功能为主，不再上传字面 `\\n`。
+
+正式发布产物准备（2026-07-18）：完整 `verify-release.sh` 再次通过，结果为 lobby-service 433/433、xUnit 672 通过及 1 个既有双客户端原型跳过、GdUnit 226/226、客户端正式构建 0 警告/0 错误。客户端与服务端各执行两次独立确定性打包，目录 `diff -qr` 与 ZIP `cmp` 均通过；发布镜像使用 `rsync -a --checksum --delete` 同步后再次逐项比较。正式客户端 ZIP SHA-256 为 `642c1e8a0d562b3201d75101972a88e5306852ca987eb2bd4c745ea0f2a124c6`，正式服务端 ZIP SHA-256 为 `a2eea9fc667726d0821c81c3e798f43f10df6041a5fcbfd14e183dfb86004e82`。
 
 ## 9. 测试矩阵
 
@@ -525,7 +551,7 @@ diff -qr <staged>/ <releases>/
 
 ### 回滚
 
-- 服务端设置 `MOD_SYNC_ENABLED=false` 并重启，v0.5.1 客户端立即回退现有加入流程。
+- 服务端在管理面板关闭 MOD 同步，v0.5.1 客户端立即回退现有加入流程。
 - 保留测试节点部署前压缩备份和 0.5.0 service 包。
 - 客户端发生严重问题时重新指向 v0.5.0 Release，不移动或覆盖历史 tag。
 - pending join 文件使用版本字段；未知版本必须忽略并清理。

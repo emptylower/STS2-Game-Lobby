@@ -63,4 +63,7 @@ export interface MetricsResponse {
   capacitySource: string;
   createRoomGuardApplies: boolean;
   createRoomGuardStatus: "allow" | "block" | "unknown";
+  modSyncProtocolVersion: number;
+  modSyncEnabled: boolean;
+  modSyncMinimumClientVersion: string;
 }

@@ -10,6 +10,17 @@
 
 # STS2 LAN Connect 使用说明
 
+正式版下载：[`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1)；Steam 玩家也可直接订阅创意工坊条目 [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。通过创意工坊安装或更新后同样需要完整重启游戏。
+
+## v0.5.1 加入前 MOD 预检
+
+- 选择房间后，客户端先比较会影响联机的 gameplay MOD 与必要 dependency；普通非联机 MOD 不会提示、禁用或影响加入
+- 游戏版本不同会先直接拦截，不能通过 MOD 同步或 relaxed“仍然尝试加入”绕过
+- Steam 桌面客户端会先显示真实 Workshop 信息，只有确认后才订阅缺失项；Android、非 Steam 或 SteamAPI 不可用时只提供手动处理
+- 多余 gameplay MOD 默认不勾选，必须手动选择并二次确认才会禁用
+- 安装或禁用 MOD 后必须重启。公开房在 15 分钟内恢复并重新预检；密码房重新询问密码，客户端不会保存密码或 token
+- 客户端不会从房主、大厅服务或任意 URL 下载 DLL、PCK、ZIP
+
 ## v0.5.0 聊天升级
 
 - 大厅右侧新增 `频道聊天`，连接当前大厅服务器后即可收发消息，不需要先加入房间
@@ -128,7 +139,7 @@
 ## 网络说明
 
 - 默认连接策略由安装包内的 `lobby-defaults.json` 决定，可选 `direct-first`、`relay-first` 或 `relay-only`
-- 公开包默认使用阿里云大厅 `47.111.146.69:8787` 作为兜底社区节点，并通过 CF 发现入口 `https://sts2-gamelobby-register.xyz` + 内置种子聚合可用服务器；旧的 `47.111.146.69:18787` 公开目录在 v0.4.0 中不再参与运行时发现
+- 公开包默认使用阿里云大厅 `47.111.146.69:8787` 作为兜底社区节点，并通过 CF 发现入口 `https://sts2-gamelobby-register.xyz` + 内置种子聚合可用服务器；测试节点 `101.35.217.99:8788` 固定排在服务器列表第一位。显示“支持 0.5.1+ MOD 同步”的服务器已实时声明加入前 gameplay MOD 预检/Workshop 同步能力；旧的 `47.111.146.69:18787` 公开目录在 v0.4.0 中不再参与运行时发现
 - 兼容矩阵当前统一规则为：
   - `4` 人房发布 `legacy_4p`，用于兼容 `0.2.2`
   - `5-8` 人房发布 `extended_8p`，仅支持 `0.2.3+`
@@ -189,16 +200,20 @@
 
 - 所有联机玩家必须使用完全相同版本的 STS2 LAN Connect
 - 以 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为准
+- 缺少 Workshop 项时先核对标题、发布者、大小和目标版本，再决定是否订阅
+- 缺少手动项时按列表自行安装；没有其他自动下载来源
+- 多余 gameplay MOD 默认不会禁用；选择禁用后必须二次确认并重启
+- relaxed“仍然尝试加入”只保留给 MOD 差异，游戏版本不同仍然拒绝
 
 ### 安卓端启动就弹"致命错误"
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本仓库 v0.5.0 文档对应 `0.5.0`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本仓库 v0.5.1 文档对应 `0.5.1`）
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保 `sts2_lan_connect.dll`、`sts2_lan_connect.pck` 和 `sts2_lan_connect.json` 同步更新
 - 如仍崩溃，将最新 `godot.log` 和本地调试报告一并发给开发者
 
 ### 安卓端进了主菜单，但打开多人页面 / 游戏大厅异常
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本仓库 v0.5.0 文档对应 `0.5.0`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本仓库 v0.5.1 文档对应 `0.5.1`）
 - 确认安装的是当前发布的客户端包，而非更早的旧包
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保三个文件来自同一批 release
 - 如问题仍存在，将最新 `godot.log` 和本地调试报告一并发给开发者
@@ -212,6 +227,17 @@
 <a name="english"></a>
 
 # STS2 LAN Connect User Guide
+
+Official download: [`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1). Steam players can also subscribe to [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330). Fully restart the game after a Workshop install or update.
+
+## v0.5.1 MOD Preflight Before Join
+
+- Only gameplay-affecting MODs and required dependencies are compared. Ordinary unrelated MODs are not shown, disabled, or used to block joining.
+- Game-version mismatches are rejected first and cannot be bypassed by synchronization or relaxed continuation.
+- Steam desktop shows real Workshop metadata and subscribes only after consent. Android, non-Steam, and unavailable SteamAPI environments provide manual guidance only.
+- Extra gameplay MODs start unchecked and require explicit selection plus a second confirmation before disablement.
+- Restart after any MOD change. Public rooms can resume and preflight again for 15 minutes; password rooms ask for the password again. Passwords and tokens are never persisted.
+- The client never downloads DLL, PCK, or ZIP content from hosts, lobby services, or arbitrary URLs.
 
 ## v0.5.0 Chat Upgrade
 
@@ -332,7 +358,7 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 ## Network Notes
 
 - The default connection strategy is determined by `lobby-defaults.json` in the installation package: `direct-first`, `relay-first`, or `relay-only`
-- The public release defaults to the Alibaba Cloud lobby at `47.111.146.69:8787` as a fallback community node and aggregates available servers through the CF discovery worker `https://sts2-gamelobby-register.xyz` plus bundled seed peers. The legacy `47.111.146.69:18787` directory is no longer used for runtime discovery in v0.4.0
+- The public release defaults to the Alibaba Cloud lobby at `47.111.146.69:8787` as a fallback community node and aggregates available servers through the CF discovery worker `https://sts2-gamelobby-register.xyz` plus bundled seed peers. Test node `101.35.217.99:8788` is always pinned first. Servers tagged `Supports 0.5.1+ MOD Sync` have declared live gameplay-MOD preflight/Workshop sync capability. The legacy `47.111.146.69:18787` directory is no longer used for runtime discovery in v0.4.0
 - The compatibility matrix is currently unified as:
   - `4`-player rooms publish `legacy_4p` for `0.2.2` compatibility
   - `5-8`-player rooms publish `extended_8p` and require `0.2.3+`
@@ -396,13 +422,13 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 
 ### Android: "Fatal Error" on launch
 
-- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.5.0 documentation corresponds to `0.5.0`)
+- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.5.1 documentation corresponds to `0.5.1`)
 - If you installed over an older package, fully uninstall first and then reinstall to ensure `sts2_lan_connect.dll`, `sts2_lan_connect.pck`, and `sts2_lan_connect.json` are all updated together
 - If the crash persists, send the latest `godot.log` and the local debug report to the developer
 
 ### Android: Main menu loads, but multiplayer page / Game Lobby behaves abnormally
 
-- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.5.0 documentation corresponds to `0.5.0`)
+- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this v0.5.1 documentation corresponds to `0.5.1`)
 - Confirm you installed the current release package, not an older package
 - If you installed over an older package, fully uninstall first and then reinstall to ensure all three files come from the same release batch
 - If the issue persists, send the latest `godot.log` and the local debug report to the developer

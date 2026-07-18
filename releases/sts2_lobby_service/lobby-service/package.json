@@ -1,6 +1,6 @@
 {
   "name": "sts2-lobby-service",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Public lobby, room coordination, relay fallback, and rich chat service for STS2 LAN Connect.",
   "private": true,
   "license": "GPL-3.0-only",

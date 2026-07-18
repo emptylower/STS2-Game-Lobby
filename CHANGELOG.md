@@ -2,6 +2,35 @@
 
 本项目从 v0.5.0 起在此记录客户端 MOD 与 lobby-service 的公开版本变更。
 
+## [0.5.1] - 2026-07-18
+
+### Added
+
+- 加入前 gameplay MOD 私有预检：只比较 `affects_gameplay=true` 的 MOD 及必要 dependency，不公开房主清单，也不提前签发 join ticket。
+- Steam 桌面客户端可在用户确认后订阅缺失的 Workshop 项，显示真实条目元数据、下载进度、取消和重试状态。
+- MOD 改动后的重启恢复：15 分钟内恢复服务器、房间和续局槽位；密码房重新询问密码，pending join 不保存密码或 token。
+
+### Changed
+
+- 客户端 MOD 与 lobby-service 同步升级到 `0.5.1`；v0.5.0 对端缺少预检能力时安全回退原加入流程。
+- 多余 gameplay MOD 默认不选择禁用，只有用户选择并二次确认后才修改本机启用状态。
+- Android、非 Steam 与 SteamAPI 不可用环境只显示手动处理项，不尝试自动下载。
+- 服务器选择列表固定将测试节点 `101.35.217.99:8788` 排在第一位；声明 MOD 同步能力的节点显示“支持 0.5.1+ MOD 同步”。
+- Steam 创意工坊条目改名为“游戏大厅”，说明改为面向玩家的分段功能介绍。
+
+### Fixed
+
+- 兼容已发布但 `/peers/metrics` 尚未携带 MOD 字段的协议 1 节点：客户端只在字段缺失时从 `/probe` 补充能力标识。
+- 修复 MOD inventory 的 nullable dependency 与跨游戏版本 Workshop metadata 字段差异。
+- 修复聊天 delivery timeout 的取消和释放竞态。
+
+### Security and Compatibility
+
+- 游戏版本不同始终硬拦截，不能通过 MOD 同步或 relaxed 继续绕过；普通非联机 MOD 不提示、不禁用、不影响加入。
+- 自动获取仅使用 Steam Workshop；客户端和服务端都不会从房主或任意 URL 下载、托管或传输 DLL、PCK、ZIP。
+- 原生 Steam provider 独立提供全部核心能力，不依赖 AutoModSubscriber，也不注册或覆盖其外部 UI handler。
+- 同一客户端包继续兼容游戏 `0.107.1`、`0.108.0` 与 `0.109.0`。
+
 ## [0.5.0] - 2026-07-17
 
 ### Added
@@ -44,5 +73,6 @@
 - 移除 lobby-service 对 `SERVER_REGISTRY_*` 的运行时依赖。
 - 完善客户端服务器选择、键盘/手柄导航、邀请快捷键和无障碍软桥接。
 
+[0.5.1]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1
 [0.5.0]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.0
 [0.4.0]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.4.0

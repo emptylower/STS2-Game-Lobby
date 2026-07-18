@@ -15,6 +15,8 @@ internal sealed class ServerListEntry
     public DateTime? LastSuccessConnect { get; set; }
     public PingBucket Bucket { get; set; } = PingBucket.Unreachable;
     public int? PingMs { get; set; }
+    public bool IsPinned { get; set; }
+    public bool SupportsModSyncV051Plus { get; set; }
 
     // Live metrics from `/peers/metrics`, populated by PingAllAsync after the
     // initial pre-warmed gather. All nullable — older v0.2/v0.3 nodes don't
@@ -37,6 +39,8 @@ internal sealed class ServerListMergeResult
 
 internal static class LanConnectServerListBootstrap
 {
+    public const string FeaturedServerAddress = "http://101.35.217.99:8788";
+
     public static List<ServerListEntry> GatherInitialCandidates()
     {
         var cache = LanConnectKnownPeersCache.Load();
@@ -75,7 +79,9 @@ internal static class LanConnectServerListBootstrap
             };
         }
 
-        return byAddr.Values.ToList();
+        List<ServerListEntry> entries = byAddr.Values.ToList();
+        EnsureFeaturedServer(entries);
+        return entries;
     }
 
     public static async Task<List<ServerListEntry>> GatherCloudflareCandidatesAsync(CancellationToken ct = default)
@@ -111,7 +117,7 @@ internal static class LanConnectServerListBootstrap
         {
             if (!string.IsNullOrWhiteSpace(currentEntry.Address))
             {
-                byAddr[currentEntry.Address] = currentEntry;
+                byAddr[NormalizeAddress(currentEntry.Address)] = currentEntry;
             }
         }
 
@@ -122,10 +128,11 @@ internal static class LanConnectServerListBootstrap
                 continue;
             }
 
-            if (!byAddr.TryGetValue(incomingEntry.Address, out var existingEntry))
+            string addressKey = NormalizeAddress(incomingEntry.Address);
+            if (!byAddr.TryGetValue(addressKey, out var existingEntry))
             {
                 currentEntries.Add(incomingEntry);
-                byAddr[incomingEntry.Address] = incomingEntry;
+                byAddr[addressKey] = incomingEntry;
                 result.AddedEntries.Add(incomingEntry);
                 result.Changed = true;
                 continue;
@@ -136,6 +143,8 @@ internal static class LanConnectServerListBootstrap
                 result.Changed = true;
             }
         }
+
+        EnsureFeaturedServer(currentEntries);
 
         return result;
     }
@@ -168,25 +177,63 @@ internal static class LanConnectServerListBootstrap
             }
 
             PeerMetricsResponse? metrics = metricsTask.Result;
-            if (metrics != null)
-            {
-                entry.Rooms = metrics.Rooms;
-                entry.CurrentBandwidthMbps = metrics.CurrentBandwidthMbps;
-                entry.BandwidthCapacityMbps = metrics.BandwidthCapacityMbps;
-                entry.ResolvedCapacityMbps = metrics.ResolvedCapacityMbps;
-                entry.BandwidthUtilizationRatio = metrics.BandwidthUtilizationRatio;
-                entry.CapacitySource = metrics.CapacitySource;
-                entry.CreateRoomGuardApplies = metrics.CreateRoomGuardApplies;
-                entry.CreateRoomGuardStatus = metrics.CreateRoomGuardStatus;
-                if (!string.IsNullOrWhiteSpace(metrics.DisplayName))
-                {
-                    entry.DisplayName = metrics.DisplayName;
-                }
-            }
+            if (metrics != null) ApplyMetrics(entry, metrics);
         }).ToList();
 
         await Task.WhenAll(tasks);
     }
+
+    internal static void EnsureFeaturedServer(List<ServerListEntry> entries)
+    {
+        List<ServerListEntry> matches = entries
+            .Where(entry => IsFeaturedAddress(entry.Address))
+            .ToList();
+        ServerListEntry featured;
+        if (matches.Count == 0)
+        {
+            featured = new ServerListEntry
+            {
+                Address = FeaturedServerAddress,
+                Source = "featured",
+            };
+            entries.Add(featured);
+        }
+        else
+        {
+            featured = matches[0];
+            foreach (ServerListEntry duplicate in matches.Skip(1)) entries.Remove(duplicate);
+        }
+
+        featured.Address = FeaturedServerAddress;
+        featured.IsPinned = true;
+    }
+
+    internal static IOrderedEnumerable<ServerListEntry> OrderForDisplay(IEnumerable<ServerListEntry> entries) =>
+        entries
+            .OrderByDescending(entry => entry.IsPinned)
+            .ThenByDescending(entry => entry.LastSuccessConnect ?? DateTime.MinValue)
+            .ThenBy(entry => entry.Bucket)
+            .ThenBy(entry => entry.Address, StringComparer.OrdinalIgnoreCase);
+
+    internal static void ApplyMetrics(ServerListEntry entry, PeerMetricsResponse metrics)
+    {
+        entry.Rooms = metrics.Rooms;
+        entry.CurrentBandwidthMbps = metrics.CurrentBandwidthMbps;
+        entry.BandwidthCapacityMbps = metrics.BandwidthCapacityMbps;
+        entry.ResolvedCapacityMbps = metrics.ResolvedCapacityMbps;
+        entry.BandwidthUtilizationRatio = metrics.BandwidthUtilizationRatio;
+        entry.CapacitySource = metrics.CapacitySource;
+        entry.CreateRoomGuardApplies = metrics.CreateRoomGuardApplies;
+        entry.CreateRoomGuardStatus = metrics.CreateRoomGuardStatus;
+        entry.SupportsModSyncV051Plus = metrics.ModSyncEnabled &&
+                                               metrics.ModSyncProtocolVersion >= LanConnectModSyncCapabilities.ProtocolVersion;
+        if (!string.IsNullOrWhiteSpace(metrics.DisplayName)) entry.DisplayName = metrics.DisplayName;
+    }
+
+    private static bool IsFeaturedAddress(string address) =>
+        string.Equals(NormalizeAddress(address), NormalizeAddress(FeaturedServerAddress), StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeAddress(string address) => address.Trim().TrimEnd('/');
 
     private static bool MergeEntry(ServerListEntry target, ServerListEntry incoming)
     {

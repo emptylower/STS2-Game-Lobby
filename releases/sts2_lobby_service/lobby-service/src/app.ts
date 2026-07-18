@@ -16,6 +16,12 @@ import {
 } from "./client-ip.js";
 import { CreateRoomBandwidthGuard } from "./bandwidth-guard.js";
 import { assertRelayCreateReady, assertRelayJoinReady } from "./join-guard.js";
+import {
+  MOD_SYNC_MINIMUM_CLIENT_VERSION,
+  MOD_SYNC_PROTOCOL_VERSION,
+  type LobbyModDescriptor,
+} from "./mod-sync/protocol.js";
+import { ModSyncValidationError, validateModInventory } from "./mod-sync/validator.js";
 import { RoomRelayManager } from "./relay.js";
 import { cleanupExpiredRooms } from "./room-cleanup.js";
 import {
@@ -126,6 +132,7 @@ function isJsonParseError(error: unknown): boolean {
   const candidate = error as { type?: unknown; status?: unknown; statusCode?: unknown };
   const status = typeof candidate.status === "number" ? candidate.status : candidate.statusCode;
   return candidate.type === "entity.parse.failed"
+    || candidate.type === "entity.too.large"
     || (error instanceof SyntaxError && typeof status === "number" && status >= 400 && status < 500);
 }
 
@@ -184,6 +191,8 @@ export async function createLobbyService(
     strictGameVersionCheck: env.strictGameVersionCheck,
     strictModVersionCheck: env.strictModVersionCheck,
     connectionStrategy: env.connectionStrategy,
+    modSyncMaxDescriptors: env.modSyncMaxDescriptors,
+    modSyncMaxPayloadBytes: env.modSyncMaxPayloadBytes,
   }, {
     peerPlayerNetIds: (roomId, roomSessionId) => {
       const playerNetIds = new Set<string>();
@@ -220,6 +229,7 @@ export async function createLobbyService(
   );
   const serverAdminStateStore = new ServerAdminStateStore(env.serverAdminStateFile, {
     publicListingEnabledDefault: env.peerPublicListingEnabledDefault,
+    modSyncEnabledDefault: env.modSyncEnabled,
     chatFeaturesDefault: env.chat.features,
   });
   const initialChatGovernance = serverAdminStateStore.getState().chatFeatures;
@@ -291,7 +301,8 @@ export async function createLobbyService(
     res.setHeader("Cache-Control", "no-store");
     next();
   });
-  app.use(express.json({ limit: "32kb" }));
+  const jsonEnvelopeLimitBytes = Math.max(32 * 1024, env.modSyncMaxPayloadBytes + 16 * 1024);
+  app.use(express.json({ limit: jsonEnvelopeLimitBytes }));
   app.use((req, res, next) => {
     const startedAt = Date.now();
     res.on("finish", () => {
@@ -351,6 +362,9 @@ export async function createLobbyService(
         maxSegments: ChatMaxSegments,
         maxEntities: ChatMaxEntitiesPhase3,
         historyLimit: ChatHistoryLimitPhase3,
+        modSyncProtocolVersion: MOD_SYNC_PROTOCOL_VERSION,
+        modSyncEnabled: serverAdminStateStore.getState().modSyncEnabled,
+        modSyncMinimumClientVersion: MOD_SYNC_MINIMUM_CLIENT_VERSION,
       },
     });
   });
@@ -488,6 +502,9 @@ export async function createLobbyService(
         version: boundedString(body?.version, "version", MaxVersionLength),
         modVersion: boundedString(body?.modVersion, "modVersion", MaxModVersionLength),
         modList: boundedStringArray(body?.modList, "modList", MaxModListEntries, MaxModListEntryLength),
+        hostModInventory: body?.hostModInventory === undefined
+          ? undefined
+          : parseModInventory(body.hostModInventory, "hostModInventory"),
         protocolProfile: optionalBoundedString(body?.protocolProfile, "protocolProfile", MaxProtocolProfileLength),
         maxPlayers: positiveInt(body?.maxPlayers, "maxPlayers", 1, MaxLobbyPlayers),
         hostConnectionInfo: {
@@ -585,6 +602,73 @@ export async function createLobbyService(
         `[lobby] join ticket issued roomId=${req.params.id} player="${body?.playerName ?? ""}" roomModVersion=${response.room.modVersion} protocolProfile=${response.room.protocolProfile} ticketId=${response.ticketId} remote=${requestIp(req)} strategy=${response.connectionPlan.strategy} direct=${response.connectionPlan.directCandidates.length} relay=${relayEndpoint ? `${relayEndpoint.host}:${relayEndpoint.port}` : "disabled"} relayState=${response.room.relayState} relayHost=${relayStatus.hasActiveHost ? relayStatus.activeHostDetail : "unregistered"} relayClients=${relayStatus.clientCount}`,
       );
       res.json(response);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/rooms/:id/mod-preflight", (req, res, next) => {
+    try {
+      assertCreateJoinRateLimit(req, "join_room");
+      const body = req.body as Record<string, unknown> | undefined;
+      const allowedFields = new Set([
+        "playerName",
+        "password",
+        "gameVersion",
+        "modSyncProtocolVersion",
+        "localMods",
+      ]);
+      if (!body || Array.isArray(body) || Object.keys(body).some((key) => !allowedFields.has(key))) {
+        throw new InputError("MOD 预检请求包含不支持的字段。");
+      }
+
+      const playerName = boundedString(body.playerName, "playerName", MaxPlayerNameLength);
+      const password = optionalBoundedString(body.password, "password", MaxPasswordLength);
+      const gameVersion = boundedString(body.gameVersion, "gameVersion", MaxVersionLength);
+      const protocolVersion = positiveInt(
+        body.modSyncProtocolVersion,
+        "modSyncProtocolVersion",
+        1,
+        Number.MAX_SAFE_INTEGER,
+      );
+      const localMods = body.localMods;
+
+      if (!serverAdminStateStore.getState().modSyncEnabled || protocolVersion !== MOD_SYNC_PROTOCOL_VERSION) {
+        res.json({
+          enabled: false,
+          protocolVersion: MOD_SYNC_PROTOCOL_VERSION,
+          gameVersion: { host: "", local: gameVersion, exactMatch: false },
+          missingWorkshopMods: [],
+          missingManualMods: [],
+          extraGameplayMods: [],
+          versionMismatches: [],
+          canContinueRelaxed: true,
+          hostInventoryAvailable: false,
+        });
+        return;
+      }
+
+      cleanupExpiredRoomsNow();
+      const result = store.modPreflight(req.params.id, {
+        playerName,
+        password,
+        gameVersion,
+        localMods,
+      });
+      console.log(
+        `[lobby] mod preflight roomId=${req.params.id} hostInventory=${result.hostInventoryAvailable ? "available" : "legacy"} inventoryHash=${result.inventoryHash ?? "none"} missingWorkshop=${result.missingWorkshopMods.length} missingManual=${result.missingManualMods.length} extraGameplay=${result.extraGameplayMods.length} versionMismatch=${result.versionMismatches.length}`,
+      );
+      res.json({
+        enabled: true,
+        protocolVersion: MOD_SYNC_PROTOCOL_VERSION,
+        gameVersion: result.gameVersion,
+        missingWorkshopMods: result.missingWorkshopMods,
+        missingManualMods: result.missingManualMods,
+        extraGameplayMods: result.extraGameplayMods,
+        versionMismatches: result.versionMismatches,
+        canContinueRelaxed: result.canContinueRelaxed,
+        hostInventoryAvailable: result.hostInventoryAvailable,
+      });
     } catch (error) {
       next(error);
     }
@@ -714,6 +798,7 @@ export async function createLobbyService(
       const body = req.body as {
         displayName?: string;
         publicListingEnabled?: boolean;
+        modSyncEnabled?: boolean;
         bandwidthCapacityMbps?: number | null;
         announcements?: unknown;
         chatFeatures?: unknown;
@@ -727,6 +812,12 @@ export async function createLobbyService(
           throw new InputError("publicListingEnabled 必须为布尔值。");
         }
         update.publicListingEnabled = body.publicListingEnabled;
+      }
+      if (body && Object.hasOwn(body, "modSyncEnabled")) {
+        if (typeof body.modSyncEnabled !== "boolean") {
+          throw new InputError("modSyncEnabled 必须为布尔值。");
+        }
+        update.modSyncEnabled = body.modSyncEnabled;
       }
       if (body && Object.hasOwn(body, "bandwidthCapacityMbps")) {
         update.bandwidthCapacityMbps = optionalPositiveNumber(
@@ -788,6 +879,14 @@ export async function createLobbyService(
     }
 
     if (error instanceof InputError) {
+      res.status(400).json({
+        code: "invalid_request",
+        message: error.message,
+      });
+      return;
+    }
+
+    if (error instanceof ModSyncValidationError) {
       res.status(400).json({
         code: "invalid_request",
         message: error.message,
@@ -1076,6 +1175,11 @@ export async function createLobbyService(
       address: peerEnv.selfAddress,
       getDisplayName: resolvePeerDisplayName,
       getPublicListing: resolvePublicListing,
+      getModSyncCapability: () => ({
+        protocolVersion: MOD_SYNC_PROTOCOL_VERSION,
+        enabled: serverAdminStateStore.getState().modSyncEnabled,
+        minimumClientVersion: MOD_SYNC_MINIMUM_CLIENT_VERSION,
+      }),
       getSnapshot: () => {
         const guard = getCreateRoomGuardSnapshot();
         return {
@@ -1936,6 +2040,20 @@ export async function createLobbyService(
     }
 
     return normalized;
+  }
+
+  function parseModInventory(value: unknown, name: string): LobbyModDescriptor[] {
+    try {
+      return validateModInventory(value, {
+        maxDescriptors: env.modSyncMaxDescriptors,
+        maxPayloadBytes: env.modSyncMaxPayloadBytes,
+      });
+    } catch (error) {
+      if (error instanceof ModSyncValidationError) {
+        throw new InputError(`${name} 非法：${error.message}`);
+      }
+      throw error;
+    }
   }
 
   function assertCreateJoinRateLimit(req: Request, scope: string) {

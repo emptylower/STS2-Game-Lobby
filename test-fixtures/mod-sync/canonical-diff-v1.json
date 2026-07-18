@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "name": "canonical-diff-v1",
+  "gameVersion": {
+    "host": "v0.109.0",
+    "local": "v0.109.0"
+  },
+  "hostMods": [
+    {
+      "id": "alpha.gameplay",
+      "version": "1.2.0",
+      "role": "gameplay",
+      "source": "steam_workshop",
+      "workshopFileId": "3747497501",
+      "dependencies": [
+        "core.dependency"
+      ]
+    },
+    {
+      "id": "core.dependency",
+      "version": "2.0.0",
+      "role": "dependency",
+      "source": "steam_workshop",
+      "workshopFileId": "3736000001",
+      "dependencies": []
+    },
+    {
+      "id": "manual.gameplay",
+      "version": "3.1.4",
+      "role": "gameplay",
+      "source": "mods_directory",
+      "dependencies": []
+    },
+    {
+      "id": "versioned.gameplay",
+      "version": "2.0.0",
+      "role": "gameplay",
+      "source": "steam_workshop",
+      "workshopFileId": "3736000002",
+      "dependencies": []
+    }
+  ],
+  "localMods": [
+    {
+      "id": "alpha.gameplay",
+      "version": "1.2.0",
+      "role": "gameplay",
+      "source": "steam_workshop",
+      "workshopFileId": "3747497501",
+      "dependencies": [
+        "core.dependency"
+      ]
+    },
+    {
+      "id": "extra.gameplay",
+      "version": "9.0.0",
+      "role": "gameplay",
+      "source": "steam_workshop",
+      "workshopFileId": "3736000003",
+      "dependencies": []
+    },
+    {
+      "id": "local.utility.dependency",
+      "version": "1.0.0",
+      "role": "dependency",
+      "source": "mods_directory",
+      "dependencies": []
+    },
+    {
+      "id": "versioned.gameplay",
+      "version": "1.9.0",
+      "role": "gameplay",
+      "source": "steam_workshop",
+      "workshopFileId": "3736000002",
+      "dependencies": []
+    }
+  ],
+  "expected": {
+    "missingWorkshopModIds": [
+      "core.dependency"
+    ],
+    "missingManualModIds": [
+      "manual.gameplay"
+    ],
+    "extraGameplayModIds": [
+      "extra.gameplay"
+    ],
+    "versionMismatchModIds": [
+      "versioned.gameplay"
+    ],
+    "canContinueRelaxed": true
+  }
+}

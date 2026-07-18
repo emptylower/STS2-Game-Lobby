@@ -1,4 +1,7 @@
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { resolveModDiff } from "./mod-sync/diff.js";
+import type { LobbyModDescriptor, ModDiffResult } from "./mod-sync/protocol.js";
+import { canonicalModInventoryJson, validateModInventory } from "./mod-sync/validator.js";
 
 export type RoomStatus = "open" | "starting" | "full" | "closed";
 export type RelayState = "disabled" | "planned" | "ready";
@@ -80,6 +83,8 @@ export interface Room extends RoomSummary {
   passwordHash?: string | undefined;
   hostConnectionInfo: HostConnectionInfo;
   modList: string[];
+  hostModInventory?: LobbyModDescriptor[] | undefined;
+  hostModInventoryHash?: string | undefined;
 }
 
 export interface JoinTicket {
@@ -120,6 +125,7 @@ export interface CreateRoomInput {
   version: string;
   modVersion: string;
   modList?: string[] | undefined;
+  hostModInventory?: LobbyModDescriptor[] | undefined;
   protocolProfile?: ProtocolProfile | string | undefined;
   maxPlayers: number;
   hostConnectionInfo: {
@@ -143,6 +149,18 @@ export interface JoinRoomInput {
   playerNetId?: string | undefined;
 }
 
+export interface ModPreflightInput {
+  playerName: string;
+  password?: string | undefined;
+  gameVersion: string;
+  localMods: unknown;
+}
+
+export interface ModPreflightResult extends ModDiffResult {
+  hostInventoryAvailable: boolean;
+  inventoryHash?: string | undefined;
+}
+
 export interface HeartbeatInput {
   hostToken: string;
   currentPlayers: number;
@@ -156,6 +174,8 @@ export interface StoreConfig {
   strictGameVersionCheck?: boolean;
   strictModVersionCheck?: boolean;
   connectionStrategy?: ConnectionStrategy;
+  modSyncMaxDescriptors?: number;
+  modSyncMaxPayloadBytes?: number;
 }
 
 export interface CreateRoomResult {
@@ -216,6 +236,8 @@ export class LobbyStore {
       strictGameVersionCheck: config.strictGameVersionCheck ?? true,
       strictModVersionCheck: config.strictModVersionCheck ?? true,
       connectionStrategy: config.connectionStrategy ?? "direct-first",
+      modSyncMaxDescriptors: config.modSyncMaxDescriptors ?? 64,
+      modSyncMaxPayloadBytes: config.modSyncMaxPayloadBytes ?? 65_536,
     };
     this.id = deps.id ?? (() => randomUUID());
     this.peerPlayerNetIds = deps.peerPlayerNetIds ?? (() => new Set<string>());
@@ -247,6 +269,15 @@ export class LobbyStore {
     const hostToken = randomToken();
     const password = input.password?.trim();
     const modList = normalizeModList(input.modList ?? []);
+    const hostModInventory = input.hostModInventory === undefined
+      ? undefined
+      : validateModInventory(input.hostModInventory, {
+          maxDescriptors: this.config.modSyncMaxDescriptors,
+          maxPayloadBytes: this.config.modSyncMaxPayloadBytes,
+        });
+    const hostModInventoryHash = hostModInventory === undefined
+      ? undefined
+      : createHash("sha256").update(canonicalModInventoryJson(hostModInventory)).digest("hex");
     const protocolProfile = normalizeProtocolProfile(
       input.protocolProfile,
       input.maxPlayers,
@@ -266,6 +297,8 @@ export class LobbyStore {
       version: input.version.trim(),
       modVersion: input.modVersion.trim(),
       modList,
+      hostModInventory,
+      hostModInventoryHash,
       protocolProfile,
       relayState: "disabled",
       createdAt: now,
@@ -388,6 +421,44 @@ export class LobbyStore {
       expiresAt: ticket.expiresAt,
       room: this.toRoomSummary(room),
       connectionPlan,
+    };
+  }
+
+  modPreflight(roomId: string, input: ModPreflightInput): ModPreflightResult {
+    const room = this.requireRoom(roomId);
+    this.requireHostSession(roomId);
+    const availableSavedRunSlots = getAvailableSavedRunSlots(room);
+    const canResumeSavedRun = room.savedRun !== undefined && availableSavedRunSlots.length > 0;
+
+    if (room.status === "closed") {
+      throw new LobbyStoreError(410, "room_closed", "该房间已经关闭。");
+    }
+    if (room.status === "starting" && !canResumeSavedRun) {
+      throw new LobbyStoreError(409, "room_started", "该房间已经开始游戏，当前不允许再加入。");
+    }
+    if (!room.savedRun && room.currentPlayers >= room.maxPlayers) {
+      throw new LobbyStoreError(409, "room_full", "该房间已满。");
+    }
+    if (room.requiresPassword && !verifyPassword(input.password ?? "", room.passwordHash)) {
+      throw new LobbyStoreError(401, "invalid_password", "房间密码错误。");
+    }
+
+    const localMods = validateModInventory(input.localMods, {
+      maxDescriptors: this.config.modSyncMaxDescriptors,
+      maxPayloadBytes: this.config.modSyncMaxPayloadBytes,
+    });
+    const hostInventoryAvailable = room.hostModInventory !== undefined;
+    const diff = resolveModDiff({
+      hostGameVersion: room.version,
+      localGameVersion: input.gameVersion,
+      hostMods: room.hostModInventory ?? [],
+      localMods: hostInventoryAvailable ? localMods : [],
+    });
+    return {
+      ...diff,
+      canContinueRelaxed: diff.gameVersion.exactMatch && !this.config.strictModVersionCheck,
+      hostInventoryAvailable,
+      ...(room.hostModInventoryHash === undefined ? {} : { inventoryHash: room.hostModInventoryHash }),
     };
   }
 

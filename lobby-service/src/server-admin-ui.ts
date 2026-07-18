@@ -8,6 +8,7 @@ export function mergeServerAdminPollSnapshot(
   for (const key of [
     "displayName",
     "publicListingEnabled",
+    "modSyncEnabled",
     "bandwidthCapacityMbps",
     "announcements",
     "chatFeatures",
@@ -754,6 +755,7 @@ export function renderServerAdminPage(serviceVersion: string) {
               settingsForm.setFieldsValue({
                 displayName: next.displayName || "",
                 publicListingEnabled: Boolean(next.publicListingEnabled),
+                modSyncEnabled: next.modSyncEnabled !== false,
                 bandwidthCapacityMbps: next.bandwidthCapacityMbps,
                 chatFeatures: normalizeChatFeatures(next.chatFeatures),
               });
@@ -1174,6 +1176,7 @@ export function renderServerAdminPage(serviceVersion: string) {
                               initialValues: {
                                 displayName: settings.displayName || "",
                                 publicListingEnabled: Boolean(settings.publicListingEnabled),
+                                modSyncEnabled: settings.modSyncEnabled !== false,
                                 bandwidthCapacityMbps: settings.bandwidthCapacityMbps,
                                 chatFeatures: normalizeChatFeatures(settings.chatFeatures),
                               },
@@ -1200,6 +1203,16 @@ export function renderServerAdminPage(serviceVersion: string) {
                                 extra: "开启后，本服务器会通过去中心化网络对所有玩家可见。关闭后玩家无法在客户端列表中看到，但已知直连地址的人仍可连接。",
                               },
                               h(Switch, { checkedChildren: "公开", unCheckedChildren: "私有" })
+                            ),
+                            h(
+                              Form.Item,
+                              {
+                                name: "modSyncEnabled",
+                                label: "加入前 MOD 兼容预检与 Workshop 自动同步",
+                                valuePropName: "checked",
+                                extra: "默认开启。关闭后，v0.5.1 客户端会回退旧版加入流程，不再提供 Workshop 自动订阅或选择性禁用提示。",
+                              },
+                              h(Switch, { checkedChildren: "开启", unCheckedChildren: "关闭" })
                             ),
                             h(Title, { level: 5, style: { marginTop: 4, marginBottom: 8 } }, "聊天治理（持久化开关）"),
                             h(

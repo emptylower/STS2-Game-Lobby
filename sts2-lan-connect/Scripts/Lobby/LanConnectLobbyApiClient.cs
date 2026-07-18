@@ -126,6 +126,18 @@ internal sealed class LobbyApiClient : IDisposable
         return SendAsync<LobbyJoinRoomResponse>($"rooms/{Uri.EscapeDataString(roomId)}/join", HttpMethod.Post, request, cancellationToken);
     }
 
+    public Task<LobbyModPreflightResponse> ModPreflightAsync(
+        string roomId,
+        LobbyModPreflightRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return SendAsync<LobbyModPreflightResponse>(
+            $"rooms/{Uri.EscapeDataString(roomId)}/mod-preflight",
+            HttpMethod.Post,
+            request,
+            cancellationToken);
+    }
+
     public Task SendHeartbeatAsync(string roomId, LobbyHeartbeatRequest request, CancellationToken cancellationToken = default)
     {
         return SendAsync<object>($"rooms/{Uri.EscapeDataString(roomId)}/heartbeat", HttpMethod.Post, request, cancellationToken);
@@ -276,8 +288,9 @@ internal sealed class LobbyApiClient : IDisposable
         return payload switch
         {
             null => "no-payload",
-            LobbyCreateRoomRequest create => $"create room='{create.RoomName}', passwordSet={!string.IsNullOrWhiteSpace(create.Password)}, maxPlayers={create.MaxPlayers}, protocolProfile={create.ProtocolProfile ?? "<auto>"}, localAddressCount={create.HostConnectionInfo.LocalAddresses.Count}, savedRunSlots={create.SavedRun?.Slots.Count ?? 0}",
+            LobbyCreateRoomRequest create => $"create room='{create.RoomName}', passwordSet={!string.IsNullOrWhiteSpace(create.Password)}, maxPlayers={create.MaxPlayers}, protocolProfile={create.ProtocolProfile ?? "<auto>"}, localAddressCount={create.HostConnectionInfo.LocalAddresses.Count}, savedRunSlots={create.SavedRun?.Slots.Count ?? 0}, hostModCount={create.HostModInventory?.Count ?? 0}",
             LobbyJoinRoomRequest join => $"join player='{join.PlayerName}', passwordSet={!string.IsNullOrWhiteSpace(join.Password)}, desiredSavePlayerNetId={(string.IsNullOrWhiteSpace(join.DesiredSavePlayerNetId) ? "<none>" : join.DesiredSavePlayerNetId)}",
+            LobbyModPreflightRequest preflight => $"mod-preflight passwordSet={!string.IsNullOrWhiteSpace(preflight.Password)}, protocolVersion={preflight.ModSyncProtocolVersion}, localModCount={preflight.LocalMods.Count}",
             LobbyHeartbeatRequest heartbeat => $"heartbeat currentPlayers={heartbeat.CurrentPlayers}, status={heartbeat.Status}, connectedSaveSlots={heartbeat.ConnectedPlayerNetIds?.Count ?? 0}",
             LobbyDeleteRoomRequest => "delete-room",
             LobbyConnectionEventRequest connectionEvent => $"connection-event phase={connectionEvent.Phase}, candidate={connectionEvent.CandidateLabel ?? "<none>"}, endpoint={connectionEvent.CandidateEndpoint ?? "<none>"}",
