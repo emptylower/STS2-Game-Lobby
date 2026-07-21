@@ -1,3 +1,5 @@
+using Godot;
+
 namespace Sts2LanConnect.Scripts;
 
 internal enum LanConnectChatInputAction
@@ -18,6 +20,13 @@ internal enum LanConnectChatInputAction
 
 internal static class LanConnectChatInputRouter
 {
+    internal static bool IsReferenceToggle(
+        Key key,
+        bool pressed,
+        bool echo,
+        bool altPressed) =>
+        key == Key.R && pressed && !echo && altPressed;
+
     internal static LanConnectChatInputAction RouteEnter(
         bool inputFocused,
         bool shiftPressed,

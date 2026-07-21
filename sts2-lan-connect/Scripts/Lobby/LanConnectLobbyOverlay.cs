@@ -829,6 +829,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void HideOverlayCore(bool persistSettings, bool publishChatVisibility)
     {
+        LanConnectLobbyRuntime.Instance?.CancelReferenceMode(
+            LanConnectReferenceModeExitReason.OverlayClosed);
         GD.Print("sts2_lan_connect overlay: hide requested");
         if (persistSettings)
         {

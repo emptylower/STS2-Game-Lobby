@@ -115,6 +115,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private Button? _newMessagesButton;
     private LanConnectRichDraftEditor? _draftEditor;
     private Button? _emojiButton;
+    private Button? _referenceButton;
     private LanConnectEmojiPicker? _emojiPicker;
     private Button? _sendButton;
     private Label? _statusLabel;
@@ -135,6 +136,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private string? _operationStatusArgument;
     private string _operationStatusDirect = string.Empty;
     private Action? _itemLinkPostInsertForTests;
+    private Func<LanConnectChatChannelState, LanConnectReferenceModePresentation>? _referencePresentationProvider;
+    private Func<LanConnectChatChannelState, LanConnectReferenceModeSource, bool>? _referenceToggle;
+    private LanConnectReferenceModePresentation _referencePresentation;
     private int _visibilityPublishSuppressionDepth;
     private bool _publishVisibilityWhenSuppressionEnds;
 
@@ -230,6 +234,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     internal LanConnectEmojiPicker EmojiPickerForTests => _emojiPicker ??
         throw new InvalidOperationException("The emoji picker is not ready.");
+
+    internal Button ReferenceButtonForTests => _referenceButton ??
+        throw new InvalidOperationException("The reference button is not ready.");
 
     internal bool DraftHasFocus =>
         _draftEditor != null &&
@@ -367,6 +374,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             Refresh();
         }
+        RefreshReferenceModePresentation();
     }
 
     public override void _ExitTree()
@@ -465,6 +473,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
     }
 
+    internal void ConfigureReferenceMode(
+        Func<LanConnectChatChannelState, LanConnectReferenceModePresentation>? presentationProvider,
+        Func<LanConnectChatChannelState, LanConnectReferenceModeSource, bool>? toggle)
+    {
+        _referencePresentationProvider = presentationProvider;
+        _referenceToggle = toggle;
+        _referencePresentation = default;
+        RefreshReferenceModePresentation(force: true);
+    }
+
     internal void SetScrollForTests(double offset, bool atBottom)
     {
         if (_state == null)
@@ -550,6 +568,12 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     internal void ShowCombatRoomOnlyWarning()
     {
         SetOperationStatus("chat.combat.room_only");
+        Refresh();
+    }
+
+    internal void ShowReferenceUnsupportedWarning()
+    {
+        SetOperationStatus("chat.reference.unsupported_target");
         Refresh();
     }
 
@@ -641,6 +665,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         AddFocusable(controls, _draftEditor?.FocusTarget);
         AddFocusable(controls, _emojiButton);
+        AddFocusable(controls, _referenceButton);
         AddFocusable(controls, _sendButton);
         if (_messagesList != null && GodotObject.IsInstanceValid(_messagesList))
         {
@@ -757,6 +782,35 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             Callable.From(() => _emojiPicker?.OpenPicker()));
         inputRow.AddChild(_emojiButton);
 
+        _referenceButton = CreateButton(string.Empty, accent: false);
+        _referenceButton.Name = LanConnectConstants.ChatReferenceButtonName;
+        _referenceButton.Icon = _icons.Get("link-2", 20, AccentColor);
+        _referenceButton.ExpandIcon = true;
+        _referenceButton.ToggleMode = true;
+        _referenceButton.TooltipText = Localize("chat.reference.tooltip");
+        _referenceButton.AccessibilityName = Localize("chat.reference.action");
+        _referenceButton.CustomMinimumSize = new Vector2(UsesLobbyStyle ? 42 : 38, 42);
+        _referenceButton.SizeFlagsVertical = SizeFlags.ExpandFill;
+        _referenceButton.Visible = false;
+        _referenceButton.Connect(Button.SignalName.Pressed, Callable.From(() =>
+        {
+            if (_state != null)
+            {
+                if (_referenceToggle != null)
+                {
+                    _referenceToggle(_state, LanConnectReferenceModeSource.TouchButton);
+                }
+                else
+                {
+                    LanConnectLobbyRuntime.Instance?.ToggleReferenceMode(
+                        _state,
+                        LanConnectReferenceModeSource.TouchButton);
+                }
+            }
+            RefreshReferenceModePresentation(force: true);
+        }));
+        inputRow.AddChild(_referenceButton);
+
         _sendButton = CreateButton(Localize("chat.action.send"), accent: true);
         _sendButton.AccessibilityName = Localize("chat.action.send");
         _sendButton.Name = LanConnectConstants.ChatSendButtonName;
@@ -804,6 +858,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             if (backwards)
             {
                 _draftEditor?.FocusEditor();
+            }
+            else if (_referenceButton is { Visible: true, Disabled: false })
+            {
+                _referenceButton.GrabFocus();
             }
             else
             {
@@ -1843,10 +1901,13 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             _emojiButton.Disabled = !editable;
         }
         _emojiPicker?.SetAvailable(emojiAvailable && editable);
+        ApplyReferenceModePresentation(CurrentReferenceModePresentation());
         _sendButton.Disabled = !editable ||
             (!CanSendCurrentDraft() && !IsBlankDraft());
         string operationStatus = OperationStatusText();
-        _statusLabel.Text = ready && !string.IsNullOrEmpty(operationStatus)
+        _statusLabel.Text = ready && _referencePresentation.Armed
+            ? Localize("chat.reference.armed_hint")
+            : ready && !string.IsNullOrEmpty(operationStatus)
             ? operationStatus
             : ready && !CanSendCurrentDraft()
                 ? CurrentDraftBlockingReason()
@@ -1854,6 +1915,56 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _statusLabel.AddThemeColorOverride(
             "font_color",
             ready && CanSendCurrentDraft() ? TextMutedColor : WarningColor);
+    }
+
+    private LanConnectReferenceModePresentation CurrentReferenceModePresentation()
+    {
+        if (_state == null)
+        {
+            return default;
+        }
+        try
+        {
+            return _referencePresentationProvider != null
+                ? _referencePresentationProvider(_state)
+                : LanConnectLobbyRuntime.Instance?.GetReferenceModePresentation(_state) ?? default;
+        }
+        catch
+        {
+            return default;
+        }
+    }
+
+    private void RefreshReferenceModePresentation(bool force = false)
+    {
+        LanConnectReferenceModePresentation next = CurrentReferenceModePresentation();
+        if (!force && next == _referencePresentation)
+        {
+            return;
+        }
+        ApplyReferenceModePresentation(next);
+        if (_statusLabel != null && GodotObject.IsInstanceValid(_statusLabel))
+        {
+            UpdateAvailability();
+        }
+    }
+
+    private void ApplyReferenceModePresentation(LanConnectReferenceModePresentation presentation)
+    {
+        _referencePresentation = presentation;
+        if (_referenceButton == null || !GodotObject.IsInstanceValid(_referenceButton))
+        {
+            return;
+        }
+        _referenceButton.Visible = presentation.Visible;
+        _referenceButton.Disabled = !presentation.Enabled;
+        _referenceButton.ButtonPressed = presentation.Armed;
+        _referenceButton.AccessibilityName = Localize(presentation.Armed
+            ? "chat.reference.armed_accessibility"
+            : "chat.reference.action");
+        _referenceButton.TooltipText = !presentation.Enabled && !string.IsNullOrEmpty(presentation.StatusKey)
+            ? Localize(presentation.StatusKey)
+            : Localize("chat.reference.tooltip");
     }
 
     private void UpdateNewMessagesButton()

@@ -243,6 +243,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     public override void _ExitTree()
     {
+        LanConnectLobbyRuntime.Instance?.CancelReferenceMode(
+            LanConnectReferenceModeExitReason.OverlayClosed);
         _chatPanel?.CloseTransientUi(restoreFocus: false);
         KillFadeTween();
     }
@@ -683,6 +685,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     private void ClosePanel()
     {
+        LanConnectLobbyRuntime.Instance?.CancelReferenceMode(
+            LanConnectReferenceModeExitReason.OverlayClosed);
         LanConnectDualChatState? chat = ResolveChat();
         if (chat?.RoomOverlayOpen != true)
         {
@@ -720,6 +724,12 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
              chat.Server.Presentation == LanConnectServerChatPresentation.Unsupported))
         {
             return;
+        }
+
+        if (chat.SelectedChannel != channel)
+        {
+            LanConnectLobbyRuntime.Instance?.CancelReferenceMode(
+                LanConnectReferenceModeExitReason.ChannelChanged);
         }
 
         CaptureCurrentViewState(chat);

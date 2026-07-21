@@ -1,3 +1,4 @@
+using Godot;
 using Sts2LanConnect.Scripts;
 
 namespace Sts2LanConnect.Tests.Lobby.Chat;
@@ -52,5 +53,25 @@ public sealed class LanConnectChatInputRouterTests
         int expected)
     {
         Assert.Equal((LanConnectChatInputAction)expected, LanConnectChatInputRouter.RouteF8(overlayOpen, pinned, modal));
+    }
+
+    [Theory]
+    [InlineData(true, false, false, true)]
+    [InlineData(true, true, false, false)]
+    [InlineData(false, false, false, false)]
+    [InlineData(false, false, true, false)]
+    public void Reference_shortcut_requires_alt_r_press_without_echo_or_composition_fallback(
+        bool pressed,
+        bool echo,
+        bool plainR,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            LanConnectChatInputRouter.IsReferenceToggle(
+                key: Key.R,
+                pressed,
+                echo,
+                altPressed: !plainR));
     }
 }

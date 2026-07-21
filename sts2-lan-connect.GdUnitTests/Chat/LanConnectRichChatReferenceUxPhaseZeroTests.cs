@@ -62,6 +62,16 @@ public sealed class LanConnectRichChatReferenceUxPhaseZeroTests
 
         TouchCapturePorts ports = new();
         LanConnectItemLinkCapture capture = new(ports);
+        LanConnectReferenceMode mode = new();
+        LanConnectReferenceModeContext context = new(
+            HasChatTarget: true,
+            LanConnectChatChannel.Room,
+            panel.State!,
+            RoomId: "room-1",
+            RoomSessionId: "session-1",
+            LanConnectReferenceTargetKind.Item | LanConnectReferenceTargetKind.Combat);
+        AssertThat(mode.Toggle(context, LanConnectReferenceModeSource.TouchButton)).IsTrue();
+        long armedGeneration = mode.ArmedGeneration;
         InputEventScreenTouch touch = new()
         {
             Index = 0,
@@ -70,17 +80,26 @@ public sealed class LanConnectRichChatReferenceUxPhaseZeroTests
         };
         bool handled = false;
 
-        AssertThat(LanConnectItemLinkCaptureInputRoute.TryRoute(
+        bool firstCapture = mode.CanCapture(
+                                armedGeneration,
+                                context,
+                                LanConnectReferenceTargetKind.Item) &&
+                            LanConnectItemLinkCaptureInputRoute.TryRoute(
             touch,
             capture,
-            () => handled = true)).IsTrue();
+            () => handled = true);
+        AssertThat(firstCapture).IsTrue();
+        AssertThat(mode.CaptureSucceeded(
+            armedGeneration,
+            context,
+            LanConnectReferenceTargetKind.Item)).IsTrue();
         AssertThat(handled).IsTrue();
         AssertThat(ports.InsertCalls).IsEqual(1);
 
-        AssertThat(LanConnectItemLinkCaptureInputRoute.TryRoute(
-            touch,
-            capture,
-            () => handled = true)).IsFalse();
+        AssertThat(mode.CanCapture(
+            armedGeneration,
+            context,
+            LanConnectReferenceTargetKind.Item)).IsFalse();
         AssertThat(ports.InsertCalls).IsEqual(1);
     }
 
@@ -208,11 +227,12 @@ public sealed class LanConnectRichChatReferenceUxPhaseZeroTests
 
     private sealed class TouchCapturePorts : ILanConnectItemLinkCapturePorts
     {
-        private readonly Control _holder = new();
+        private readonly object _holder = new();
 
         internal int InsertCalls { get; private set; }
 
         public object? GuiGetHoveredControl() => _holder;
+        public object? GuiGetControlAtPosition(Vector2 position) => _holder;
         public object? GetParent(object node) => null;
         public bool IsChatInteractionBlocking => false;
         public bool ItemRefsEnabledForSelectedChannel => true;

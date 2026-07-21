@@ -9,6 +9,123 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 [RequireGodotRuntime]
 public sealed partial class LanConnectItemLinkCaptureUiTests
 {
+    [TestCase]
+    public async Task Runtime_alt_r_arms_one_touch_capture_and_escape_cancels_the_next_attempt()
+    {
+        (SubViewport viewport, ObservableInputHolder holder, ViewportRoutePorts ports,
+            LanConnectLobbyRuntime runtime) = CreateReferenceRuntimeFixture();
+        using ISceneRunner runner = ISceneRunner.Load(viewport, autoFree: true);
+        await runner.AwaitIdleFrame();
+
+        PushAltR(viewport);
+        await runner.AwaitInputProcessed();
+        viewport.PushInput(new InputEventScreenTouch
+        {
+            Index = 0,
+            Position = new Vector2(40, 40),
+            Pressed = true
+        });
+        await runner.AwaitInputProcessed();
+        AssertThat(ports.InsertCalls).IsEqual(1);
+
+        viewport.PushInput(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Position = new Vector2(40, 40),
+            GlobalPosition = new Vector2(40, 40),
+            Pressed = true
+        });
+        await runner.AwaitInputProcessed();
+        AssertThat(ports.InsertCalls).IsEqual(1);
+
+        PushAltR(viewport);
+        await runner.AwaitInputProcessed();
+        viewport.PushInput(new InputEventKey { Keycode = Key.Escape, Pressed = true });
+        await runner.AwaitInputProcessed();
+        viewport.PushInput(new InputEventScreenTouch
+        {
+            Index = 1,
+            Position = new Vector2(40, 40),
+            Pressed = true
+        });
+        await runner.AwaitInputProcessed();
+        AssertThat(ports.InsertCalls).IsEqual(1);
+        viewport.PushInput(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Position = new Vector2(40, 40),
+            GlobalPosition = new Vector2(40, 40),
+            Pressed = true
+        });
+        await runner.AwaitInputProcessed();
+        AssertThat(holder.NormalActions).IsGreaterEqual(1);
+        _ = runtime;
+    }
+
+    [TestCase]
+    public async Task Runtime_direct_alt_click_reuses_one_shot_capture_without_prior_shortcut()
+    {
+        (SubViewport viewport, _, ViewportRoutePorts ports, _) = CreateReferenceRuntimeFixture();
+        using ISceneRunner runner = ISceneRunner.Load(viewport, autoFree: true);
+        await runner.AwaitIdleFrame();
+        Vector2 pointer = new(40, 40);
+        viewport.PushInput(new InputEventMouseMotion { Position = pointer, GlobalPosition = pointer });
+        await runner.AwaitInputProcessed();
+
+        viewport.PushInput(AltLeftPress(pointer));
+        await runner.AwaitInputProcessed();
+
+        AssertThat(ports.InsertCalls).IsEqual(1);
+    }
+
+    [TestCase]
+    public async Task Armed_unsupported_click_survives_then_supported_click_consumes_once_and_exits()
+    {
+        (SubViewport viewport, ObservableInputHolder holder, ViewportRoutePorts ports, _) =
+            CreateReferenceRuntimeFixture(captureSucceeds: false);
+        using ISceneRunner runner = ISceneRunner.Load(viewport, autoFree: true);
+        await runner.AwaitIdleFrame();
+        Vector2 pointer = new(40, 40);
+        viewport.PushInput(new InputEventMouseMotion { Position = pointer, GlobalPosition = pointer });
+        await runner.AwaitInputProcessed();
+        PushAltR(viewport);
+        await runner.AwaitInputProcessed();
+
+        viewport.PushInput(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Position = pointer,
+            GlobalPosition = pointer,
+            Pressed = true
+        });
+        await runner.AwaitInputProcessed();
+        AssertThat(ports.InsertCalls).IsEqual(0);
+        AssertThat(holder.NormalActions).IsEqual(1);
+
+        ports.CaptureSucceeds = true;
+        viewport.PushInput(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Position = pointer,
+            GlobalPosition = pointer,
+            Pressed = true
+        });
+        await runner.AwaitInputProcessed();
+        AssertThat(ports.InsertCalls).IsEqual(1);
+        AssertThat(holder.NormalActions).IsEqual(1);
+
+        viewport.PushInput(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Position = pointer,
+            GlobalPosition = pointer,
+            Pressed = true
+        });
+        await runner.AwaitInputProcessed();
+        AssertThat(ports.InsertCalls).IsEqual(1);
+        AssertThat(holder.NormalActions).IsEqual(2);
+    }
+
     [TestCase(true, 0)]
     [TestCase(false, 1)]
     public async Task Runtime_input_route_precedes_gui_and_only_success_suppresses_normal_action(
@@ -562,6 +679,42 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         GlobalPosition = position ?? Vector2.Zero
     };
 
+    private static void PushAltR(Viewport viewport) => viewport.PushInput(new InputEventKey
+    {
+        Keycode = Key.R,
+        AltPressed = true,
+        Pressed = true
+    });
+
+    private static (SubViewport Viewport, ObservableInputHolder Holder, ViewportRoutePorts Ports,
+        LanConnectLobbyRuntime Runtime) CreateReferenceRuntimeFixture(bool captureSucceeds = true)
+    {
+        SubViewport viewport = AutoFree(new SubViewport
+        {
+            Size = new Vector2I(320, 180),
+            Disable3D = true
+        })!;
+        ObservableInputHolder holder = new()
+        {
+            Position = new Vector2(20, 20),
+            Size = new Vector2(120, 80),
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        viewport.AddChild(holder);
+        ViewportRoutePorts ports = new(holder, captureSucceeds);
+        LanConnectChatChannelState server = new(LanConnectChatChannel.Server);
+        LanConnectDualChatState chat = new(server);
+        chat.EnterRoom("room-1");
+        chat.Room.SetChatEnabled(true);
+        chat.Room.SetPresentationForTests(LanConnectServerChatPresentation.Ready);
+        chat.Room.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 1));
+        chat.OpenRoomOverlay(serverSelectable: false);
+        LanConnectLobbyRuntime runtime = new();
+        runtime.ConfigureReferenceModeRouteForTests(ports, chat, "room-1", "session-1");
+        viewport.AddChild(runtime);
+        return (viewport, holder, ports, runtime);
+    }
+
     private static LanConnectChatChannelState EnabledState(LanConnectChatChannel channel)
     {
         LanConnectChatChannelState state = new(channel);
@@ -739,6 +892,8 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         ObservableInputHolder holder,
         bool captureSucceeds) : ILanConnectItemLinkCapturePorts
     {
+        internal bool CaptureSucceeds { get; set; } = captureSucceeds;
+
         internal int InsertCalls { get; private set; }
 
         public bool IsChatInteractionBlocking => false;
@@ -750,6 +905,12 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         public bool IsRoomChannelSelected => false;
 
         public object? GuiGetHoveredControl() => holder;
+
+        public object? GuiGetControlAtPosition(Vector2 position) =>
+            holder.GetGlobalRect().HasPoint(position) ? holder : null;
+
+        public bool HasVisibleReferenceTarget(LanConnectReferenceTargetKind allowedTargets) =>
+            allowedTargets.HasFlag(LanConnectReferenceTargetKind.Item);
 
         public object? GetParent(object node) => (node as Node)?.GetParent();
 
@@ -763,7 +924,7 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
 
         public bool TryResolveCard(object node, out LanConnectItemRun run)
         {
-            if (captureSucceeds && ReferenceEquals(node, holder))
+            if (CaptureSucceeds && ReferenceEquals(node, holder))
             {
                 run = new LanConnectItemRun("card", "MegaCrit.Strike", 1);
                 return true;

@@ -39,6 +39,12 @@ internal sealed record LanConnectReferenceModeContext(
     string? RoomSessionId,
     LanConnectReferenceTargetKind AllowedTargets);
 
+internal readonly record struct LanConnectReferenceModePresentation(
+    bool Visible,
+    bool Enabled,
+    bool Armed,
+    string StatusKey);
+
 internal sealed class LanConnectReferenceMode
 {
     private long _nextArmedGeneration;

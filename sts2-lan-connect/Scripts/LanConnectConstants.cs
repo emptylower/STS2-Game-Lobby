@@ -82,6 +82,8 @@ internal static class LanConnectConstants
 
     public const string ChatSendButtonName = "ChatSendButton";
 
+    public const string ChatReferenceButtonName = "ChatReferenceButton";
+
     public const string ChatStatusLabelName = "ChatStatusLabel";
 
     public const string ChatNewMessagesButtonName = "ChatNewMessagesButton";
