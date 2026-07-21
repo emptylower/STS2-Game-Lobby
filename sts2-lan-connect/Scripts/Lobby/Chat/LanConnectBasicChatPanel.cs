@@ -1473,7 +1473,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             if (CanTouchControls(binding))
             {
                 SetOperationStatus("chat.operation.send_failed", ex.Message);
-                _draftEditor.FocusEditor();
+                restoreFocus = true;
             }
         }
         finally
