@@ -26,12 +26,12 @@ public sealed class LanConnectRoomRichReleaseSmokeTests
             AssertThat(LanConnectRoomRichScreenshotTests.Cases.Count).IsEqual(12);
             AssertThat(fixture.PhysicalSize).IsEqual(new Vector2I(1920, 1080));
             AssertThat(fixture.LogicalViewportSize).IsEqual(new Vector2I(1920, 1080));
-            AssertThat(fixture.RichMessageRuns().Length).IsEqual(13);
-            AssertThat(fixture.RichMessageRuns().Count(run => run is not Label)).IsEqual(12);
-            AssertThat(fixture.RichMessageRuns().Count(run => run.HasMeta("lan_connect_resolved_combat")))
-                .IsEqual(2);
-            AssertThat(fixture.RichMessageRuns().Count(run => run.HasMeta("lan_connect_combat_fallback")))
-                .IsEqual(1);
+            AssertThat(fixture.RichMessageViews().Length).IsEqual(1);
+            AssertThat(fixture.RichMessageTexts().Length).IsEqual(1);
+            AssertThat(fixture.RichReferenceCount).IsGreaterEqual(5);
+            AssertThat(fixture.RichCopyText.Contains("MegaCrit.", StringComparison.Ordinal)).IsFalse();
+            AssertThat(fixture.RichCopyText).Contains("[能力]");
+            AssertThat(fixture.RichCopyText).Contains("[玩家]");
             AssertThat(fixture.RichVisibleText).Contains("Watcher");
             AssertThat(fixture.RichVisibleText.Contains("prototype:stale", StringComparison.Ordinal)).IsFalse();
 

@@ -10,6 +10,74 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 public sealed class LanConnectRichMessageRenderingTests
 {
     [TestCase]
+    public async Task Mixed_message_uses_one_native_inline_label_with_opaque_meta_and_safe_copy_text()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.AppendConfirmedContentForTests(
+            "inline-message",
+            "Silent",
+            Content(),
+            sequence: 1,
+            isLocal: false);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+            LanConnectChatUiComposition.Icons,
+            ResolveItem))!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        RichTextLabel inline = panel.FindChildren("*", string.Empty, recursive: true, owned: false)
+            .OfType<RichTextLabel>()
+            .Single();
+        Control view = (Control)inline.GetParent();
+        string parsedText = inline.GetParsedText();
+        string copyText = view.GetMeta("lan_connect_copy_text").AsString();
+        string opaqueKeys = view.GetMeta("lan_connect_reference_keys").AsString();
+
+        AssertThat(panel.FindChild("ChatMessageRun0", true, false) == null).IsTrue();
+        AssertThat(parsedText).Contains("before ");
+        AssertThat(parsedText).Contains("Localized Strike+2");
+        AssertThat(parsedText).Contains("未知遗物");
+        AssertThat(parsedText).Contains("Localized Potion");
+        AssertThat(copyText).Contains("[卡牌]");
+        AssertThat(copyText).Contains("[遗物]");
+        AssertThat(copyText).Contains("[药水]");
+        AssertThat(copyText.Contains("MegaCrit.", StringComparison.Ordinal)).IsFalse();
+        AssertThat(inline.AccessibilityName.Contains("MegaCrit.", StringComparison.Ordinal)).IsFalse();
+        AssertThat(opaqueKeys.Contains("MegaCrit.", StringComparison.Ordinal)).IsFalse();
+        AssertThat(opaqueKeys.Split(',', StringSplitOptions.RemoveEmptyEntries).Length).IsEqual(2);
+    }
+
+    [TestCase]
+    public async Task Resolver_failure_degrades_one_inline_segment_without_hiding_later_content()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.AppendConfirmedContentForTests(
+            "isolated-inline-failure",
+            "Silent",
+            Content(),
+            sequence: 1,
+            isLocal: false);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+            LanConnectChatUiComposition.Icons,
+            run => run.ItemType == "relic"
+                ? throw new InvalidOperationException("resolver failed")
+                : ResolveItem(run)))!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        RichTextLabel inline = panel.FindChildren("*", string.Empty, recursive: true, owned: false)
+            .OfType<RichTextLabel>()
+            .Single();
+        string parsedText = inline.GetParsedText();
+
+        AssertThat(parsedText).Contains("未知遗物");
+        AssertThat(parsedText).Contains("Localized Potion");
+        AssertThat(parsedText.Contains("PrivateMod.SecretRelic", StringComparison.Ordinal)).IsFalse();
+    }
+
+    [TestCase]
     public async Task Renders_ordered_rich_runs_with_local_titles_unknown_placeholder_and_status()
     {
         LanConnectChatChannelState state = EnabledState();
@@ -35,19 +103,21 @@ public sealed class LanConnectRichMessageRenderingTests
             _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
 
-        Control[] runs = Enumerable.Range(0, 6)
-            .Select(index => FindNode<Control>(panel, $"ChatMessageRun{index}"))
-            .ToArray();
-        AssertThat(RunText(runs[0])).IsEqual("before ");
-        AssertThat(RunText(runs[1])).IsEqual("Localized Strike+2");
-        AssertThat(RunText(runs[2])).IsEqual(" middle ");
-        AssertThat(RunText(runs[3])).IsEqual("未知遗物");
-        AssertThat(runs[4] is TextureRect).IsTrue();
-        AssertThat(RunText(runs[5])).IsEqual("Localized Potion");
+        Control confirmedRow = FindNode<Control>(panel, "ChatMessageRow0");
+        RichTextLabel inline = RichMessageText(confirmedRow);
+        string parsedText = inline.GetParsedText();
+        int before = parsedText.IndexOf("before ", StringComparison.Ordinal);
+        int card = parsedText.IndexOf("Localized Strike+2", StringComparison.Ordinal);
+        int middle = parsedText.IndexOf(" middle ", StringComparison.Ordinal);
+        int relic = parsedText.IndexOf("未知遗物", StringComparison.Ordinal);
+        int potion = parsedText.IndexOf("Localized Potion", StringComparison.Ordinal);
+        AssertThat(before >= 0 && before < card && card < middle && middle < relic && relic < potion).IsTrue();
         AssertThat(Labels(panel).Any(text => text.Contains("PrivateMod.SecretRelic", StringComparison.Ordinal))).IsFalse();
-        AssertThat(runs[1].HasMeta("lan_connect_resolved_item")).IsTrue();
-        AssertThat(runs[3].HasMeta("lan_connect_resolved_item")).IsFalse();
-        AssertThat(runs[5].HasMeta("lan_connect_resolved_item")).IsTrue();
+        AssertThat(confirmedRow.FindChildren("*", string.Empty, true, false)
+            .OfType<RichTextLabel>().Count()).IsEqual(1);
+        AssertThat(confirmedRow.FindChild("ChatMessageRun0", true, false) == null).IsTrue();
+        Control view = (Control)inline.GetParent();
+        AssertThat(view.GetMeta("lan_connect_reference_keys").AsString()).IsEqual("ref-1,ref-5");
         AssertThat(Labels(panel)).Contains("发送中");
     }
 
@@ -70,10 +140,11 @@ public sealed class LanConnectRichMessageRenderingTests
         panel.BindStructured(first, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
 
-        AssertThat(Enumerable.Range(0, 6)
-            .All(index => panel.FindChild($"ChatMessageRun{index}", true, false) != null)).IsTrue();
-        Control potion = FindNode<Control>(panel, "ChatMessageRun5");
-        potion.EmitSignal(Control.SignalName.MouseEntered);
+        Control firstRow = FindNode<Control>(panel, "ChatMessageRow0");
+        RichTextLabel inline = RichMessageText(firstRow);
+        AssertThat(inline.GetParsedText()).Contains("未知遗物");
+        AssertThat(inline.GetParsedText()).Contains("Localized Potion");
+        inline.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-5");
         await runner.AwaitIdleFrame();
         AssertThat(panel.ItemPreviewForTests.TestState.Visible).IsTrue();
 
@@ -135,21 +206,22 @@ public sealed class LanConnectRichMessageRenderingTests
         panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
 
-        AssertThat(RunText(FindNode<Control>(panel, "ChatMessageRun0"))).IsEqual("Potion EN");
-        FindNode<Control>(panel, "ChatMessageRun0").EmitSignal(Control.SignalName.MouseEntered);
+        RichTextLabel initial = RichMessageText(FindNode<Control>(panel, "ChatMessageRow0"));
+        AssertThat(initial.GetParsedText()).IsEqual("Potion EN");
+        initial.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-0");
         await runner.AwaitIdleFrame();
         AssertThat(panel.ItemPreviewForTests.TestState.Visible).IsTrue();
 
         port.Title = "药水 CN";
         context = new LanConnectItemResolverContext("zh-CN", "mods-a");
         await runner.AwaitIdleFrame();
-        AssertThat(RunText(FindNode<Control>(panel, "ChatMessageRun0"))).IsEqual("药水 CN");
+        AssertThat(RichMessageText(FindNode<Control>(panel, "ChatMessageRow0")).GetParsedText()).IsEqual("药水 CN");
         AssertThat(panel.ItemPreviewForTests.TestState.Visible).IsFalse();
 
         port.Title = "Potion Mod B";
         context = new LanConnectItemResolverContext("zh-CN", "mods-b");
         await runner.AwaitIdleFrame();
-        AssertThat(RunText(FindNode<Control>(panel, "ChatMessageRun0"))).IsEqual("Potion Mod B");
+        AssertThat(RichMessageText(FindNode<Control>(panel, "ChatMessageRow0")).GetParsedText()).IsEqual("Potion Mod B");
         AssertThat(port.PotionLookups).IsEqual(3);
     }
 
@@ -177,16 +249,21 @@ public sealed class LanConnectRichMessageRenderingTests
         await runner.AwaitIdleFrame();
         await runner.AwaitIdleFrame();
 
-        Control text = FindNode<Control>(panel, "ChatMessageRun0");
+        Control row = FindNode<Control>(panel, "ChatMessageRow0");
+        RichTextLabel text = RichMessageText(row);
         Rect2 rect = text.GetGlobalRect();
-        AssertThat(rect.Size.X).IsGreaterEqual(96f);
+        Rect2 visibleRect = rect.Intersection(FindNode<Control>(panel, "ChatMessagesScroll").GetGlobalRect());
+        AssertThat(rect.Size.X).IsGreater(0f);
         AssertThat(rect.Size.Y).IsGreater(0f);
-        AssertThat(rect.Position.X).IsGreaterEqual(0f);
-        AssertThat(rect.Position.Y).IsGreaterEqual(0f);
-        AssertThat(rect.End.X).IsLessEqual(1280f);
-        AssertThat(rect.End.Y).IsLessEqual(720f);
-        AssertThat(Enumerable.Range(1, 12)
-            .All(index => panel.FindChild($"ChatMessageRun{index}", true, false) != null)).IsTrue();
+        AssertThat(visibleRect.Size.X).IsGreater(0f);
+        AssertThat(visibleRect.Size.Y).IsGreater(0f);
+        AssertThat(visibleRect.Position.X).IsGreaterEqual(0f);
+        AssertThat(visibleRect.Position.Y).IsGreaterEqual(0f);
+        AssertThat(visibleRect.End.X).IsLessEqual(1280f);
+        AssertThat(visibleRect.End.Y).IsLessEqual(720f);
+        AssertThat(row.FindChildren("*", string.Empty, true, false)
+            .OfType<RichTextLabel>().Count()).IsEqual(1);
+        AssertThat(row.FindChildren("*", "HFlowContainer", true, false).Count).IsEqual(0);
     }
 
     private static LanConnectChatContent Content() => new(1,
@@ -264,14 +341,10 @@ public sealed class LanConnectRichMessageRenderingTests
         return state;
     }
 
-    private static string RunText(Control run) => run switch
-    {
-        Label label => label.Text,
-        _ => run.FindChildren("*", "Label", true, false)
-            .OfType<Label>()
-            .Select(label => label.Text)
-            .FirstOrDefault() ?? string.Empty
-    };
+    private static RichTextLabel RichMessageText(Node root) => root
+        .FindChildren("*", string.Empty, true, false)
+        .OfType<RichTextLabel>()
+        .Single();
 
     private static string[] Labels(Node root) => root.FindChildren("*", "Label", true, false)
         .OfType<Label>()

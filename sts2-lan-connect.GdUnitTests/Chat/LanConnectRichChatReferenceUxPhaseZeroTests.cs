@@ -1,5 +1,6 @@
 using Godot;
 using GdUnit4;
+using MegaCrit.Sts2.addons.mega_text;
 using Sts2LanConnect.Scripts;
 using static GdUnit4.Assertions;
 
@@ -125,7 +126,7 @@ public sealed class LanConnectRichChatReferenceUxPhaseZeroTests
         await runner.AwaitIdleFrame();
 
         Control touchTarget = panel.FindChild("ChatMessageRun1", true, false) as Control ??
-            panel.FindChildren("*", "MegaRichTextLabel", true, false).OfType<Control>().Single();
+            panel.FindChildren("*", string.Empty, true, false).OfType<MegaRichTextLabel>().Single();
         touchTarget.EmitSignal(Control.SignalName.GuiInput, new InputEventScreenTouch
         {
             Index = 0,
@@ -167,11 +168,8 @@ public sealed class LanConnectRichChatReferenceUxPhaseZeroTests
         panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
 
-        Control[] richTextControls = panel.FindChildren(
-                "*",
-                "MegaRichTextLabel",
-                recursive: true,
-                owned: false)
+        Control[] richTextControls = panel.FindChildren("*", string.Empty, recursive: true, owned: false)
+            .OfType<MegaRichTextLabel>()
             .OfType<Control>()
             .ToArray();
         AssertThat(richTextControls.Length).IsEqual(1);
@@ -181,8 +179,10 @@ public sealed class LanConnectRichChatReferenceUxPhaseZeroTests
             .All(control => !control.IsAncestorOf(richTextControls[0]))).IsTrue();
     }
 
+    [TestCase(1280, 720, "desktop-1280x720")]
     [TestCase(1920, 1080, "desktop-1920x1080")]
     [TestCase(1080, 1920, "touch-portrait-simulated-1080x1920")]
+    [TestCase(2400, 1080, "touch-landscape-simulated-2400x1080")]
     public async Task Capture_phase_zero_rich_chat_baseline(int width, int height, string id)
     {
         using ChatUiFixture fixture = await ChatUiFixture.Create(new Vector2I(width, height), 1f);
@@ -195,6 +195,10 @@ public sealed class LanConnectRichChatReferenceUxPhaseZeroTests
         string path = Path.Combine(outputDirectory, id + ".png");
         using Image image = await fixture.CaptureImage();
 
+        AssertThat(fixture.RichMessageViews().Length).IsEqual(1);
+        AssertThat(fixture.RichMessageTexts().Length).IsEqual(1);
+        AssertThat(fixture.RichMessageTexts().Single().GetGlobalRect()
+            .Intersects(fixture.ViewportRect, includeBorders: false)).IsTrue();
         AssertThat(image.SavePng(path)).IsEqual(Error.Ok);
         AssertThat(new FileInfo(path).Length).IsGreater(1024L);
     }

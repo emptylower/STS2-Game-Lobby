@@ -158,7 +158,9 @@ public sealed class LanConnectRoomRichScreenshotTests
         string context)
     {
         AssertThat(fixture.PhysicalSize).IsEqual(Cases.Single(item => item.Id == context).PhysicalSize);
-        AssertThat(fixture.RichMessageRuns().Count(run => run is not Label)).IsEqual(12);
+        AssertThat(fixture.RichMessageViews().Length).IsEqual(1);
+        AssertThat(fixture.RichMessageTexts().Length).IsEqual(1);
+        AssertThat(fixture.RichReferenceCount).IsGreaterEqual(5);
         switch (scenario)
         {
             case ScreenshotScenario.RichPicker:

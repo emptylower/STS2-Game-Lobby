@@ -1048,6 +1048,16 @@ public sealed class LanConnectBasicChatPanelTests
             }
         }
 
+        foreach (RichTextLabel richText in root
+                     .FindChildren("*", string.Empty, recursive: true, owned: false)
+                     .OfType<RichTextLabel>())
+        {
+            if (richText.GetParsedText() == text)
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 

@@ -36,26 +36,29 @@ public sealed class LanConnectRoomCombatRenderingTests
         await runner.AwaitIdleFrame();
 
         LanConnectBasicChatPanel panel = overlay.ChatPanelForTests;
-        AssertRunMatrix(panel, "before ", "Strength +3", " middle ", "Silent", " after ");
-        Control firstPower = Run(panel, 1);
-        string staticItemText = RunText(Run(panel, 4));
-        bool staticItemResolved = Run(panel, 4).HasMeta("lan_connect_resolved_item");
-        ulong stablePowerInstance = firstPower.GetInstanceId();
+        RichTextLabel inline = MessageText(panel);
+        string staticItemText = TextBetween(inline.GetParsedText(), "Silent", " after ");
+        AssertRunMatrix(inline.GetParsedText(), "before ", "Strength +3", " middle ", "Silent", staticItemText, " after ");
+        Control view = (Control)inline.GetParent();
+        ulong stableViewInstance = view.GetInstanceId();
+        AssertThat(view.GetMeta("lan_connect_reference_count").AsInt32()).IsEqual(2);
         await runner.AwaitIdleFrame();
         await runner.AwaitIdleFrame();
-        AssertThat(Run(panel, 1).GetInstanceId()).IsEqual(stablePowerInstance);
+        AssertThat(((Control)MessageText(panel).GetParent()).GetInstanceId()).IsEqual(stableViewInstance);
 
         live.Peers.Remove("3");
         renderContext = renderContext with { PeerTargetDirectoryFingerprint = "1:1:4:Host" };
         await runner.AwaitIdleFrame();
         AssertRunMatrix(
-            panel,
+            MessageText(panel).GetParsedText(),
             "before ",
             "Strength +3",
             " middle ",
             "Target is no longer available",
+            staticItemText,
             " after ");
-        AssertThat(Run(panel, 3).HasMeta("lan_connect_resolved_combat")).IsFalse();
+        AssertThat(((Control)MessageText(panel).GetParent())
+            .GetMeta("lan_connect_reference_count").AsInt32()).IsEqual(1);
 
         live.ActiveRoomSessionId = "generation-b";
         renderContext = renderContext with
@@ -64,23 +67,25 @@ public sealed class LanConnectRoomCombatRenderingTests
             PeerTargetDirectoryFingerprint = "1:1:4:Host\u001e1:3:6:Silent"
         };
         await runner.AwaitIdleFrame();
-        AssertThat(RunText(Run(panel, 1))).IsEqual("Unknown power");
-        AssertThat(RunText(Run(panel, 3))).IsEqual("Target is no longer available");
-        AssertThat(RunText(Run(panel, 0))).IsEqual("before ");
-        AssertThat(RunText(Run(panel, 2))).IsEqual(" middle ");
-        AssertThat(RunText(Run(panel, 5))).IsEqual(" after ");
-        AssertThat(RunText(Run(panel, 4))).IsEqual(staticItemText);
-        AssertThat(Run(panel, 4).HasMeta("lan_connect_resolved_item")).IsEqual(staticItemResolved);
+        AssertRunMatrix(
+            MessageText(panel).GetParsedText(),
+            "before ",
+            "Unknown power",
+            " middle ",
+            "Target is no longer available",
+            staticItemText,
+            " after ");
+        AssertThat(((Control)MessageText(panel).GetParent())
+            .GetMeta("lan_connect_reference_count").AsInt32()).IsEqual(0);
 
         renderContext = renderContext with { Locale = "zh-CN" };
         await runner.AwaitIdleFrame();
-        AssertThat(RunText(Run(panel, 1))).IsEqual("未知能力");
-        AssertThat(RunText(Run(panel, 3))).IsEqual("目标已不可用");
+        AssertThat(MessageText(panel).GetParsedText()).Contains("未知能力");
+        AssertThat(MessageText(panel).GetParsedText()).Contains("目标已不可用");
 
         renderContext = renderContext with { ModFingerprint = "mods-b" };
         await runner.AwaitIdleFrame();
-        AssertThat(RunText(Run(panel, 4))).IsEqual(staticItemText);
-        AssertThat(Run(panel, 4).HasMeta("lan_connect_resolved_item")).IsEqual(staticItemResolved);
+        AssertThat(MessageText(panel).GetParsedText()).Contains(staticItemText);
     }
 
     [TestCase]
@@ -111,21 +116,24 @@ public sealed class LanConnectRoomCombatRenderingTests
         panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
 
-        Control power = Run(panel, 1);
-        AssertThat(RunText(power)).IsEqual("Strength -4");
-        AssertThat(power.TooltipText).Contains("Amount: -4");
-        AssertThat(power.TooltipText).Contains("Owner: Host");
-        AssertThat(power.TooltipText).Contains("Applied by: Silent");
+        RichTextLabel inline = MessageText(panel);
+        AssertThat(inline.GetParsedText()).Contains("Strength -4");
+        inline.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-1");
+        await runner.AwaitIdleFrame();
+        AssertThat(inline.TooltipText).Contains("Amount: -4");
+        AssertThat(inline.TooltipText).Contains("Owner: Host");
+        AssertThat(inline.TooltipText).Contains("Applied by: Silent");
 
         live.ThrowOnPower = true;
-        power.EmitSignal(Control.SignalName.MouseEntered);
+        renderContext = renderContext with { ModFingerprint = "mods-throws" };
         await runner.AwaitIdleFrame();
-        AssertThat(RunText(power)).IsEqual("Unknown power");
-        AssertThat(power.HasMeta("lan_connect_resolved_combat")).IsFalse();
-        AssertThat(power.MouseFilter).IsEqual(Control.MouseFilterEnum.Ignore);
-        AssertThat(RunText(Run(panel, 0))).IsEqual("left ");
-        AssertThat(RunText(Run(panel, 2))).IsEqual(" right");
-        AssertThat(Run(panel, 3).HasMeta("lan_connect_resolved_item")).IsTrue();
+        RichTextLabel fallback = MessageText(panel);
+        AssertThat(fallback.GetParsedText()).Contains("Unknown power");
+        AssertThat(fallback.GetParsedText()).Contains("left ");
+        AssertThat(fallback.GetParsedText()).Contains(" right");
+        AssertThat(fallback.GetParsedText()).Contains("Anchor");
+        AssertThat(((Control)fallback.GetParent())
+            .GetMeta("lan_connect_reference_count").AsInt32()).IsEqual(1);
     }
 
     [TestCase]
@@ -444,32 +452,45 @@ public sealed class LanConnectRoomCombatRenderingTests
         FreshReady: true);
 
     private static void AssertRunMatrix(
-        Node panel,
+        string text,
         string first,
         string power,
         string middle,
         string target,
+        string item,
         string after)
     {
-        AssertThat(RunText(Run(panel, 0))).IsEqual(first);
-        AssertThat(RunText(Run(panel, 1))).IsEqual(power);
-        AssertThat(RunText(Run(panel, 2))).IsEqual(middle);
-        AssertThat(RunText(Run(panel, 3))).IsEqual(target);
-        AssertThat(Run(panel, 4)).IsNotNull();
-        AssertThat(RunText(Run(panel, 5))).IsEqual(after);
+        AssertThat(text).Contains(first);
+        AssertThat(text).Contains(power);
+        AssertThat(text).Contains(middle);
+        AssertThat(text).Contains(target);
+        AssertThat(text).Contains(item);
+        AssertThat(text).Contains(after);
+        int firstIndex = text.IndexOf(first, StringComparison.Ordinal);
+        int powerIndex = text.IndexOf(power, StringComparison.Ordinal);
+        int middleIndex = text.IndexOf(middle, StringComparison.Ordinal);
+        int targetIndex = text.IndexOf(target, StringComparison.Ordinal);
+        int itemIndex = text.IndexOf(item, StringComparison.Ordinal);
+        int afterIndex = text.IndexOf(after, StringComparison.Ordinal);
+        AssertThat(firstIndex >= 0 &&
+                   firstIndex < powerIndex &&
+                   powerIndex < middleIndex &&
+                   middleIndex < targetIndex &&
+                   targetIndex < itemIndex &&
+                   itemIndex < afterIndex).IsTrue();
     }
 
-    private static Control Run(Node panel, int index) =>
-        (Control)panel.FindChild($"ChatMessageRun{index}", recursive: true, owned: false);
+    private static RichTextLabel MessageText(Node panel) => panel
+        .FindChildren(LanConnectRichMessageView.LabelName, string.Empty, true, false)
+        .OfType<RichTextLabel>()
+        .Single();
 
-    private static string RunText(Control run) => run switch
+    private static string TextBetween(string text, string start, string end)
     {
-        Label label => label.Text,
-        _ => run.FindChildren("*", "Label", true, false)
-            .OfType<Label>()
-            .Select(label => label.Text)
-            .FirstOrDefault() ?? string.Empty
-    };
+        int startIndex = text.IndexOf(start, StringComparison.Ordinal) + start.Length;
+        int endIndex = text.IndexOf(end, startIndex, StringComparison.Ordinal);
+        return text[startIndex..endIndex];
+    }
 
     private static LanConnectResolvedItem ResolveItem(LanConnectItemRun run) => new(
         LanConnectResolvedItemStatus.Resolved,
