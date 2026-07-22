@@ -529,6 +529,12 @@ public sealed partial class LanConnectItemPreviewTests
             recursive: true,
             owned: false);
         AssertThat(close.Visible).IsTrue();
+        AssertThat(close.CustomMinimumSize.X >= 44f).IsTrue();
+        AssertThat(close.CustomMinimumSize.Y >= 44f).IsTrue();
+        AssertThat(close.AccessibilityName).IsEqual("Close reference preview");
+        AssertThat(close.TooltipText).IsEqual("Close reference preview");
+        AssertThat(fixture.Preview.AccessibilityName).Contains("Anchor");
+        AssertThat(fixture.Preview.AccessibilityName).Contains("Complete description");
         close.EmitSignal(Button.SignalName.Pressed);
         await fixture.Runner.AwaitIdleFrame();
 

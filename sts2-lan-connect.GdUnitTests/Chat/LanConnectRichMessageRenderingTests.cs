@@ -208,6 +208,12 @@ public sealed class LanConnectRichMessageRenderingTests
         });
         await runner.AwaitIdleFrame();
         AssertThat(panel.ItemPreviewForTests.TestState.Pinned).IsTrue();
+        Button close = (Button)panel.ItemPreviewForTests.FindChild(
+            LanConnectReferencePreviewController.CloseButtonName,
+            recursive: true,
+            owned: false);
+        AssertThat(close.AccessibilityName).IsEqual("关闭引用预览");
+        AssertThat(close.TooltipText).IsEqual("关闭引用预览");
 
         panel.ItemPreviewForTests.ClosePreview();
         inline.EmitSignal(Control.SignalName.GuiInput, new InputEventJoypadButton

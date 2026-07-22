@@ -221,6 +221,7 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
     private bool _hotkeyScopeActive;
     private int _hotkeyScopeGeneration;
     private Task _hotkeyScopeReleaseTask = Task.CompletedTask;
+    private string _closeAccessibilityLabel = "Close reference preview";
     private Rect2 _viewport;
     private Rect2 _bounds;
 
@@ -302,6 +303,20 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
     internal Vector2 CardPreferredSizeForTests => CardSurfacePreferredSize;
     internal bool TrailingHideProtectionActiveForTests => false;
     internal Task HotkeyScopeReleaseTaskForTests => _hotkeyScopeReleaseTask;
+
+    internal void ConfigureAccessibility(string closeLabel)
+    {
+        if (string.IsNullOrWhiteSpace(closeLabel))
+        {
+            return;
+        }
+        _closeAccessibilityLabel = closeLabel;
+        if (_closeButton != null && GodotObject.IsInstanceValid(_closeButton))
+        {
+            _closeButton.AccessibilityName = closeLabel;
+            _closeButton.TooltipText = closeLabel;
+        }
+    }
 
     public override void _Ready()
     {
@@ -501,6 +516,9 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
         _description = description;
         _hasLocalVisual = hasLocalVisual || card;
         _pinned = pinned;
+        AccessibilityName = string.IsNullOrWhiteSpace(description)
+            ? title
+            : $"{title}. {description}";
         _viewport = viewport;
         _closeButton!.Visible = pinned;
         _surface!.MouseFilter = pinned ? MouseFilterEnum.Stop : MouseFilterEnum.Ignore;
@@ -596,10 +614,12 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
         {
             Name = CloseButtonName,
             Text = "×",
+            AccessibilityName = _closeAccessibilityLabel,
+            TooltipText = _closeAccessibilityLabel,
             Visible = false,
             FocusMode = FocusModeEnum.All,
             SizeFlagsHorizontal = SizeFlags.ShrinkEnd,
-            CustomMinimumSize = new Vector2(34, 30)
+            CustomMinimumSize = new Vector2(44, 44)
         };
         _closeButton.Pressed += ClosePreview;
         shell.AddChild(_closeButton);
@@ -645,6 +665,7 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
         _description = string.Empty;
         _hasLocalVisual = false;
         _pinned = false;
+        AccessibilityName = string.Empty;
         _viewport = default;
         _bounds = default;
         if (_closeButton != null && GodotObject.IsInstanceValid(_closeButton))

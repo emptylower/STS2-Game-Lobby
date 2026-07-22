@@ -37,6 +37,8 @@ public sealed class LanConnectReferenceModeUiTests
         AssertThat(button.Visible).IsTrue();
         AssertThat(button.Disabled).IsFalse();
         AssertThat(button.AccessibilityName).IsEqual("引用");
+        AssertThat(button.CustomMinimumSize.X >= 44f).IsTrue();
+        AssertThat(button.CustomMinimumSize.Y >= 44f).IsTrue();
 
         button.EmitSignal(Button.SignalName.Pressed);
         await panel.RefreshForTests();

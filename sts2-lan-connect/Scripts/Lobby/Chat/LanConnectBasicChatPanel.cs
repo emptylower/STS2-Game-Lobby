@@ -789,7 +789,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _referenceButton.ToggleMode = true;
         _referenceButton.TooltipText = Localize("chat.reference.tooltip");
         _referenceButton.AccessibilityName = Localize("chat.reference.action");
-        _referenceButton.CustomMinimumSize = new Vector2(UsesLobbyStyle ? 42 : 38, 42);
+        _referenceButton.CustomMinimumSize = new Vector2(44, 44);
         _referenceButton.SizeFlagsVertical = SizeFlags.ExpandFill;
         _referenceButton.Visible = false;
         _referenceButton.Connect(Button.SignalName.Pressed, Callable.From(() =>
@@ -872,6 +872,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         _itemPreview = new LanConnectItemPreview();
         AddChild(_itemPreview);
+        _itemPreview.ConfigureAccessibility(Localize("chat.preview.close"));
 
         Connect(CanvasItem.SignalName.VisibilityChanged, Callable.From(UpdateStateVisibility));
     }
@@ -1758,6 +1759,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             _sendButton.Text = DisplayText(Localize("chat.action.send"));
             _sendButton.AccessibilityName = Localize("chat.action.send");
         }
+        _itemPreview?.ConfigureAccessibility(Localize("chat.preview.close"));
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
         {
             _unknownConfirmation.Title = Localize("chat.confirm.title");
