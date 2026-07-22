@@ -2,6 +2,32 @@
 
 本项目从 v0.5.0 起在此记录客户端 MOD 与 lobby-service 的公开版本变更。
 
+## [0.5.2] - 2026-07-22
+
+### Added
+
+- 新增统一的一次性引用模式：Android 点击聊天输入区旁的“引用”按钮，桌面按 `Alt+R` 进入或取消；成功捕获一个卡牌、遗物、药水、状态或玩家后自动退出并把焦点交回真实文本输入位置。
+- Android 可点击消息中的引用打开固定原生说明预览，并通过点击外部、`Esc` 或关闭按钮退出。
+
+### Changed
+
+- 原有 `Alt+左键` 直接引用继续保留，并与按钮和 `Alt+R` 共用同一状态机、目标能力矩阵和一次性捕获链路。
+- 混合文字、Emoji 与引用改为单一行内富文本控件自然换行；引用使用仅本地可解析的 opaque meta，不向聊天协议暴露模型 ID。
+- 卡牌、遗物、药水和 Power 使用游戏原生 hover-tip 体系；Power 说明注入实际层数、玩家和动态变量，不再固定裁成四行。
+- 客户端升级到 `0.5.2`；lobby-service 与聊天线协议继续使用 `0.5.1`，无需升级服务端。
+
+### Fixed
+
+- 修复引用实体造成的桌面异常空隙、独立块换行和位置偏移。
+- 修复空草稿插入引用后焦点落在 Button，导致中文组合输入或 Android 键盘输入无法继续的问题。
+- 修复 Android 没有触屏引用入口和消息说明只能依赖桌面悬停的问题。
+
+### Security and Compatibility
+
+- 不改变 v0.5.1 feature intersection、限额、generation、legacy fallback、MOD 同步或加入流程；v0.5.2 客户端可与 v0.5.1 服务端和客户端安全互通。
+- 不启用 monster target reference，不从远端下载预览资源，不让引用执行游戏动作，不泄漏内部 model ID。
+- 同一客户端包以游戏 `0.107.1` 与 `0.109.0` 为加载兼容目标；`0.108.0` 不在本次发布适配范围内。
+
 ## [0.5.1] - 2026-07-18
 
 ### Added
@@ -73,6 +99,7 @@
 - 移除 lobby-service 对 `SERVER_REGISTRY_*` 的运行时依赖。
 - 完善客户端服务器选择、键盘/手柄导航、邀请快捷键和无障碍软桥接。
 
+[0.5.2]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2
 [0.5.1]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1
 [0.5.0]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.0
 [0.4.0]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.4.0

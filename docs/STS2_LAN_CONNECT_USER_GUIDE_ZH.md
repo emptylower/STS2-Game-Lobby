@@ -10,7 +10,15 @@
 
 # STS2 LAN Connect 使用说明
 
-正式版下载：[`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1)；Steam 玩家也可直接订阅创意工坊条目 [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。通过创意工坊安装或更新后同样需要完整重启游戏。
+当前正式版仍为 [`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1)；v0.5.2 候选完成玩家确认后才会发布。Steam 玩家也可订阅创意工坊条目 [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。通过创意工坊安装或更新后同样需要完整重启游戏。
+
+## v0.5.2 一次性引用与原生预览
+
+- Android 点击聊天输入区旁的“引用”按钮，桌面按 `Alt+R`，可进入或取消一次性引用模式；成功引用一个支持对象后自动退出，并把焦点交回真实文本输入位置。
+- 原有桌面 `Alt+左键` 直接引用继续保留；点击不支持区域不会吞掉正常游戏操作，成功捕获会消费点击以避免同时出牌或触发物品。
+- 文字、Emoji 和引用使用单一行内富文本控件自然换行；卡牌、遗物、药水和 Power 使用游戏原生预览，动态 Power 说明按实际状态生成。
+- Android 点击消息引用打开固定预览，点击外部、`Esc` 或关闭按钮退出；不再依赖桌面悬停。
+- v0.5.2 只更新客户端，继续兼容 lobby-service 0.5.1 和 v0.5.1 聊天协议；游戏加载目标为 `0.107.1` 与 `0.109.0`。
 
 ## v0.5.1 加入前 MOD 预检
 
@@ -95,10 +103,10 @@
 ### 富聊天引用操作
 
 - **Emoji**：点击输入框右侧的笑脸按钮，在面板中选择表情。表情会先插入草稿，可继续输入文字，再按 `Enter` 或点击 `发送`；`Shift + Enter` 用于换行。
-- **卡牌 / 遗物 / 药水**：先点击游戏画面空白处，让聊天输入框失去焦点并关闭表情或物品预览；macOS 按住 `Option`、Windows/Linux 按住 `Alt`，再左键点击可见卡牌、遗物栏图标或药水栏图标。引用会插入当前选中频道的草稿，不会立即发送。
-- **战斗状态**：在战斗中使用同样的 `Option/Alt + 左键` 操作点击能力、增益/减益图标或玩家角色，可引用能力名称、层数、持有者、施加者或玩家。战斗状态只能分享到 `房间聊天`，不能分享到大厅 `频道聊天`；怪物目标引用当前版本尚未开放。
-- **编辑与查看**：引用可以与普通文字混排。用方向键移动光标，在引用旁按 `Backspace` / `Delete`，或选中引用后删除。收到卡牌、遗物或药水引用后，桌面端可将鼠标悬停在引用标签上查看本地化预览。
-- **Android 限制**：纯触屏目前可以发送文字和 Emoji，也可以接收并显示引用；主动插入物品或战斗引用仍依赖 `Alt + 左键`，需要外接键盘和鼠标。
+- **一次性入口**：Android 点击输入区旁的“引用”按钮；桌面按 `Alt+R`。成功点击一个卡牌、遗物、药水、状态或玩家后自动退出，并回到文字输入位置继续输入。
+- **桌面直达**：原有 `Alt+左键` 继续保留。卡牌、遗物、药水可发到服务器或房间频道；战斗状态和玩家只允许房间频道；怪物目标引用仍未开放。
+- **取消与失败**：再次点击引用按钮、`Esc`、切频道、关闭聊天或离开房间都会取消。点击不支持区域时保持 armed，且不吞掉原本的游戏操作。
+- **编辑与查看**：引用和普通文字自然混排，可用方向键、选择、粘贴、`Backspace` 和 `Delete` 编辑。桌面可悬停或点击查看原生预览；Android 点击打开固定预览，再点外部、`Esc` 或关闭按钮退出。
 
 ## 房间管理
 
@@ -228,7 +236,15 @@
 
 # STS2 LAN Connect User Guide
 
-Official download: [`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1). Steam players can also subscribe to [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330). Fully restart the game after a Workshop install or update.
+The current official download remains [`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1); the v0.5.2 candidate will be released only after player acceptance. Steam users can subscribe to [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330). Fully restart the game after a Workshop install or update.
+
+## v0.5.2 One-Shot References and Native Previews
+
+- Tap the Reference button beside the composer on Android, or press `Alt+R` on desktop, to arm or cancel one-shot reference mode. One successful capture exits the mode and restores focus to the real text input.
+- The original desktop `Alt+left-click` path remains available. Unsupported clicks preserve the normal game action, while successful captures consume the click to prevent playing a card or triggering an item at the same time.
+- Text, Emoji, and references flow through one inline rich-text control. Cards, relics, potions, and Powers use native game previews with dynamic Power context.
+- Android opens a pinned preview by tapping a message reference and closes it by tapping outside, pressing `Esc`, or using the close button.
+- v0.5.2 is client-only and remains compatible with lobby-service 0.5.1 and the v0.5.1 chat protocol. Supported game loading targets are `0.107.1` and `0.109.0`.
 
 ## v0.5.1 MOD Preflight Before Join
 
@@ -313,10 +329,10 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 ### Rich Chat Reference Controls
 
 - **Emoji**: click the smile button beside the composer and choose an emoji. It is inserted into the draft, so you can add text before sending with `Enter` or `Send`; use `Shift + Enter` for a newline.
-- **Cards / relics / potions**: first click an empty part of the game view so the chat composer loses focus and close any emoji or item preview. Hold `Option` on macOS or `Alt` on Windows/Linux, then left-click a visible card, relic inventory icon, or potion-slot icon. The reference is inserted into the selected channel draft and is not sent immediately.
-- **Combat state**: use the same `Option/Alt + left-click` gesture on a power, buff/debuff icon, or player character to share the power name, amount, owner, applier, or player. Combat references are room-chat only; monster-target references are not enabled in this release.
-- **Editing and viewing**: references can be mixed with ordinary text. Move the caret with the arrow keys and remove a neighboring or selected reference with `Backspace` / `Delete`. On desktop, hover a received card, relic, or potion chip to open its localized preview.
-- **Android limitation**: touch-only users can send text and Emoji and can receive references. Inserting item or combat references still requires an external keyboard and mouse for the `Alt + left-click` gesture.
+- **One-shot entry**: tap the Reference button on Android or press `Alt+R` on desktop. Capturing one card, relic, potion, power, or player exits the mode and restores the text caret.
+- **Desktop direct path**: the existing `Alt+left-click` shortcut remains available. Items work in server or room chat; combat powers and players are room-chat only. Monster targets remain disabled.
+- **Cancel and failure**: the button, `Esc`, channel changes, closing chat, or leaving the room cancels the mode. Unsupported clicks keep it armed and do not consume the normal game action.
+- **Editing and viewing**: references flow inline with text and support arrows, selection, paste, `Backspace`, and `Delete`. Desktop supports hover and pinned click previews; Android taps open a pinned preview that closes via outside tap, `Esc`, or the close button.
 
 ## Room Management
 
