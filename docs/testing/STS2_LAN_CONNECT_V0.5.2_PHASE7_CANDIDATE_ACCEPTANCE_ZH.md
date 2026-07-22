@@ -117,3 +117,14 @@ Android 0.5.2 创建密码房间 `P7FinalReCompat052051` 后：
   无测试尾缀的 `v0.5.2` 正式 GitHub Release。
 - 用户随后补充授权更新 Steam Workshop；固定顺序为远程 `main` 合并、正式 GitHub
   Release、最后更新 Workshop。
+
+## v0.5.2 正式发布包
+
+包含 GitHub 与 Workshop 正式发布文档的 `4fa97dc` 通过此前同一源码的完整
+`scripts/verify-release.sh` 门禁。随后执行两次独立完整客户端构建，目录 `diff -qr`
+无差异，ZIP `cmp` 完全一致：
+
+- 客户端 ZIP SHA-256：`9c14ea2945fdc1bead96b4df4c43f08ecd53ab76fd28e25673ef3fb6af13b9a8`
+- 正式标签：`v0.5.2`；GitHub 资产只包含客户端 `sts2_lan_connect-release.zip`。
+- Workshop 条目：`3749766330`；在正式 GitHub Release 后最后更新。
+- lobby-service 保持 `0.5.1`，不发布新的服务端包。
