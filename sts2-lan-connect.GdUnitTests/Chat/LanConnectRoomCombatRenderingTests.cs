@@ -120,9 +120,9 @@ public sealed class LanConnectRoomCombatRenderingTests
         AssertThat(inline.GetParsedText()).Contains("Strength -4");
         inline.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-1");
         await runner.AwaitIdleFrame();
-        AssertThat(inline.TooltipText).Contains("Amount: -4");
-        AssertThat(inline.TooltipText).Contains("Owner: Host");
-        AssertThat(inline.TooltipText).Contains("Applied by: Silent");
+        AssertThat(panel.ItemPreviewForTests.TestState.Description).Contains("Amount: -4");
+        AssertThat(panel.ItemPreviewForTests.TestState.Description).Contains("Owner: Host");
+        AssertThat(panel.ItemPreviewForTests.TestState.Description).Contains("Applied by: Silent");
 
         live.ThrowOnPower = true;
         renderContext = renderContext with { ModFingerprint = "mods-throws" };

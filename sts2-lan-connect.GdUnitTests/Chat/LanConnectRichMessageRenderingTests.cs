@@ -10,6 +10,32 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 public sealed class LanConnectRichMessageRenderingTests
 {
     [TestCase]
+    public async Task Android_message_text_keeps_the_chat_font_size_instead_of_native_auto_sizing()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.AppendConfirmedContentForTests(
+            "android-font-size",
+            "Silent",
+            new LanConnectChatContent(1, [new LanConnectTextSegment("房间聊天。")]),
+            sequence: 1,
+            isLocal: false);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+            LanConnectChatUiComposition.Icons,
+            ResolveItem))!;
+        panel.CustomMinimumSize = new Vector2(288f, 360f);
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        MegaCrit.Sts2.addons.mega_text.MegaRichTextLabel inline =
+            (MegaCrit.Sts2.addons.mega_text.MegaRichTextLabel)RichMessageText(
+                FindNode<Control>(panel, "ChatMessageRow0"));
+
+        AssertThat(inline.AutoSizeEnabled).IsFalse();
+        AssertThat(inline.GetThemeFontSize("normal_font_size", "RichTextLabel")).IsEqual(14);
+    }
+
+    [TestCase]
     public async Task Mixed_message_uses_one_native_inline_label_with_opaque_meta_and_safe_copy_text()
     {
         LanConnectChatChannelState state = EnabledState();
@@ -154,6 +180,43 @@ public sealed class LanConnectRichMessageRenderingTests
 
         AssertThat(panel.ItemPreviewForTests.TestState.Visible).IsFalse();
         AssertThat(panel.ItemPreviewForTests.TestState.ContentNodeCount).IsEqual(0);
+    }
+
+    [TestCase]
+    public async Task Keyboard_and_controller_open_the_single_reference_as_a_pinned_preview()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.AppendConfirmedContentForTests(
+            "accessible-preview",
+            "Silent",
+            new LanConnectChatContent(1,
+                [new LanConnectItemRefSegment("potion", "MegaCrit.FirePotion")]),
+            sequence: 1,
+            isLocal: false);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+            LanConnectChatUiComposition.Icons,
+            ResolveItem))!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        RichTextLabel inline = RichMessageText(FindNode<Control>(panel, "ChatMessageRow0"));
+        inline.EmitSignal(Control.SignalName.GuiInput, new InputEventKey
+        {
+            Keycode = Key.Enter,
+            Pressed = true
+        });
+        await runner.AwaitIdleFrame();
+        AssertThat(panel.ItemPreviewForTests.TestState.Pinned).IsTrue();
+
+        panel.ItemPreviewForTests.ClosePreview();
+        inline.EmitSignal(Control.SignalName.GuiInput, new InputEventJoypadButton
+        {
+            ButtonIndex = JoyButton.A,
+            Pressed = true
+        });
+        await runner.AwaitIdleFrame();
+        AssertThat(panel.ItemPreviewForTests.TestState.Pinned).IsTrue();
     }
 
     [TestCase]

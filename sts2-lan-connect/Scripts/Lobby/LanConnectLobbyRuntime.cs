@@ -252,6 +252,11 @@ internal sealed partial class LanConnectLobbyRuntime :
     bool ILanConnectRoomCombatContext.IsCurrentPeer(string playerNetId) =>
         IsCurrentRoomPeer(playerNetId);
 
+    int ILanConnectRoomCombatContext.PlayerCount =>
+        TryGetActiveCombatRoom(out _, out _, out IReadOnlyCollection<ulong> peerIds)
+            ? Math.Max(1, peerIds.Count)
+            : 1;
+
     bool ILanConnectRoomCombatContext.TryGetCurrentPeerName(
         string playerNetId,
         out string name)

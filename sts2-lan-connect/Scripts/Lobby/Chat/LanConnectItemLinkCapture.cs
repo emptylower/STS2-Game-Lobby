@@ -213,8 +213,23 @@ internal sealed class LanConnectGodotItemLinkCapturePorts : ILanConnectItemLinkC
 
     public object? GuiGetControlAtPosition(Vector2 position)
     {
+        Node root = _runtime.GetTree().Root;
+        return SelectControlAtPosition(
+            root,
+            position,
+            node => IsSupportedHolder(node) || IsPowerHolder(node) || IsPlayerHolder(node),
+            IsCaptureBoundary);
+    }
+
+    internal static object? SelectControlAtPosition(
+        Node root,
+        Vector2 position,
+        Func<object, bool> isReferenceTarget,
+        Func<object, bool> isCaptureBoundary)
+    {
         Control? selected = null;
-        foreach (Node node in _runtime.GetTree().Root.FindChildren(
+        Control? selectedReference = null;
+        foreach (Node node in root.FindChildren(
                      "*",
                      "Control",
                      recursive: true,
@@ -229,8 +244,20 @@ internal sealed class LanConnectGodotItemLinkCapturePorts : ILanConnectItemLinkC
                 continue;
             }
             selected = control;
+            for (Node? ancestor = control; ancestor != null; ancestor = ancestor.GetParent())
+            {
+                if (isCaptureBoundary(ancestor))
+                {
+                    break;
+                }
+                if (isReferenceTarget(ancestor))
+                {
+                    selectedReference = control;
+                    break;
+                }
+            }
         }
-        return selected;
+        return selectedReference ?? selected;
     }
 
     public object? GetParent(object node) => (node as Node)?.GetParent();

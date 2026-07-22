@@ -43,12 +43,14 @@ internal sealed partial class LanConnectRichMessageView : MarginContainer
         {
             Name = LabelName,
             BbcodeEnabled = false,
+            AutoSizeEnabled = false,
             FitContent = true,
             ScrollActive = false,
             SelectionEnabled = true,
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             MouseFilter = MouseFilterEnum.Stop,
+            FocusMode = FocusModeEnum.All,
             CustomMinimumSize = new Vector2(0f, 22f)
         };
         _label.AddThemeFontOverride("normal_font", font ?? ThemeDB.FallbackFont);
@@ -153,6 +155,29 @@ internal sealed partial class LanConnectRichMessageView : MarginContainer
 
     private void OnGuiInput(InputEvent input)
     {
+        bool openSingleReference = input switch
+        {
+            InputEventScreenTouch { Pressed: true } => true,
+            InputEventKey
+            {
+                Pressed: true,
+                Echo: false,
+                Keycode: Key.Enter or Key.KpEnter
+            } => true,
+            InputEventJoypadButton
+            {
+                Pressed: true,
+                ButtonIndex: JoyButton.A
+            } => true,
+            _ => false
+        };
+        if (openSingleReference && _references.Count == 1)
+        {
+            ReferencePressed?.Invoke(_label, _references.Values.Single());
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
         if (input is not InputEventKey key ||
             !key.Pressed || key.Echo ||
             key.Keycode != Key.C ||

@@ -5,7 +5,8 @@ namespace Sts2LanConnect.Scripts;
 
 internal readonly record struct LanConnectLocalPowerReference(
     string Title,
-    string Description);
+    string Description,
+    object? Model = null);
 
 internal readonly record struct LanConnectPowerCaptureCandidate(
     string ModelId,
@@ -31,6 +32,8 @@ internal interface ILanConnectRoomCombatContext
     bool TryGetCurrentPeerName(string playerNetId, out string name);
 
     bool TryResolveLocalPower(string modelId, out LanConnectLocalPowerReference power);
+
+    int PlayerCount => 1;
 }
 
 internal enum LanConnectResolvedCombatReferenceStatus
@@ -43,20 +46,24 @@ internal enum LanConnectResolvedCombatReferenceStatus
 internal sealed record LanConnectResolvedCombatReference(
     LanConnectResolvedCombatReferenceStatus Status,
     string Label,
-    string Description);
+    string Description,
+    LanConnectHoverTipPreviewData? Preview = null);
 
 internal sealed class LanConnectRoomCombatReferenceResolver
 {
     private readonly ILanConnectRoomCombatContext _context;
     private readonly LanConnectChatLocalizer _localizer;
+    private readonly LanConnectPowerHoverTipResolver _powerHoverTipResolver;
     private readonly LanConnectMonsterTargetIdPrototype _monsterTargets = new(adapter: null);
 
     internal LanConnectRoomCombatReferenceResolver(
         ILanConnectRoomCombatContext context,
-        LanConnectChatLocalizer? localizer = null)
+        LanConnectChatLocalizer? localizer = null,
+        LanConnectPowerHoverTipResolver? powerHoverTipResolver = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _localizer = localizer ?? LanConnectChatUiComposition.Localizer;
+        _powerHoverTipResolver = powerHoverTipResolver ?? new LanConnectPowerHoverTipResolver();
     }
 
     internal bool TryCreatePowerRun(
@@ -219,43 +226,66 @@ internal sealed class LanConnectRoomCombatReferenceResolver
         string amount = power.Amount > 0
             ? $"+{power.Amount}"
             : power.Amount.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        List<string> descriptionLines =
-        [
-            localPower.Description,
-            _localizer.Format(locale, "chat.power.amount", amount)
-        ];
+        string ownerName;
+        string applierName;
+        List<string> contextLines = [];
         if (!TryAppendPeerDescription(
-                descriptionLines,
+                contextLines,
                 power.OwnerPlayerNetId,
                 locale,
-                "chat.power.owner") ||
+                "chat.power.owner",
+                out ownerName) ||
             !TryAppendPeerDescription(
-                descriptionLines,
+                contextLines,
                 power.ApplierPlayerNetId,
                 locale,
-                "chat.power.applier"))
+                "chat.power.applier",
+                out applierName))
         {
             return UnknownPower(locale);
         }
 
+        int playerCount = Math.Max(1, _context.PlayerCount);
+        LanConnectHoverTipPreviewData? preview = localPower.Model == null
+            ? null
+            : _powerHoverTipResolver.Resolve(
+                localPower.Model,
+                new LanConnectPowerDescriptionContext(
+                    power.Amount,
+                    OnPlayer: !string.IsNullOrEmpty(power.OwnerPlayerNetId),
+                    IsMultiplayer: playerCount > 1,
+                    PlayerCount: playerCount,
+                    OwnerName: ownerName,
+                    ApplierName: applierName,
+                    TargetName: string.Empty));
+        List<string> descriptionLines =
+        [
+            preview?.Description ?? localPower.Description,
+            _localizer.Format(locale, "chat.power.amount", amount),
+            .. contextLines
+        ];
+
         return new LanConnectResolvedCombatReference(
             LanConnectResolvedCombatReferenceStatus.Resolved,
             _localizer.Format(locale, "chat.power.label", localPower.Title, amount),
-            string.Join('\n', descriptionLines));
+            string.Join('\n', descriptionLines),
+            preview);
     }
 
     private bool TryAppendPeerDescription(
         List<string> descriptionLines,
         string? playerNetId,
         string? locale,
-        string labelKey)
+        string labelKey,
+        out string name)
     {
+        name = string.Empty;
         if (string.IsNullOrEmpty(playerNetId))
         {
             return true;
         }
         if (!_context.IsCurrentPeer(playerNetId) ||
-            !_context.TryGetCurrentPeerName(playerNetId, out string name) ||
+            !_context.TryGetCurrentPeerName(playerNetId, out name) ||
             string.IsNullOrWhiteSpace(name))
         {
             return false;
@@ -304,7 +334,7 @@ internal static class LanConnectProductionPowerModelResolver
             {
                 return false;
             }
-            power = new LanConnectLocalPowerReference(title, description);
+            power = new LanConnectLocalPowerReference(title, description, model);
             return true;
         }
         catch (ModelNotFoundException)

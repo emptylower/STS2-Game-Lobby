@@ -1133,6 +1133,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         view.ReferenceHoverStarted += OnMessageReferenceHoverStarted;
         view.ReferenceHoverEnded += () =>
             _itemPreview?.Invalidate(LanConnectItemPreviewInvalidation.PointerExited);
+        view.ReferencePressed += OnMessageReferencePressed;
         return view;
     }
 
@@ -1306,7 +1307,37 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         if (reference.Combat is { } combat)
         {
-            owner.TooltipText = combat.Description;
+            _itemPreview?.ShowCombat(
+                combat,
+                owner.GetGlobalRect(),
+                GetViewport().GetVisibleRect());
+        }
+    }
+
+    private void OnMessageReferencePressed(
+        Control owner,
+        LanConnectRichMessageReference reference)
+    {
+        if (_itemPreview == null || !GodotObject.IsInstanceValid(_itemPreview))
+        {
+            return;
+        }
+        if (reference.Item is { } item)
+        {
+            _itemPreview.ShowResolved(
+                item,
+                owner.GetGlobalRect(),
+                GetViewport().GetVisibleRect(),
+                pinned: true);
+            return;
+        }
+        if (reference.Combat is { } combat)
+        {
+            _itemPreview.ShowCombat(
+                combat,
+                owner.GetGlobalRect(),
+                GetViewport().GetVisibleRect(),
+                pinned: true);
         }
     }
 

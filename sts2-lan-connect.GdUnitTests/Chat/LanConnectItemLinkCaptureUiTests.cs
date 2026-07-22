@@ -10,6 +10,44 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 public sealed partial class LanConnectItemLinkCaptureUiTests
 {
     [TestCase]
+    public async Task Touch_hit_test_prefers_reference_ancestor_over_later_overlapping_container()
+    {
+        Control root = AutoFree(new Control
+        {
+            Size = new Vector2(320, 180)
+        })!;
+        Control referenceHolder = new()
+        {
+            Position = new Vector2(20, 20),
+            Size = new Vector2(80, 80)
+        };
+        Control referenceHitbox = new()
+        {
+            Size = new Vector2(80, 80),
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        referenceHolder.AddChild(referenceHitbox);
+        root.AddChild(referenceHolder);
+        Control laterSidebarContainer = new()
+        {
+            Position = new Vector2(0, 0),
+            Size = new Vector2(160, 180),
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        root.AddChild(laterSidebarContainer);
+        using ISceneRunner runner = ISceneRunner.Load(root, autoFree: true);
+        await runner.AwaitIdleFrame();
+
+        object? selected = LanConnectGodotItemLinkCapturePorts.SelectControlAtPosition(
+            root,
+            new Vector2(40, 40),
+            node => ReferenceEquals(node, referenceHolder),
+            _ => false);
+
+        AssertThat(selected).IsSame(referenceHitbox);
+    }
+
+    [TestCase]
     public async Task Runtime_alt_r_arms_one_touch_capture_and_escape_cancels_the_next_attempt()
     {
         (SubViewport viewport, ObservableInputHolder holder, ViewportRoutePorts ports,
