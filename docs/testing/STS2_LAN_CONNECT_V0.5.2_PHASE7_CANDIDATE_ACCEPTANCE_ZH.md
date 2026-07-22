@@ -19,6 +19,19 @@
 最终候选已按同一 DLL 哈希安装到 Steam v0.109.0、v0.107.1 fixture 和 MuMu Android
 启动器。Mac app bundle 的 `codesign --verify --deep --strict` 通过。
 
+## v0.5.2-rc.1 预览发布包
+
+在完成预览发布文档的 `44d7000`（`docs: prepare v0.5.2 rc.1 preview`）后，针对
+`v0.5.2-rc.1` 又执行了两次独立完整构建。两份包的目录 `diff -qr` 无差异，ZIP
+`cmp` 完全一致：
+
+- 客户端 ZIP SHA-256：`fd55958a84a3f8cd380fc7059850e088001d5746e3df6683ac13cda131f0eee4`
+- 发布范围：仅客户端预览包；沿用 v0.5.1 lobby-service 和聊天协议。
+- GitHub 标签：`v0.5.2-rc.1`，从未合并的
+  `feat/rich-chat-reference-ux-0.5.2` 分支发布。
+- 正式稳定版仍为 `v0.5.1`；本次不创建无尾缀 `v0.5.2` 标签、不更新 Steam
+  Workshop。
+
 ## 游戏版本加载证据
 
 ### v0.107.1
