@@ -4,7 +4,7 @@
 
 ## [0.5.2] - 2026-07-22
 
-正式客户端标签为 [`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)。本次为客户端正式发布，lobby-service 继续使用 `0.5.1`。
+正式客户端标签为 [`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)，并在 GitHub Release 完成后同步更新 Steam Workshop。lobby-service 继续使用 `0.5.1`。
 
 ### Added
 

@@ -21,7 +21,7 @@
 
 `0.5.2` 主要改进聊天引用体验：Android 点击输入区旁的“引用”按钮，桌面按 `Alt+R`，即可进入一次性引用模式；成功捕获一个卡牌、遗物、药水、状态或玩家后会自动退出并回到真实文本输入位置。原有 `Alt+左键` 直接引用继续保留。消息改为单一行内富文本自然换行，卡牌与其他引用使用游戏原生预览，动态 Power 说明按实际层数和玩家上下文生成。Android 还可以点击消息引用打开固定预览。
 
-当前稳定版通过 GitHub Release [`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2) 提供。[Steam 创意工坊](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) 是独立发布渠道。v0.5.2 只更新客户端，继续使用 lobby-service 0.5.1 和 v0.5.1 聊天协议；同一客户端包以游戏 `0.107.1` 与 `0.109.0` 为加载目标。
+当前稳定版通过 GitHub Release [`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2) 与 [Steam 创意工坊](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) 提供。v0.5.2 只更新客户端，继续使用 lobby-service 0.5.1 和 v0.5.1 聊天协议；同一客户端包以游戏 `0.107.1` 与 `0.109.0` 为加载目标。
 
 同一房间内的所有玩家必须使用完全相同的游戏版本。房主和客户端版本不同时，加入流程会直接提示双方版本并中止；普通非联机 MOD 不进入预检、不提示、不禁用，也不影响加入。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。
 

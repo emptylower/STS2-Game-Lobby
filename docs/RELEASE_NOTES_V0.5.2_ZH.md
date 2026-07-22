@@ -40,4 +40,4 @@ v0.5.2 是客户端交互与渲染升级，继续使用 lobby-service 0.5.1 和 
 3. 重启游戏，在主菜单确认只加载一个 STS2 LAN Connect。
 4. 如需回滚，完整卸载 v0.5.2，再安装正式 v0.5.1 Release；不要覆盖或移动历史 tag/资产。
 
-本次只发布客户端 GitHub 正式包，不要求 lobby-service 升级。Steam Workshop 是独立发布渠道，需在 GitHub Release 完成后另行更新。
+本次只更新客户端，不要求 lobby-service 升级。正式发布顺序为：先合并并推送远程 `main`，再发布 `v0.5.2` GitHub Release，最后更新 Steam Workshop。

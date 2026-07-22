@@ -55,7 +55,7 @@
 - 客户端 MOD：[`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)
 - 大厅服务：`0.5.1`
 - GitHub 稳定版：[`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)
-- Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
+- Steam 创意工坊：[`v0.5.2 游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 
 ### 推荐阅读顺序
 
@@ -225,7 +225,7 @@ Each `lobby-service` node advertises itself to peers via the built-in peer-annou
 - Client MOD: [`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)
 - Lobby Service: `0.5.1`
 - Stable GitHub release: [`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)
-- Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
+- Steam Workshop: [`v0.5.2 游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 
 ### Recommended reading order
 

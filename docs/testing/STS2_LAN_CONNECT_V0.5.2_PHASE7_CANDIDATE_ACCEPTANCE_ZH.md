@@ -115,14 +115,5 @@ Android 0.5.2 创建密码房间 `P7FinalReCompat052051` 后：
 - 2026-07-22，玩家完成 `v0.5.2-rc.1` 实测并确认没有问题。
 - 用户授权将 `feat/rich-chat-reference-ux-0.5.2` 合并到本地与远程 `main`，并发布
   无测试尾缀的 `v0.5.2` 正式 GitHub Release。
-- 本次授权不包含 Steam Workshop 更新；Workshop 保持为后续独立发布步骤。
-
-## v0.5.2 正式 GitHub 发布包
-
-正式发布文档提交 `9edb420`（`docs: finalize v0.5.2 release`）通过完整
-`scripts/verify-release.sh` 门禁。随后执行两次独立完整客户端构建，目录 `diff -qr`
-无差异，ZIP `cmp` 完全一致：
-
-- 客户端 ZIP SHA-256：`53b04dd894192570fbe69d475e000fb66dbd1f46daf335c269b8b18d8c20a63d`
-- 正式标签：`v0.5.2`；发布资产只包含客户端 `sts2_lan_connect-release.zip`。
-- lobby-service 保持 `0.5.1`，不发布新的服务端包。
+- 用户随后补充授权更新 Steam Workshop；固定顺序为远程 `main` 合并、正式 GitHub
+  Release、最后更新 Workshop。
