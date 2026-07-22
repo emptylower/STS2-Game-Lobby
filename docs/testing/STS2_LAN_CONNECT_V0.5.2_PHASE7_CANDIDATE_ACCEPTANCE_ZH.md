@@ -89,8 +89,10 @@ Android 0.5.2 创建密码房间 `P7FinalReCompat052051` 后：
 - Steam v0.109.0 已恢复最终 0.5.2 候选 DLL。
 - 测试前暂存的 `SayTheSpire2` 可访问性 MOD 已恢复，并重新完成 app bundle codesign。
 - MuMu 已退出游戏并停在 STS2 启动器，安装的候选 MOD 保留。
-- 未合并 main，未创建 v0.5.2 tag/Release，未更新 Steam Workshop。
+- 用户已确认实机验收，并授权从 `feat/rich-chat-reference-ux-0.5.2` 功能分支发布
+  `v0.5.2-rc.1` GitHub Pre-release；仍不合并 main、不创建无尾缀 `v0.5.2` 正式标签，
+  也不更新 Steam Workshop。
 
 电脑控制接口无法在鼠标点击期间保持 Option/Alt 修饰键，所以原 `Alt+左键` 路径保留自动化
-回归证据，但本轮没有新增真实修饰键点击证据。正式 Phase 8 前仍需玩家手动确认一次
-`Alt+左键` 未退化，并明确接受上述“MuMu 使用实体键盘、无软键盘证据”的剩余风险。
+回归证据，但本轮没有新增真实修饰键点击证据。用户已接受该剩余风险，以及“MuMu 使用实体
+键盘、无软键盘证据”的验收边界，并选择先发布 GitHub 预览版。

@@ -4,6 +4,8 @@
 
 ## [0.5.2] - 2026-07-22
 
+公开预览标签为 [`v0.5.2-rc.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2-rc.1)。该 Pre-release 从功能分支发布，未合并 main，也不更新 Steam Workshop。
+
 ### Added
 
 - 新增统一的一次性引用模式：Android 点击聊天输入区旁的“引用”按钮，桌面按 `Alt+R` 进入或取消；成功捕获一个卡牌、遗物、药水、状态或玩家后自动退出并把焦点交回真实文本输入位置。
@@ -100,6 +102,7 @@
 - 完善客户端服务器选择、键盘/手柄导航、邀请快捷键和无障碍软桥接。
 
 [0.5.2]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2
+[0.5.2-rc.1]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2-rc.1
 [0.5.1]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1
 [0.5.0]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.0
 [0.4.0]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.4.0

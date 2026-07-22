@@ -10,7 +10,7 @@
 
 # STS2 LAN Connect 使用说明
 
-当前正式版仍为 [`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1)；v0.5.2 候选完成玩家确认后才会发布。Steam 玩家也可订阅创意工坊条目 [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。通过创意工坊安装或更新后同样需要完整重启游戏。
+当前稳定版仍为 [`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1)；聊天引用升级以 [`v0.5.2-rc.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2-rc.1) Pre-release 提供。本次预览不更新创意工坊条目 [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)，安装 GitHub 预览包后必须完整重启游戏。
 
 ## v0.5.2 一次性引用与原生预览
 
@@ -236,7 +236,7 @@
 
 # STS2 LAN Connect User Guide
 
-The current official download remains [`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1); the v0.5.2 candidate will be released only after player acceptance. Steam users can subscribe to [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330). Fully restart the game after a Workshop install or update.
+The stable download remains [`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1). The rich-reference upgrade is available as the [`v0.5.2-rc.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2-rc.1) Pre-release. This preview does not update the [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) Workshop item. Fully restart the game after installing the GitHub preview package.
 
 ## v0.5.2 One-Shot References and Native Previews
 

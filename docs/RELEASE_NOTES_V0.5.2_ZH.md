@@ -1,6 +1,6 @@
-# STS2 LAN Connect v0.5.2 发布说明
+# STS2 LAN Connect v0.5.2-rc.1 预览发布说明
 
-> 当前为候选说明。玩家实测确认前不会合并 main、创建正式 tag/Release 或更新 Steam 创意工坊。
+> 这是客户端 `0.5.2` 的 GitHub Pre-release，标签为 `v0.5.2-rc.1`。源码来自未合并 main 的 `feat/rich-chat-reference-ux-0.5.2` 分支；稳定版仍为 `v0.5.1`，本次不更新 Steam 创意工坊。
 
 v0.5.2 是客户端交互与渲染升级，继续使用 lobby-service 0.5.1 和 v0.5.1 聊天协议；服主无需升级服务端。新版客户端与 v0.5.1 服务端、v0.5.1 客户端可安全互通。
 
@@ -36,8 +36,8 @@ v0.5.2 是客户端交互与渲染升级，继续使用 lobby-service 0.5.1 和 
 ## 安装与回滚
 
 1. 完整退出游戏。
-2. 用候选包中的安装器安装完整 `sts2_lan_connect` 目录，不要混用旧 DLL、PCK 或 manifest。
+2. 用 `v0.5.2-rc.1` 预览包中的安装器安装完整 `sts2_lan_connect` 目录，不要混用旧 DLL、PCK 或 manifest。
 3. 重启游戏，在主菜单确认只加载一个 STS2 LAN Connect。
 4. 如需回滚，完整卸载 v0.5.2，再安装正式 v0.5.1 Release；不要覆盖或移动历史 tag/资产。
 
-正式发布顺序固定为：合并远程 main，发布无测试尾缀的 v0.5.2 GitHub Release，最后更新 Steam Workshop。
+预览版不改变正式发布顺序：后续仍需先合并远程 main，再发布无测试尾缀的 v0.5.2 GitHub Release，最后更新 Steam Workshop。
