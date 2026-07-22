@@ -69,20 +69,21 @@ public sealed class LanConnectChatResolutionTests
             await fixture.ShowRichMatrix();
             try
             {
-                Control[] messageRuns = fixture.RichMessageRuns();
-                AssertThat(messageRuns.Length).IsEqual(13);
-                AssertThat(messageRuns.Count(run => run is not Label)).IsEqual(12);
-                foreach (Control run in messageRuns)
+                Control[] messageViews = fixture.RichMessageViews();
+                RichTextLabel[] messageTexts = fixture.RichMessageTexts();
+                AssertThat(messageViews.Length).IsEqual(1);
+                AssertThat(messageTexts.Length).IsEqual(1);
+                foreach (Control view in messageViews)
                 {
-                    AssertRectInside(run.GetGlobalRect(), fixture.ViewportRect, $"{context} rich message run");
-                    if (run is not Label)
-                    {
-                        AssertThat(run.AccessibilityName.ToString().Length).IsGreater(0);
-                    }
+                    Rect2 visible = view.GetGlobalRect().Intersection(fixture.RichPanel.TestState.MessagesRect);
+                    AssertRectInside(visible, fixture.ViewportRect, $"{context} rich message view");
                 }
-                AssertNoPairwiseOverlap(messageRuns, $"{context} rich message runs");
-                AssertThat(fixture.RichResolvedItemCount).IsGreaterEqual(5);
-                AssertThat(fixture.RichUnknownItemCount).IsGreaterEqual(3);
+                AssertThat(messageTexts[0].AccessibilityName.ToString().Length).IsGreater(0);
+                AssertThat(fixture.RichReferenceCount).IsGreaterEqual(5);
+                AssertThat(fixture.RichCopyText).Contains("[卡牌]");
+                AssertThat(fixture.RichCopyText).Contains("[遗物]");
+                AssertThat(fixture.RichCopyText).Contains("[药水]");
+                AssertThat(fixture.RichCopyText.Contains("MegaCrit.", StringComparison.Ordinal)).IsFalse();
                 AssertThat(fixture.RichVisibleText.Contains("PrivateMod.", StringComparison.Ordinal)).IsFalse();
 
                 Control[] editorRuns = fixture.RichEditorRuns();
@@ -374,17 +375,19 @@ internal sealed class ChatUiFixture : IDisposable
 
     internal float UiScale => _uiScale;
 
-    internal int RichResolvedItemCount => RichMessageRuns()
-        .Count(run => run.HasMeta("lan_connect_resolved_item"));
+    internal int RichReferenceCount => RichMessageViews()
+        .Sum(view => view.GetMeta("lan_connect_reference_count").AsInt32());
 
-    internal int RichUnknownItemCount => RichMessageRuns()
-        .Count(run => run is PanelContainer && !run.HasMeta("lan_connect_resolved_item"));
+    internal string RichCopyText => string.Join(
+        "\n",
+        RichMessageViews().Select(view => view.GetMeta("lan_connect_copy_text").AsString()));
 
     internal string RichVisibleText => string.Join(
         "\n",
         RichPanel.FindChildren("*", "Label", recursive: true, owned: false)
             .OfType<Label>()
-            .Select(label => label.Text));
+            .Select(label => label.Text)
+            .Concat(RichMessageTexts().Select(label => label.GetParsedText())));
 
     internal string RoomUnreadBadgeText => Find<Label>(Room, "RoomUnreadBadge").Text;
 
@@ -614,9 +617,14 @@ internal sealed class ChatUiFixture : IDisposable
         FreezeDynamicProcessing(RichPanel.EmojiPickerForTests);
     }
 
-    internal Control[] RichMessageRuns() => RichPanel
-        .FindChildren("ChatMessageRun*", "Control", recursive: true, owned: false)
+    internal Control[] RichMessageViews() => RichPanel
+        .FindChildren(LanConnectRichMessageView.ViewName, string.Empty, recursive: true, owned: false)
         .OfType<Control>()
+        .ToArray();
+
+    internal RichTextLabel[] RichMessageTexts() => RichPanel
+        .FindChildren(LanConnectRichMessageView.LabelName, string.Empty, recursive: true, owned: false)
+        .OfType<RichTextLabel>()
         .ToArray();
 
     internal Control[] RichEditorRuns() => RichPanel
@@ -681,9 +689,7 @@ internal sealed class ChatUiFixture : IDisposable
 
     internal IReadOnlyList<Control> AccessibilityStateControls()
     {
-        List<Control> controls = RichMessageRuns()
-            .Where(run => run is not Label)
-            .ToList();
+        List<Control> controls = RichMessageTexts().Cast<Control>().ToList();
         controls.AddRange(RichPanel.FindChildren("*", "Button", recursive: true, owned: false)
             .OfType<Button>()
             .Where(button => button.Disabled));

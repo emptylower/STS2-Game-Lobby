@@ -77,12 +77,19 @@ public sealed class LanConnectChatLocalizerTests
         "chat.power.amount",
         "chat.power.owner",
         "chat.power.applier",
+        "chat.preview.close",
         "chat.preview_unavailable",
         "chat.rich_disabled",
         "chat.emoji_disabled",
         "chat.item_disabled",
         "chat.combat_disabled",
         "chat.combat.room_only",
+        "chat.reference.action",
+        "chat.reference.tooltip",
+        "chat.reference.armed_accessibility",
+        "chat.reference.armed_hint",
+        "chat.reference.no_targets",
+        "chat.reference.unsupported_target",
         "chat.budget.empty",
         "chat.budget.text_limit",
         "chat.budget.segment_limit",
@@ -178,6 +185,15 @@ public sealed class LanConnectChatLocalizerTests
 
         Assert.Equal("Unknown power", localizer.Get(locale, "chat.unknown_power"));
         Assert.Equal("Chat · {0} unread", localizer.Get(locale, "chat.fade.unread_hint"));
+    }
+
+    [Fact]
+    public void Preview_close_accessibility_copy_is_exact_in_both_languages()
+    {
+        LanConnectChatLocalizer localizer = new();
+
+        Assert.Equal("Close reference preview", localizer.Get("en-US", "chat.preview.close"));
+        Assert.Equal("关闭引用预览", localizer.Get("zh-CN", "chat.preview.close"));
     }
 
     [Theory]

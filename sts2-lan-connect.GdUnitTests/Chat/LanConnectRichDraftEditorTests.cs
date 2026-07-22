@@ -135,6 +135,82 @@ public sealed class LanConnectRichDraftEditorTests
     }
 
     [TestCase]
+    public async Task Entity_boundary_uses_one_real_text_edit_and_keeps_it_across_composition_updates()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromText(string.Empty);
+        LanConnectRichDraftEditor editor = AutoFree(new LanConnectRichDraftEditor())!;
+        editor.Bind(draft, new(1, 1, 1, 0), "Ironclad", AccessibleLabel);
+        using ISceneRunner runner = ISceneRunner.Load(editor, autoFree: true);
+        await runner.AwaitIdleFrame();
+
+        AssertThat(editor.InsertItem(new LanConnectItemRun("card", "MegaCrit.Strike", 1))).IsTrue();
+        await runner.AwaitIdleFrame();
+
+        TextEdit[] liveInputs = editor.FindChildren("*", "TextEdit", recursive: true, owned: false)
+            .OfType<TextEdit>()
+            .Where(input => !input.IsQueuedForDeletion())
+            .ToArray();
+        AssertThat(liveInputs.Length).IsEqual(1);
+        TextEdit compositionTarget = liveInputs.Single();
+        AssertThat(compositionTarget.Text).IsEqual(string.Empty);
+        AssertThat(editor.FocusTarget).IsSame(compositionTarget);
+        AssertThat(editor.GetViewport().GuiGetFocusOwner()).IsSame(compositionTarget);
+        AssertThat(compositionTarget.VirtualKeyboardEnabled).IsTrue();
+
+        compositionTarget.Text = "zhong";
+        compositionTarget.EmitSignal(TextEdit.SignalName.TextChanged);
+        await runner.AwaitIdleFrame();
+        AssertThat(editor.FocusTarget).IsSame(compositionTarget);
+        AssertThat(editor.GetViewport().GuiGetFocusOwner()).IsSame(compositionTarget);
+        AssertThat(compositionTarget.IsQueuedForDeletion()).IsFalse();
+        AssertThat(draft.Runs).ContainsExactly(
+            new LanConnectItemRun("card", "MegaCrit.Strike", 1),
+            new LanConnectTextRun("zhong"));
+
+        compositionTarget.Text = "中文";
+        compositionTarget.EmitSignal(TextEdit.SignalName.TextChanged);
+        await runner.AwaitIdleFrame();
+        AssertThat(editor.FocusTarget).IsSame(compositionTarget);
+        AssertThat(editor.GetViewport().GuiGetFocusOwner()).IsSame(compositionTarget);
+        AssertThat(compositionTarget.IsQueuedForDeletion()).IsFalse();
+        AssertThat(draft.ToCompatibilityText()).IsEqual("[Card]中文");
+    }
+
+    [TestCase]
+    public async Task Empty_entity_boundary_slot_supports_document_navigation_and_delete()
+    {
+        LanConnectRichDraft draft = LanConnectRichDraft.FromRuns(
+        [
+            new LanConnectTextRun("before"),
+            new LanConnectEmojiRun("heart")
+        ]);
+        LanConnectRichDraftEditor editor = AutoFree(new LanConnectRichDraftEditor())!;
+        editor.Bind(draft, new(1, 1, 1, 0), "Ironclad", AccessibleLabel);
+        using ISceneRunner runner = ISceneRunner.Load(editor, autoFree: true);
+        await runner.AwaitIdleFrame();
+
+        editor.FocusEditor();
+        await runner.AwaitIdleFrame();
+        TextEdit boundary = (TextEdit)editor.FocusTarget!;
+        AssertThat(boundary.Text).IsEqual(string.Empty);
+        AssertThat(editor.GetViewport().GuiGetFocusOwner()).IsSame(boundary);
+
+        PushGuiKey(boundary, Key.Left);
+        await runner.AwaitIdleFrame();
+        AssertThat(draft.Selection.Active).IsEqual(new LanConnectDraftPosition(1, 0));
+
+        editor.FocusEditor();
+        PushGuiKey((Control)editor.FocusTarget!, Key.Right);
+        await runner.AwaitIdleFrame();
+        AssertThat(editor.FocusTarget is TextEdit).IsTrue();
+        PushGuiKey((Control)editor.FocusTarget!, Key.Backspace);
+        await runner.AwaitIdleFrame();
+
+        AssertThat(draft.Runs).ContainsExactly(new LanConnectTextRun("before"));
+        AssertThat(editor.FocusTarget is TextEdit).IsTrue();
+    }
+
+    [TestCase]
     public async Task Boundary_backspace_removes_one_whole_entity_and_merges_text_runs()
     {
         LanConnectRichDraft draft = LanConnectRichDraft.FromRuns(

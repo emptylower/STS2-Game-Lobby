@@ -124,7 +124,7 @@ public sealed class LanConnectLucideIconLoaderTests
     {
         FakeDecoder decoder = new();
         LanConnectLucideIconLoader loader = new(decoder: decoder);
-        string[] chatIcons = ["send", "refresh-cw", "pin"];
+        string[] chatIcons = ["send", "refresh-cw", "pin", "link-2"];
 
         foreach (string iconName in LanConnectChatEmojiSet.Version1
                      .Select(emoji => emoji.LucideIcon)
@@ -133,7 +133,7 @@ public sealed class LanConnectLucideIconLoaderTests
             loader.Get(iconName, 20, Colors.White);
         }
 
-        Assert.Equal(21, decoder.DecodeCount);
+        Assert.Equal(22, decoder.DecodeCount);
         Assert.Equal(0, decoder.FallbackCount);
     }
 

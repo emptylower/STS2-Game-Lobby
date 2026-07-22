@@ -115,6 +115,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private Button? _newMessagesButton;
     private LanConnectRichDraftEditor? _draftEditor;
     private Button? _emojiButton;
+    private Button? _referenceButton;
     private LanConnectEmojiPicker? _emojiPicker;
     private Button? _sendButton;
     private Label? _statusLabel;
@@ -135,6 +136,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private string? _operationStatusArgument;
     private string _operationStatusDirect = string.Empty;
     private Action? _itemLinkPostInsertForTests;
+    private Func<LanConnectChatChannelState, LanConnectReferenceModePresentation>? _referencePresentationProvider;
+    private Func<LanConnectChatChannelState, LanConnectReferenceModeSource, bool>? _referenceToggle;
+    private LanConnectReferenceModePresentation _referencePresentation;
     private int _visibilityPublishSuppressionDepth;
     private bool _publishVisibilityWhenSuppressionEnds;
 
@@ -230,6 +234,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     internal LanConnectEmojiPicker EmojiPickerForTests => _emojiPicker ??
         throw new InvalidOperationException("The emoji picker is not ready.");
+
+    internal Button ReferenceButtonForTests => _referenceButton ??
+        throw new InvalidOperationException("The reference button is not ready.");
 
     internal bool DraftHasFocus =>
         _draftEditor != null &&
@@ -367,6 +374,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             Refresh();
         }
+        RefreshReferenceModePresentation();
     }
 
     public override void _ExitTree()
@@ -465,6 +473,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
     }
 
+    internal void ConfigureReferenceMode(
+        Func<LanConnectChatChannelState, LanConnectReferenceModePresentation>? presentationProvider,
+        Func<LanConnectChatChannelState, LanConnectReferenceModeSource, bool>? toggle)
+    {
+        _referencePresentationProvider = presentationProvider;
+        _referenceToggle = toggle;
+        _referencePresentation = default;
+        RefreshReferenceModePresentation(force: true);
+    }
+
     internal void SetScrollForTests(double offset, bool atBottom)
     {
         if (_state == null)
@@ -550,6 +568,12 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     internal void ShowCombatRoomOnlyWarning()
     {
         SetOperationStatus("chat.combat.room_only");
+        Refresh();
+    }
+
+    internal void ShowReferenceUnsupportedWarning()
+    {
+        SetOperationStatus("chat.reference.unsupported_target");
         Refresh();
     }
 
@@ -641,6 +665,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         AddFocusable(controls, _draftEditor?.FocusTarget);
         AddFocusable(controls, _emojiButton);
+        AddFocusable(controls, _referenceButton);
         AddFocusable(controls, _sendButton);
         if (_messagesList != null && GodotObject.IsInstanceValid(_messagesList))
         {
@@ -757,6 +782,35 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             Callable.From(() => _emojiPicker?.OpenPicker()));
         inputRow.AddChild(_emojiButton);
 
+        _referenceButton = CreateButton(string.Empty, accent: false);
+        _referenceButton.Name = LanConnectConstants.ChatReferenceButtonName;
+        _referenceButton.Icon = _icons.Get("link-2", 20, AccentColor);
+        _referenceButton.ExpandIcon = true;
+        _referenceButton.ToggleMode = true;
+        _referenceButton.TooltipText = Localize("chat.reference.tooltip");
+        _referenceButton.AccessibilityName = Localize("chat.reference.action");
+        _referenceButton.CustomMinimumSize = new Vector2(44, 44);
+        _referenceButton.SizeFlagsVertical = SizeFlags.ExpandFill;
+        _referenceButton.Visible = false;
+        _referenceButton.Connect(Button.SignalName.Pressed, Callable.From(() =>
+        {
+            if (_state != null)
+            {
+                if (_referenceToggle != null)
+                {
+                    _referenceToggle(_state, LanConnectReferenceModeSource.TouchButton);
+                }
+                else
+                {
+                    LanConnectLobbyRuntime.Instance?.ToggleReferenceMode(
+                        _state,
+                        LanConnectReferenceModeSource.TouchButton);
+                }
+            }
+            RefreshReferenceModePresentation(force: true);
+        }));
+        inputRow.AddChild(_referenceButton);
+
         _sendButton = CreateButton(Localize("chat.action.send"), accent: true);
         _sendButton.AccessibilityName = Localize("chat.action.send");
         _sendButton.Name = LanConnectConstants.ChatSendButtonName;
@@ -805,6 +859,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             {
                 _draftEditor?.FocusEditor();
             }
+            else if (_referenceButton is { Visible: true, Disabled: false })
+            {
+                _referenceButton.GrabFocus();
+            }
             else
             {
                 _sendButton?.GrabFocus();
@@ -814,6 +872,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         _itemPreview = new LanConnectItemPreview();
         AddChild(_itemPreview);
+        _itemPreview.ConfigureAccessibility(Localize("chat.preview.close"));
 
         Connect(CanvasItem.SignalName.VisibilityChanged, Callable.From(UpdateStateVisibility));
     }
@@ -1050,156 +1109,153 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private Control BuildMessageContent(ServerChatMessageState message)
     {
-        HFlowContainer runs = new()
-        {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill
-        };
-        runs.AddThemeConstantOverride("h_separation", 2);
-        runs.AddThemeConstantOverride("v_separation", 4);
         IReadOnlyList<LanConnectChatSegment> segments = message.Content?.Segments ??
             Array.Empty<LanConnectChatSegment>();
         if (segments.Count == 0)
         {
             segments = [new LanConnectTextSegment(message.Text)];
         }
+
+        List<LanConnectRichMessageSpan> spans = new(segments.Count);
         for (int index = 0; index < segments.Count; index++)
         {
             LanConnectChatSegment segment = segments[index];
-            Control run;
             try
             {
-                run = BuildMessageRun(segment);
+                spans.Add(BuildMessageSpan(segment));
             }
             catch
             {
-                run = BuildMessageRunFallback(segment);
+                spans.Add(BuildMessageSpanFallback(segment));
             }
-            run.Name = $"ChatMessageRun{index}";
-            runs.AddChild(run);
         }
-        return runs;
+
+        LanConnectRichMessageView view = new(spans, 14, GetThemeDefaultFont());
+        view.ReferenceHoverStarted += OnMessageReferenceHoverStarted;
+        view.ReferenceHoverEnded += () =>
+            _itemPreview?.Invalidate(LanConnectItemPreviewInvalidation.PointerExited);
+        view.ReferencePressed += OnMessageReferencePressed;
+        return view;
     }
 
-    private Control BuildMessageRunFallback(LanConnectChatSegment segment) => segment switch
+    private LanConnectRichMessageSpan BuildMessageSpanFallback(LanConnectChatSegment segment) => segment switch
     {
-        LanConnectPowerStateSegment => UnknownItemChip(Localize("chat.unknown_power")),
-        LanConnectTargetRefSegment => UnknownItemChip(Localize("chat.target_expired")),
-        LanConnectItemRefSegment item => UnknownItemChip(UnknownItemLabel(UnknownResolvedItem(item.ItemType))),
-        LanConnectTextSegment text => CreateLabel(text.Text, 14, TextStrongColor),
-        LanConnectEmojiSegment => UnknownItemChip(Localize("chat.unknown_emoji")),
-        _ => UnknownItemChip(Localize("chat.unknown_content"))
+        LanConnectPowerStateSegment => PlainSpan(
+            Localize("chat.unknown_power"),
+            Localize("chat.copy.power")),
+        LanConnectTargetRefSegment => PlainSpan(
+            Localize("chat.target_expired"),
+            Localize("chat.copy.player")),
+        LanConnectItemRefSegment item => PlainSpan(
+            UnknownItemLabel(UnknownResolvedItem(item.ItemType)),
+            ItemCopyPlaceholder(item.ItemType)),
+        LanConnectTextSegment text => PlainSpan(text.Text, text.Text),
+        LanConnectEmojiSegment => PlainSpan(
+            Localize("chat.unknown_emoji"),
+            Localize("chat.copy.emoji")),
+        _ => PlainSpan(
+            Localize("chat.unknown_content"),
+            Localize("chat.copy.entity"))
     };
 
-    private Control BuildMessageRun(LanConnectChatSegment segment)
+    private LanConnectRichMessageSpan BuildMessageSpan(LanConnectChatSegment segment)
     {
         switch (segment)
         {
             case LanConnectTextSegment text:
-                Label label = CreateLabel(text.Text, 14, TextStrongColor);
-                label.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-                int longestLine = text.Text
-                    .Split('\n')
-                    .Select(line => line.EnumerateRunes().Count())
-                    .DefaultIfEmpty(0)
-                    .Max();
-                int visibleLines = Math.Clamp(text.Text.Count(character => character == '\n') + 1, 1, 3);
-                label.CustomMinimumSize = new Vector2(
-                    Math.Clamp(44f + longestLine * 7f, 96f, 280f),
-                    Math.Max(22f, visibleLines * 20f));
-                label.MouseFilter = MouseFilterEnum.Ignore;
-                return label;
+                return PlainSpan(text.Text, text.Text);
             case LanConnectEmojiSegment emoji:
                 if (!LanConnectChatEmojiSet.TryGet(emoji.EmojiId, out LanConnectEmojiDescriptor descriptor))
                 {
-                    return UnknownItemChip(Localize("chat.unknown_emoji"));
+                    return BuildMessageSpanFallback(segment);
                 }
-                return new TextureRect
-                {
-                    Texture = _icons.Get(descriptor.LucideIcon, 20, AccentColor),
-                    ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
-                    StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
-                    CustomMinimumSize = new Vector2(22, 22),
-                    TooltipText = Localize(descriptor.LabelKey),
-                    AccessibilityName = Localize(descriptor.LabelKey),
-                    MouseFilter = MouseFilterEnum.Ignore
-                };
+                return new LanConnectRichMessageSpan(
+                    string.Empty,
+                    Localize("chat.copy.emoji"),
+                    Localize(descriptor.LabelKey),
+                    AccentColor,
+                    _icons.Get(descriptor.LucideIcon, 20, AccentColor),
+                    null);
             case LanConnectItemRefSegment item:
-                return BuildItemRun(item);
+                return BuildItemSpan(item);
             case LanConnectPowerStateSegment power:
-                return BuildCombatRun(new LanConnectCombatRun(power));
+                return BuildCombatSpan(new LanConnectCombatRun(power));
             case LanConnectTargetRefSegment target:
-                return BuildCombatRun(new LanConnectCombatRun(target));
+                return BuildCombatSpan(new LanConnectCombatRun(target));
             default:
-                return UnknownItemChip(Localize("chat.unknown_content"));
+                return BuildMessageSpanFallback(segment);
         }
     }
 
-    private Control BuildCombatRun(LanConnectCombatRun run)
+    private LanConnectRichMessageSpan BuildCombatSpan(LanConnectCombatRun run)
     {
         LanConnectResolvedCombatReference resolved = ResolveCombat(run);
         if (resolved.Status != LanConnectResolvedCombatReferenceStatus.Resolved ||
             string.IsNullOrWhiteSpace(resolved.Label))
         {
-            return CombatFallbackChip(resolved.Label, run);
+            string fallback = FallbackCombatLabel(resolved.Label, run);
+            return PlainSpan(fallback, CombatCopyPlaceholder(run));
         }
 
-        PanelContainer chip = ItemChip(resolved.Label);
-        chip.SetMeta("lan_connect_resolved_combat", true);
-        ApplyResolvedCombatChip(chip, resolved);
-        chip.MouseFilter = MouseFilterEnum.Stop;
-        chip.MouseEntered += () => RefreshCombatChipAtHover(chip, run);
-        return chip;
+        return new LanConnectRichMessageSpan(
+            resolved.Label,
+            CombatCopyPlaceholder(run),
+            string.IsNullOrWhiteSpace(resolved.Description)
+                ? resolved.Label
+                : $"{resolved.Label}. {resolved.Description}",
+            AccentColor,
+            null,
+            new LanConnectRichMessageReference(run.Segment, null, resolved));
     }
 
-    private void RefreshCombatChipAtHover(PanelContainer chip, LanConnectCombatRun run)
+    private LanConnectRichMessageSpan BuildItemSpan(LanConnectItemRefSegment item)
     {
-        if (!GodotObject.IsInstanceValid(chip))
+        LanConnectResolvedItem resolved;
+        try
         {
-            return;
+            resolved = _resolveItem(new LanConnectItemRun(item.ItemType, item.ModelId, item.UpgradeLevel));
         }
-        LanConnectResolvedCombatReference resolved = ResolveCombat(run);
-        if (resolved.Status == LanConnectResolvedCombatReferenceStatus.Resolved &&
-            !string.IsNullOrWhiteSpace(resolved.Label))
+        catch
         {
-            chip.SetMeta("lan_connect_resolved_combat", true);
-            chip.MouseFilter = MouseFilterEnum.Stop;
-            ApplyResolvedCombatChip(chip, resolved);
-            return;
+            resolved = UnknownResolvedItem(item.ItemType);
         }
-
-        chip.RemoveMeta("lan_connect_resolved_combat");
-        chip.MouseFilter = MouseFilterEnum.Ignore;
-        ApplyCombatChipText(chip, FallbackCombatLabel(resolved.Label, run));
-        chip.AccessibilityName = FallbackCombatLabel(resolved.Label, run);
-        chip.TooltipText = Localize("chat.preview_unavailable");
-    }
-
-    private static void ApplyResolvedCombatChip(
-        PanelContainer chip,
-        LanConnectResolvedCombatReference resolved)
-    {
-        ApplyCombatChipText(chip, resolved.Label);
-        chip.AccessibilityName = string.IsNullOrWhiteSpace(resolved.Description)
-            ? resolved.Label
-            : $"{resolved.Label}. {resolved.Description}";
-        chip.TooltipText = resolved.Description;
-    }
-
-    private static void ApplyCombatChipText(PanelContainer chip, string text)
-    {
-        if (chip.GetChildCount() > 0 && chip.GetChild(0) is Label label)
+        if (resolved.Status != LanConnectResolvedItemStatus.Resolved ||
+            string.IsNullOrWhiteSpace(resolved.LocalizedTitle) ||
+            resolved.Preview == null)
         {
-            label.Text = text;
+            string fallback = UnknownItemLabel(resolved);
+            return PlainSpan(fallback, ItemCopyPlaceholder(item.ItemType));
         }
+
+        return new LanConnectRichMessageSpan(
+            resolved.LocalizedTitle,
+            ItemCopyPlaceholder(item.ItemType),
+            resolved.AccessibleText,
+            AccentColor,
+            null,
+            new LanConnectRichMessageReference(item, resolved, null));
     }
 
-    private Control CombatFallbackChip(string? resolvedLabel, LanConnectCombatRun run)
+    private LanConnectRichMessageSpan PlainSpan(string displayText, string copyText) => new(
+        displayText,
+        copyText,
+        displayText,
+        TextStrongColor,
+        null,
+        null);
+
+    private string ItemCopyPlaceholder(string itemType) => Localize(itemType switch
     {
-        string label = FallbackCombatLabel(resolvedLabel, run);
-        PanelContainer chip = UnknownItemChip(label);
-        chip.SetMeta("lan_connect_combat_fallback", true);
-        return chip;
-    }
+        "card" => "chat.copy.card",
+        "relic" => "chat.copy.relic",
+        "potion" => "chat.copy.potion",
+        _ => "chat.copy.entity"
+    });
+
+    private string CombatCopyPlaceholder(LanConnectCombatRun run) => Localize(
+        run.Segment is LanConnectPowerStateSegment
+            ? "chat.copy.power"
+            : "chat.copy.player");
 
     private string FallbackCombatLabel(string? resolvedLabel, LanConnectCombatRun run)
     {
@@ -1240,35 +1296,50 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             fallback);
     }
 
-    private Control BuildItemRun(LanConnectItemRefSegment item)
+    private void OnMessageReferenceHoverStarted(
+        Control owner,
+        LanConnectRichMessageReference reference)
     {
-        LanConnectResolvedItem resolved;
-        try
+        if (reference.Item is { } item)
         {
-            resolved = _resolveItem(new LanConnectItemRun(item.ItemType, item.ModelId, item.UpgradeLevel));
-        }
-        catch
-        {
-            resolved = UnknownResolvedItem(item.ItemType);
-        }
-        if (resolved.Status != LanConnectResolvedItemStatus.Resolved ||
-            string.IsNullOrWhiteSpace(resolved.LocalizedTitle) ||
-            resolved.Preview == null)
-        {
-            return UnknownItemChip(UnknownItemLabel(resolved));
+            ShowItemPreview(owner, item);
+            return;
         }
 
-        PanelContainer chip = ItemChip(resolved.LocalizedTitle);
-        chip.SetMeta("lan_connect_resolved_item", true);
-        chip.AccessibilityName = resolved.AccessibleText;
-        chip.TooltipText = _localizer.Format(
-            CurrentLocale,
-            "chat.tooltip.item_preview",
-            resolved.LocalizedTitle);
-        chip.MouseFilter = MouseFilterEnum.Stop;
-        chip.MouseEntered += () => ShowItemPreview(chip, resolved);
-        chip.MouseExited += () => _itemPreview?.Invalidate(LanConnectItemPreviewInvalidation.PointerExited);
-        return chip;
+        if (reference.Combat is { } combat)
+        {
+            _itemPreview?.ShowCombat(
+                combat,
+                owner.GetGlobalRect(),
+                GetViewport().GetVisibleRect());
+        }
+    }
+
+    private void OnMessageReferencePressed(
+        Control owner,
+        LanConnectRichMessageReference reference)
+    {
+        if (_itemPreview == null || !GodotObject.IsInstanceValid(_itemPreview))
+        {
+            return;
+        }
+        if (reference.Item is { } item)
+        {
+            _itemPreview.ShowResolved(
+                item,
+                owner.GetGlobalRect(),
+                GetViewport().GetVisibleRect(),
+                pinned: true);
+            return;
+        }
+        if (reference.Combat is { } combat)
+        {
+            _itemPreview.ShowCombat(
+                combat,
+                owner.GetGlobalRect(),
+                GetViewport().GetVisibleRect(),
+                pinned: true);
+        }
     }
 
     private void ShowItemPreview(Control owner, LanConnectResolvedItem item)
@@ -1281,36 +1352,6 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             return;
         }
         _itemPreview.ShowResolved(item, owner.GetGlobalRect(), GetViewport().GetVisibleRect());
-    }
-
-    private PanelContainer UnknownItemChip(string label)
-    {
-        PanelContainer chip = ItemChip(label);
-        chip.MouseFilter = MouseFilterEnum.Ignore;
-        chip.AccessibilityName = label;
-        chip.TooltipText = Localize("chat.preview_unavailable");
-        return chip;
-    }
-
-    private PanelContainer ItemChip(string label)
-    {
-        PanelContainer chip = new();
-        StyleBoxFlat style = new()
-        {
-            BgColor = UsesLobbyStyle ? LobbySecondaryColor : new Color(0.18f, 0.17f, 0.15f, 1f),
-            BorderColor = AccentColor,
-            CornerRadiusTopLeft = 5,
-            CornerRadiusTopRight = 5,
-            CornerRadiusBottomLeft = 5,
-            CornerRadiusBottomRight = 5,
-            ContentMarginLeft = 6,
-            ContentMarginRight = 6,
-            ContentMarginTop = 2,
-            ContentMarginBottom = 2
-        };
-        chip.AddThemeStyleboxOverride("panel", style);
-        chip.AddChild(CreateLabel(label, 13, TextStrongColor));
-        return chip;
     }
 
     private string UnknownItemLabel(LanConnectResolvedItem item) =>
@@ -1415,7 +1456,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             if (CanTouchControls(binding))
             {
                 SetOperationStatus("chat.operation.send_failed", ex.Message);
-                _draftEditor.FocusEditor();
+                restoreFocus = true;
             }
         }
         finally
@@ -1718,6 +1759,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             _sendButton.Text = DisplayText(Localize("chat.action.send"));
             _sendButton.AccessibilityName = Localize("chat.action.send");
         }
+        _itemPreview?.ConfigureAccessibility(Localize("chat.preview.close"));
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
         {
             _unknownConfirmation.Title = Localize("chat.confirm.title");
@@ -1843,10 +1885,13 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             _emojiButton.Disabled = !editable;
         }
         _emojiPicker?.SetAvailable(emojiAvailable && editable);
+        ApplyReferenceModePresentation(CurrentReferenceModePresentation());
         _sendButton.Disabled = !editable ||
             (!CanSendCurrentDraft() && !IsBlankDraft());
         string operationStatus = OperationStatusText();
-        _statusLabel.Text = ready && !string.IsNullOrEmpty(operationStatus)
+        _statusLabel.Text = ready && _referencePresentation.Armed
+            ? Localize("chat.reference.armed_hint")
+            : ready && !string.IsNullOrEmpty(operationStatus)
             ? operationStatus
             : ready && !CanSendCurrentDraft()
                 ? CurrentDraftBlockingReason()
@@ -1854,6 +1899,56 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _statusLabel.AddThemeColorOverride(
             "font_color",
             ready && CanSendCurrentDraft() ? TextMutedColor : WarningColor);
+    }
+
+    private LanConnectReferenceModePresentation CurrentReferenceModePresentation()
+    {
+        if (_state == null)
+        {
+            return default;
+        }
+        try
+        {
+            return _referencePresentationProvider != null
+                ? _referencePresentationProvider(_state)
+                : LanConnectLobbyRuntime.Instance?.GetReferenceModePresentation(_state) ?? default;
+        }
+        catch
+        {
+            return default;
+        }
+    }
+
+    private void RefreshReferenceModePresentation(bool force = false)
+    {
+        LanConnectReferenceModePresentation next = CurrentReferenceModePresentation();
+        if (!force && next == _referencePresentation)
+        {
+            return;
+        }
+        ApplyReferenceModePresentation(next);
+        if (_statusLabel != null && GodotObject.IsInstanceValid(_statusLabel))
+        {
+            UpdateAvailability();
+        }
+    }
+
+    private void ApplyReferenceModePresentation(LanConnectReferenceModePresentation presentation)
+    {
+        _referencePresentation = presentation;
+        if (_referenceButton == null || !GodotObject.IsInstanceValid(_referenceButton))
+        {
+            return;
+        }
+        _referenceButton.Visible = presentation.Visible;
+        _referenceButton.Disabled = !presentation.Enabled;
+        _referenceButton.ButtonPressed = presentation.Armed;
+        _referenceButton.AccessibilityName = Localize(presentation.Armed
+            ? "chat.reference.armed_accessibility"
+            : "chat.reference.action");
+        _referenceButton.TooltipText = !presentation.Enabled && !string.IsNullOrEmpty(presentation.StatusKey)
+            ? Localize(presentation.StatusKey)
+            : Localize("chat.reference.tooltip");
     }
 
     private void UpdateNewMessagesButton()

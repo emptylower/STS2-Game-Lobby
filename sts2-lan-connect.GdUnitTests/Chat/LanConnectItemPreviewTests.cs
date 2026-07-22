@@ -7,7 +7,7 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 
 [TestSuite]
 [RequireGodotRuntime]
-public sealed class LanConnectItemPreviewTests
+public sealed partial class LanConnectItemPreviewTests
 {
     [TestCase]
     public async Task Resolved_card_creates_one_local_visual_and_clamps_wholly_inside_viewport()
@@ -136,14 +136,15 @@ public sealed class LanConnectItemPreviewTests
             LanConnectItemPreview.HoverTitleName,
             recursive: true,
             owned: false);
-        Label descriptionLabel = (Label)fixture.Preview.FindChild(
+        RichTextLabel descriptionLabel = (RichTextLabel)fixture.Preview.FindChild(
             LanConnectItemPreview.HoverDescriptionName,
             recursive: true,
             owned: false);
-        AssertThat(titleLabel.ClipText).IsTrue();
-        AssertThat(titleLabel.MaxLinesVisible).IsEqual(1);
-        AssertThat(descriptionLabel.ClipText).IsTrue();
-        AssertThat(descriptionLabel.MaxLinesVisible >= 1).IsTrue();
+        AssertThat(titleLabel.ClipText).IsFalse();
+        AssertThat(titleLabel.MaxLinesVisible <= 0).IsTrue();
+        AssertThat(titleLabel.AutowrapMode).IsEqual(TextServer.AutowrapMode.WordSmart);
+        AssertThat(descriptionLabel.Text).IsEqual(description);
+        AssertThat(descriptionLabel.FitContent).IsTrue();
         AssertThat(state.HasLocalVisual).IsEqual(withIcon);
         AssertDescendantsInsidePopup(fixture.Preview);
     }
@@ -318,6 +319,136 @@ public sealed class LanConnectItemPreviewTests
         AssertThat(fixture.Preview.TestState.ContentNodeCount).IsEqual(0);
     }
 
+    [TestCase]
+    public async Task Pinned_physical_escape_closes_preview_before_the_game_can_pause()
+    {
+        using PreviewFixture fixture = await PreviewFixture.Create(new FakeCardVisualFactory());
+        fixture.Preview.ShowResolved(
+            ResolvedHoverTip("relic", "Anchor", "Complete description", null),
+            new Rect2(new Vector2(100, 100), new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)),
+            pinned: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        fixture.Preview.GetViewport().PushInput(new InputEventKey
+        {
+            PhysicalKeycode = Key.Escape,
+            Pressed = true,
+            Echo = false
+        });
+        await fixture.Runner.AwaitInputProcessed();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Preview.TestState.Visible).IsFalse();
+        AssertThat(fixture.Preview.TestState.ContentNodeCount).IsEqual(0);
+    }
+
+    [TestCase]
+    public async Task Android_back_key_press_and_release_close_preview_without_reaching_game_hotkeys()
+    {
+        using PreviewFixture fixture = await PreviewFixture.Create(new FakeCardVisualFactory());
+        PauseReleaseProbe probe = new();
+        fixture.Preview.GetParent().AddChild(probe);
+        fixture.Preview.ShowResolved(
+            ResolvedHoverTip("relic", "Anchor", "Complete description", null),
+            new Rect2(new Vector2(100, 100), new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)),
+            pinned: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        fixture.Preview.GetViewport().PushInput(new InputEventKey
+        {
+            Keycode = Key.Back,
+            Pressed = true,
+            Echo = false
+        });
+        await fixture.Runner.AwaitInputProcessed();
+        fixture.Preview.GetViewport().PushInput(new InputEventKey
+        {
+            Keycode = Key.Back,
+            Pressed = false,
+            Echo = false
+        });
+        await fixture.Runner.AwaitInputProcessed();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Preview.TestState.Visible).IsFalse();
+        AssertThat(fixture.Preview.TestState.ContentNodeCount).IsEqual(0);
+        AssertThat(probe.PauseReleaseCalls).IsEqual(0);
+    }
+
+    [TestCase]
+    public async Task Android_back_keeps_native_hotkey_blocker_until_release()
+    {
+        FakePreviewHotkeyScope hotkeyScope = new();
+        using PreviewFixture fixture = await PreviewFixture.Create(
+            new FakeCardVisualFactory(),
+            new LanConnectItemPreviewNodePort(),
+            hotkeyScope);
+        fixture.Preview.ShowResolved(
+            ResolvedHoverTip("relic", "Anchor", "Complete description", null),
+            new Rect2(new Vector2(100, 100), new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)),
+            pinned: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(hotkeyScope.AcquireCalls).IsEqual(1);
+        AssertThat(hotkeyScope.ReleaseCalls).IsEqual(0);
+
+        fixture.Preview.GetViewport().PushInput(new InputEventKey
+        {
+            Keycode = Key.Back,
+            Pressed = true,
+            Echo = false
+        });
+        await fixture.Runner.AwaitInputProcessed();
+
+        AssertThat(fixture.Preview.TestState.Visible).IsFalse();
+        AssertThat(hotkeyScope.ReleaseCalls).IsEqual(0);
+
+        fixture.Preview.GetViewport().PushInput(new InputEventKey
+        {
+            Keycode = Key.Back,
+            Pressed = false,
+            Echo = false
+        });
+        await fixture.Runner.AwaitInputProcessed();
+
+        await fixture.Preview.HotkeyScopeReleaseTaskForTests;
+
+        AssertThat(hotkeyScope.ReleaseCalls).IsEqual(1);
+    }
+
+    [TestCase]
+    public async Task Android_back_release_only_keeps_native_blocker_through_event_dispatch()
+    {
+        FakePreviewHotkeyScope hotkeyScope = new();
+        using PreviewFixture fixture = await PreviewFixture.Create(
+            new FakeCardVisualFactory(),
+            new LanConnectItemPreviewNodePort(),
+            hotkeyScope);
+        fixture.Preview.ShowResolved(
+            ResolvedHoverTip("relic", "Anchor", "Complete description", null),
+            new Rect2(new Vector2(100, 100), new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)),
+            pinned: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        fixture.Preview._Input(new InputEventKey
+        {
+            Keycode = Key.Back,
+            Pressed = false,
+            Echo = false
+        });
+
+        AssertThat(fixture.Preview.TestState.Visible).IsFalse();
+        AssertThat(hotkeyScope.ReleaseCalls).IsEqual(0);
+
+        await fixture.Preview.HotkeyScopeReleaseTaskForTests;
+
+        AssertThat(hotkeyScope.ReleaseCalls).IsEqual(1);
+    }
+
     [TestCase(nameof(LanConnectItemPreviewInvalidation.MessageRemoved))]
     [TestCase(nameof(LanConnectItemPreviewInvalidation.TabSwitched))]
     [TestCase(nameof(LanConnectItemPreviewInvalidation.ContextCleared))]
@@ -346,6 +477,65 @@ public sealed class LanConnectItemPreviewTests
 
         Control surface = fixture.Preview.GetNode<Control>(LanConnectItemPreview.SurfaceName);
         surface.EmitSignal(Control.SignalName.MouseExited);
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Preview.TestState.Visible).IsFalse();
+        AssertThat(fixture.Preview.TestState.ContentNodeCount).IsEqual(0);
+        AssertThat(LanConnectGodotItemLinkCapturePorts.HasVisibleItemPreview(
+            fixture.Preview.GetTree())).IsFalse();
+    }
+
+    [TestCase]
+    public async Task Pinned_touch_preview_ignores_pointer_exit_and_closes_on_outside_touch()
+    {
+        using PreviewFixture fixture = await PreviewFixture.Create(new FakeCardVisualFactory());
+        fixture.Preview.ShowResolved(
+            ResolvedHoverTip("potion", "Fire Potion", "Complete description", null),
+            new Rect2(new Vector2(100, 100), new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)),
+            pinned: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Preview.TestState.Pinned).IsTrue();
+        fixture.Preview.GetNode<Control>(LanConnectItemPreview.SurfaceName)
+            .EmitSignal(Control.SignalName.MouseExited);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Preview.TestState.Visible).IsTrue();
+
+        fixture.Preview.GetViewport().PushInput(new InputEventScreenTouch
+        {
+            Index = 0,
+            Position = Vector2.Zero,
+            Pressed = true
+        });
+        await fixture.Runner.AwaitInputProcessed();
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Preview.TestState.Visible).IsFalse();
+    }
+
+    [TestCase]
+    public async Task Pinned_preview_close_button_releases_content_and_capture_guard()
+    {
+        using PreviewFixture fixture = await PreviewFixture.Create(new FakeCardVisualFactory());
+        fixture.Preview.ShowResolved(
+            ResolvedHoverTip("relic", "Anchor", "Complete description", null),
+            new Rect2(new Vector2(100, 100), new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)),
+            pinned: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        Button close = (Button)fixture.Preview.FindChild(
+            LanConnectReferencePreviewController.CloseButtonName,
+            recursive: true,
+            owned: false);
+        AssertThat(close.Visible).IsTrue();
+        AssertThat(close.CustomMinimumSize.X >= 44f).IsTrue();
+        AssertThat(close.CustomMinimumSize.Y >= 44f).IsTrue();
+        AssertThat(close.AccessibilityName).IsEqual("Close reference preview");
+        AssertThat(close.TooltipText).IsEqual("Close reference preview");
+        AssertThat(fixture.Preview.AccessibilityName).Contains("Anchor");
+        AssertThat(fixture.Preview.AccessibilityName).Contains("Complete description");
+        close.EmitSignal(Button.SignalName.Pressed);
         await fixture.Runner.AwaitIdleFrame();
 
         AssertThat(fixture.Preview.TestState.Visible).IsFalse();
@@ -503,7 +693,7 @@ public sealed class LanConnectItemPreviewTests
         AssertThat(fixture.Preview.Visible).IsTrue();
         AssertThat(Content(fixture.Preview).GetChildCount()).IsEqual(1);
 
-        ((PopupPanel)fixture.Preview).Hide();
+        fixture.Preview.Hide();
         await fixture.Runner.AwaitIdleFrame();
         await fixture.Runner.AwaitIdleFrame();
 
@@ -543,8 +733,10 @@ public sealed class LanConnectItemPreviewTests
         new LanConnectHoverTipPreviewData(itemType, title, description, visual));
 
     private static VBoxContainer Content(LanConnectItemPreview preview) =>
-        preview.GetNode<VBoxContainer>(
-            $"{LanConnectItemPreview.SurfaceName}/{LanConnectItemPreview.ContentName}");
+        (VBoxContainer)preview.FindChild(
+            LanConnectItemPreview.ContentName,
+            recursive: true,
+            owned: false);
 
     private static void AssertReleasedOrDetached(Control visual)
     {
@@ -558,27 +750,50 @@ public sealed class LanConnectItemPreviewTests
 
     private static void AssertDescendantsInsidePopup(LanConnectItemPreview preview)
     {
-        Rect2 localPopup = new(Vector2.Zero, new Vector2(preview.Size.X, preview.Size.Y));
-        Control[] descendants = preview.FindChildren(
-                "*",
-                "Control",
-                recursive: true,
-                owned: false)
-            .OfType<Control>()
-            .Where(control => control.Visible && !control.IsQueuedForDeletion())
-            .ToArray();
-        AssertThat(descendants.Length > 0).IsTrue();
-        foreach (Control control in descendants)
-        {
-            Rect2 rect = control.GetGlobalRect();
-            AssertThat(rect.Position.X >= localPopup.Position.X).IsTrue();
-            AssertThat(rect.Position.Y >= localPopup.Position.Y).IsTrue();
-            AssertThat(rect.End.X <= localPopup.End.X).IsTrue();
-            AssertThat(rect.End.Y <= localPopup.End.Y).IsTrue();
-        }
+        Rect2 bounds = preview.TestState.Bounds;
+        Control surface = preview.GetNode<Control>(LanConnectItemPreview.SurfaceName);
+        ScrollContainer scroll = preview.FindChildren("*", "ScrollContainer", true, false)
+            .OfType<ScrollContainer>()
+            .Single();
+        AssertThat(surface.GetGlobalRect().Intersects(bounds, includeBorders: true)).IsTrue();
+        AssertThat(scroll.GetGlobalRect().Intersects(bounds, includeBorders: true)).IsTrue();
+        AssertThat(scroll.ClipContents).IsTrue();
+        AssertThat(Content(preview).GetChildCount()).IsEqual(1);
     }
 
     private sealed class FakeCardModel;
+
+    private sealed partial class PauseReleaseProbe : Node
+    {
+        internal int PauseReleaseCalls { get; private set; }
+
+        public override void _UnhandledInput(InputEvent inputEvent)
+        {
+            if (inputEvent is InputEventKey { Pressed: false, Keycode: Key.Back })
+            {
+                PauseReleaseCalls++;
+            }
+        }
+    }
+
+    private sealed class FakePreviewHotkeyScope : ILanConnectPreviewHotkeyScope
+    {
+        internal int AcquireCalls { get; private set; }
+
+        internal int ReleaseCalls { get; private set; }
+
+        public void Acquire(Node owner)
+        {
+            _ = owner;
+            AcquireCalls++;
+        }
+
+        public void Release(Node owner)
+        {
+            _ = owner;
+            ReleaseCalls++;
+        }
+    }
 
     private sealed class FakeCardVisualFactory : ILanConnectCardPreviewVisualFactory
     {
@@ -717,7 +932,15 @@ public sealed class LanConnectItemPreviewTests
             ILanConnectCardPreviewVisualFactory factory,
             ILanConnectItemPreviewNodePort nodePort)
         {
-            LanConnectItemPreview preview = new(factory, nodePort);
+            return await Create(factory, nodePort, new LanConnectPreviewHotkeyScope());
+        }
+
+        internal static async Task<PreviewFixture> Create(
+            ILanConnectCardPreviewVisualFactory factory,
+            ILanConnectItemPreviewNodePort nodePort,
+            ILanConnectPreviewHotkeyScope hotkeyScope)
+        {
+            LanConnectItemPreview preview = new(factory, nodePort, hotkeyScope);
             Control host = new() { Name = "ItemPreviewTestHost" };
             host.AddChild(preview);
             ISceneRunner runner = ISceneRunner.Load(host, autoFree: true);

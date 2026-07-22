@@ -13,6 +13,10 @@ internal interface ILanConnectItemLinkCapturePorts
 {
     object? GuiGetHoveredControl();
 
+    object? GuiGetControlAtPosition(Vector2 position) => null;
+
+    bool HasVisibleReferenceTarget(LanConnectReferenceTargetKind allowedTargets) => false;
+
     object? GetParent(object node);
 
     bool IsChatInteractionBlocking { get; }
@@ -59,13 +63,28 @@ internal sealed class LanConnectItemLinkCapture
 
     internal bool TryCapture(LanConnectPointerGesture gesture)
     {
+        if (!gesture.Alt || !gesture.Left)
+        {
+            return false;
+        }
+        return TryCapture(new LanConnectReferenceCaptureRequest(
+            LanConnectReferenceModeSource.DirectAltClick,
+            LanConnectReferencePointerKind.Mouse,
+            gesture.Pressed,
+            Vector2.Zero,
+            StartingControl: null,
+            ArmedGeneration: 1)).Consumed;
+    }
+
+    internal LanConnectReferenceCaptureResult TryCapture(LanConnectReferenceCaptureRequest request)
+    {
         try
         {
-            return TryCaptureCore(gesture);
+            return TryCaptureCore(request);
         }
         catch
         {
-            return false;
+            return new LanConnectReferenceCaptureResult(LanConnectReferenceCaptureStatus.Unsupported);
         }
     }
 
@@ -81,21 +100,24 @@ internal sealed class LanConnectItemLinkCapture
         return enabled.RichContentVersion == 1 && enabled.CombatRefVersion == 1;
     }
 
-    private bool TryCaptureCore(LanConnectPointerGesture gesture)
+    private LanConnectReferenceCaptureResult TryCaptureCore(LanConnectReferenceCaptureRequest request)
     {
-        if (!gesture.Alt || !gesture.Left || !gesture.Pressed ||
-            _ports.IsChatInteractionBlocking)
+        if (!request.Pressed || request.ArmedGeneration <= 0 || _ports.IsChatInteractionBlocking)
         {
-            return false;
+            return new LanConnectReferenceCaptureResult(LanConnectReferenceCaptureStatus.Blocked);
         }
 
-        for (object? node = _ports.GuiGetHoveredControl();
+        object? startingControl = request.StartingControl ??
+            (request.PointerKind == LanConnectReferencePointerKind.Touch
+                ? _ports.GuiGetControlAtPosition(request.ScreenPosition)
+                : _ports.GuiGetHoveredControl());
+        for (object? node = startingControl;
              node != null;
              node = _ports.GetParent(node))
         {
             if (_ports.IsCaptureBoundary(node))
             {
-                return false;
+                return new LanConnectReferenceCaptureResult(LanConnectReferenceCaptureStatus.Blocked);
             }
 
             if (_ports.TryResolveCard(node, out LanConnectItemRun run) ||
@@ -104,34 +126,46 @@ internal sealed class LanConnectItemLinkCapture
             {
                 if (!_ports.ItemRefsEnabledForSelectedChannel)
                 {
-                    return false;
+                    return new LanConnectReferenceCaptureResult(LanConnectReferenceCaptureStatus.Unsupported);
                 }
                 LanConnectItemRun? canonical = Canonicalize(run);
-                return canonical != null && _ports.InsertAndFocus(canonical);
+                return canonical != null && _ports.InsertAndFocus(canonical)
+                    ? new LanConnectReferenceCaptureResult(
+                        LanConnectReferenceCaptureStatus.Captured,
+                        LanConnectReferenceTargetKind.Item)
+                    : new LanConnectReferenceCaptureResult(LanConnectReferenceCaptureStatus.Unsupported);
             }
             if (_ports.IsSupportedHolder(node))
             {
-                return false;
+                return new LanConnectReferenceCaptureResult(LanConnectReferenceCaptureStatus.Unsupported);
             }
             if (_ports.TryResolvePower(node, out LanConnectCombatRun combat))
             {
-                return TryInsertCombat(combat);
+                return TryInsertCombat(combat)
+                    ? new LanConnectReferenceCaptureResult(
+                        LanConnectReferenceCaptureStatus.Captured,
+                        LanConnectReferenceTargetKind.Combat)
+                    : new LanConnectReferenceCaptureResult(LanConnectReferenceCaptureStatus.Unsupported);
             }
             if (_ports.IsPowerHolder(node))
             {
-                return false;
+                return new LanConnectReferenceCaptureResult(LanConnectReferenceCaptureStatus.Unsupported);
             }
             if (_ports.TryResolvePlayerTarget(node, out combat))
             {
-                return TryInsertCombat(combat);
+                return TryInsertCombat(combat)
+                    ? new LanConnectReferenceCaptureResult(
+                        LanConnectReferenceCaptureStatus.Captured,
+                        LanConnectReferenceTargetKind.Combat)
+                    : new LanConnectReferenceCaptureResult(LanConnectReferenceCaptureStatus.Unsupported);
             }
             if (_ports.IsPlayerHolder(node))
             {
-                return false;
+                return new LanConnectReferenceCaptureResult(LanConnectReferenceCaptureStatus.Unsupported);
             }
         }
 
-        return false;
+        return new LanConnectReferenceCaptureResult(LanConnectReferenceCaptureStatus.Unsupported);
     }
 
     private bool TryInsertCombat(LanConnectCombatRun run)
@@ -176,6 +210,55 @@ internal sealed class LanConnectGodotItemLinkCapturePorts : ILanConnectItemLinkC
     }
 
     public object? GuiGetHoveredControl() => _runtime.GetViewport().GuiGetHoveredControl();
+
+    public object? GuiGetControlAtPosition(Vector2 position)
+    {
+        Node root = _runtime.GetTree().Root;
+        return SelectControlAtPosition(
+            root,
+            position,
+            node => IsSupportedHolder(node) || IsPowerHolder(node) || IsPlayerHolder(node),
+            IsCaptureBoundary);
+    }
+
+    internal static object? SelectControlAtPosition(
+        Node root,
+        Vector2 position,
+        Func<object, bool> isReferenceTarget,
+        Func<object, bool> isCaptureBoundary)
+    {
+        Control? selected = null;
+        Control? selectedReference = null;
+        foreach (Node node in root.FindChildren(
+                     "*",
+                     "Control",
+                     recursive: true,
+                     owned: false))
+        {
+            if (node is not Control control ||
+                control.IsQueuedForDeletion() ||
+                !control.IsVisibleInTree() ||
+                control.MouseFilter == Control.MouseFilterEnum.Ignore ||
+                !control.GetGlobalRect().HasPoint(position))
+            {
+                continue;
+            }
+            selected = control;
+            for (Node? ancestor = control; ancestor != null; ancestor = ancestor.GetParent())
+            {
+                if (isCaptureBoundary(ancestor))
+                {
+                    break;
+                }
+                if (isReferenceTarget(ancestor))
+                {
+                    selectedReference = control;
+                    break;
+                }
+            }
+        }
+        return selectedReference ?? selected;
+    }
 
     public object? GetParent(object node) => (node as Node)?.GetParent();
 
@@ -228,7 +311,11 @@ internal sealed class LanConnectGodotItemLinkCapturePorts : ILanConnectItemLinkC
         _runtime.HasActiveRoomSession &&
         _runtime.Chat.SelectedChannel == LanConnectChatChannel.Room;
 
-    public bool IsCaptureBoundary(object node) => node is NPreviewCardHolder;
+    public bool IsCaptureBoundary(object node) =>
+        node is NPreviewCardHolder or LanConnectBasicChatPanel ||
+        node is Node godotNode &&
+        (godotNode.IsInGroup(ItemPreviewGroupName) ||
+         godotNode.IsInGroup(LanConnectConstants.BlockingModalGroupName));
 
     public bool IsSupportedHolder(object node) =>
         node is NCardHolder or NRelicInventoryHolder or NPotionHolder;
@@ -384,6 +471,27 @@ internal sealed class LanConnectGodotItemLinkCapturePorts : ILanConnectItemLinkC
         }
         return false;
     }
+
+    public bool HasVisibleReferenceTarget(LanConnectReferenceTargetKind allowedTargets)
+    {
+        foreach (Node node in _runtime.GetTree().Root.FindChildren("*", "", true, false))
+        {
+            if (node is not CanvasItem canvas ||
+                canvas.IsQueuedForDeletion() ||
+                !canvas.IsVisibleInTree() ||
+                node is NPreviewCardHolder)
+            {
+                continue;
+            }
+            if ((allowedTargets.HasFlag(LanConnectReferenceTargetKind.Item) && IsSupportedHolder(node)) ||
+                (allowedTargets.HasFlag(LanConnectReferenceTargetKind.Combat) &&
+                 (IsPowerHolder(node) || IsPlayerHolder(node))))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 }
 
 internal static class LanConnectItemLinkCaptureInputRoute
@@ -396,15 +504,33 @@ internal static class LanConnectItemLinkCaptureInputRoute
         ArgumentNullException.ThrowIfNull(inputEvent);
         ArgumentNullException.ThrowIfNull(capture);
         ArgumentNullException.ThrowIfNull(markHandled);
-        if (inputEvent is not InputEventMouseButton mouse)
+        LanConnectReferenceCaptureRequest request;
+        switch (inputEvent)
         {
-            return false;
+            case InputEventMouseButton mouse when
+                mouse.AltPressed && mouse.ButtonIndex == MouseButton.Left:
+                request = new LanConnectReferenceCaptureRequest(
+                    LanConnectReferenceModeSource.DirectAltClick,
+                    LanConnectReferencePointerKind.Mouse,
+                    mouse.Pressed,
+                    mouse.GlobalPosition,
+                    StartingControl: null,
+                    ArmedGeneration: 1);
+                break;
+            case InputEventScreenTouch touch:
+                request = new LanConnectReferenceCaptureRequest(
+                    LanConnectReferenceModeSource.TouchButton,
+                    LanConnectReferencePointerKind.Touch,
+                    touch.Pressed,
+                    touch.Position,
+                    StartingControl: null,
+                    ArmedGeneration: 1);
+                break;
+            default:
+                return false;
         }
 
-        bool consumed = capture.TryCapture(new LanConnectPointerGesture(
-            mouse.AltPressed,
-            mouse.ButtonIndex == MouseButton.Left,
-            mouse.Pressed));
+        bool consumed = capture.TryCapture(request).Consumed;
         if (consumed)
         {
             markHandled();

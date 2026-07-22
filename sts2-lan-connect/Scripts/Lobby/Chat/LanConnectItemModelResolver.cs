@@ -82,7 +82,8 @@ internal sealed record LanConnectHoverTipPreviewData(
     string ItemType,
     string Title,
     string Description,
-    object? Visual) : LanConnectItemPreviewData(ItemType);
+    object? Visual,
+    bool IsDebuff = false) : LanConnectItemPreviewData(ItemType);
 
 internal sealed record LanConnectResolvedItem(
     LanConnectResolvedItemStatus Status,

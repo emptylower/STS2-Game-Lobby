@@ -140,7 +140,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     internal Control? FocusTarget =>
         _draft == null
             ? null
-            : FindRunControl(_draft.Selection.Active.RunIndex) ??
+            : FindSelectionControl(_draft.Selection) ??
               _flow?.GetChildren().OfType<Control>().FirstOrDefault(control => !control.IsQueuedForDeletion());
 
     internal LanConnectDraftMeasure Budget => GetBudgetSnapshot().Measure;
@@ -515,6 +515,10 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             for (int runIndex = 0; runIndex < runs.Count; runIndex++)
             {
                 LanConnectDraftRun run = runs[runIndex];
+                if (ShouldBuildBoundarySlotBefore(runs, runIndex))
+                {
+                    _flow.AddChild(BuildBoundaryTextRun(runIndex, 0, textIndex++));
+                }
                 Control child = run switch
                 {
                     LanConnectTextRun text => BuildTextRun(
@@ -525,6 +529,10 @@ internal sealed partial class LanConnectRichDraftEditor : Control
                     _ => BuildEntityChip(run, runIndex)
                 };
                 _flow.AddChild(child);
+                if (ShouldBuildBoundarySlotAfter(runs, runIndex))
+                {
+                    _flow.AddChild(BuildBoundaryTextRun(runIndex, 1, textIndex++));
+                }
             }
             if (_budgetLabel != null && GodotObject.IsInstanceValid(_budgetLabel))
             {
@@ -589,16 +597,53 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         editor.SetMeta("draft_text", run.Text);
         UpdateTextRunMinimumSize(editor, run.Text);
         ApplyTextRunStyle(editor);
-        editor.Connect(TextEdit.SignalName.TextChanged, Callable.From(() => OnTextRunChanged(editor, runIndex)));
-        editor.Connect(TextEdit.SignalName.CaretChanged, Callable.From(() => OnTextCaretChanged(editor, runIndex)));
+        ConnectTextRun(editor);
+        return editor;
+    }
+
+    private TextEdit BuildBoundaryTextRun(
+        int runIndex,
+        int boundaryOffset,
+        int textIndex)
+    {
+        TextEdit editor = new()
+        {
+            Name = textIndex == 0
+                ? LanConnectConstants.ChatDraftInputName
+                : LanConnectConstants.ChatDraftRunPrefix + $"Boundary{runIndex}_{boundaryOffset}",
+            Text = string.Empty,
+            PlaceholderText = textIndex == 0 ? Localize("chat.input.placeholder") : string.Empty,
+            SizeFlagsHorizontal = UsesLobbyStyle ? SizeFlags.ExpandFill : SizeFlags.Fill,
+            FocusMode = _editable ? FocusModeEnum.All : FocusModeEnum.None,
+            Editable = _editable,
+            WrapMode = TextEdit.LineWrappingMode.Boundary,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            ScrollFitContentHeight = false,
+            TabInputMode = false,
+            ContextMenuEnabled = false,
+            VirtualKeyboardEnabled = true,
+            AccessibilityName = Localize("chat.accessibility.message_text")
+        };
+        editor.SetMeta("run_index", runIndex);
+        editor.SetMeta("boundary_offset", boundaryOffset);
+        editor.SetMeta("draft_text", string.Empty);
+        UpdateTextRunMinimumSize(editor, string.Empty);
+        ApplyTextRunStyle(editor);
+        ConnectTextRun(editor);
+        return editor;
+    }
+
+    private void ConnectTextRun(TextEdit editor)
+    {
+        editor.Connect(TextEdit.SignalName.TextChanged, Callable.From(() => OnTextRunChanged(editor)));
+        editor.Connect(TextEdit.SignalName.CaretChanged, Callable.From(() => OnTextCaretChanged(editor)));
         editor.Connect(Control.SignalName.FocusEntered, Callable.From(() =>
         {
             CancelDeferredFocusRestore();
             SetLobbySurfaceFocused(true);
         }));
         editor.Connect(Control.SignalName.FocusExited, Callable.From(() => SetLobbySurfaceFocused(false)));
-        editor.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(input => OnTextGuiInput(editor, runIndex, input)));
-        return editor;
+        editor.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(input => OnTextGuiInput(editor, input)));
     }
 
     private Button BuildEntityChip(LanConnectDraftRun run, int runIndex)
@@ -639,12 +684,13 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             UsesLobbyStyle ? 28f : 12f + lines * TextLineHeight);
     }
 
-    private void OnTextRunChanged(TextEdit editor, int runIndex)
+    private void OnTextRunChanged(TextEdit editor)
     {
         if (_draft == null || _reconciling || _handlingChildChange)
         {
             return;
         }
+        int runIndex = TextRunIndex(editor);
         string previousText = editor.HasMeta("draft_text")
             ? editor.GetMeta("draft_text").AsString()
             : editor.Text;
@@ -654,11 +700,16 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         string insertedText = nextText[prefix..(nextText.Length - suffix)];
         LanConnectDraftSelection documentSelection = _draft.Selection;
         bool replaceDocumentSelection = SelectionSpansRuns(documentSelection);
+        bool wasBoundarySlot = TryGetBoundaryPosition(editor, out LanConnectDraftPosition boundary);
         _handlingChildChange = true;
         try
         {
             _restoreFocus = editor.HasFocus();
-            if (!replaceDocumentSelection)
+            if (wasBoundarySlot)
+            {
+                _draft.SetCaret(boundary);
+            }
+            else if (!replaceDocumentSelection)
             {
                 _draft.SetSelection(new LanConnectDraftSelection(
                     new LanConnectDraftPosition(runIndex, prefix),
@@ -671,25 +722,46 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             _handlingChildChange = false;
         }
         IReadOnlyList<LanConnectDraftRun> runs = _draft.Runs;
+        if (wasBoundarySlot && TryPromoteBoundaryEditor(editor, boundary, nextText, runs))
+        {
+            FinishNativeTextEdit(editor, nextText, runs);
+            return;
+        }
         bool canKeepNativeEditor = !replaceDocumentSelection &&
                                    runIndex >= 0 &&
                                    runIndex < runs.Count &&
                                    runs[runIndex] is LanConnectTextRun text &&
                                    string.Equals(text.Text, nextText, StringComparison.Ordinal);
+        if (!canKeepNativeEditor &&
+            !wasBoundarySlot &&
+            nextText.Length == 0 &&
+            TryDemoteEmptyEditorToBoundary(editor, runIndex, runs))
+        {
+            FinishNativeTextEdit(editor, nextText, runs);
+            return;
+        }
         if (!canKeepNativeEditor)
         {
             ReconcileControls(preserveFocus: _restoreFocus);
             return;
         }
 
+        FinishNativeTextEdit(editor, nextText, runs);
+    }
+
+    private void FinishNativeTextEdit(
+        TextEdit editor,
+        string nextText,
+        IReadOnlyList<LanConnectDraftRun> runs)
+    {
         editor.SetMeta("draft_text", nextText);
         UpdateTextRunMinimumSize(editor, nextText);
         UpdateMinimumSizeForDraft(runs);
-        _renderedDraftRevision = _draft.ContentRevision;
+        _renderedDraftRevision = _draft?.ContentRevision ?? _renderedDraftRevision;
         _restoreFocus = false;
     }
 
-    private void OnTextCaretChanged(TextEdit editor, int runIndex)
+    private void OnTextCaretChanged(TextEdit editor)
     {
         if (_draft == null || _reconciling || _handlingChildChange || _syncingSelection ||
             !editor.HasFocus() || SelectionSpansRuns(_draft.Selection))
@@ -697,24 +769,30 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             return;
         }
         CancelDeferredFocusRestore();
-        SyncTextSelectionToDocument(editor, runIndex);
+        SyncTextSelectionToDocument(editor);
     }
 
-    private void SyncLocalSelectionUnlessDocumentSpansRuns(TextEdit editor, int runIndex)
+    private void SyncLocalSelectionUnlessDocumentSpansRuns(TextEdit editor)
     {
         CancelDeferredFocusRestore();
         if (_draft != null && !SelectionSpansRuns(_draft.Selection))
         {
-            SyncTextSelectionToDocument(editor, runIndex);
+            SyncTextSelectionToDocument(editor);
         }
     }
 
-    private void SyncTextSelectionToDocument(TextEdit editor, int runIndex)
+    private void SyncTextSelectionToDocument(TextEdit editor)
     {
         if (_draft == null)
         {
             return;
         }
+        if (TryGetBoundaryPosition(editor, out LanConnectDraftPosition boundary))
+        {
+            _draft.SetCaret(boundary);
+            return;
+        }
+        int runIndex = TextRunIndex(editor);
         int active = Utf16OffsetFromLineColumn(editor, editor.GetCaretLine(), editor.GetCaretColumn());
         if (editor.HasSelection())
         {
@@ -740,12 +818,13 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     private static bool SelectionSpansRuns(LanConnectDraftSelection selection) =>
         selection.Anchor.RunIndex != selection.Active.RunIndex;
 
-    private void OnTextGuiInput(TextEdit editor, int runIndex, InputEvent inputEvent)
+    private void OnTextGuiInput(TextEdit editor, InputEvent inputEvent)
     {
         if (_draft == null)
         {
             return;
         }
+        int runIndex = TextRunIndex(editor);
         if (inputEvent is InputEventMouseButton { ButtonIndex: MouseButton.Left } mouseButton)
         {
             if (mouseButton.Pressed)
@@ -753,7 +832,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
                 BeginPointerSelection(
                     DocumentPositionAtGlobal(
                         GlobalPointerPosition(editor, mouseButton.Position),
-                        DocumentPositionAt(editor, runIndex, mouseButton.Position)),
+                        DocumentPositionAt(editor, mouseButton.Position)),
                     mouseButton.ShiftPressed);
             }
             else
@@ -767,7 +846,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         {
             ExtendPointerSelection(DocumentPositionAtGlobal(
                 GlobalPointerPosition(editor, motion.Position),
-                DocumentPositionAt(editor, runIndex, motion.Position)));
+                DocumentPositionAt(editor, motion.Position)));
             return;
         }
         if (inputEvent is not InputEventKey { Pressed: true, Echo: false } key)
@@ -777,14 +856,14 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         bool command = key.CtrlPressed || key.MetaPressed;
         if (command && key.Keycode == Key.C)
         {
-            SyncLocalSelectionUnlessDocumentSpansRuns(editor, runIndex);
+            SyncLocalSelectionUnlessDocumentSpansRuns(editor);
             CopySelectionToClipboard();
             editor.AcceptEvent();
             return;
         }
         if (command && key.Keycode == Key.V)
         {
-            SyncLocalSelectionUnlessDocumentSpansRuns(editor, runIndex);
+            SyncLocalSelectionUnlessDocumentSpansRuns(editor);
             PastePlainText(DisplayServer.ClipboardGet());
             editor.AcceptEvent();
             return;
@@ -793,7 +872,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         {
             if (key.ShiftPressed)
             {
-                SyncLocalSelectionUnlessDocumentSpansRuns(editor, runIndex);
+                SyncLocalSelectionUnlessDocumentSpansRuns(editor);
                 InsertNewline();
             }
             else
@@ -813,6 +892,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         int textLength = editor.Text.Length;
         LanConnectDraftSelection documentSelection = _draft.Selection;
         bool spansRuns = SelectionSpansRuns(documentSelection);
+        bool mappedEntityBoundary = TryGetMappedEntityBoundary(editor, out LanConnectDraftPosition mappedBoundary);
         bool crossRunCommand = spansRuns && key.Keycode is
             Key.Left or Key.Right or Key.Backspace or Key.Delete;
         bool boundaryCommand = key.Keycode switch
@@ -820,7 +900,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             Key.Left => caret == 0,
             Key.Right => caret == textLength,
             Key.Backspace => caret == 0 && !editor.HasSelection(),
-            Key.Delete => caret == textLength && !editor.HasSelection(),
+            Key.Delete => (caret == textLength || mappedEntityBoundary) && !editor.HasSelection(),
             _ => false
         };
         if (!boundaryCommand && !crossRunCommand)
@@ -828,10 +908,14 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             return;
         }
 
-        LanConnectDraftPosition localCaret = new(runIndex, caret);
+        LanConnectDraftPosition localCaret = TryGetBoundaryPosition(editor, out LanConnectDraftPosition boundary)
+            ? boundary
+            : mappedEntityBoundary
+                ? mappedBoundary
+                : new LanConnectDraftPosition(runIndex, caret);
         if (!spansRuns && !Equals(_draft.Selection.Active, localCaret))
         {
-            SyncTextSelectionToDocument(editor, runIndex);
+            SyncTextSelectionToDocument(editor);
         }
         MutateDocument(() =>
         {
@@ -984,14 +1068,17 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     private static LanConnectDraftPosition DocumentPositionAt(
         TextEdit editor,
-        int runIndex,
         Vector2 localPosition)
     {
+        if (TryGetBoundaryPosition(editor, out LanConnectDraftPosition boundary))
+        {
+            return boundary;
+        }
         Vector2I lineColumn = editor.GetLineColumnAtPos(
             new Vector2I((int)localPosition.X, (int)localPosition.Y),
             allowOutOfBounds: true);
         int offset = Utf16OffsetFromLineColumn(editor, lineColumn.Y, lineColumn.X);
-        return new LanConnectDraftPosition(runIndex, offset);
+        return new LanConnectDraftPosition(TextRunIndex(editor), offset);
     }
 
     private static Vector2 GlobalPointerPosition(Control receiver, Vector2 localPosition) =>
@@ -1019,7 +1106,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             Vector2 localPosition = inverse * globalPosition;
             if (control is TextEdit text)
             {
-                return DocumentPositionAt(text, runIndex, localPosition);
+                return DocumentPositionAt(text, localPosition);
             }
             return new LanConnectDraftPosition(
                 runIndex,
@@ -1149,8 +1236,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         long syncGeneration = ++_selectionSyncGeneration;
         try
         {
-            int runIndex = selection.Active.RunIndex;
-            Control? control = FindRunControl(runIndex);
+            Control? control = FindSelectionControl(selection);
             if (control == null)
             {
                 control = _flow.GetChildren().OfType<Control>()
@@ -1159,8 +1245,11 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             if (control is TextEdit text)
             {
                 text.GrabFocus();
-                SetCaretUtf16Offset(text, selection.Active.TextOffset);
-                if (selection.Anchor.RunIndex == selection.Active.RunIndex &&
+                int caretOffset = SelectionTextOffset(text, selection.Active);
+                SetCaretUtf16Offset(text, caretOffset);
+                if (!TryGetBoundaryPosition(text, out _) &&
+                    TextRunIndex(text) == selection.Anchor.RunIndex &&
+                    selection.Anchor.RunIndex == selection.Active.RunIndex &&
                     selection.Anchor.TextOffset != selection.Active.TextOffset)
                 {
                     (int fromLine, int fromColumn) = LineColumnAtUtf16Offset(text, selection.Anchor.TextOffset);
@@ -1217,7 +1306,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             {
                 return;
             }
-            Control? intended = FindRunControl(selection.Active.RunIndex);
+            Control? intended = FindSelectionControl(selection);
             if (focusOwner != null &&
                 GodotObject.IsInstanceValid(focusOwner) &&
                 IsAncestorOf(focusOwner) &&
@@ -1269,6 +1358,244 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             }
         }
         return null;
+    }
+
+    private Control? FindSelectionControl(LanConnectDraftSelection selection)
+    {
+        if (_draft == null)
+        {
+            return null;
+        }
+        IReadOnlyList<LanConnectDraftRun> runs = _draft.Runs;
+        LanConnectDraftPosition active = selection.Active;
+        bool collapsed = Equals(selection.Anchor, selection.Active);
+        if (collapsed &&
+            active.RunIndex >= 0 &&
+            active.RunIndex < runs.Count &&
+            runs[active.RunIndex] is not LanConnectTextRun)
+        {
+            if (active.TextOffset == 1 &&
+                active.RunIndex + 1 < runs.Count &&
+                runs[active.RunIndex + 1] is LanConnectTextRun)
+            {
+                return FindRunControl(active.RunIndex + 1);
+            }
+            TextEdit? boundary = FindBoundaryControl(active);
+            if (boundary != null)
+            {
+                return boundary;
+            }
+        }
+        return FindRunControl(active.RunIndex);
+    }
+
+    private bool TryGetMappedEntityBoundary(
+        TextEdit editor,
+        out LanConnectDraftPosition boundary)
+    {
+        boundary = default;
+        if (_draft == null ||
+            !Equals(_draft.Selection.Anchor, _draft.Selection.Active))
+        {
+            return false;
+        }
+        LanConnectDraftPosition active = _draft.Selection.Active;
+        IReadOnlyList<LanConnectDraftRun> runs = _draft.Runs;
+        if (active.TextOffset != 1 ||
+            active.RunIndex < 0 ||
+            active.RunIndex + 1 >= runs.Count ||
+            runs[active.RunIndex] is LanConnectTextRun ||
+            runs[active.RunIndex + 1] is not LanConnectTextRun ||
+            TextRunIndex(editor) != active.RunIndex + 1)
+        {
+            return false;
+        }
+        boundary = active;
+        return true;
+    }
+
+    private TextEdit? FindBoundaryControl(LanConnectDraftPosition position)
+    {
+        if (_flow == null)
+        {
+            return null;
+        }
+        return _flow.GetChildren()
+            .OfType<TextEdit>()
+            .FirstOrDefault(editor =>
+                !editor.IsQueuedForDeletion() &&
+                TryGetBoundaryPosition(editor, out LanConnectDraftPosition boundary) &&
+                Equals(boundary, position));
+    }
+
+    private bool ShouldBuildBoundarySlotBefore(
+        IReadOnlyList<LanConnectDraftRun> runs,
+        int runIndex) =>
+        _draft != null &&
+        Equals(_draft.Selection.Anchor, _draft.Selection.Active) &&
+        Equals(_draft.Selection.Active, new LanConnectDraftPosition(runIndex, 0)) &&
+        runs[runIndex] is not LanConnectTextRun &&
+        (runIndex == 0 || runs[runIndex - 1] is not LanConnectTextRun);
+
+    private bool ShouldBuildBoundarySlotAfter(
+        IReadOnlyList<LanConnectDraftRun> runs,
+        int runIndex) =>
+        _draft != null &&
+        Equals(_draft.Selection.Anchor, _draft.Selection.Active) &&
+        Equals(_draft.Selection.Active, new LanConnectDraftPosition(runIndex, 1)) &&
+        runs[runIndex] is not LanConnectTextRun &&
+        (runIndex + 1 >= runs.Count || runs[runIndex + 1] is not LanConnectTextRun);
+
+    private bool TryPromoteBoundaryEditor(
+        TextEdit editor,
+        LanConnectDraftPosition boundary,
+        string nextText,
+        IReadOnlyList<LanConnectDraftRun> runs)
+    {
+        if (_draft == null)
+        {
+            return false;
+        }
+        if (nextText.Length == 0)
+        {
+            return Equals(_draft.Selection.Active, boundary);
+        }
+        LanConnectDraftPosition active = _draft.Selection.Active;
+        if (active.RunIndex < 0 ||
+            active.RunIndex >= runs.Count ||
+            runs[active.RunIndex] is not LanConnectTextRun text ||
+            !string.Equals(text.Text, nextText, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        ReindexControlsAfterBoundaryInsertion(editor, boundary);
+        editor.RemoveMeta("boundary_offset");
+        editor.SetMeta("run_index", active.RunIndex);
+        RenameDraftControls();
+        return true;
+    }
+
+    private bool TryDemoteEmptyEditorToBoundary(
+        TextEdit editor,
+        int removedRunIndex,
+        IReadOnlyList<LanConnectDraftRun> runs)
+    {
+        if (_draft == null ||
+            !Equals(_draft.Selection.Anchor, _draft.Selection.Active))
+        {
+            return false;
+        }
+        LanConnectDraftPosition active = _draft.Selection.Active;
+        if (active.RunIndex < 0 ||
+            active.RunIndex >= runs.Count ||
+            runs[active.RunIndex] is LanConnectTextRun ||
+            (active.TextOffset != 0 && active.TextOffset != 1))
+        {
+            return false;
+        }
+        foreach (Control control in LiveDraftControls())
+        {
+            if (ReferenceEquals(control, editor) || !control.HasMeta("run_index"))
+            {
+                continue;
+            }
+            int index = control.GetMeta("run_index").AsInt32();
+            if (index > removedRunIndex)
+            {
+                control.SetMeta("run_index", index - 1);
+            }
+        }
+        editor.SetMeta("run_index", active.RunIndex);
+        editor.SetMeta("boundary_offset", active.TextOffset);
+        RenameDraftControls();
+        return true;
+    }
+
+    private void ReindexControlsAfterBoundaryInsertion(
+        TextEdit boundaryEditor,
+        LanConnectDraftPosition boundary)
+    {
+        foreach (Control control in LiveDraftControls())
+        {
+            if (ReferenceEquals(control, boundaryEditor) || !control.HasMeta("run_index"))
+            {
+                continue;
+            }
+            int index = control.GetMeta("run_index").AsInt32();
+            bool shifts = boundary.TextOffset == 0
+                ? index >= boundary.RunIndex
+                : index > boundary.RunIndex;
+            if (shifts)
+            {
+                control.SetMeta("run_index", index + 1);
+            }
+        }
+    }
+
+    private IEnumerable<Control> LiveDraftControls() =>
+        _flow?.GetChildren()
+            .OfType<Control>()
+            .Where(control => !control.IsQueuedForDeletion()) ?? [];
+
+    private void RenameDraftControls()
+    {
+        int textIndex = 0;
+        foreach (Control control in LiveDraftControls())
+        {
+            if (!control.HasMeta("run_index"))
+            {
+                continue;
+            }
+            int runIndex = control.GetMeta("run_index").AsInt32();
+            switch (control)
+            {
+                case Button:
+                    control.Name = LanConnectConstants.ChatEntityChipPrefix + runIndex;
+                    break;
+                case TextEdit text when TryGetBoundaryPosition(text, out LanConnectDraftPosition boundary):
+                    control.Name = textIndex++ == 0
+                        ? LanConnectConstants.ChatDraftInputName
+                        : LanConnectConstants.ChatDraftRunPrefix + $"Boundary{boundary.RunIndex}_{boundary.TextOffset}";
+                    break;
+                case TextEdit:
+                    control.Name = textIndex++ == 0
+                        ? LanConnectConstants.ChatDraftInputName
+                        : LanConnectConstants.ChatDraftRunPrefix + runIndex;
+                    break;
+            }
+        }
+    }
+
+    private static int SelectionTextOffset(TextEdit editor, LanConnectDraftPosition active)
+    {
+        if (TryGetBoundaryPosition(editor, out _))
+        {
+            return 0;
+        }
+        int runIndex = TextRunIndex(editor);
+        if (runIndex == active.RunIndex)
+        {
+            return active.TextOffset;
+        }
+        return runIndex < active.RunIndex ? editor.Text.Length : 0;
+    }
+
+    private static int TextRunIndex(TextEdit editor) => editor.GetMeta("run_index").AsInt32();
+
+    private static bool TryGetBoundaryPosition(
+        TextEdit editor,
+        out LanConnectDraftPosition position)
+    {
+        if (editor.HasMeta("boundary_offset"))
+        {
+            position = new LanConnectDraftPosition(
+                TextRunIndex(editor),
+                editor.GetMeta("boundary_offset").AsInt32());
+            return true;
+        }
+        position = default;
+        return false;
     }
 
     private static int CommonPrefix(string left, string right)

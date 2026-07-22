@@ -511,8 +511,10 @@ public sealed class LanConnectWebSocketTransportTests
         {
             socket.ReleaseFirstSend();
         }
+        CloseCall close = await socket.NextCloseAsync(TestCancellation);
         await Task.WhenAll(send, socket.CloseStarted.Task).WaitAsync(TestCancellation);
-        Assert.Equal(WebSocketCloseStatus.InvalidMessageType, Assert.Single(socket.CloseCalls).Status);
+        Assert.Equal(WebSocketCloseStatus.InvalidMessageType, close.Status);
+        Assert.Single(socket.CloseCalls);
     }
 
     [Fact]

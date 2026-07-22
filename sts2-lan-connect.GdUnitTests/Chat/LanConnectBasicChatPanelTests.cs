@@ -284,6 +284,36 @@ public sealed class LanConnectBasicChatPanelTests
     }
 
     [TestCase]
+    public async Task Structured_send_failure_retains_text_entity_order_and_real_text_focus()
+    {
+        LanConnectChatChannelState state = EnabledState(rich: true);
+        state.RichDraft.ReplaceAllWithText("发送前");
+        state.RichDraft.InsertEntity(new LanConnectItemRun("card", "MegaCrit.Strike", 1));
+        state.RichDraft.InsertText("发送后");
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(
+            state,
+            (_, _) => Task.FromException(new InvalidOperationException("offline")),
+            _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName)
+            .EmitSignal(Button.SignalName.Pressed);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(state.RichDraft.Runs).ContainsExactly(
+            new LanConnectTextRun("发送前"),
+            new LanConnectItemRun("card", "MegaCrit.Strike", 1),
+            new LanConnectTextRun("发送后"));
+        AssertThat(panel.DraftHasFocus).IsTrue();
+        AssertThat(panel.GetViewport().GuiGetFocusOwner() is TextEdit).IsTrue();
+        AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
+            .Contains("offline");
+    }
+
+    [TestCase]
     public async Task Synchronous_send_queue_is_rendered_on_the_next_idle_frame()
     {
         LanConnectChatChannelState state = EnabledState();
@@ -1013,6 +1043,16 @@ public sealed class LanConnectBasicChatPanelTests
         foreach (Node node in root.FindChildren("*", "Label", recursive: true, owned: false))
         {
             if (node is Label label && label.Text == text)
+            {
+                return true;
+            }
+        }
+
+        foreach (RichTextLabel richText in root
+                     .FindChildren("*", string.Empty, recursive: true, owned: false)
+                     .OfType<RichTextLabel>())
+        {
+            if (richText.GetParsedText() == text)
             {
                 return true;
             }

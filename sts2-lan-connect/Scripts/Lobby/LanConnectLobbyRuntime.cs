@@ -215,8 +215,14 @@ internal sealed partial class LanConnectLobbyRuntime :
     private double _timeUntilRestartSubmenuAttempt;
     private long _lastRestartSubmenuOpenAtUnixMs;
     private LanConnectItemLinkCapture? _itemLinkCapture;
+    private ILanConnectItemLinkCapturePorts? _itemLinkCapturePorts;
+    private readonly LanConnectReferenceMode _referenceMode = new();
+    private readonly LanConnectReferenceTouchMouseDeduplicator _referenceTouchMouseDedupe = new();
     private static bool _enableItemLinkCaptureOnInstall;
     private bool _itemLinkCaptureRouteOnlyForTests;
+    private bool _referenceModeRouteOnlyForTests;
+    private bool _referenceModeTestRoomActive;
+    private LanConnectDualChatState? _referenceModeTestChat;
     private string? _chatRoomId;
     private string? _chatRoomSessionId;
     private IReadOnlySet<ulong> _joinedRoomPeerIds = new HashSet<ulong>();
@@ -245,6 +251,11 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     bool ILanConnectRoomCombatContext.IsCurrentPeer(string playerNetId) =>
         IsCurrentRoomPeer(playerNetId);
+
+    int ILanConnectRoomCombatContext.PlayerCount =>
+        TryGetActiveCombatRoom(out _, out _, out IReadOnlyCollection<ulong> peerIds)
+            ? Math.Max(1, peerIds.Count)
+            : 1;
 
     bool ILanConnectRoomCombatContext.TryGetCurrentPeerName(
         string playerNetId,
@@ -287,7 +298,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     internal int ChatRevision => unchecked((int)Chat.Room.Revision);
 
-    internal LanConnectDualChatState Chat => _chatOwner?.Current.State ??
+    internal LanConnectDualChatState Chat => _referenceModeTestChat ?? _chatOwner?.Current.State ??
         throw new InvalidOperationException("Chat is unavailable before the lobby runtime is ready.");
 
     internal bool ChatEnabled => _chatEnabled;
@@ -453,14 +464,14 @@ internal sealed partial class LanConnectLobbyRuntime :
         _timeUntilRestartSubmenuAttempt = 0d;
         _lastRestartSubmenuOpenAtUnixMs = 0;
         Instance = this;
-        if (_itemLinkCaptureRouteOnlyForTests)
+        if (_itemLinkCaptureRouteOnlyForTests || _referenceModeRouteOnlyForTests)
         {
             return;
         }
         if (_enableItemLinkCaptureOnInstall)
         {
-            _itemLinkCapture = new LanConnectItemLinkCapture(
-                new LanConnectGodotItemLinkCapturePorts(this));
+            _itemLinkCapturePorts = new LanConnectGodotItemLinkCapturePorts(this);
+            _itemLinkCapture = new LanConnectItemLinkCapture(_itemLinkCapturePorts);
         }
         _chatOwner = new LanConnectRotatingServerChatPort(
             new LanConnectServerChatClient(),
@@ -484,6 +495,7 @@ internal sealed partial class LanConnectLobbyRuntime :
     public override void _Process(double delta)
     {
         DrivePendingRestartNavigation(delta);
+        SynchronizeReferenceMode();
         if (_activeSession == null)
         {
             return;
@@ -506,10 +518,262 @@ internal sealed partial class LanConnectLobbyRuntime :
         {
             return;
         }
-        LanConnectItemLinkCaptureInputRoute.TryRoute(
-            inputEvent,
-            _itemLinkCapture,
-            () => GetViewport().SetInputAsHandled());
+        if (_itemLinkCaptureRouteOnlyForTests)
+        {
+            LanConnectItemLinkCaptureInputRoute.TryRoute(
+                inputEvent,
+                _itemLinkCapture,
+                () => GetViewport().SetInputAsHandled());
+            return;
+        }
+        RouteReferenceInput(inputEvent);
+    }
+
+    internal LanConnectReferenceModePresentation GetReferenceModePresentation(
+        LanConnectChatChannelState expectedState)
+    {
+        if (!TryGetReferenceModeContext(expectedState, out LanConnectReferenceModeContext context))
+        {
+            return default;
+        }
+        bool visible = context.AllowedTargets != LanConnectReferenceTargetKind.None;
+        bool hasTargets = visible && _itemLinkCapturePorts?.HasVisibleReferenceTarget(
+            context.AllowedTargets) == true;
+        bool armed = _referenceMode.State == LanConnectReferenceModeState.Armed &&
+                     ReferenceEquals(_referenceMode.ArmedChannelState, expectedState);
+        return new LanConnectReferenceModePresentation(
+            visible,
+            Enabled: visible && (hasTargets || armed),
+            armed,
+            armed ? "chat.reference.armed_hint" : hasTargets ? string.Empty : "chat.reference.no_targets");
+    }
+
+    internal bool ToggleReferenceMode(
+        LanConnectChatChannelState expectedState,
+        LanConnectReferenceModeSource source)
+    {
+        if (!TryGetReferenceModeContext(expectedState, out LanConnectReferenceModeContext context) ||
+            _itemLinkCapturePorts?.HasVisibleReferenceTarget(context.AllowedTargets) != true &&
+            _referenceMode.State == LanConnectReferenceModeState.Idle)
+        {
+            return false;
+        }
+        bool changed = _referenceMode.Toggle(context, source);
+        if (changed && _referenceMode.State == LanConnectReferenceModeState.Armed)
+        {
+            ReleaseReferenceInputFocus();
+        }
+        return changed;
+    }
+
+    internal bool CancelReferenceMode(LanConnectReferenceModeExitReason reason) =>
+        _referenceMode.Exit(reason);
+
+    private void RouteReferenceInput(InputEvent inputEvent)
+    {
+        if (_itemLinkCapture is not { } itemLinkCapture)
+        {
+            return;
+        }
+        if (inputEvent is InputEventKey key)
+        {
+            if (LanConnectChatInputRouter.IsReferenceToggle(
+                    key.Keycode,
+                    key.Pressed,
+                    key.Echo,
+                    key.AltPressed))
+            {
+                if (TryGetReferenceModeContext(expectedState: null, out LanConnectReferenceModeContext context) &&
+                    ToggleReferenceMode(context.ChannelState, LanConnectReferenceModeSource.KeyboardShortcut))
+                {
+                    GetViewport().SetInputAsHandled();
+                }
+                return;
+            }
+            if (key is { Pressed: true, Echo: false, Keycode: Key.Escape } &&
+                CancelReferenceMode(LanConnectReferenceModeExitReason.Canceled))
+            {
+                GetViewport().SetInputAsHandled();
+            }
+            return;
+        }
+
+        bool isTouch = inputEvent is InputEventScreenTouch { Pressed: true };
+        bool isMouse = inputEvent is InputEventMouseButton
+        {
+            Pressed: true,
+            ButtonIndex: MouseButton.Left
+        };
+        if (!isTouch && !isMouse)
+        {
+            return;
+        }
+
+        Vector2 position = inputEvent switch
+        {
+            InputEventScreenTouch touch => touch.Position,
+            InputEventMouseButton mouse => mouse.GlobalPosition,
+            _ => Vector2.Zero
+        };
+        ulong now = Time.GetTicksMsec();
+        if (isMouse && _referenceTouchMouseDedupe.IsSyntheticMouse(position, now))
+        {
+            if (_referenceTouchMouseDedupe.ConsumeSyntheticMouse)
+            {
+                GetViewport().SetInputAsHandled();
+            }
+            return;
+        }
+
+        bool directAltClick = inputEvent is InputEventMouseButton { AltPressed: true };
+        if (_referenceMode.State == LanConnectReferenceModeState.Idle && !directAltClick)
+        {
+            return;
+        }
+        if (!TryGetReferenceModeContext(expectedState: null, out LanConnectReferenceModeContext current))
+        {
+            return;
+        }
+        if (_referenceMode.State == LanConnectReferenceModeState.Idle)
+        {
+            if (_itemLinkCapturePorts?.HasVisibleReferenceTarget(current.AllowedTargets) != true ||
+                !_referenceMode.ArmDirect(current))
+            {
+                return;
+            }
+            ReleaseReferenceInputFocus();
+        }
+        else
+        {
+            _referenceMode.Synchronize(current);
+        }
+        if (_referenceMode.State != LanConnectReferenceModeState.Armed)
+        {
+            return;
+        }
+
+        long armedGeneration = _referenceMode.ArmedGeneration;
+        LanConnectReferenceCaptureResult result = itemLinkCapture.TryCapture(
+            new LanConnectReferenceCaptureRequest(
+                _referenceMode.Source ?? LanConnectReferenceModeSource.TouchButton,
+                isTouch ? LanConnectReferencePointerKind.Touch : LanConnectReferencePointerKind.Mouse,
+                Pressed: true,
+                position,
+                StartingControl: isMouse ? GetViewport().GuiGetHoveredControl() : null,
+                armedGeneration));
+        bool captured = result.Consumed &&
+                        _referenceMode.CaptureSucceeded(
+                            armedGeneration,
+                            current,
+                            result.TargetKind);
+        if (!captured)
+        {
+            _referenceMode.CaptureFailed(armedGeneration, current);
+            if (result.Status == LanConnectReferenceCaptureStatus.Unsupported)
+            {
+                ShowReferenceUnsupportedWarning();
+            }
+        }
+        if (isTouch)
+        {
+            _referenceTouchMouseDedupe.ObserveTouch(position, now, captured);
+        }
+        if (captured)
+        {
+            GetViewport().SetInputAsHandled();
+        }
+    }
+
+    private bool TryGetReferenceModeContext(
+        LanConnectChatChannelState? expectedState,
+        out LanConnectReferenceModeContext context)
+    {
+        context = null!;
+        if (_chatOwner == null && _referenceModeTestChat == null)
+        {
+            return false;
+        }
+        bool roomActive = HasActiveRoomSession || _referenceModeTestRoomActive;
+        LanConnectChatChannelState selected = roomActive &&
+                                              Chat.SelectedChannel == LanConnectChatChannel.Room
+            ? Chat.Room
+            : Chat.Server;
+        if (expectedState != null && !ReferenceEquals(expectedState, selected))
+        {
+            return false;
+        }
+        LanConnectReferenceTargetKind allowed = LanConnectReferenceTargetKind.None;
+        if (LanConnectItemLinkCapture.ItemRefsEnabled(selected.EnabledRichFeatures))
+        {
+            allowed |= LanConnectReferenceTargetKind.Item;
+        }
+        if (selected.Channel == LanConnectChatChannel.Room &&
+            LanConnectItemLinkCapture.CombatRefsEnabled(selected.EnabledRichFeatures))
+        {
+            allowed |= LanConnectReferenceTargetKind.Combat;
+        }
+        bool hasTarget = selected.Presentation == LanConnectServerChatPresentation.Ready &&
+                         selected.ChatEnabled;
+        context = new LanConnectReferenceModeContext(
+            hasTarget,
+            selected.Channel,
+            selected,
+            selected.Channel == LanConnectChatChannel.Room ? _chatRoomId : null,
+            selected.Channel == LanConnectChatChannel.Room ? _chatRoomSessionId : null,
+            allowed);
+        return true;
+    }
+
+    private void SynchronizeReferenceMode()
+    {
+        if (_referenceMode.State != LanConnectReferenceModeState.Armed)
+        {
+            return;
+        }
+        if (TryGetReferenceModeContext(expectedState: null, out LanConnectReferenceModeContext context))
+        {
+            if (_referenceMode.Synchronize(context))
+            {
+                return;
+            }
+            if (_itemLinkCapturePorts?.HasVisibleReferenceTarget(context.AllowedTargets) != true)
+            {
+                _referenceMode.Exit(LanConnectReferenceModeExitReason.CapabilityLost);
+            }
+        }
+        else
+        {
+            _referenceMode.Exit(LanConnectReferenceModeExitReason.CapabilityLost);
+        }
+    }
+
+    private void ReleaseReferenceInputFocus()
+    {
+        ResolveReferencePanel()?.ReleaseDraftFocus();
+    }
+
+    private void ShowReferenceUnsupportedWarning()
+    {
+        ResolveReferencePanel()?.ShowReferenceUnsupportedWarning();
+    }
+
+    private LanConnectBasicChatPanel? ResolveReferencePanel()
+    {
+        try
+        {
+            if (HasActiveRoomSession)
+            {
+                return GetTree().Root
+                    .GetNodeOrNull<LanConnectRoomChatOverlay>(LanConnectConstants.RoomChatOverlayName)?
+                    .ChatPanelForTests;
+            }
+            LanConnectLobbyOverlay? lobby = LanConnectLobbyOverlay.Instance;
+            return GodotObject.IsInstanceValid(lobby) ? lobby.ServerChatPanelForTests : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     internal void ConfigureItemLinkCaptureRouteForTests(ILanConnectItemLinkCapturePorts ports)
@@ -518,9 +782,28 @@ internal sealed partial class LanConnectLobbyRuntime :
         _itemLinkCapture = new LanConnectItemLinkCapture(ports);
     }
 
+    internal void ConfigureReferenceModeRouteForTests(
+        ILanConnectItemLinkCapturePorts ports,
+        LanConnectDualChatState chat,
+        string roomId,
+        string roomSessionId)
+    {
+        ArgumentNullException.ThrowIfNull(ports);
+        ArgumentNullException.ThrowIfNull(chat);
+        ArgumentException.ThrowIfNullOrEmpty(roomId);
+        ArgumentException.ThrowIfNullOrEmpty(roomSessionId);
+        _itemLinkCapturePorts = ports;
+        _itemLinkCapture = new LanConnectItemLinkCapture(ports);
+        _referenceModeTestChat = chat;
+        _referenceModeTestRoomActive = true;
+        _chatRoomId = roomId;
+        _chatRoomSessionId = roomSessionId;
+        _referenceModeRouteOnlyForTests = true;
+    }
+
     public override void _ExitTree()
     {
-        if (_itemLinkCaptureRouteOnlyForTests)
+        if (_itemLinkCaptureRouteOnlyForTests || _referenceModeRouteOnlyForTests)
         {
             if (ReferenceEquals(Instance, this))
             {
@@ -2081,6 +2364,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         string? previousRoomSessionId,
         Action closePreviousSession)
     {
+        _referenceMode.Exit(LanConnectReferenceModeExitReason.RoomChanged);
         RebindRoomGeneration(
             GetChatCoordinator(),
             roomId,
@@ -2277,6 +2561,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         _chatRoomId = null;
         _chatRoomSessionId = null;
+        _referenceMode.Exit(LanConnectReferenceModeExitReason.RoomChanged);
         _chatOwner?.Current.LeaveRoom();
     }
 
