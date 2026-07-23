@@ -8,12 +8,12 @@
 
 - 仓库：`/Users/mac/Desktop/STS2-Game-Lobby`
 - 当前分支：`main`
-- 当前 HEAD：`6930001`
+- 当前 HEAD：`6a7d5c7`（管理面板 + 自动更新 + Dashboard 重构已提交）
 - 服务端目标版本：`0.5.2`
 - 管理员面板属于 `lobby-service/`。
 - 本轮没有修改客户端页面。
-- 根目录 `.gitignore` 在本轮开始前已有用户改动，本轮未改动该文件。
 - `releases/` 是打包产物镜像目录，本轮没有直接修改。
+- 生产部署交接见 `docs/admin-ui-production-upgrade-handoff.md`。
 
 ## 页面实现
 
@@ -181,25 +181,4 @@
 
 ## 当前相关工作树文件
 
-管理员面板和自动更新功能当前尚未提交。相关文件包括：
-
-- `lobby-service/src/server-admin-ui.ts`
-- `lobby-service/src/server-admin-ui.test.ts`
-- `lobby-service/src/app.ts`
-- `lobby-service/src/app.integration.test.ts`
-- `lobby-service/src/config.ts`
-- `lobby-service/src/service-update.ts`
-- `lobby-service/src/service-update.test.ts`
-- `lobby-service/scripts/service-runtime.mjs`
-- `lobby-service/package.json`
-- `lobby-service/package-lock.json`
-- `lobby-service/Dockerfile`
-- `lobby-service/.env.example`
-- `lobby-service/deploy/lobby-service.docker.env.example`
-- `lobby-service/deploy/sts2-lobby.service.example`
-- `deploy/lobby-service.env.example`
-- `scripts/install-lobby-service-linux.sh`
-- `scripts/package-lobby-service.sh`
-- `lobby-service/src/package-content.test.ts`
-- `lobby-service/README.md`
-- `README.md`
+管理员面板、自动更新与 Dashboard 重构已随 commit `6a7d5c7` 提交，工作树干净。生产部署交接见 `docs/admin-ui-production-upgrade-handoff.md`。
