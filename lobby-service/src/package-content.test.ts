@@ -39,6 +39,7 @@ const expectedFiles = [
   "lobby-service/package-lock.json",
   "lobby-service/package.json",
   "lobby-service/scripts/generate-server-admin-password-hash.mjs",
+  "lobby-service/scripts/service-runtime.mjs",
   "lobby-service/src/app.ts",
   "lobby-service/src/bandwidth-guard.ts",
   "lobby-service/src/chat/dedupe-cache.ts",
@@ -76,6 +77,7 @@ const expectedFiles = [
   "lobby-service/src/server-admin-auth.ts",
   "lobby-service/src/server-admin-state.ts",
   "lobby-service/src/server-admin-ui.ts",
+  "lobby-service/src/service-update.ts",
   "lobby-service/src/server.ts",
   "lobby-service/src/store.ts",
   "lobby-service/tsconfig.json",
@@ -226,9 +228,9 @@ test("service package uses exact production allowlist and deterministic temporar
       version?: unknown;
       packages?: Record<string, { version?: unknown }>;
     };
-    assert.equal(packageJson.version, "0.5.1");
-    assert.equal(packageLock.version, "0.5.1");
-    assert.equal(packageLock.packages?.[""]?.version, "0.5.1");
+    assert.equal(packageJson.version, "0.5.2");
+    assert.equal(packageLock.version, "0.5.2");
+    assert.equal(packageLock.packages?.[""]?.version, "0.5.2");
 
     for (const packagePath of expectedFiles) {
       assert.deepEqual(
@@ -281,7 +283,7 @@ test("service package rejects malformed protected traversal and symlink outputs"
   }
 });
 
-test("release sources pin service v0.5.1 and client v0.5.2 while preserving older fixtures", () => {
+test("release sources pin service and client v0.5.2 while preserving older fixtures", () => {
   const servicePackage = JSON.parse(readFileSync(join(repositoryRoot, "lobby-service/package.json"), "utf8")) as {
     version?: unknown;
   };
@@ -293,9 +295,9 @@ test("release sources pin service v0.5.1 and client v0.5.2 while preserving olde
     version?: unknown;
   };
   const clientProject = readFileSync(join(repositoryRoot, "sts2-lan-connect/sts2_lan_connect.csproj"), "utf8");
-  assert.equal(servicePackage.version, "0.5.1");
-  assert.equal(serviceLock.version, "0.5.1");
-  assert.equal(serviceLock.packages?.[""]?.version, "0.5.1");
+  assert.equal(servicePackage.version, "0.5.2");
+  assert.equal(serviceLock.version, "0.5.2");
+  assert.equal(serviceLock.packages?.[""]?.version, "0.5.2");
   assert.equal(clientManifest.version, "0.5.2");
   assert.match(clientProject, /<Version>0\.5\.2<\/Version>/);
   assert.match(clientProject, /<AssemblyVersion>0\.5\.2\.0<\/AssemblyVersion>/);

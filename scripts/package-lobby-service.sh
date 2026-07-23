@@ -74,6 +74,7 @@ lobby-service/package-lock.json
 lobby-service/package.json
 lobby-service/tsconfig.json
 lobby-service/scripts/generate-server-admin-password-hash.mjs
+lobby-service/scripts/service-runtime.mjs
 lobby-service/deploy/.env.example
 lobby-service/deploy/docker-compose.lobby-service.yml
 lobby-service/deploy/lobby-service.docker.env.example
@@ -92,6 +93,7 @@ lobby-service/src/room-cleanup.ts
 lobby-service/src/server-admin-auth.ts
 lobby-service/src/server-admin-state.ts
 lobby-service/src/server-admin-ui.ts
+lobby-service/src/service-update.ts
 lobby-service/src/server.ts
 lobby-service/src/store.ts
 lobby-service/src/chat/dedupe-cache.ts

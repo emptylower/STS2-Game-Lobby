@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import vm from "node:vm";
 import {
   beginServerAdminSingleFlight,
   buildServerAdminRequestInit,
@@ -10,6 +11,13 @@ import {
   renderServerAdminPage,
   resolveServerAdminChatControlState,
 } from "./server-admin-ui.js";
+
+test("server admin page inline script parses without syntax errors", () => {
+  const html = renderServerAdminPage("0.5.2");
+  const match = html.match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(match, "inline bootstrap script should be present");
+  new vm.Script(match[1] as string);
+});
 
 test("server admin request options attach CSRF only to unsafe same-origin requests", () => {
   assert.deepEqual(buildServerAdminRequestInit("GET", "csrf-token"), {
@@ -240,11 +248,26 @@ test("server admin page centralizes CSRF requests and 401/403 handling", () => {
   );
 });
 
-test("server admin page shows server version in current status block", () => {
+test("server admin page renders the service update center and protected update actions", () => {
   const html = renderServerAdminPage("0.5.0");
 
-  assert.match(html, /title: "当前状态"[\s\S]*label: "服务器版本"[\s\S]*serviceVersionLabel/);
+  assert.match(html, /服务端版本/);
   assert.match(html, /Lobby Service v0\.5\.0/);
+  assert.match(html, /\/server-admin\/update\/check/);
+  assert.match(html, /\/server-admin\/update\/install/);
+  assert.match(html, /更新预检查未通过/);
+  assert.match(html, /一键更新/);
+  assert.match(html, /watchServiceRestart/);
+});
+
+test("server admin page uses dashboard metrics and button toggles instead of a status table", () => {
+  const html = renderServerAdminPage("0.5.2");
+  assert.match(html, /className: "metric-grid"/);
+  assert.match(html, /className: "detail-panels"/);
+  assert.match(html, /aria-label": "服务器运行仪表盘"/);
+  assert.match(html, /function ToggleButton/);
+  assert.match(html, /"aria-pressed": enabled/);
+  assert.doesNotMatch(html, /h\(Descriptions/);
 });
 
 test("server admin page maps node-network status from peerRuntimeState", () => {
@@ -258,7 +281,7 @@ test("server admin page maps node-network status from peerRuntimeState", () => {
   assert.match(html, /已加入节点网络/);
 });
 
-test("server admin page mobile layout wraps actions and bounds long status content", () => {
+test("server admin page mobile layout wraps actions and collapses dashboard grids", () => {
   const html = renderServerAdminPage("0.5.0");
 
   assert.match(html, /className: "settings-actions"/);
@@ -268,6 +291,7 @@ test("server admin page mobile layout wraps actions and bounds long status conte
   assert.match(html, /\.console-card \.ant-card-extra \{[\s\S]*margin-inline-start: 0/);
   assert.match(html, /\.settings-actions,[\s\S]*\.announcement-actions \{[\s\S]*flex-wrap: wrap[\s\S]*width: 100%/);
   assert.match(html, /\.settings-actions \.ant-btn,[\s\S]*white-space: normal[\s\S]*height: auto/);
-  assert.match(html, /\.status-block \.ant-descriptions-view table \{[\s\S]*table-layout: fixed/);
-  assert.match(html, /\.status-block \.ant-descriptions-item-content \{[\s\S]*overflow-wrap: anywhere[\s\S]*word-break: break-word/);
+  assert.match(html, /@media \(max-width: 640px\)[\s\S]*\.metric-grid,[\s\S]*\.detail-panels \{[\s\S]*grid-template-columns: 1fr/);
+  assert.match(html, /\.update-layout \{[\s\S]*grid-template-columns: 1fr/);
+  assert.match(html, /\.toggle-button \{[\s\S]*width: 100%/);
 });

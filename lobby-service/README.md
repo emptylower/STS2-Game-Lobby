@@ -12,9 +12,9 @@
 
 # STS2 Lobby Service
 
-> 本文档对应 **v0.5.1**。去中心化节点网络和 v0.5.0 聊天能力保持不变；v0.5.1 新增私有 gameplay MOD 预检。v0.3.x 时代的 `SERVER_REGISTRY_*` 环境变量自 v0.4.0 起已完全删除。
+> 本文档对应 **v0.5.2**。本版在保留既有节点网络、聊天与 MOD 预检协议的基础上，新增服务端自动更新与响应式运维 Dashboard。
 
-正式服务端源码包见 [GitHub v0.5.1 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1) 中的 `sts2_lobby_service.zip`。
+正式服务端源码包见 [GitHub v0.5.2 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2) 中的 `sts2_lobby_service.zip`。
 
 ## 文档定位
 
@@ -23,7 +23,7 @@
 它主要回答：
 
 - 该服务负责什么、**不**负责什么
-- 当前 v0.5.1 推荐的部署路径是什么
+- 当前 v0.5.2 推荐的部署路径是什么
 - 首次部署完成后先检查哪些项目
 - 如何配置节点网络、私有访问、管理面板与客户端默认大厅
 - 需要深入查阅时，环境变量和 API 在哪里看
@@ -192,6 +192,7 @@ docker compose -f deploy/docker-compose.lobby-service.yml up -d
 ```
 
 默认将 `./deploy/data/lobby-service` 挂载到容器内 `/app/data`，并将 `SERVER_ADMIN_STATE_FILE` 指向 `/app/data/server-admin.json`。
+自动更新槽位也位于这个持久卷内。面板安装并重启后，即使容器随后被重新创建，已安装的服务版本仍会由 `service-runtime.mjs` 继续加载；不需要挂载 Docker Socket。
 
 如果 Docker Hub 拉取较慢，可复制 `deploy/.env.example` 为 `deploy/.env`，再调整 `STS2_NODE_IMAGE`。
 
@@ -460,6 +461,19 @@ MOD 同步只允许客户端在明确确认后调用 Steam Workshop 订阅，以
 | `SERVER_ADMIN_SESSION_SECRET` | 会话密钥 |
 | `SERVER_ADMIN_SESSION_TTL_HOURS` | 会话有效期（小时） |
 | `SERVER_ADMIN_STATE_FILE` | 状态持久化文件路径 |
+| `SERVER_UPDATE_ENABLED` | 是否启用 GitHub Release 自动检查与一键更新；默认 `true` |
+| `SERVER_UPDATE_DATA_DIR` | 更新状态、当前槽位与回退槽位的持久化目录 |
+| `SERVER_UPDATE_CHECK_INTERVAL_MINUTES` | 后台检查周期，范围 15–1440 分钟；默认 `360` |
+| `SERVER_UPDATE_RELEASES_API_URL` | 可选的可信 GitHub-compatible Release 列表地址，默认使用官方仓库；仅用于受控镜像或测试 |
+| `SERVER_UPDATE_DEPLOYMENT_MODE` | `docker` / `systemd`；模板会按部署方式预设，未设置时自动识别 |
+
+### 自动更新与回退
+
+- 服务通过 GitHub 最新稳定 Release 的 `sts2_lobby_service.zip` 检查版本，只有严格大于当前 `x.y.z` 版本时才提示更新。
+- 安装前会检查 Linux、部署方式、持久目录写权限、运行时启动器、`npm` 与 `unzip`。预检失败时面板会列出原因，不会修改当前版本。
+- 下载包限制为 128 MB，ZIP 路径必须位于 `sts2_lobby_service/`，包内版本必须与 Release 标签一致；依赖安装、编译和生产依赖裁剪全部成功后才原子切换。
+- `current` 是活动更新槽位，`rollback` 保留上一槽位。Docker 使用 `/app/data/service-update`；systemd 默认使用服务目录下的 `data/service-update`。
+- 更新完成后进程以专用退出码结束，由 Docker `restart: unless-stopped` 或 systemd `Restart=always` 自动拉起。重启会清空内存中的管理会话和当前房间连接，需要重新登录面板。
 
 ### 节点网络（PEER_*）—— v0.4.0 新增
 
@@ -548,9 +562,9 @@ MOD 同步只允许客户端在明确确认后调用 Steam Workshop 订阅，以
 
 # STS2 Lobby Service
 
-> Targets **v0.5.1**. It retains the v0.4.0 decentralized peer network and v0.5.0 chat capabilities, and adds private gameplay-MOD preflight. All `SERVER_REGISTRY_*` env vars from the v0.3.x era have been inert since v0.4.0.
+> Targets **v0.5.2**. It retains the existing peer, chat, and MOD-preflight protocols while adding service self-update and a responsive operations dashboard.
 
-The official service source package is `sts2_lobby_service.zip` in the [GitHub v0.5.1 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1).
+The official service source package is `sts2_lobby_service.zip` in the [GitHub v0.5.2 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2).
 
 This README is the **operator/admin guide** for `lobby-service`.
 
@@ -628,4 +642,4 @@ When `LOBBY_ACCESS_TOKEN` is unset, `CREATE_ROOM_TOKEN` also authorizes protecte
 
 - Environment variables: see [`../deploy/lobby-service.env.example`](../deploy/lobby-service.env.example)
 - Current deployment guide (Chinese): [`../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md)
-- Historical compatibility notes are intentionally demoted and not part of the v0.5.1 path
+- Historical compatibility notes are intentionally demoted and not part of the v0.5.2 path

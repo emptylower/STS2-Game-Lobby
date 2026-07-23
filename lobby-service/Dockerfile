@@ -18,10 +18,15 @@ ENV NODE_ENV=production
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY scripts/service-runtime.mjs ./scripts/service-runtime.mjs
 
-RUN mkdir -p /app/data
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /app/data
 
+ENV STS2_CONTAINER=true
 VOLUME ["/app/data"]
 EXPOSE 8787/tcp
 
-CMD ["node", "--enable-source-maps", "dist/server.js"]
+CMD ["node", "scripts/service-runtime.mjs"]

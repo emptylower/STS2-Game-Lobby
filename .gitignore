@@ -27,3 +27,9 @@ releases/sts2_peer_sidecar/
 .claude/
 .omx/
 .omo/run-continuation/
+
+# Local agent/browser state and untracked historical planning archives.
+.omc/
+.playwright-mcp/
+.superpowers/
+docs/.local-archive/

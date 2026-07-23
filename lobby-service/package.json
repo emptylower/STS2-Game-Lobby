@@ -1,6 +1,6 @@
 {
   "name": "sts2-lobby-service",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Public lobby, room coordination, relay fallback, and rich chat service for STS2 LAN Connect.",
   "private": true,
   "license": "GPL-3.0-only",
@@ -19,7 +19,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "hash-admin-password": "node ./scripts/generate-server-admin-password-hash.mjs",
-    "start": "node --enable-source-maps dist/server.js",
+    "start": "node scripts/service-runtime.mjs",
     "test": "rm -rf dist && npm run build && find dist -name '*.test.js' -print0 | xargs -0 node --test"
   },
   "dependencies": {

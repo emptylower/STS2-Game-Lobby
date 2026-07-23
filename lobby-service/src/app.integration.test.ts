@@ -2448,7 +2448,11 @@ test("server admin CSRF protects every mutation without leaking tokens", async (
     }
 
     async function mutation(
-      path: "/server-admin/settings" | "/server-admin/chat/clear-history" | "/server-admin/logout",
+      path: "/server-admin/settings"
+        | "/server-admin/chat/clear-history"
+        | "/server-admin/update/check"
+        | "/server-admin/update/install"
+        | "/server-admin/logout",
       cookie?: string,
       csrfToken?: string,
     ) {
@@ -2488,6 +2492,8 @@ test("server admin CSRF protects every mutation without leaking tokens", async (
     for (const path of [
       "/server-admin/settings",
       "/server-admin/chat/clear-history",
+      "/server-admin/update/check",
+      "/server-admin/update/install",
       "/server-admin/logout",
     ] as const) {
       const withoutSession = await mutation(path, undefined, sessionA.csrfToken);

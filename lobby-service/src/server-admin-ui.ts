@@ -87,6 +87,7 @@ export function renderServerAdminPage(serviceVersion: string) {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#090f0d" />
     <title>STS2 服务器控制台</title>
     <link rel="stylesheet" href="https://unpkg.com/antd@5.22.6/dist/reset.css" />
     <style>
@@ -98,13 +99,15 @@ export function renderServerAdminPage(serviceVersion: string) {
       body {
         margin: 0;
         background:
-          radial-gradient(circle at top left, rgba(22,119,255,0.08), transparent 22%),
-          linear-gradient(180deg, #f5f7fa 0%, #eef3f8 100%);
-        color: #1f2329;
+          radial-gradient(1100px 480px at 88% -12%, rgba(47, 212, 164, 0.08), transparent 60%),
+          radial-gradient(820px 400px at -12% -6%, rgba(92, 179, 230, 0.06), transparent 55%),
+          #090f0d;
+        color: #e8f0ea;
         font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
       }
       .page-shell {
         min-height: 100vh;
+        background: transparent;
       }
       .page-header {
         position: sticky;
@@ -112,36 +115,79 @@ export function renderServerAdminPage(serviceVersion: string) {
         z-index: 8;
         height: auto;
         min-height: 0;
+        min-width: 0;
         line-height: normal;
         padding: 0;
-        background: rgba(255,255,255,0.86);
-        backdrop-filter: blur(10px);
-        border-bottom: 1px solid rgba(5, 5, 5, 0.06);
+        background: rgba(9, 15, 13, 0.85);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border-bottom: 1px solid #1c2a22;
       }
       .page-header-inner {
-        max-width: 1280px;
+        max-width: 1360px;
         margin: 0 auto;
-        padding: 20px 24px;
+        padding: 16px 24px;
         display: flex;
         flex-wrap: wrap;
-        align-items: flex-start;
+        align-items: center;
         justify-content: space-between;
-        gap: 16px;
+        gap: 14px;
       }
       .page-brand {
         display: flex;
-        flex-direction: column;
-        gap: 4px;
+        align-items: center;
+        gap: 12px;
         min-width: 0;
         flex: 1 1 auto;
+      }
+      .brand-mark {
+        width: 40px;
+        height: 40px;
+        flex: 0 0 auto;
+        border-radius: 11px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #123b30, #0d1f1a);
+        border: 1px solid rgba(47, 212, 164, 0.4);
+        box-shadow: 0 0 18px rgba(47, 212, 164, 0.15);
+        color: #2fd4a4;
+      }
+      .brand-mark .svg-icon {
+        width: 20px;
+        height: 20px;
+      }
+      .page-brand-text {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
       }
       .page-brand-title {
         margin: 0 !important;
         line-height: 1.15;
         overflow-wrap: anywhere;
+        color: #eef5f0 !important;
       }
       .page-brand-subtitle {
         line-height: 1.45;
+        overflow-wrap: anywhere;
+        color: #7f948a !important;
+        font-size: 12px;
+      }
+      .version-chip {
+        display: inline-flex;
+        align-items: center;
+        align-self: flex-start;
+        max-width: 100%;
+        padding: 1px 9px;
+        border-radius: 999px;
+        border: 1px solid #2a3d33;
+        background: #131e19;
+        color: #8ea398;
+        font-size: 11px;
+        line-height: 1.6;
+        font-variant-numeric: tabular-nums;
         overflow-wrap: anywhere;
       }
       .page-actions {
@@ -154,9 +200,41 @@ export function renderServerAdminPage(serviceVersion: string) {
         margin-left: auto;
       }
       .page-content {
-        max-width: 1280px;
+        width: 100%;
+        max-width: 1360px;
+        min-width: 0;
         margin: 0 auto;
-        padding: 24px;
+        padding: 24px 24px 12px;
+      }
+      .page-footer {
+        width: 100%;
+        max-width: 1360px;
+        min-width: 0;
+        margin: 4px auto 0;
+        padding: 16px 24px 28px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px 16px;
+        border-top: 1px solid #14201a;
+        color: #64766d;
+        font-size: 12px;
+      }
+      .footer-group {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+        min-width: 0;
+      }
+      .footer-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #2fd4a4;
+        box-shadow: 0 0 8px rgba(47, 212, 164, 0.6);
+        flex: 0 0 auto;
       }
       .login-shell {
         min-height: 100vh;
@@ -167,36 +245,286 @@ export function renderServerAdminPage(serviceVersion: string) {
       }
       .login-wrap {
         width: 100%;
-        max-width: 420px;
+        max-width: 400px;
       }
       .login-card,
       .console-card {
-        border-radius: 18px;
-        box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
+        border-radius: 14px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+        border-color: #1c2a22;
         min-width: 0;
+      }
+      .login-brand {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 18px;
+        text-align: center;
+      }
+      .login-brand .brand-mark {
+        width: 52px;
+        height: 52px;
+        border-radius: 14px;
+      }
+      .login-brand .brand-mark .svg-icon {
+        width: 26px;
+        height: 26px;
+      }
+      .page-actions .ant-badge-status-text {
+        color: #c6d6cd;
+      }
+      .page-actions .ant-btn {
+        color: #d7e4dc;
+        border-color: #33463c;
+        background: transparent;
+      }
+      .console-card .ant-card-head {
+        border-bottom-color: #1c2a22;
+      }
+      .dashboard-stack {
+        display: grid;
+        gap: 16px;
+      }
+      .update-panel {
+        border: 1px solid rgba(47, 212, 164, 0.35);
+        background: linear-gradient(120deg, rgba(47, 212, 164, 0.10), rgba(16, 25, 20, 0) 42%), #101914;
+      }
+      .update-panel.available {
+        border-color: rgba(242, 176, 77, 0.5);
+        background: linear-gradient(120deg, rgba(242, 176, 77, 0.12), rgba(16, 25, 20, 0) 45%), #101914;
+      }
+      .update-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 20px;
+      }
+      .version-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 10px;
+      }
+      .version-number {
+        font-size: 30px;
+        font-weight: 700;
+        line-height: 1;
+        color: #eef5f0;
+        font-variant-numeric: tabular-nums;
+      }
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .metric-tile {
+        min-height: 128px;
+        padding: 16px 18px;
+        border: 1px solid #1c2a22;
+        border-radius: 14px;
+        background: linear-gradient(180deg, #131e19, #101914);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        justify-content: flex-start;
+      }
+      .metric-tile.tone-good { border-top: 2px solid #2fd4a4; }
+      .metric-tile.tone-warn { border-top: 2px solid #f2b04d; }
+      .metric-tile.tone-info { border-top: 2px solid #5cb3e6; }
+      .metric-label {
+        color: #8ea398;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+      }
+      .metric-label-icon {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .metric-label-icon .svg-icon {
+        width: 13px;
+        height: 13px;
+        color: #5f7569;
+      }
+      .metric-value {
+        color: #eef5f0;
+        font-size: 25px;
+        font-weight: 700;
+        line-height: 1.15;
+        overflow-wrap: anywhere;
+        font-variant-numeric: tabular-nums;
+      }
+      .metric-main {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .metric-note {
+        color: #64766d;
+        font-size: 12px;
+      }
+      .sparkline {
+        width: 100%;
+        height: 36px;
+        display: block;
+        margin: 2px 0;
+      }
+      .sparkline-line {
+        fill: none;
+        stroke: #2fd4a4;
+        stroke-width: 1.6;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        vector-effect: non-scaling-stroke;
+      }
+      .sparkline-area {
+        fill: rgba(47, 212, 164, 0.12);
+        stroke: none;
+      }
+      .sparkline-empty {
+        display: flex;
+        align-items: center;
+        color: #64766d;
+        font-size: 12px;
+      }
+      .usage-ring {
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+      }
+      .usage-ring-inner {
+        width: 74%;
+        height: 74%;
+        border-radius: 50%;
+        background: #101914;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        color: #eef5f0;
+        font-variant-numeric: tabular-nums;
+      }
+      .meter {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        overflow: hidden;
+        margin: 4px 0 12px;
+      }
+      .meter-fill {
+        height: 100%;
+        border-radius: 999px;
+        transition: width 0.45s ease;
+      }
+      .meter-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        margin-top: 8px;
+        font-size: 12px;
+        color: #8ea398;
+      }
+      .legend-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+      }
+      .legend-empty {
+        color: #64766d;
+      }
+      .quality-meter {
+        margin-bottom: 12px;
+      }
+      .quality-meter-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 12px;
+        color: #8ea398;
+        margin-bottom: 6px;
+      }
+      .quality-meter-value {
+        color: #dce8e0;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .detail-panels {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .detail-panel {
+        padding: 18px;
+        border: 1px solid #1c2a22;
+        border-radius: 14px;
+        background: linear-gradient(180deg, #121c17, #0f1713);
+      }
+      .detail-panel-title {
+        margin: 0 0 12px;
+        font-size: 14px;
+        font-weight: 700;
+        color: #dce8e0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .detail-panel-title .svg-icon {
+        width: 15px;
+        height: 15px;
+        color: #2fd4a4;
+        flex: 0 0 auto;
+      }
+      .detail-row {
+        min-height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border-top: 1px solid #18241e;
+        font-size: 13px;
+      }
+      .detail-row-label { color: #7f948a; }
+      .detail-row-value {
+        color: #e8f0ea;
+        font-weight: 600;
+        text-align: right;
+        overflow-wrap: anywhere;
+        font-variant-numeric: tabular-nums;
+      }
+      .toggle-button {
+        min-width: 104px;
+        border-color: #33463c !important;
+        background: #18231e !important;
+        color: #9fb3a8 !important;
+      }
+      .toggle-button.active {
+        border-color: #2fd4a4 !important;
+        background: linear-gradient(135deg, #1d5c48, #155040) !important;
+        color: #eafff7 !important;
+      }
+      .feature-grid .ant-form-item {
+        margin-bottom: 14px;
+        padding: 12px;
+        border: 1px solid #1c2a22;
+        border-radius: 10px;
+        background: #131e19;
       }
       .console-card .ant-card-head-wrapper,
       .console-card .ant-card-head-title,
       .console-card .ant-card-extra {
         min-width: 0;
       }
-      .status-block .ant-descriptions-item-label {
-        width: 164px;
-        color: #667085;
-      }
-      .status-block .ant-descriptions-view table {
-        table-layout: fixed;
-        width: 100%;
-      }
-      .status-block .ant-descriptions-item-content {
-        min-width: 0;
-        overflow-wrap: anywhere;
-        word-break: break-word;
-      }
       .section-title {
         display: flex;
         justify-content: space-between;
         align-items: center;
+        flex-wrap: wrap;
         gap: 12px;
       }
       .announcement-list {
@@ -204,10 +532,10 @@ export function renderServerAdminPage(serviceVersion: string) {
         gap: 14px;
       }
       .announcement-card {
-        border: 1px solid rgba(5, 5, 5, 0.08);
-        border-radius: 16px;
+        border: 1px solid #1c2a22;
+        border-radius: 14px;
         padding: 16px;
-        background: rgba(248, 250, 252, 0.75);
+        background: #131e19;
       }
       .announcement-card-header {
         display: flex;
@@ -234,15 +562,15 @@ export function renderServerAdminPage(serviceVersion: string) {
       }
       .announcement-empty {
         padding: 18px 20px;
-        border-radius: 16px;
-        background: rgba(248, 250, 252, 0.8);
-        border: 1px dashed rgba(5, 5, 5, 0.12);
+        border-radius: 14px;
+        background: #131e19;
+        border: 1px dashed #2a3d33;
       }
       .announcement-card .ant-input,
       .announcement-card .ant-input-affix-wrapper,
       .announcement-card .ant-select-selector,
       .announcement-card .ant-input-number {
-        border-radius: 12px !important;
+        border-radius: 10px !important;
       }
       .announcement-card .ant-input-textarea textarea {
         min-height: 112px;
@@ -251,6 +579,225 @@ export function renderServerAdminPage(serviceVersion: string) {
         display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
         gap: 4px 16px;
+      }
+      .console-nav {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 20px;
+        padding: 6px;
+        border: 1px solid #1c2a22;
+        border-radius: 14px;
+        background: #0d1512;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+      }
+      .console-nav::-webkit-scrollbar {
+        display: none;
+      }
+      .console-nav-btn {
+        flex: 1 0 auto;
+        min-width: max-content;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 10px 18px;
+        border-radius: 10px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: #8ea398;
+        font-size: 14px;
+        font-family: inherit;
+        cursor: pointer;
+        transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+      }
+      .console-nav-btn:hover {
+        color: #d7e4dc;
+        background: #131e19;
+      }
+      .console-nav-btn.active {
+        background: #15231d;
+        color: #eafff7;
+        border-color: rgba(47, 212, 164, 0.4);
+      }
+      .console-nav-btn .svg-icon {
+        width: 15px;
+        height: 15px;
+      }
+      .console-nav-btn.active .svg-icon {
+        color: #2fd4a4;
+      }
+      .nav-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+      }
+      .nav-count {
+        min-width: 20px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: #1a2620;
+        border: 1px solid #2a3d33;
+        font-size: 11px;
+        line-height: 1.6;
+        color: #8ea398;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+      @keyframes consoleFadeUp {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: none; }
+      }
+      .tab-panel,
+      .dashboard-stack {
+        animation: consoleFadeUp 0.25s ease;
+      }
+      .tab-narrow {
+        max-width: 860px;
+        margin: 0 auto;
+        width: 100%;
+      }
+      .update-teaser {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        padding: 12px 16px;
+        border-radius: 12px;
+        border: 1px solid rgba(242, 176, 77, 0.5);
+        background: linear-gradient(120deg, rgba(242, 176, 77, 0.14), rgba(242, 176, 77, 0.04));
+        color: #f5c877;
+        font-size: 13px;
+        font-family: inherit;
+        cursor: pointer;
+        text-align: left;
+        transition: background 0.2s ease;
+      }
+      .update-teaser:hover {
+        background: linear-gradient(120deg, rgba(242, 176, 77, 0.2), rgba(242, 176, 77, 0.07));
+      }
+      .update-teaser-arrow {
+        flex: 0 0 auto;
+        font-size: 15px;
+      }
+      .panel-visual-row {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      .panel-visual-main {
+        flex: 1 1 180px;
+        min-width: 0;
+      }
+      .panel-visual-value {
+        font-size: 16px;
+        font-weight: 700;
+        color: #eef5f0;
+        margin-bottom: 4px;
+        font-variant-numeric: tabular-nums;
+      }
+      .panel-visual-note {
+        font-size: 12px;
+        color: #64766d;
+      }
+      .fact-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 2px 0 12px;
+      }
+      .fact-chip {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        padding: 8px 12px;
+        border: 1px solid #1c2a22;
+        border-radius: 10px;
+        background: #0d1512;
+        min-width: 0;
+        flex: 1 1 120px;
+      }
+      .fact-chip-label {
+        font-size: 11px;
+        color: #64766d;
+      }
+      .fact-chip-value {
+        font-size: 13px;
+        font-weight: 600;
+        color: #e8f0ea;
+        font-variant-numeric: tabular-nums;
+        overflow-wrap: anywhere;
+      }
+      .relay-donut {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
+      }
+      .relay-donut-svg {
+        width: 96px;
+        height: 96px;
+        flex: 0 0 auto;
+      }
+      .donut-track {
+        fill: none;
+        stroke: rgba(255, 255, 255, 0.07);
+        stroke-width: 11;
+      }
+      .donut-host {
+        fill: none;
+        stroke: #2fd4a4;
+        stroke-width: 11;
+        stroke-linecap: round;
+      }
+      .donut-client {
+        fill: none;
+        stroke: #5cb3e6;
+        stroke-width: 11;
+        stroke-linecap: round;
+      }
+      .donut-center-value {
+        fill: #eef5f0;
+        font-size: 24px;
+        font-weight: 700;
+        text-anchor: middle;
+      }
+      .donut-center-label {
+        fill: #64766d;
+        font-size: 10px;
+        text-anchor: middle;
+      }
+      .relay-donut-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        font-size: 12px;
+        color: #8ea398;
+      }
+      .release-notes {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        background: #0d1512;
+        border: 1px solid #1c2a22;
+        padding: 12px 14px;
+        border-radius: 10px;
+        font-size: 12px;
+        line-height: 1.7;
+        color: #8ea398;
+        max-height: 280px;
+        overflow-y: auto;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .tab-panel,
+        .dashboard-stack {
+          animation: none;
+        }
       }
       @media (max-width: 992px) {
         .page-header-inner,
@@ -264,17 +811,20 @@ export function renderServerAdminPage(serviceVersion: string) {
         .feature-grid {
           grid-template-columns: 1fr;
         }
+        .metric-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
       }
       @media (max-width: 640px) {
         .page-header-inner {
           flex-direction: column;
           align-items: stretch;
-          padding-top: 16px;
-          padding-bottom: 16px;
+          padding-top: 14px;
+          padding-bottom: 14px;
           gap: 12px;
         }
         .page-brand-title {
-          font-size: 24px !important;
+          font-size: 22px !important;
         }
         .page-brand-subtitle {
           font-size: 12px;
@@ -325,8 +875,40 @@ export function renderServerAdminPage(serviceVersion: string) {
         .announcement-card-header {
           flex-wrap: wrap;
         }
-        .status-block .ant-descriptions-item-label {
-          width: 120px;
+        .update-layout {
+          grid-template-columns: 1fr;
+        }
+        .update-layout .ant-space {
+          width: 100%;
+        }
+        .update-layout .ant-btn {
+          flex: 1 1 auto;
+        }
+        .metric-grid,
+        .detail-panels {
+          grid-template-columns: 1fr;
+        }
+        .metric-tile {
+          min-height: 104px;
+        }
+        .metric-value {
+          font-size: 22px;
+        }
+        .version-number {
+          font-size: 24px;
+        }
+        .toggle-button {
+          width: 100%;
+        }
+        .console-nav {
+          margin-bottom: 16px;
+        }
+        .console-nav-btn {
+          padding: 9px 14px;
+          font-size: 13px;
+        }
+        .panel-visual-row {
+          gap: 14px;
         }
       }
       @media (max-width: 480px) {
@@ -337,14 +919,16 @@ export function renderServerAdminPage(serviceVersion: string) {
         .page-brand-subtitle {
           display: none;
         }
+        .page-footer {
+          flex-direction: column;
+          align-items: flex-start;
+          padding-bottom: 22px;
+        }
         .page-actions {
           justify-content: space-between;
         }
         .page-actions .ant-badge-status-text {
           font-size: 12px;
-        }
-        .status-block .ant-descriptions-item-label {
-          width: 108px;
         }
       }
     </style>
@@ -398,6 +982,50 @@ export function renderServerAdminPage(serviceVersion: string) {
           { value: "warning", label: "警告" },
           { value: "info", label: "信息" },
         ];
+
+        const ADMIN_THEME = {
+          algorithm: antd.theme.darkAlgorithm,
+          token: {
+            colorPrimary: "#2fd4a4",
+            colorInfo: "#2fd4a4",
+            colorBgContainer: "#101914",
+            colorBgElevated: "#182219",
+            colorBorder: "#233329",
+            colorBorderSecondary: "#1c2a22",
+            colorText: "#e8f0ea",
+            colorTextSecondary: "#8ea398",
+            borderRadius: 10,
+            fontFamily: "'PingFang SC','Microsoft YaHei',sans-serif",
+          },
+        };
+
+        const ICONS = {
+          activity: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+          gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+          network: '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/>',
+          chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+          target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+          server: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
+          dashboard: '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+          sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
+          megaphone: '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+          download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+        };
+
+        function svgIcon(inner) {
+          return h("svg", {
+            className: "svg-icon",
+            viewBox: "0 0 24 24",
+            fill: "none",
+            stroke: "currentColor",
+            strokeWidth: 2,
+            strokeLinecap: "round",
+            strokeLinejoin: "round",
+            "aria-hidden": "true",
+            focusable: "false",
+            dangerouslySetInnerHTML: { __html: inner },
+          });
+        }
 
         class AdminRequestError extends Error {
           constructor(status, code, messageText) {
@@ -645,6 +1273,224 @@ export function renderServerAdminPage(serviceVersion: string) {
           return "announcement-" + Date.now() + "-" + Math.random().toString(16).slice(2);
         }
 
+        function ToggleButton(props) {
+          const enabled = props.value === true;
+          return h(Button, {
+            className: "toggle-button" + (enabled ? " active" : ""),
+            disabled: props.disabled,
+            "aria-pressed": enabled,
+            onClick: function () {
+              if (!props.disabled && typeof props.onChange === "function") props.onChange(!enabled);
+            },
+          }, enabled ? (props.activeLabel || "已开启") : (props.inactiveLabel || "已关闭"));
+        }
+
+        function metricTile(label, value, note, tone, iconInner) {
+          return h(
+            "div",
+            { className: "metric-tile tone-" + (tone || "info") },
+            h(
+              "div",
+              { className: "metric-label" + (iconInner ? " metric-label-icon" : "") },
+              iconInner ? svgIcon(iconInner) : null,
+              label
+            ),
+            h("div", { className: "metric-value" }, value),
+            h("div", { className: "metric-note" }, note)
+          );
+        }
+
+        function detailRow(label, value) {
+          return h(
+            "div",
+            { className: "detail-row" },
+            h("span", { className: "detail-row-label" }, label),
+            h("span", { className: "detail-row-value" }, value)
+          );
+        }
+
+        function usageRing(ratio, size) {
+          const pct = typeof ratio === "number" && ratio > 0
+            ? Math.min(100, Math.round(ratio * 100))
+            : 0;
+          const color = pct > 80 ? "#ef6f6f" : pct > 60 ? "#f2b04d" : "#2fd4a4";
+          const dimension = size || 52;
+          return h(
+            "div",
+            {
+              className: "usage-ring",
+              role: "img",
+              "aria-label": "容量利用率 " + pct + "%",
+              style: {
+                width: dimension,
+                height: dimension,
+                background: "conic-gradient(" + color + " " + pct + "%, rgba(255, 255, 255, 0.07) 0)",
+              },
+            },
+            h(
+              "div",
+              { className: "usage-ring-inner", style: { fontSize: dimension >= 50 ? 13 : 11 } },
+              pct + "%"
+            )
+          );
+        }
+
+        function utilizationMeter(ratio) {
+          const pct = typeof ratio === "number" && ratio > 0
+            ? Math.min(100, Math.round(ratio * 1000) / 10)
+            : 0;
+          const color = pct > 80 ? "#ef6f6f" : pct > 60 ? "#f2b04d" : "#2fd4a4";
+          return h(
+            "div",
+            { className: "meter" },
+            h("div", {
+              className: "meter-fill",
+              style: { width: pct + "%", background: "linear-gradient(90deg, " + color + "99, " + color + ")" },
+            })
+          );
+        }
+
+        function relayDonut(hosts, clients) {
+          const hostCount = typeof hosts === "number" && hosts > 0 ? hosts : 0;
+          const clientCount = typeof clients === "number" && clients > 0 ? clients : 0;
+          const total = hostCount + clientCount;
+          const radius = 42;
+          const circumference = 2 * Math.PI * radius;
+          const hostLength = total === 0 ? 0 : (hostCount / total) * circumference;
+          const clientLength = total === 0 ? 0 : (clientCount / total) * circumference;
+          return h(
+            "div",
+            { className: "relay-donut" },
+            h(
+              "svg",
+              {
+                className: "relay-donut-svg",
+                viewBox: "0 0 120 120",
+                role: "img",
+                "aria-label": "活跃 relay 会话 " + total + " 个",
+              },
+              h("circle", { cx: 60, cy: 60, r: radius, className: "donut-track" }),
+              hostLength > 0
+                ? h("circle", {
+                    cx: 60,
+                    cy: 60,
+                    r: radius,
+                    className: "donut-host",
+                    strokeDasharray: hostLength.toFixed(1) + " " + circumference.toFixed(1),
+                    transform: "rotate(-90 60 60)",
+                  })
+                : null,
+              clientLength > 0
+                ? h("circle", {
+                    cx: 60,
+                    cy: 60,
+                    r: radius,
+                    className: "donut-client",
+                    strokeDasharray: clientLength.toFixed(1) + " " + circumference.toFixed(1),
+                    strokeDashoffset: (-hostLength).toFixed(1),
+                    transform: "rotate(-90 60 60)",
+                  })
+                : null,
+              h("text", { x: 60, y: 58, className: "donut-center-value" }, String(total)),
+              h("text", { x: 60, y: 76, className: "donut-center-label" }, "活跃会话")
+            ),
+            h(
+              "div",
+              { className: "relay-donut-legend" },
+              h("span", null, h("i", { className: "legend-dot", style: { background: "#2fd4a4" } }), "Host " + hostCount),
+              h("span", null, h("i", { className: "legend-dot", style: { background: "#5cb3e6" } }), "Client " + clientCount),
+              total === 0 ? h("span", { className: "legend-empty" }, "暂无活跃 relay 会话") : null
+            )
+          );
+        }
+
+        function factChip(label, value) {
+          return h(
+            "div",
+            { className: "fact-chip" },
+            h("span", { className: "fact-chip-label" }, label),
+            h("span", { className: "fact-chip-value" }, value)
+          );
+        }
+
+        function chatQualityMeter(label, accepted, rejected) {
+          const ok = typeof accepted === "number" && accepted > 0 ? accepted : 0;
+          const bad = typeof rejected === "number" && rejected > 0 ? rejected : 0;
+          const total = ok + bad;
+          const rate = total === 0 ? null : ok / total;
+          const pct = rate === null ? 0 : Math.round(rate * 1000) / 10;
+          const color = rate === null
+            ? "rgba(255, 255, 255, 0.08)"
+            : rate >= 0.95 ? "#2fd4a4" : rate >= 0.85 ? "#f2b04d" : "#ef6f6f";
+          return h(
+            "div",
+            { className: "quality-meter" },
+            h(
+              "div",
+              { className: "quality-meter-head" },
+              h("span", null, label),
+              h("span", { className: "quality-meter-value" }, rate === null ? "暂无消息" : pct + "% 接受")
+            ),
+            h(
+              "div",
+              { className: "meter" },
+              h("div", { className: "meter-fill", style: { width: pct + "%", background: color } })
+            )
+          );
+        }
+
+        function Sparkline(props) {
+          const samples = Array.isArray(props.points) ? props.points.slice(-40) : [];
+          if (samples.length < 2) {
+            return h("div", { className: "sparkline sparkline-empty" }, "等待流量采样…");
+          }
+          const width = 120;
+          const height = 34;
+          const max = Math.max.apply(null, samples.concat([0.01]));
+          const step = width / (samples.length - 1);
+          const coords = samples.map(function (value, index) {
+            const x = index * step;
+            const y = height - 3 - (Math.max(0, value) / max) * (height - 6);
+            return [x, y];
+          });
+          const linePath = coords.map(function (point, index) {
+            return (index === 0 ? "M" : "L") + point[0].toFixed(1) + " " + point[1].toFixed(1);
+          }).join(" ");
+          const areaPath = linePath + " L" + width + " " + height + " L0 " + height + " Z";
+          return h(
+            "svg",
+            {
+              className: "sparkline",
+              viewBox: "0 0 " + width + " " + height,
+              preserveAspectRatio: "none",
+              "aria-hidden": "true",
+            },
+            h("path", { className: "sparkline-area", d: areaPath }),
+            h("path", { className: "sparkline-line", d: linePath })
+          );
+        }
+
+        function getUpdatePhaseMeta(update) {
+          const phase = update && update.phase;
+          const mapping = {
+            idle: ["default", "等待检查"],
+            checking: ["processing", "正在检查"],
+            available: ["warning", "发现新版本"],
+            downloading: ["processing", "正在下载"],
+            installing: ["processing", "正在安装"],
+            restarting: ["processing", "正在重启"],
+            up_to_date: ["success", "已是最新版"],
+            failed: ["error", "更新异常"],
+          };
+          return mapping[phase] || mapping.idle;
+        }
+
+        function deploymentLabel(mode) {
+          if (mode === "docker") return "Docker";
+          if (mode === "systemd") return "systemd";
+          return "未识别";
+        }
+
         function App() {
           const [booting, setBooting] = React.useState(true);
           const [session, setSession] = React.useState(null);
@@ -657,7 +1503,11 @@ export function renderServerAdminPage(serviceVersion: string) {
           const [saveLoading, setSaveLoading] = React.useState(false);
           const [clearLoading, setClearLoading] = React.useState(false);
           const [logoutLoading, setLogoutLoading] = React.useState(false);
+          const [updateCheckLoading, setUpdateCheckLoading] = React.useState(false);
+          const [updateInstallLoading, setUpdateInstallLoading] = React.useState(false);
           const [adminMutationInFlight, setAdminMutationInFlight] = React.useState(false);
+          const [activeTab, setActiveTab] = React.useState("overview");
+          const [lastSyncedAt, setLastSyncedAt] = React.useState(0);
           const [loginForm] = Form.useForm();
           const [settingsForm] = Form.useForm();
           const settingsRef = React.useRef(null);
@@ -668,11 +1518,14 @@ export function renderServerAdminPage(serviceVersion: string) {
           const loginInFlightRef = React.useRef(false);
           const adminMutationInFlightRef = React.useRef(false);
           const clearConfirmOpenRef = React.useRef(false);
+          const bandwidthHistoryRef = React.useRef([]);
           const watchedChatFeatures = Form.useWatch("chatFeatures", settingsForm);
           const chatControlState = resolveChatControlState(
             watchedChatFeatures || (settings && settings.chatFeatures) || null,
           );
           const statusAlert = settings ? buildStatusAlert(settings) : null;
+          const updateStatus = (settings && settings.update) || {};
+          const updatePhaseMeta = getUpdatePhaseMeta(updateStatus);
 
           function beginAdminMutation() {
             if (!beginSingleFlight(adminMutationInFlightRef)) return false;
@@ -746,8 +1599,16 @@ export function renderServerAdminPage(serviceVersion: string) {
             const displaySnapshot = source === "poll"
               ? mergePollSnapshot(previous, next, draftDirtyRef.current)
               : next;
+            if (typeof next.currentBandwidthMbps === "number" && isFinite(next.currentBandwidthMbps)) {
+              const history = bandwidthHistoryRef.current;
+              history.push(next.currentBandwidthMbps);
+              if (history.length > 60) {
+                history.splice(0, history.length - 60);
+              }
+            }
             settingsRef.current = displaySnapshot;
             setSettings(displaySnapshot);
+            setLastSyncedAt(Date.now());
             if (source === "poll" && draftDirtyRef.current) {
               setPollRefreshDeferred(true);
             } else {
@@ -819,6 +1680,7 @@ export function renderServerAdminPage(serviceVersion: string) {
               csrfTokenRef.current = nextSession.csrfToken;
               setSession(nextSession);
               await refreshSettings({ source: "initial" });
+              void checkServiceUpdate(true);
             } catch (error) {
               if (!error || error.status !== 401) invalidateSession();
             } finally {
@@ -859,6 +1721,7 @@ export function renderServerAdminPage(serviceVersion: string) {
               setSession(nextSession);
               message.success("登录成功");
               await refreshSettings({ source: "initial" });
+              void checkServiceUpdate(true);
             } catch (error) {
               if (csrfTokenRef.current) invalidateSession();
               message.error(error.message || "登录失败");
@@ -893,6 +1756,77 @@ export function renderServerAdminPage(serviceVersion: string) {
               endAdminMutation();
               setLogoutLoading(false);
             }
+          }
+
+          function applyUpdateStatus(update) {
+            if (!settingsRef.current) return;
+            const next = { ...settingsRef.current, update: update };
+            settingsRef.current = next;
+            setSettings(next);
+          }
+
+          async function checkServiceUpdate(silent) {
+            if (updateCheckLoading) return;
+            setUpdateCheckLoading(true);
+            try {
+              const result = await request("/server-admin/update/check", { method: "POST" });
+              applyUpdateStatus(result);
+              if (!silent) {
+                message.success(result.updateAvailable ? "发现可用服务端更新" : "当前已是最新版本");
+              }
+            } catch (error) {
+              if (!silent && (!error || (error.status !== 401 && error.status !== 403))) {
+                message.error((error && error.message) || "检查更新失败");
+              }
+            } finally {
+              setUpdateCheckLoading(false);
+            }
+          }
+
+          function watchServiceRestart() {
+            let attempts = 0;
+            const timer = setInterval(async function () {
+              attempts += 1;
+              try {
+                const response = await fetch("/server-admin/session", { credentials: "same-origin", cache: "no-store" });
+                if (response.status === 401) {
+                  clearInterval(timer);
+                  window.location.reload();
+                  return;
+                }
+              } catch {
+                // The service is between shutdown and restart.
+              }
+              if (attempts >= 180) clearInterval(timer);
+            }, 2000);
+          }
+
+          async function executeServiceUpdate() {
+            if (!beginAdminMutation()) return;
+            setUpdateInstallLoading(true);
+            try {
+              const result = await request("/server-admin/update/install", { method: "POST" });
+              applyUpdateStatus(result);
+              message.success("更新任务已启动，完成后服务将自动重启");
+              watchServiceRestart();
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "启动更新失败");
+              }
+            } finally {
+              endAdminMutation();
+              setUpdateInstallLoading(false);
+            }
+          }
+
+          function confirmServiceUpdate() {
+            Modal.confirm({
+              title: "安装服务端更新？",
+              content: "系统会先完成下载、校验和构建，随后自动重启服务。现有房间连接会在重启时中断。",
+              okText: "安装并重启",
+              cancelText: "取消",
+              onOk: executeServiceUpdate,
+            });
           }
 
           async function handleSave(values) {
@@ -1045,24 +1979,20 @@ export function renderServerAdminPage(serviceVersion: string) {
 
           if (booting) {
             return h(
-              "div",
-              { className: "login-shell" },
-              h(Spin, { size: "large", tip: "正在加载控制台..." })
+              ConfigProvider,
+              { theme: ADMIN_THEME },
+              h(
+                "div",
+                { className: "login-shell" },
+                h(Spin, { size: "large", tip: "正在加载控制台..." })
+              )
             );
           }
 
           if (!session) {
             return h(
               ConfigProvider,
-              {
-                theme: {
-                  token: {
-                    colorPrimary: "#1677ff",
-                    borderRadius: 14,
-                    fontFamily: "'PingFang SC','Microsoft YaHei',sans-serif",
-                  },
-                },
-              },
+              { theme: ADMIN_THEME },
               h(
                 "div",
                 { className: "login-shell" },
@@ -1072,9 +2002,14 @@ export function renderServerAdminPage(serviceVersion: string) {
                   h(
                     Card,
                     { className: "login-card" },
-                    h(Title, { level: 2, style: { marginTop: 0, marginBottom: 8 } }, "服务器控制台"),
-                    h(Paragraph, { type: "secondary", style: { marginBottom: 8 } }, serviceVersionLabel),
-                    h(Paragraph, { type: "secondary", style: { marginBottom: 24 } }, "登录后查看和修改这台服务器的公开列表设置与同步状态。"),
+                    h(
+                      "div",
+                      { className: "login-brand" },
+                      h("div", { className: "brand-mark" }, svgIcon(ICONS.server)),
+                      h(Title, { level: 2, style: { marginTop: 0, marginBottom: 0 } }, "服务器控制台"),
+                      h("span", { className: "version-chip" }, serviceVersionLabel)
+                    ),
+                    h(Paragraph, { type: "secondary", style: { marginBottom: 24, textAlign: "center" } }, "登录后查看和修改这台服务器的公开列表设置与同步状态。"),
                     h(
                       Form,
                       { form: loginForm, layout: "vertical", onFinish: handleLogin },
@@ -1090,23 +2025,26 @@ export function renderServerAdminPage(serviceVersion: string) {
 
           if (!settings) {
             return h(
-              "div",
-              { className: "login-shell" },
-              h(Spin, { size: "large", tip: "正在加载服务器设置..." })
+              ConfigProvider,
+              { theme: ADMIN_THEME },
+              h(
+                "div",
+                { className: "login-shell" },
+                h(Spin, { size: "large", tip: "正在加载服务器设置..." })
+              )
             );
           }
 
+          const navTabs = [
+            { key: "overview", label: "概览", icon: ICONS.dashboard, dot: null, count: null },
+            { key: "settings", label: "公开设置", icon: ICONS.sliders, dot: hasUnsavedDrafts ? "#f2b04d" : null, count: null },
+            { key: "announcements", label: "大厅公告", icon: ICONS.megaphone, dot: null, count: announcements.length },
+            { key: "update", label: "服务更新", icon: ICONS.download, dot: updateStatus.updateAvailable ? "#f2b04d" : null, count: null },
+          ];
+
           return h(
             ConfigProvider,
-            {
-              theme: {
-                token: {
-                  colorPrimary: "#1677ff",
-                  borderRadius: 14,
-                  fontFamily: "'PingFang SC','Microsoft YaHei',sans-serif",
-                },
-              },
-            },
+            { theme: ADMIN_THEME },
             h(
               Layout,
               { className: "page-shell" },
@@ -1117,11 +2055,16 @@ export function renderServerAdminPage(serviceVersion: string) {
                   "div",
                   { className: "page-header-inner" },
                   h(
-                  "div",
-                  { className: "page-brand" },
-                    h(Title, { level: 3, className: "page-brand-title" }, "服务器控制台"),
-                    h(Text, { type: "secondary", className: "page-brand-subtitle" }, serviceVersionLabel),
-                    h(Text, { type: "secondary", className: "page-brand-subtitle" }, "管理公开列表开关、显示名称和节点网络运行状态")
+                    "div",
+                    { className: "page-brand" },
+                    h("div", { className: "brand-mark" }, svgIcon(ICONS.server)),
+                    h(
+                      "div",
+                      { className: "page-brand-text" },
+                      h(Title, { level: 3, className: "page-brand-title" }, "服务器控制台"),
+                      h("span", { className: "version-chip" }, serviceVersionLabel + " · " + deploymentLabel(updateStatus.deploymentMode)),
+                      h(Text, { type: "secondary", className: "page-brand-subtitle" }, "管理公开列表开关、显示名称和节点网络运行状态")
+                    )
                   ),
                   h(
                     "div",
@@ -1135,14 +2078,105 @@ export function renderServerAdminPage(serviceVersion: string) {
                 Layout.Content,
                 { className: "page-content" },
                 h(
-                  Row,
-                  { gutter: [16, 16] },
+                  "nav",
+                  { className: "console-nav", "aria-label": "控制台功能导航" },
+                  navTabs.map(function (tab) {
+                    return h(
+                      "button",
+                      {
+                        key: tab.key,
+                        type: "button",
+                        className: "console-nav-btn" + (activeTab === tab.key ? " active" : ""),
+                        "aria-pressed": activeTab === tab.key,
+                        onClick: function () { setActiveTab(tab.key); },
+                      },
+                      svgIcon(tab.icon),
+                      h("span", null, tab.label),
+                      typeof tab.count === "number" ? h("span", { className: "nav-count" }, tab.count) : null,
+                      tab.dot ? h("i", { className: "nav-dot", style: { background: tab.dot } }) : null
+                    );
+                  })
+                ),
+                activeTab === "update"
+                ? h(
+                  "div",
+                  { className: "tab-panel" },
                   h(
-                    Col,
-                    { xs: 24, lg: 10 },
+                    Card,
+                    {
+                      className: "console-card update-panel" + (updateStatus.updateAvailable ? " available" : ""),
+                      style: { marginBottom: 16 },
+                    },
+                  h(
+                    "div",
+                    { className: "update-layout" },
                     h(
                       Space,
-                      { direction: "vertical", size: 16, style: { width: "100%" } },
+                      { direction: "vertical", size: 8 },
+                      h(
+                        "div",
+                        { className: "version-line" },
+                        h(Text, { strong: true }, "服务端版本"),
+                        h("span", { className: "version-number" }, "v" + (updateStatus.currentVersion || serviceVersionLabel.replace(/^.*v/, ""))),
+                        h(Tag, { color: updatePhaseMeta[0] }, updatePhaseMeta[1]),
+                        h(Tag, null, deploymentLabel(updateStatus.deploymentMode))
+                      ),
+                      updateStatus.updateAvailable
+                        ? h(Text, null, "新版本 v" + updateStatus.latestVersion + " 已可用，预检通过后可直接安装。")
+                        : h(Text, { type: "secondary" }, updateStatus.checkedAt
+                            ? "最近检查：" + formatDateTime(updateStatus.checkedAt)
+                            : "登录后会自动检查 GitHub Release。"),
+                      updateStatus.error
+                        ? h(Alert, { type: "error", showIcon: true, message: updateStatus.error })
+                        : null,
+                      Array.isArray(updateStatus.preflight) && updateStatus.preflight.length > 0
+                        ? h(Alert, {
+                            type: "warning",
+                            showIcon: true,
+                            message: "更新预检查未通过",
+                            description: updateStatus.preflight.join("；"),
+                          })
+                        : null
+                    ),
+                    h(
+                      Space,
+                      { wrap: true },
+                      updateStatus.releaseUrl
+                        ? h(Button, { href: updateStatus.releaseUrl, target: "_blank", rel: "noreferrer" }, "查看 Release")
+                        : null,
+                      h(Button, {
+                        onClick: function () { void checkServiceUpdate(false); },
+                        loading: updateCheckLoading,
+                        disabled: updateInstallLoading || adminMutationInFlight,
+                      }, "检查更新"),
+                      updateStatus.updateAvailable
+                        ? h(Button, {
+                            type: "primary",
+                            onClick: confirmServiceUpdate,
+                            loading: updateInstallLoading,
+                            disabled: !updateStatus.canUpdate || adminMutationInFlight,
+                          }, "一键更新")
+                        : null
+                    )
+                  )
+                  ),
+                  updateStatus.releaseNotes
+                    ? h(
+                        "div",
+                        { className: "detail-panel" },
+                        h("h3", { className: "detail-panel-title" }, svgIcon(ICONS.download), h("span", null, "Release 说明")),
+                        h("div", { className: "release-notes" }, updateStatus.releaseNotes)
+                      )
+                    : null
+                )
+                : null,
+                activeTab === "settings"
+                ? h(
+                  "div",
+                  { className: "tab-panel tab-narrow" },
+                  h(
+                    Space,
+                    { direction: "vertical", size: 16, style: { width: "100%" } },
                       hasUnsavedDrafts
                         ? h(Alert, {
                             type: pollRefreshDeferred ? "warning" : "info",
@@ -1199,20 +2233,18 @@ export function renderServerAdminPage(serviceVersion: string) {
                               {
                                 name: "publicListingEnabled",
                                 label: "加入公开节点列表",
-                                valuePropName: "checked",
                                 extra: "开启后，本服务器会通过去中心化网络对所有玩家可见。关闭后玩家无法在客户端列表中看到，但已知直连地址的人仍可连接。",
                               },
-                              h(Switch, { checkedChildren: "公开", unCheckedChildren: "私有" })
+                              h(ToggleButton, { activeLabel: "公开中", inactiveLabel: "私有" })
                             ),
                             h(
                               Form.Item,
                               {
                                 name: "modSyncEnabled",
                                 label: "加入前 MOD 兼容预检与 Workshop 自动同步",
-                                valuePropName: "checked",
-                                extra: "默认开启。关闭后，v0.5.1 客户端会回退旧版加入流程，不再提供 Workshop 自动订阅或选择性禁用提示。",
+                                extra: "默认开启。关闭后，客户端会回退旧版加入流程，不再提供 Workshop 自动订阅或选择性禁用提示。",
                               },
-                              h(Switch, { checkedChildren: "开启", unCheckedChildren: "关闭" })
+                              h(ToggleButton, null)
                             ),
                             h(Title, { level: 5, style: { marginTop: 4, marginBottom: 8 } }, "聊天治理（持久化开关）"),
                             h(
@@ -1220,33 +2252,33 @@ export function renderServerAdminPage(serviceVersion: string) {
                               { className: "feature-grid" },
                               h(
                                 Form.Item,
-                                { name: ["chatFeatures", "serverChatEnabled"], label: "服务器频道", valuePropName: "checked" },
-                                h(Switch, { checkedChildren: "开启", unCheckedChildren: "关闭" })
+                                { name: ["chatFeatures", "serverChatEnabled"], label: "服务器频道" },
+                                h(ToggleButton, null)
                               ),
                               h(
                                 Form.Item,
-                                { name: ["chatFeatures", "richContentEnabled"], label: "富内容", valuePropName: "checked" },
-                                h(Switch, { checkedChildren: "开启", unCheckedChildren: "关闭" })
+                                { name: ["chatFeatures", "richContentEnabled"], label: "富内容" },
+                                h(ToggleButton, null)
                               ),
                               h(
                                 Form.Item,
-                                { name: ["chatFeatures", "emojiEnabled"], label: "Emoji", valuePropName: "checked" },
-                                h(Switch, { disabled: chatControlState.emojiEnabled, checkedChildren: "开启", unCheckedChildren: "关闭" })
+                                { name: ["chatFeatures", "emojiEnabled"], label: "Emoji" },
+                                h(ToggleButton, { disabled: chatControlState.emojiEnabled })
                               ),
                               h(
                                 Form.Item,
-                                { name: ["chatFeatures", "itemRefsEnabled"], label: "物品引用", valuePropName: "checked" },
-                                h(Switch, { disabled: chatControlState.itemRefsEnabled, checkedChildren: "开启", unCheckedChildren: "关闭" })
+                                { name: ["chatFeatures", "itemRefsEnabled"], label: "物品引用" },
+                                h(ToggleButton, { disabled: chatControlState.itemRefsEnabled })
                               ),
                               h(
                                 Form.Item,
-                                { name: ["chatFeatures", "roomChatV2Enabled"], label: "房间富聊天 v2", valuePropName: "checked" },
-                                h(Switch, { checkedChildren: "开启", unCheckedChildren: "关闭" })
+                                { name: ["chatFeatures", "roomChatV2Enabled"], label: "房间富聊天 v2" },
+                                h(ToggleButton, null)
                               ),
                               h(
                                 Form.Item,
-                                { name: ["chatFeatures", "roomCombatRefsEnabled"], label: "房间战斗引用", valuePropName: "checked" },
-                                h(Switch, { disabled: chatControlState.roomCombatRefsEnabled, checkedChildren: "开启", unCheckedChildren: "关闭" })
+                                { name: ["chatFeatures", "roomCombatRefsEnabled"], label: "房间战斗引用" },
+                                h(ToggleButton, { disabled: chatControlState.roomCombatRefsEnabled })
                               )
                             ),
                             h(
@@ -1262,12 +2294,19 @@ export function renderServerAdminPage(serviceVersion: string) {
                             )
                           )
                         )
-                      ),
-                      h(
-                        Card,
-                        {
-                          className: "console-card",
-                          title: h("div", { className: "section-title" }, h("span", null, "大厅公告")),
+                      )
+                    )
+                  )
+                  : null,
+                activeTab === "announcements"
+                ? h(
+                  "div",
+                  { className: "tab-panel tab-narrow" },
+                  h(
+                    Card,
+                    {
+                      className: "console-card",
+                      title: h("div", { className: "section-title" }, h("span", null, "大厅公告")),
                           extra: h(
                             Space,
                             { size: 8, className: "announcement-actions" },
@@ -1378,56 +2417,143 @@ export function renderServerAdminPage(serviceVersion: string) {
                               )
                         )
                       )
-                    )
+                  )
+                  : null,
+                activeTab === "overview"
+                ? h(
+                  "section",
+                  { className: "dashboard-stack", "aria-label": "服务器运行仪表盘" },
+                  updateStatus.updateAvailable
+                    ? h(
+                        "button",
+                        {
+                          type: "button",
+                          className: "update-teaser",
+                          onClick: function () { setActiveTab("update"); },
+                        },
+                        h("span", null, "发现新版本 v" + updateStatus.latestVersion + "，点击前往服务更新"),
+                        h("span", { className: "update-teaser-arrow" }, "→")
+                      )
+                    : null,
+                  h(
+                    "div",
+                    { className: "section-title" },
+                    h(Title, { level: 4, style: { margin: 0 } }, "运行仪表盘"),
+                    renderListingStateTag(settings)
+                  ),
+                      h(
+                        "div",
+                        { className: "metric-grid" },
+                        h(
+                          "div",
+                          { className: "metric-tile tone-info metric-tile-chart" },
+                          h("div", { className: "metric-label metric-label-icon" }, svgIcon(ICONS.activity), "当前带宽"),
+                          h("div", { className: "metric-value" }, formatMbps(settings.currentBandwidthMbps)),
+                          h(Sparkline, { points: bandwidthHistoryRef.current }),
+                          h("div", { className: "metric-note" }, "实时 relay 吞吐 · 每 15 秒采样")
+                        ),
+                        h(
+                          "div",
+                          { className: "metric-tile tone-" + (settings.bandwidthUtilizationRatio > 0.8 ? "warn" : "good") },
+                          h("div", { className: "metric-label metric-label-icon" }, svgIcon(ICONS.gauge), "容量利用率"),
+                          h(
+                            "div",
+                            { className: "metric-main" },
+                            h("div", { className: "metric-value" }, formatRatio(settings.bandwidthUtilizationRatio)),
+                            usageRing(settings.bandwidthUtilizationRatio, 54)
+                          ),
+                          h("div", { className: "metric-note" }, "有效容量 " + formatMbps(settings.resolvedCapacityMbps))
+                        ),
+                        metricTile(
+                          "活跃 relay 房间",
+                          formatMetricCount(settings.relayActiveRooms),
+                          "Host " + formatMetricCount(settings.relayActiveHosts) + " · Client " + formatMetricCount(settings.relayActiveClients),
+                          "good",
+                          ICONS.network
+                        ),
+                        metricTile(
+                          "聊天连接",
+                          formatMetricCount(
+                            formatMetricCount(settings.metrics && settings.metrics.serverConnectionCount)
+                              + formatMetricCount(settings.metrics && settings.metrics.roomConnectionCount)
+                          ),
+                          "服务器 + 房间频道",
+                          "info",
+                          ICONS.chat
+                        )
+                      ),
+                      h(Alert, {
+                        type: statusAlert ? statusAlert.type : "info",
+                        showIcon: true,
+                        message: statusAlert ? statusAlert.message : "节点状态读取中",
+                        description: statusAlert ? statusAlert.description : "正在读取节点网络状态。",
+                      }),
+                      h(
+                        "div",
+                        { className: "detail-panels" },
+                        h(
+                          "div",
+                          { className: "detail-panel" },
+                          h("h3", { className: "detail-panel-title" }, svgIcon(ICONS.gauge), h("span", null, "带宽与容量")),
+                          h(
+                            "div",
+                            { className: "panel-visual-row" },
+                            usageRing(settings.bandwidthUtilizationRatio, 86),
+                            h(
+                              "div",
+                              { className: "panel-visual-main" },
+                              h("div", { className: "panel-visual-value" }, formatRatio(settings.bandwidthUtilizationRatio) + " 利用率"),
+                              utilizationMeter(settings.bandwidthUtilizationRatio),
+                              h("div", { className: "panel-visual-note" }, "当前带宽 " + formatMbps(settings.currentBandwidthMbps))
+                            )
+                          ),
+                          h(
+                            "div",
+                            { className: "fact-chips" },
+                            factChip("有效容量", formatMbps(settings.resolvedCapacityMbps)),
+                            factChip("手动容量", formatMbps(settings.bandwidthCapacityMbps)),
+                            factChip("探针峰值（7 天）", formatMbps(settings.probePeak7dCapacityMbps)),
+                            factChip("容量来源", renderCapacitySource(settings.capacitySource || "unknown"))
+                          ),
+                          detailRow("建房保护", renderGuardTag(settings.createRoomGuardStatus || "unknown", Boolean(settings.createRoomGuardApplies))),
+                          detailRow("30 秒累计流量", formatBytes(settings.relayTrafficBytesInWindow)),
+                          detailRow("流量窗口", formatWindowSeconds(settings.relayTrafficWindowMs))
+                        ),
+                        h(
+                          "div",
+                          { className: "detail-panel" },
+                          h("h3", { className: "detail-panel-title" }, svgIcon(ICONS.network), h("span", null, "连接与消息")),
+                          relayDonut(settings.relayActiveHosts, settings.relayActiveClients),
+                          chatQualityMeter("服务器频道", settings.metrics && settings.metrics.serverAcceptedMessages, settings.metrics && settings.metrics.serverRejectedMessages),
+                          chatQualityMeter("房间频道", settings.metrics && settings.metrics.roomAcceptedMessages, settings.metrics && settings.metrics.roomRejectedMessages),
+                          detailRow("服务器拒绝率", formatRejectionRate(settings.metrics && settings.metrics.serverAcceptedMessages, settings.metrics && settings.metrics.serverRejectedMessages)),
+                          detailRow("房间拒绝率", formatRejectionRate(settings.metrics && settings.metrics.roomAcceptedMessages, settings.metrics && settings.metrics.roomRejectedMessages)),
+                          detailRow("服务器频道有效版本", formatFeatureVersions(settings.serverFeatures)),
+                          detailRow("房间聊天有效版本", formatFeatureVersions(settings.roomFeatures)),
+                          detailRow("保留历史 / epoch", formatMetricCount(settings.metrics && settings.metrics.serverRetainedHistoryCount) + " / " + formatMetricCount(settings.metrics && settings.metrics.historyEpoch))
+                        )
+                      )
+                  )
+                  : null
+                ),
+                h(
+                  "footer",
+                  { className: "page-footer" },
+                  h(
+                    "div",
+                    { className: "footer-group" },
+                    h("span", { className: "version-chip" }, serviceVersionLabel),
+                    h("span", null, deploymentLabel(updateStatus.deploymentMode) + " 部署模式")
                   ),
                   h(
-                    Col,
-                    { xs: 24, lg: 14 },
-                    h(
-                      Card,
-                      { className: "console-card", title: "当前状态" },
-                      h(
-                        Descriptions,
-                        { bordered: true, size: "middle", column: 1, className: "status-block" },
-                        h(Descriptions.Item, { label: "服务器版本" }, serviceVersionLabel),
-                        h(Descriptions.Item, { label: "公开列表" }, renderListingStateTag(settings)),
-                        h(Descriptions.Item, { label: "说明" }, getListingStateMeta(settings).description),
-                        h(Descriptions.Item, { label: "建房保护" }, renderGuardTag(settings.createRoomGuardStatus || "unknown", Boolean(settings.createRoomGuardApplies))),
-                        h(Descriptions.Item, { label: "当前带宽" }, formatMbps(settings.currentBandwidthMbps)),
-                        h(Descriptions.Item, { label: "30秒累计流量" }, formatBytes(settings.relayTrafficBytesInWindow)),
-                        h(Descriptions.Item, { label: "流量窗口" }, formatWindowSeconds(settings.relayTrafficWindowMs)),
-                        h(Descriptions.Item, { label: "relay 房间" }, typeof settings.relayActiveRooms === "number" ? settings.relayActiveRooms : "未记录"),
-                        h(Descriptions.Item, { label: "relay Host" }, typeof settings.relayActiveHosts === "number" ? settings.relayActiveHosts : "未记录"),
-                        h(Descriptions.Item, { label: "relay Client" }, typeof settings.relayActiveClients === "number" ? settings.relayActiveClients : "未记录"),
-                        h(Descriptions.Item, { label: "手动容量" }, formatMbps(settings.bandwidthCapacityMbps)),
-                        h(Descriptions.Item, { label: "探针峰值(7天)" }, formatMbps(settings.probePeak7dCapacityMbps)),
-                        h(Descriptions.Item, { label: "有效容量" }, formatMbps(settings.resolvedCapacityMbps)),
-                        h(Descriptions.Item, { label: "当前利用率" }, formatRatio(settings.bandwidthUtilizationRatio)),
-                        h(Descriptions.Item, { label: "容量来源" }, renderCapacitySource(settings.capacitySource || "unknown"))
-                        ,h(Descriptions.Item, { label: "服务器频道有效版本" }, formatFeatureVersions(settings.serverFeatures))
-                        ,h(Descriptions.Item, { label: "房间聊天有效版本" }, formatFeatureVersions(settings.roomFeatures))
-                        ,h(Descriptions.Item, { label: "服务器聊天连接" }, formatMetricCount(settings.metrics && settings.metrics.serverConnectionCount))
-                        ,h(Descriptions.Item, { label: "房间聊天连接" }, formatMetricCount(settings.metrics && settings.metrics.roomConnectionCount))
-                        ,h(Descriptions.Item, { label: "服务器保留历史" }, formatMetricCount(settings.metrics && settings.metrics.serverRetainedHistoryCount))
-                        ,h(Descriptions.Item, { label: "历史 epoch" }, formatMetricCount(settings.metrics && settings.metrics.historyEpoch))
-                        ,h(Descriptions.Item, { label: "服务器接受消息" }, formatMetricCount(settings.metrics && settings.metrics.serverAcceptedMessages))
-                        ,h(Descriptions.Item, { label: "服务器拒绝消息" }, formatMetricCount(settings.metrics && settings.metrics.serverRejectedMessages))
-                        ,h(Descriptions.Item, { label: "房间接受消息" }, formatMetricCount(settings.metrics && settings.metrics.roomAcceptedMessages))
-                        ,h(Descriptions.Item, { label: "房间拒绝消息" }, formatMetricCount(settings.metrics && settings.metrics.roomRejectedMessages))
-                        ,h(Descriptions.Item, { label: "服务器拒绝率" }, formatRejectionRate(
-                          settings.metrics && settings.metrics.serverAcceptedMessages,
-                          settings.metrics && settings.metrics.serverRejectedMessages,
-                        ))
-                        ,h(Descriptions.Item, { label: "房间拒绝率" }, formatRejectionRate(
-                          settings.metrics && settings.metrics.roomAcceptedMessages,
-                          settings.metrics && settings.metrics.roomRejectedMessages,
-                        ))
-                      )
-                    )
+                    "div",
+                    { className: "footer-group" },
+                    h("span", { className: "footer-dot" }),
+                    h("span", null, "每 15 秒自动刷新"),
+                    h("span", null, "最近同步 " + (lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString() : "尚未同步"))
                   )
                 )
               )
-            )
           );
         }
 

@@ -34,6 +34,7 @@ import {
 } from "./server-admin-auth.js";
 import { ServerAdminStateStore } from "./server-admin-state.js";
 import { renderServerAdminPage } from "./server-admin-ui.js";
+import { ServiceUpdateManager } from "./service-update.js";
 import {
   LobbyStore,
   LobbyStoreError,
@@ -231,6 +232,13 @@ export async function createLobbyService(
     publicListingEnabledDefault: env.peerPublicListingEnabledDefault,
     modSyncEnabledDefault: env.modSyncEnabled,
     chatFeaturesDefault: env.chat.features,
+  });
+  const serviceUpdateManager = new ServiceUpdateManager({
+    currentVersion: lobbyServiceVersion,
+    enabled: env.serverUpdateEnabled,
+    dataDir: env.serverUpdateDataDir,
+    checkIntervalMs: env.serverUpdateCheckIntervalMs,
+    ...(env.serverUpdateReleaseApiUrl == null ? {} : { releaseApiUrl: env.serverUpdateReleaseApiUrl }),
   });
   const initialChatGovernance = serverAdminStateStore.getState().chatFeatures;
   const createRoomBandwidthGuard = new CreateRoomBandwidthGuard();
@@ -844,6 +852,27 @@ export async function createLobbyService(
     });
   });
 
+  app.post("/server-admin/update/check", (req, res, next) => {
+    (async () => {
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
+      res.json(await serviceUpdateManager.check());
+    })().catch(next);
+  });
+
+  app.post("/server-admin/update/install", (req, res, next) => {
+    try {
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
+      void serviceUpdateManager.install().catch((error) => {
+        console.error("[service-update] installation failed", error);
+      });
+      res.status(202).json(serviceUpdateManager.getStatus());
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/server-admin/chat/clear-history", (req, res, next) => {
     (async () => {
       const session = requireServerAdminSession(req);
@@ -1321,6 +1350,7 @@ export async function createLobbyService(
 
       relayManager.start();
       await startPeerRuntime();
+      serviceUpdateManager.start();
 
       started = true;
       return boundAddress;
@@ -1352,6 +1382,7 @@ export async function createLobbyService(
     }
 
     peerStore = null;
+    serviceUpdateManager.stop();
 
     try {
       relayManager.close();
@@ -1402,6 +1433,7 @@ export async function createLobbyService(
     closed = true;
     started = false;
     boundAddress = null;
+    serviceUpdateManager.stop();
 
     if (cleanupInterval) {
       clearInterval(cleanupInterval);
@@ -1802,6 +1834,7 @@ export async function createLobbyService(
       serverFeatures: resolveAdminFeatures(settings.chatFeatures, "server"),
       roomFeatures: resolveAdminFeatures(settings.chatFeatures, "room"),
       metrics: buildChatMetrics(),
+      update: serviceUpdateManager.getStatus(),
     };
   }
 

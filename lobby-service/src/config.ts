@@ -71,6 +71,10 @@ export interface LobbyServiceConfig {
   serverAdminSessionSecret?: string;
   serverAdminSessionTtlMs: number;
   serverAdminStateFile: string;
+  serverUpdateEnabled: boolean;
+  serverUpdateDataDir: string;
+  serverUpdateCheckIntervalMs: number;
+  serverUpdateReleaseApiUrl?: string;
   peerPublicListingEnabledDefault: boolean;
   peer: {
     enabled: boolean;
@@ -89,6 +93,7 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
   const createRoomToken = optionalEnv(source.CREATE_ROOM_TOKEN) ?? optionalEnv(source.LOBBY_ACCESS_TOKEN);
   const serverAdminPasswordHash = optionalEnv(source.SERVER_ADMIN_PASSWORD_HASH);
   const serverAdminSessionSecret = optionalEnv(source.SERVER_ADMIN_SESSION_SECRET);
+  const serverUpdateReleaseApiUrl = optionalEnv(source.SERVER_UPDATE_RELEASES_API_URL);
 
   return {
     host,
@@ -123,6 +128,10 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
     ...(serverAdminSessionSecret == null ? {} : { serverAdminSessionSecret }),
     serverAdminSessionTtlMs: parseLegacyInteger(source, "SERVER_ADMIN_SESSION_TTL_HOURS", 168) * 60 * 60 * 1000,
     serverAdminStateFile: source.SERVER_ADMIN_STATE_FILE ?? `${process.cwd()}/data/server-admin.json`,
+    serverUpdateEnabled: parseBoolean(source, "SERVER_UPDATE_ENABLED", true),
+    serverUpdateDataDir: source.SERVER_UPDATE_DATA_DIR ?? `${process.cwd()}/data/service-update`,
+    serverUpdateCheckIntervalMs: parseInteger(source, "SERVER_UPDATE_CHECK_INTERVAL_MINUTES", 360, 15, 1440) * 60 * 1000,
+    ...(serverUpdateReleaseApiUrl == null ? {} : { serverUpdateReleaseApiUrl }),
     peerPublicListingEnabledDefault: parseLegacyBoolean(source.PEER_PUBLIC_LISTING_ENABLED, true),
     peer: {
       enabled: source.PEER_NETWORK_ENABLED !== "false",
