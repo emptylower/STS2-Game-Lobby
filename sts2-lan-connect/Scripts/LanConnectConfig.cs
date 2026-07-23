@@ -567,7 +567,9 @@ internal static class LanConnectConfig
             PlayerCount = binding.PlayerCount,
             PlayerSignature = binding.PlayerSignature,
             PlayerNames = binding.PlayerNames,
-            UpdatedAtUnixSeconds = binding.UpdatedAtUnixSeconds
+            UpdatedAtUnixSeconds = binding.UpdatedAtUnixSeconds,
+            // Preserve empty HostChannel for legacy bindings; do not rewrite to lobby.
+            HostChannel = binding.HostChannel ?? string.Empty
         };
     }
 
