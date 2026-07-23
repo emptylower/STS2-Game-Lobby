@@ -19,7 +19,7 @@ internal static class LanConnectHostChannels
     }
 
     /// <summary>
-    /// Missing/empty/unknown → lobby (compat). Unknown non-empty logs warning.
+    /// Missing/empty/unknown → lobby (compat). Pure: callers log unknown non-empty values.
     /// </summary>
     public static string Resolve(string? value)
     {
@@ -34,9 +34,6 @@ internal static class LanConnectHostChannels
             return normalized;
         }
 
-        // Prefer Console over GD.Print so pure Resolve stays safe under xUnit
-        // (Godot native print aborts when no engine host is present).
-        Console.WriteLine($"sts2_lan_connect host_channel: unknown value '{value}', treating as lobby");
         return Lobby;
     }
 
