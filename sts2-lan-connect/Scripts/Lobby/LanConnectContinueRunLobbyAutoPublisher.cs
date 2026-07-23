@@ -91,6 +91,28 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
             return;
         }
 
+        // Resolve host channel before lobby-endpoint preflight so pure-LAN saves never
+        // depend on lobby URL or show "未绑定大厅服务" when they should not publish.
+        LanConnectResolvedRoomBinding earlyBinding = LanConnectMultiplayerSaveRoomBinding.Resolve(context.Run);
+        LanConnectSavedRoomBinding? earlyStored = LanConnectConfig.TryGetSaveRoomBinding(earlyBinding.SaveKey);
+        string? earlyPersistedChannel = earlyStored?.HostChannel ?? earlyBinding.HostChannel;
+        if (!string.IsNullOrWhiteSpace(earlyPersistedChannel) && !LanConnectHostChannels.IsValid(earlyPersistedChannel))
+        {
+            GD.Print(
+                $"sts2_lan_connect continue_run_publish: warning unknown hostChannel={LanConnectHostChannels.DescribePersisted(earlyPersistedChannel)}, treating as lobby");
+        }
+
+        string earlyEffectiveChannel = LanConnectHostChannels.Resolve(earlyPersistedChannel);
+        LanConnectContinueRunPublishDecisionKind earlyDecision =
+            LanConnectContinueRunPublishDecision.Decide(earlyEffectiveChannel);
+        if (earlyDecision == LanConnectContinueRunPublishDecisionKind.SkipLanOrigin)
+        {
+            CompletedScreens.Add(instanceId);
+            GD.Print(
+                $"sts2_lan_connect continue_run_publish: skip LAN-origin save screen={context.ScreenType}, saveKey={earlyBinding.SaveKey}, storedBinding={earlyBinding.HasStoredBinding}, persistedHostChannel={LanConnectHostChannels.DescribePersisted(earlyPersistedChannel)}, effectiveHostChannel={earlyEffectiveChannel}, decision=skip_lan_origin, source={source}");
+            return;
+        }
+
         if (!HasAvailableLobbyEndpoint())
         {
             CompletedScreens.Add(instanceId);
