@@ -67,8 +67,11 @@ internal static class LanConnectSaveDiagnostics
             string saveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run);
             LanConnectSavedRoomBinding? binding = LanConnectConfig.TryGetSaveRoomBinding(saveKey);
             string playerSignature = LanConnectMultiplayerSaveRoomBinding.GetPlayerSignature(run);
+            string bindingSegment = binding == null
+                ? "binding=missing, effectiveHostChannel=lobby"
+                : $"binding=present, bindingHostChannel={LanConnectHostChannels.DescribePersisted(binding.HostChannel)}, effectiveHostChannel={LanConnectHostChannels.Resolve(binding.HostChannel)}";
             return
-                $"hasRunSave=true, load=ok, profile={profileId}, mpSavePath={multiplayerSavePath}, mpSaveUpdatedAt={multiplayerSaveTimestamp}, saveKey={saveKey}, gameMode={LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(run)}, players={run.Players.Count}, playerSignature={playerSignature}, startTime={run.StartTime}, binding={(binding == null ? "missing" : "present")}, activeHostedRoom={hasActiveHostedRoom}, activeRoomId={activeRoomId}, lobby={effectiveEndpoint}";
+                $"hasRunSave=true, load=ok, profile={profileId}, mpSavePath={multiplayerSavePath}, mpSaveUpdatedAt={multiplayerSaveTimestamp}, saveKey={saveKey}, gameMode={LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(run)}, players={run.Players.Count}, playerSignature={playerSignature}, startTime={run.StartTime}, {bindingSegment}, activeHostedRoom={hasActiveHostedRoom}, activeRoomId={activeRoomId}, lobby={effectiveEndpoint}";
         }
         catch (Exception ex)
         {

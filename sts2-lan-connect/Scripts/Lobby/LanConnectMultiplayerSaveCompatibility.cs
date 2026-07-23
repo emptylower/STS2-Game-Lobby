@@ -177,10 +177,17 @@ internal static class LanConnectMultiplayerSaveCompatibility
             {
                 Log.Error($"ERROR: Failed to upload run history/metrics: {ex}");
             }
+
+            string saveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run);
+            bool removedBinding = LanConnectConfig.RemoveSaveRoomBinding(saveKey);
+            GD.Print(
+                $"sts2_lan_connect save_compat: abandon binding cleanup removedBinding={removedBinding}, saveKey={saveKey}");
         }
         else
         {
             Log.Error($"ERROR: Failed to load multiplayer run save through LAN compatibility path: {failureReason}. Deleting current run...");
+            GD.Print(
+                $"sts2_lan_connect save_compat: abandon binding cleanup skipped reason={failureReason}");
         }
 
         SaveManager.Instance.DeleteCurrentMultiplayerRun();
