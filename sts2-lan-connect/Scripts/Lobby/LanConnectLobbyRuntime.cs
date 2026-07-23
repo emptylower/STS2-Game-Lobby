@@ -200,6 +200,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         new(1, 1, 1, 1);
 
     private HostedRoomSession? _activeSession;
+    private HostOriginState? _hostOrigin;
     private JoinedClientSession? _activeClientSession;
     private bool _heartbeatInFlight;
     private double _timeUntilHeartbeat;
@@ -803,6 +804,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     public override void _ExitTree()
     {
+        ClearHostOrigin();
         if (_itemLinkCaptureRouteOnlyForTests || _referenceModeRouteOnlyForTests)
         {
             if (ReferenceEquals(Instance, this))
@@ -823,6 +825,53 @@ internal sealed partial class LanConnectLobbyRuntime :
             _activeClientSession));
 
         LanConnectLobbyPlayerNameDirectory.ClearRoom(null);
+    }
+
+    internal void RegisterHostOrigin(
+        NetHostGameService netService,
+        string hostChannel,
+        string roomName,
+        string? password,
+        string gameMode)
+    {
+        if (netService == null)
+        {
+            return;
+        }
+
+        if (!LanConnectHostChannels.IsValid(hostChannel))
+        {
+            GD.Print($"sts2_lan_connect lobby runtime: reject host origin hostChannel='{hostChannel}'");
+            return;
+        }
+
+        ClearHostOrigin();
+        _hostOrigin = new HostOriginState(
+            netService,
+            hostChannel.Trim().ToLowerInvariant(),
+            LanConnectConfig.SanitizeRoomName(roomName),
+            string.IsNullOrWhiteSpace(password) ? null : LanConnectConfig.SanitizeRoomPassword(password),
+            string.IsNullOrWhiteSpace(gameMode) ? LanConnectConstants.DefaultGameMode : gameMode.Trim());
+
+        GD.Print(
+            $"sts2_lan_connect lobby runtime: registered host origin channel={_hostOrigin.HostChannel}, roomName='{_hostOrigin.RoomName}'");
+    }
+
+    internal void ClearHostOrigin(NetHostGameService? netService = null)
+    {
+        if (_hostOrigin == null)
+        {
+            return;
+        }
+
+        if (netService != null && !ReferenceEquals(_hostOrigin.NetService, netService))
+        {
+            return;
+        }
+
+        GD.Print($"sts2_lan_connect lobby runtime: cleared host origin channel={_hostOrigin.HostChannel}");
+        _hostOrigin.Detach();
+        _hostOrigin = null;
     }
 
     private async Task ShutdownAsync(
@@ -954,6 +1003,12 @@ internal sealed partial class LanConnectLobbyRuntime :
         netService.Disconnected += session.OnDisconnected;
         netService.ClientConnected += session.OnClientCountChanged;
         netService.ClientDisconnected += session.OnClientDisconnected;
+        RegisterHostOrigin(
+            netService,
+            LanConnectHostChannels.Lobby,
+            metadata.RoomName,
+            metadata.Password,
+            metadata.GameMode);
         TaskHelper.RunSafely(ConnectHostedControlAsync(session));
         PersistBindingForCurrentSave("attach");
         _pendingHostRestart = null;
@@ -1848,18 +1903,53 @@ internal sealed partial class LanConnectLobbyRuntime :
     private void PersistBindingForCurrentSave(string source)
     {
         HostedRoomSession? session = _activeSession;
-        if (session == null)
+        if (session != null)
+        {
+            if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out SerializableRun? run, out string failureReason) || run == null)
+            {
+                GD.Print($"sts2_lan_connect lobby runtime: skip save binding persist source={source}, reason={failureReason}");
+                return;
+            }
+
+            LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+                run,
+                session.Metadata.RoomName,
+                session.Metadata.Password,
+                session.Metadata.GameMode,
+                LanConnectHostChannels.Lobby,
+                source);
+            return;
+        }
+
+        HostOriginState? origin = _hostOrigin;
+        if (origin == null)
         {
             return;
         }
 
-        if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out SerializableRun? run, out string failureReason) || run == null)
+        if (origin.NetService.Type != NetGameType.Host)
         {
-            GD.Print($"sts2_lan_connect lobby runtime: skip save binding persist source={source}, reason={failureReason}");
             return;
         }
 
-        LanConnectMultiplayerSaveRoomBinding.PersistBinding(run, session.Metadata.RoomName, session.Metadata.Password, session.Metadata.GameMode, source);
+        if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out SerializableRun? lanRun, out string lanFailure) || lanRun == null)
+        {
+            GD.Print($"sts2_lan_connect lobby runtime: skip LAN host binding persist source={source}, reason={lanFailure}");
+            return;
+        }
+
+        string roomName = string.IsNullOrWhiteSpace(origin.RoomName)
+            ? "LAN 联机房间"
+            : origin.RoomName;
+
+        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+            lanRun,
+            roomName,
+            origin.Password,
+            origin.GameMode,
+            origin.HostChannel,
+            source);
+        origin.HasPersisted = true;
     }
 
     private async void OnHostedControlEnvelope(HostedRoomSession session, LobbyControlEnvelope envelope)
@@ -2763,6 +2853,53 @@ internal sealed partial class LanConnectLobbyRuntime :
         }
         HashSet<ulong> peers = NormalizeRoomPeerDirectory(snapshot);
         return new LanConnectPreparedPlayerNameSnapshot(snapshot, peers);
+    }
+
+    private sealed class HostOriginState
+    {
+        private readonly Action<NetErrorInfo> _disconnectedHandler;
+
+        public HostOriginState(
+            NetHostGameService netService,
+            string hostChannel,
+            string roomName,
+            string? password,
+            string gameMode)
+        {
+            NetService = netService;
+            HostChannel = hostChannel;
+            RoomName = roomName;
+            Password = password;
+            GameMode = gameMode;
+            _disconnectedHandler = OnDisconnected;
+            netService.Disconnected += _disconnectedHandler;
+        }
+
+        public NetHostGameService NetService { get; }
+
+        public string HostChannel { get; }
+
+        public string RoomName { get; }
+
+        public string? Password { get; }
+
+        public string GameMode { get; }
+
+        public bool HasPersisted { get; set; }
+
+        public void Detach()
+        {
+            NetService.Disconnected -= _disconnectedHandler;
+        }
+
+        private void OnDisconnected(NetErrorInfo _)
+        {
+            NetService.Disconnected -= _disconnectedHandler;
+            if (LanConnectLobbyRuntime.Instance != null)
+            {
+                LanConnectLobbyRuntime.Instance.ClearHostOrigin(NetService);
+            }
+        }
     }
 
     private sealed class HostedRoomSession

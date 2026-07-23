@@ -58,6 +58,20 @@ internal static class LanConnectHostFlow
                 return;
             }
 
+            if (LanConnectLobbyRuntime.Instance != null)
+            {
+                LanConnectLobbyRuntime.Instance.RegisterHostOrigin(
+                    netService,
+                    LanConnectHostChannels.Lan,
+                    "LAN 联机房间",
+                    password: null,
+                    gameMode: LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode));
+            }
+            else
+            {
+                GD.Print("sts2_lan_connect host_flow: runtime missing, cannot register LAN host origin");
+            }
+
             PushHostScreen(gameMode, stack, netService, maxPlayers);
 
             await Task.Yield();
