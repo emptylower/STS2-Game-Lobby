@@ -47,6 +47,8 @@ internal static class LanConnectConstants
 
     public const string EndpointInputName = "LanConnectEndpointInput";
 
+    public const string ResumeCodeInputName = "LanConnectResumeCodeInput";
+
     public const string JoinButtonName = "LanConnectJoinButton";
 
     public const string HostButtonName = "LanConnectHostButton";

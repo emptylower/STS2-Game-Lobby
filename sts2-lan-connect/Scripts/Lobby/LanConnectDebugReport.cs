@@ -43,6 +43,7 @@ internal static class LanConnectDebugReport
         builder.AppendLine($"mod_version: {LanConnectBuildInfo.GetModVersion()}");
         builder.AppendLine($"gameplay_relevant_mods: {FormatList(LanConnectBuildInfo.GetModList())}");
         builder.AppendLine($"player_name: {LanConnectConfig.GetEffectivePlayerDisplayName()}");
+        builder.AppendLine($"persistent_lan_client_net_id: {LanConnectConfig.GetPersistedClientNetIdForDiagnostics()}");
         builder.AppendLine($"primary_platform: {PlatformUtil.PrimaryPlatform}");
         builder.AppendLine($"local_platform_player_id: {TryGetLocalPlayerId()}");
         builder.AppendLine($"platform: {RuntimeInformation.OSDescription}");

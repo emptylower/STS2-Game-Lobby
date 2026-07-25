@@ -121,6 +121,9 @@
 ## 多人续局
 
 - 房主重新进入已存在的多人续局存档时，续局会自动重新发布到大厅，沿用原有房间信息，无需重新手动建房
+- 纯 LAN 存档不会自动发布到公共大厅；房主通过 `LAN 安全续局` 载入后，可在续局等待页点击 `续局身份码`
+- 房主应按角色/玩家名把对应的单条 `STS2LANRESUME:` 身份码发给每位队友。队友在手动 LAN/IP 加入页填写地址，并把该码粘贴到 `旧存档续局身份码` 输入框；不要互换身份码
+- 新游戏或同一台设备后续普通直连无需填写续局码：客户端会复用安装级 LAN 身份，网络超时只会用同一个身份再试一次
 - 房主点击 `重开一局` 后，会短暂断开并自动回到多人续局载入页面
 - 队友会自动回主菜单并按自己的 `desiredSavePlayerNetId` 轮询重连同一续局房间
 - 若自动重连超时，可在 `游戏大厅` 手动加入作为兜底
@@ -229,6 +232,8 @@
 ### 需要回退到手动 LAN/IP
 
 - 官方 Host / Join 页面的手动 LAN 调试入口仍然保留，可作为排障回退方案
+- 旧存档续局必须使用房主提供、与你的角色/玩家名对应的单条续局身份码；粘贴多条时客户端会拒绝连接，避免误占其他槽位
+- `永久放弃多人存档` 会先把原始 `current_run_mp.save` 备份到 `user://sts2_lan_connect/save-backups/`；读取或备份失败时不会删除存档
 
 ---
 
@@ -347,6 +352,9 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 ## Save-Run Multiplayer
 
 - When a host re-enters an existing multiplayer save, the run is automatically re-published to the lobby using the original room info — no need to create a new room manually
+- Pure-LAN saves are not published to the public lobby. After loading through `LAN Safe Continue`, the host can click `Resume Identity Codes` on the waiting screen
+- The host should send each teammate exactly one `STS2LANRESUME:` line matching that player's character/name. The teammate enters the host address on manual LAN/IP Join and pastes that line into the old-save resume-code field
+- New runs and later ordinary joins on the same installation do not need a resume code: the client reuses one installation-level LAN identity and retries a transport timeout once with that same identity
 - After the host clicks `Restart Run`, the host briefly disconnects and is auto-routed back to multiplayer save-load
 - Teammates are auto-routed to main menu and rejoin by polling with their own `desiredSavePlayerNetId`
 - If auto-rejoin times out, manual join from `Game Lobby` remains the fallback path
@@ -452,3 +460,5 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 ### Need to fall back to manual LAN/IP
 
 - The manual LAN debug entry point in the official Host / Join pages is still available as a fallback for troubleshooting
+- Old-save resumes require exactly one code matching your character/player name; the client rejects multiple pasted slot codes instead of guessing
+- `Permanently Abandon Multiplayer Save` first backs up the original `current_run_mp.save` under `user://sts2_lan_connect/save-backups/`; a read or backup failure blocks deletion

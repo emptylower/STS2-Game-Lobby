@@ -2741,7 +2741,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             Log.Warn($"sts2_lan_connect failed to resolve platform player id for server chat: {ex.Message}");
         }
 
-        _serverChatPlayerNetId = LanConnectNetUtil.GenerateClientNetId().ToString();
+        _serverChatPlayerNetId = LanConnectConfig.GetOrCreateClientNetId().ToString();
         return _serverChatPlayerNetId;
     }
 

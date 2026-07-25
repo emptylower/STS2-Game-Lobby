@@ -1,4 +1,8 @@
 using System;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Logging;
@@ -11,6 +15,11 @@ namespace Sts2LanConnect.Scripts;
 internal static class JoinFriendScreenPatches
 {
     private const string HookedMetaKey = "sts2_lan_connect_join_hooks";
+    private static readonly FieldInfo? StackField =
+        typeof(NSubmenu).GetField("_stack", BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly FieldInfo? LoadingOverlayField =
+        typeof(NJoinFriendScreen).GetField("_loadingOverlay", BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly ConditionalWeakTable<NJoinFriendScreen, DirectJoinState> DirectJoinStates = new();
 
     internal static void EnsureLanJoinControls(NJoinFriendScreen screen)
     {
@@ -37,7 +46,8 @@ internal static class JoinFriendScreenPatches
             screen.SetMeta(HookedMetaKey, true);
             screen.Connect(Node.SignalName.TreeEntered, Callable.From(() => QueueEnsureLanJoinControls(screen, "tree_entered")));
             screen.Connect(Node.SignalName.Ready, Callable.From(() => QueueEnsureLanJoinControls(screen, "ready")));
-            screen.Connect(CanvasItem.SignalName.VisibilityChanged, Callable.From(() => QueueEnsureLanJoinControls(screen, "visibility_changed")));
+            screen.Connect(CanvasItem.SignalName.VisibilityChanged, Callable.From(() => OnVisibilityChanged(screen)));
+            screen.Connect(Node.SignalName.TreeExiting, Callable.From(() => CancelActiveJoin(screen)));
         }
 
         Callable.From(() => TryEnsureLanJoinControls(screen, source)).CallDeferred();
@@ -46,6 +56,17 @@ internal static class JoinFriendScreenPatches
     private static void QueueEnsureLanJoinControls(NJoinFriendScreen screen, string source)
     {
         Callable.From(() => TryEnsureLanJoinControls(screen, source)).CallDeferred();
+    }
+
+    private static void OnVisibilityChanged(NJoinFriendScreen screen)
+    {
+        if (!screen.Visible)
+        {
+            CancelActiveJoin(screen);
+            return;
+        }
+
+        QueueEnsureLanJoinControls(screen, "visibility_changed");
     }
 
     private static void TryEnsureLanJoinControls(NJoinFriendScreen screen, string source)
@@ -116,6 +137,16 @@ internal static class JoinFriendScreenPatches
         container.AddChild(title);
         container.AddChild(row);
 
+        NMegaLineEdit resumeCodeInput = new()
+        {
+            Name = LanConnectConstants.ResumeCodeInputName,
+            PlaceholderText = "旧存档续局时粘贴房主发来的 STS2LANRESUME 身份码（新游戏留空）",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            Secret = false
+        };
+        resumeCodeInput.Connect(LineEdit.SignalName.TextSubmitted, Callable.From<string>(_ => JoinByEndpoint(screen)));
+        container.AddChild(resumeCodeInput);
+
         parent.AddChild(container);
         parent.MoveChild(container, buttonContainer.GetIndex() + 1);
     }
@@ -145,10 +176,113 @@ internal static class JoinFriendScreenPatches
             return;
         }
 
+        DirectJoinState state = DirectJoinStates.GetOrCreateValue(screen);
+        if (state.ActiveTask is { IsCompleted: false })
+        {
+            Log.Warn("sts2_lan_connect lan_direct_join: ignored duplicate submit while a join is active.");
+            return;
+        }
+
         LanConnectConfig.LastEndpoint = raw;
-        ulong netId = LanConnectNetUtil.GenerateClientNetId();
-        ENetClientConnectionInitializer initializer = new(netId, ip, port);
-        TaskHelper.RunSafely(screen.JoinGameAsync(initializer));
+        state.CancellationSource?.Dispose();
+        state.CancellationSource = new CancellationTokenSource();
+        Task task = JoinByEndpointAsync(screen, ip, port, state);
+        state.ActiveTask = TaskHelper.RunSafely(task);
+    }
+
+    private static async Task JoinByEndpointAsync(
+        NJoinFriendScreen screen,
+        string ip,
+        ushort port,
+        DirectJoinState state)
+    {
+        SetJoinControlsEnabled(screen, enabled: false);
+        if (LoadingOverlayField?.GetValue(screen) is Control loadingOverlay)
+        {
+            loadingOverlay.Visible = true;
+        }
+
+        try
+        {
+            if (StackField?.GetValue(screen) is not NSubmenuStack stack || screen.GetTree() is not SceneTree sceneTree)
+            {
+                LanConnectPopupUtil.ShowInfo("LAN 加入页面上下文未就绪，请重新打开加入页面后再试。");
+                return;
+            }
+
+            ulong netId;
+            string identitySource;
+            string? resumeCode = FindResumeCodeInput(screen)?.Text.Trim();
+            if (!string.IsNullOrWhiteSpace(resumeCode))
+            {
+                if (!LanConnectLanResumeCode.TryDecode(resumeCode, out LanConnectLanResumePayload payload, out string error))
+                {
+                    LanConnectPopupUtil.ShowInfo(error);
+                    return;
+                }
+
+                netId = payload.PlayerNetId;
+                identitySource = "lan_resume_code";
+                Log.Info(
+                    $"sts2_lan_connect lan_direct_join: selected saved slot from resume code saveKey={payload.SaveKey}, netId={netId}, character='{payload.CharacterName}', player='{payload.PlayerName}'");
+            }
+            else
+            {
+                netId = LanConnectConfig.GetOrCreateClientNetId();
+                identitySource = "persistent_installation";
+            }
+
+            await LanConnectDirectJoinFlow.JoinAsync(
+                stack,
+                sceneTree,
+                ip,
+                port,
+                netId,
+                identitySource,
+                state.CancellationSource?.Token ?? CancellationToken.None);
+        }
+        finally
+        {
+            if (GodotObject.IsInstanceValid(screen))
+            {
+                if (LoadingOverlayField?.GetValue(screen) is Control activeLoadingOverlay)
+                {
+                    activeLoadingOverlay.Visible = false;
+                }
+
+                SetJoinControlsEnabled(screen, enabled: true);
+            }
+
+            state.CancellationSource?.Dispose();
+            state.CancellationSource = null;
+            state.ActiveTask = null;
+        }
+    }
+
+    private static void SetJoinControlsEnabled(NJoinFriendScreen screen, bool enabled)
+    {
+        if (FindEndpointInput(screen) is { } endpointInput)
+        {
+            endpointInput.Editable = enabled;
+        }
+
+        if (FindResumeCodeInput(screen) is { } resumeCodeInput)
+        {
+            resumeCodeInput.Editable = enabled;
+        }
+
+        if (screen.FindChild(LanConnectConstants.JoinButtonName, recursive: true, owned: false) is Button joinButton)
+        {
+            joinButton.Disabled = !enabled;
+        }
+    }
+
+    private static void CancelActiveJoin(NJoinFriendScreen screen)
+    {
+        if (DirectJoinStates.TryGetValue(screen, out DirectJoinState? state))
+        {
+            state.CancellationSource?.Cancel();
+        }
     }
 
     private static Control? FindJoinContainer(NJoinFriendScreen screen)
@@ -159,5 +293,17 @@ internal static class JoinFriendScreenPatches
     private static NMegaLineEdit? FindEndpointInput(NJoinFriendScreen screen)
     {
         return screen.FindChild(LanConnectConstants.EndpointInputName, recursive: true, owned: false) as NMegaLineEdit;
+    }
+
+    private static NMegaLineEdit? FindResumeCodeInput(NJoinFriendScreen screen)
+    {
+        return screen.FindChild(LanConnectConstants.ResumeCodeInputName, recursive: true, owned: false) as NMegaLineEdit;
+    }
+
+    private sealed class DirectJoinState
+    {
+        public Task? ActiveTask { get; set; }
+
+        public CancellationTokenSource? CancellationSource { get; set; }
     }
 }

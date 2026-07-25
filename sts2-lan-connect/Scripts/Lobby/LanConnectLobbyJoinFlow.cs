@@ -297,17 +297,17 @@ internal static class LanConnectLobbyJoinFlow
         return !string.IsNullOrWhiteSpace(DescribeJoinFailure(ex));
     }
 
-    private static ulong ResolveJoinNetId(LobbyJoinRoomResponse joinResponse, string? desiredSavePlayerNetId)
+    internal static ulong ResolveJoinNetId(LobbyJoinRoomResponse joinResponse, string? desiredSavePlayerNetId)
     {
-        if (!string.IsNullOrWhiteSpace(desiredSavePlayerNetId) && ulong.TryParse(desiredSavePlayerNetId, out ulong selectedNetId))
+        if (LanConnectClientIdentity.TryParse(desiredSavePlayerNetId, out ulong selectedNetId))
         {
             Log.Info($"sts2_lan_connect join_flow: using selected saved-run slot netId={selectedNetId}");
             return selectedNetId;
         }
 
-        ulong fallbackNetId = LanConnectNetUtil.GenerateClientNetId();
+        ulong fallbackNetId = LanConnectConfig.GetOrCreateClientNetId();
         Log.Info(
-            $"sts2_lan_connect join_flow: no saved-run slot selected for room {joinResponse.Room.RoomId}; falling back to random netId={fallbackNetId}");
+            $"sts2_lan_connect join_flow: no saved-run slot selected for room {joinResponse.Room.RoomId}; using persistent netId={fallbackNetId}");
         return fallbackNetId;
     }
 
@@ -337,7 +337,7 @@ internal static class LanConnectLobbyJoinFlow
         }
     }
 
-    private static void PushJoinedScreen(NSubmenuStack stack, NetClientGameService netService, JoinResult joinResult)
+    internal static void PushJoinedScreen(NSubmenuStack stack, NetClientGameService netService, JoinResult joinResult)
     {
         if (joinResult.sessionState == RunSessionState.InLobby)
         {

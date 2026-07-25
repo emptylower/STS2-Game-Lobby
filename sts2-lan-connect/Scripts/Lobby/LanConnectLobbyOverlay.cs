@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -1798,6 +1799,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void ApplyResponsiveLayout()
     {
+        if (!IsInsideTree())
+        {
+            return;
+        }
+
         Vector2 size = Size.X > 0f && Size.Y > 0f ? Size : GetViewportRect().Size;
         float aspectRatio = size.Y <= 0f ? 1f : size.X / size.Y;
         float uiScale = _uiScaleOverride ?? Math.Max(1f, GetWindow()?.ContentScaleFactor ?? 1f);
@@ -3854,11 +3860,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                         }
                         return decision;
                     }));
+            ulong effectiveJoinNetId = LanConnectLobbyJoinFlow.ResolveJoinNetId(
+                new LobbyJoinRoomResponse { Room = room },
+                desiredSavePlayerNetId);
             LanConnectModPreflightJoinResult preflightJoin = await coordinator.JoinAsync(
                 LanConnectModPreflightJoinRequest.CreateCurrent(
                     room,
                     password,
-                    desiredSavePlayerNetId),
+                    desiredSavePlayerNetId,
+                    effectiveJoinNetId.ToString(CultureInfo.InvariantCulture)),
                 joinCancellationSource.Token);
             if (preflightJoin.Outcome != LanConnectModPreflightJoinOutcome.TicketIssued ||
                 preflightJoin.JoinResponse == null)

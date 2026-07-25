@@ -1,14 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using Godot;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
-using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
-using MegaCrit.Sts2.Core.Nodes.Screens.CustomRun;
-using MegaCrit.Sts2.Core.Nodes.Screens.DailyRun;
 using MegaCrit.Sts2.Core.Platform;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
@@ -19,10 +15,6 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
 {
     private const string HookedMetaKey = "sts2_lan_connect_continue_run_hooks";
     private const double RetryIntervalSeconds = 5d;
-
-    private static readonly FieldInfo? MultiplayerLoadLobbyField = typeof(NMultiplayerLoadGameScreen).GetField("_runLobby", BindingFlags.Instance | BindingFlags.NonPublic);
-    private static readonly FieldInfo? CustomLoadLobbyField = typeof(NCustomRunLoadScreen).GetField("_lobby", BindingFlags.Instance | BindingFlags.NonPublic);
-    private static readonly FieldInfo? DailyLoadLobbyField = typeof(NDailyRunLoadScreen).GetField("_lobby", BindingFlags.Instance | BindingFlags.NonPublic);
 
     private static readonly HashSet<ulong> InFlightScreens = new();
     private static readonly HashSet<ulong> CompletedScreens = new();
@@ -108,6 +100,7 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
         if (earlyDecision == LanConnectContinueRunPublishDecisionKind.SkipLanOrigin)
         {
             CompletedScreens.Add(instanceId);
+            LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(screen, "continue_lan_resume");
             GD.Print(
                 $"sts2_lan_connect continue_run_publish: skip LAN-origin save screen={context.ScreenType}, saveKey={earlyBinding.SaveKey}, storedBinding={earlyBinding.HasStoredBinding}, persistedHostChannel={LanConnectHostChannels.DescribePersisted(earlyPersistedChannel)}, effectiveHostChannel={earlyEffectiveChannel}, decision=skip_lan_origin, source={source}");
             return;
@@ -199,13 +192,9 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
 
     private static bool TryResolveContext(Control screen, out ContinuedRunHostContext context)
     {
-        LoadRunLobby? lobby = screen switch
-        {
-            NMultiplayerLoadGameScreen multiplayerLoadScreen => GetLobby(screen, MultiplayerLoadLobbyField, multiplayerLoadScreen),
-            NCustomRunLoadScreen customRunLoadScreen => GetLobby(screen, CustomLoadLobbyField, customRunLoadScreen),
-            NDailyRunLoadScreen dailyRunLoadScreen => GetLobby(screen, DailyLoadLobbyField, dailyRunLoadScreen),
-            _ => null
-        };
+        LoadRunLobby? lobby = LanConnectLoadedRunContext.TryResolve(screen, out LoadRunLobby resolvedLobby)
+            ? resolvedLobby
+            : null;
 
         if (lobby?.NetService is not NetHostGameService netService)
         {
@@ -215,17 +204,6 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
 
         context = new ContinuedRunHostContext(netService, lobby.Run, lobby.GameMode, screen.GetType().Name);
         return true;
-    }
-
-    private static LoadRunLobby? GetLobby(Control screen, FieldInfo? field, object instance)
-    {
-        if (field == null)
-        {
-            GD.Print($"sts2_lan_connect continue_run_publish: missing reflection field for {screen.GetType().Name}");
-            return null;
-        }
-
-        return field.GetValue(instance) as LoadRunLobby;
     }
 
     private static bool HasAvailableLobbyEndpoint()
