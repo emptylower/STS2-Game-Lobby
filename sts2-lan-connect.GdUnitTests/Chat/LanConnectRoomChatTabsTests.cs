@@ -223,6 +223,38 @@ public sealed class LanConnectRoomChatTabsTests
         AssertThat(overlay.TestState.NewMessagesBelowCount).IsEqual(1);
     }
 
+    [TestCase]
+    public async Task History_received_while_the_overlay_is_closed_opens_on_the_newest_message()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        LanConnectRoomChatOverlay overlay = fixture.Overlay;
+
+        await overlay.CloseForTests();
+        await fixture.Runner.AwaitIdleFrame();
+
+        for (int index = 0; index < 40; index++)
+        {
+            fixture.State.Room.AppendConfirmedForTests(
+                $"room-{index}", "A", $"room message {index}", index + 1, false);
+        }
+        await overlay.RefreshForTests();
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+
+        await overlay.OpenForTests();
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+
+        ScrollBar bar = FindNode<ScrollContainer>(
+            overlay.ChatPanelForTests, LanConnectConstants.ChatMessagesScrollName).GetVScrollBar();
+
+        AssertThat(BottomValue(bar)).IsGreater(0d);
+        AssertThat(bar.Value).IsEqual(BottomValue(bar));
+    }
+
+    private static double BottomValue(ScrollBar bar) =>
+        Math.Max(bar.MinValue, bar.MaxValue - bar.Page);
+
     private static T FindNode<T>(Node root, string name) where T : Node =>
         (T)root.FindChild(name, recursive: true, owned: false);
 }

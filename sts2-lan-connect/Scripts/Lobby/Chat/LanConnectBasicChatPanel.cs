@@ -737,12 +737,16 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         };
         _messagesList.AddThemeConstantOverride("separation", 6);
         _messagesScroll.AddChild(_messagesList);
-        _messagesScroll.GetVScrollBar().Connect(
+        ScrollBar messagesScrollBar = _messagesScroll.GetVScrollBar();
+        messagesScrollBar.Connect(
             Godot.Range.SignalName.ValueChanged,
             Callable.From<double>(OnScrollChanged));
+        messagesScrollBar.Connect(
+            Godot.Range.SignalName.Changed,
+            Callable.From(OnScrollRangeChanged));
         if (UsesLobbyStyle)
         {
-            ApplyLobbyScrollBarStyle(_messagesScroll.GetVScrollBar());
+            ApplyLobbyScrollBarStyle(messagesScrollBar);
         }
 
         _newMessagesButton = CreateButton(string.Empty, accent: false);
@@ -1793,6 +1797,20 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _scrollInteractionGeneration++;
         ScrollBar bar = _messagesScroll.GetVScrollBar();
         _state.SetScrollState(value, IsNearBottom(bar));
+    }
+
+    private void OnScrollRangeChanged()
+    {
+        if (_suppressScrollChange ||
+            _state == null ||
+            _messagesScroll == null ||
+            !GodotObject.IsInstanceValid(_messagesScroll) ||
+            !_state.IsAtBottom)
+        {
+            return;
+        }
+
+        ScrollToBottomWithoutConsumingState();
     }
 
     private void ScrollToBottom()

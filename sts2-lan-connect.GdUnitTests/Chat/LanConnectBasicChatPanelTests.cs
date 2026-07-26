@@ -734,6 +734,31 @@ public sealed class LanConnectBasicChatPanelTests
     }
 
     [TestCase]
+    public async Task Fresh_bind_with_overflowing_history_lands_on_the_newest_message()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        for (int index = 0; index < 40; index++)
+        {
+            state.AppendConfirmedForTests($"message-{index}", "A", $"message {index}", index + 1, false);
+        }
+
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel
+        {
+            CustomMinimumSize = new Vector2(480, 300)
+        })!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        ScrollBar bar = FindNode<ScrollContainer>(panel, LanConnectConstants.ChatMessagesScrollName).GetVScrollBar();
+
+        AssertThat(BottomValue(bar)).IsGreater(0d);
+        AssertThat(bar.Value).IsEqual(BottomValue(bar));
+        AssertThat(panel.TestState.IsAtBottom).IsTrue();
+    }
+
+    [TestCase]
     public async Task Scrolled_up_panel_preserves_offset_and_exposes_new_message_action()
     {
         LanConnectChatChannelState state = EnabledState();
