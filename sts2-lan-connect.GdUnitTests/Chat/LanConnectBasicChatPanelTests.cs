@@ -976,6 +976,49 @@ public sealed class LanConnectBasicChatPanelTests
     }
 
     [TestCase]
+    public async Task Sub_floor_hud_controls_meet_the_touch_target_floor_on_both_axes()
+    {
+        // Room chat HUD redesign spec §6 item 4: interactive controls must clear
+        // LanConnectHudLegibility.MinTouchTargetPixels on the touch axis. These three were the
+        // last holdouts inside LanConnectBasicChatPanel's own CreateButton -- separate from
+        // LanConnectRoomChatOverlay.CreateButton, which adopted EnsureTouchTarget long ago.
+        LanConnectChatChannelState state = EnabledState(rich: true);
+        for (int index = 0; index < 20; index++)
+        {
+            state.AppendConfirmedForTests($"floor-{index}", "A", $"message {index}", index + 1, false);
+        }
+
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel
+        {
+            CustomMinimumSize = new Vector2(480, 300)
+        })!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+        ScrollBar bar = FindNode<ScrollContainer>(panel, LanConnectConstants.ChatMessagesScrollName).GetVScrollBar();
+        double offset = Math.Max(1, Math.Min(72, BottomValue(bar) / 2));
+        panel.SetScrollForTests(offset, atBottom: false);
+        await runner.AwaitIdleFrame();
+
+        state.AppendConfirmedForTests("floor-new", "A", "new", 100, false);
+        await panel.RefreshForTests();
+        await runner.AwaitIdleFrame();
+
+        Button newMessages = FindNode<Button>(panel, LanConnectConstants.ChatNewMessagesButtonName);
+        Button emoji = FindNode<Button>(panel, LanConnectEmojiPicker.ToggleButtonName);
+        Button send = FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName);
+        AssertThat(newMessages.Visible).IsTrue();
+        AssertThat(emoji.Visible).IsTrue();
+
+        foreach (Button button in new[] { newMessages, emoji, send })
+        {
+            AssertThat(button.CustomMinimumSize.X).IsGreaterEqual(LanConnectHudLegibility.MinTouchTargetPixels);
+            AssertThat(button.CustomMinimumSize.Y).IsGreaterEqual(LanConnectHudLegibility.MinTouchTargetPixels);
+        }
+    }
+
+    [TestCase]
     public async Task Rebinding_from_empty_channel_restores_saved_non_bottom_offset_after_layout()
     {
         LanConnectChatChannelState room = new(LanConnectChatChannel.Room);

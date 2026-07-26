@@ -161,6 +161,33 @@ public sealed class LanConnectFlatMessageRowTests
     }
 
     [TestCase]
+    public async Task Lobby_sidebar_bubble_row_retry_button_keeps_its_pre_floor_size()
+    {
+        // Guard against the touch-target floor fix (spec §6 item 4) leaking into the lobby
+        // sidebar's bubble-row retry button: the lobby sidebar is explicitly out of scope for
+        // the HUD redesign (spec §2.2 non-goal 1), so this control must stay exactly as it was
+        // even after LanConnectBasicChatPanel's own CreateButton starts enforcing the floor.
+        // This must fail if someone later applies the floor across the board and quietly
+        // changes the sidebar.
+        LanConnectChatChannelState state = EnabledState();
+        state.BeginPendingText("lobby-retry-floor", "Me", "will fail", queuedAt: DateTimeOffset.UtcNow);
+        state.MarkFailed("lobby-retry-floor", "offline", "offline");
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+            LanConnectChatUiComposition.Icons,
+            ResolveItem)
+        {
+            ChatVisualStyle = LanConnectChatVisualStyle.LobbySidebar
+        })!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        Button retry = FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "lobby-retry-floor");
+        AssertThat(retry.CustomMinimumSize.X).IsEqual(64f);
+        AssertThat(retry.CustomMinimumSize.Y).IsEqual(34f);
+    }
+
+    [TestCase]
     public async Task Failed_message_row_shows_a_visible_state_label_distinct_from_the_tooltip()
     {
         LanConnectChatChannelState state = EnabledState();

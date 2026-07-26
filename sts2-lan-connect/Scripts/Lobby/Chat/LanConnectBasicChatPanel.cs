@@ -820,7 +820,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         _newMessagesButton = CreateButton(string.Empty, accent: false);
         _newMessagesButton.Name = LanConnectConstants.ChatNewMessagesButtonName;
-        _newMessagesButton.CustomMinimumSize = new Vector2(0, 34);
+        _newMessagesButton.CustomMinimumSize = LanConnectHudLegibility.EnsureTouchTarget(new Vector2(0, 34));
         _newMessagesButton.Visible = false;
         _newMessagesButton.Connect(Button.SignalName.Pressed, Callable.From(ScrollToBottom));
         messagesContainer.AddChild(_newMessagesButton);
@@ -847,7 +847,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _emojiButton.ExpandIcon = true;
         _emojiButton.TooltipText = Localize("chat.tooltip.emoji_picker");
         _emojiButton.AccessibilityName = Localize("chat.emoji.button");
-        _emojiButton.CustomMinimumSize = new Vector2(UsesLobbyStyle ? 42 : 38, 42);
+        _emojiButton.CustomMinimumSize =
+            LanConnectHudLegibility.EnsureTouchTarget(new Vector2(UsesLobbyStyle ? 42 : 38, 42));
         _emojiButton.SizeFlagsVertical = SizeFlags.ExpandFill;
         _emojiButton.Visible = false;
         _emojiButton.Connect(
@@ -892,7 +893,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             18,
             UsesLobbyStyle ? LobbyPrimaryForegroundColor : TextStrongColor);
         _sendButton.ExpandIcon = true;
-        _sendButton.CustomMinimumSize = new Vector2(UsesLobbyStyle ? 80 : 74, 42);
+        _sendButton.CustomMinimumSize =
+            LanConnectHudLegibility.EnsureTouchTarget(new Vector2(UsesLobbyStyle ? 80 : 74, 42));
         _sendButton.SizeFlagsVertical = SizeFlags.ExpandFill;
         _sendButton.Connect(Button.SignalName.Pressed, Callable.From(() =>
         {
@@ -2593,6 +2595,15 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         button.AddThemeColorOverride("font_focus_color", foreground);
         button.AddThemeColorOverride("font_disabled_color", new Color(TextMutedColor, 0.72f));
         button.AddThemeFontSizeOverride("font_size", UsesLobbyStyle ? 15 : 14);
+        // Root-cause fix for spec §6 item 4: LanConnectRoomChatOverlay.CreateButton has
+        // applied EnsureTouchTarget for a while, but this panel's own CreateButton never did,
+        // so the contract never actually reached anything built through it. Safe to apply
+        // unconditionally (including for the lobby sidebar): every current call site
+        // immediately overwrites CustomMinimumSize after construction anyway (see the
+        // individual fixes below and the sidebar bubble-row retry button, which stays
+        // untouched at (64, 34)), so this only closes the hole for future call sites that
+        // don't override it.
+        button.CustomMinimumSize = LanConnectHudLegibility.EnsureTouchTarget(button.CustomMinimumSize);
         return button;
     }
 
