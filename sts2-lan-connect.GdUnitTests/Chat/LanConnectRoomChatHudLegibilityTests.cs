@@ -66,4 +66,23 @@ public sealed class LanConnectRoomChatHudLegibilityTests
         AssertThat(button.CustomMinimumSize.Y).IsEqual(LanConnectHudLegibility.MinTouchTargetPixels);
         AssertThat(button.FocusMode).IsEqual(Control.FocusModeEnum.All);
     }
+
+    [TestCase]
+    public async Task Overlay_controls_meet_the_touch_target_floor_and_expose_focus()
+    {
+        LanConnectRoomChatOverlay overlay = AutoFree(new LanConnectRoomChatOverlay())!;
+        using ISceneRunner runner = ISceneRunner.Load(overlay, autoFree: true);
+        await runner.AwaitIdleFrame();
+
+        Button pin = (Button)overlay.FindChild("ChatPinButton", recursive: true, owned: false);
+        Button close = (Button)overlay.FindChild("ChatCloseButton", recursive: true, owned: false);
+
+        AssertThat(pin.CustomMinimumSize.Y)
+            .IsGreaterEqual(LanConnectHudLegibility.MinTouchTargetPixels);
+        AssertThat(pin.HasThemeStyleboxOverride("focus")).IsTrue();
+
+        AssertThat(close.CustomMinimumSize.Y)
+            .IsGreaterEqual(LanConnectHudLegibility.MinTouchTargetPixels);
+        AssertThat(close.HasThemeStyleboxOverride("focus")).IsTrue();
+    }
 }

@@ -489,14 +489,15 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
         _pinButton = CreateButton("固定", accent: false, TogglePinned);
         _pinButton.Name = "ChatPinButton";
-        _pinButton.CustomMinimumSize = new Vector2(104, 36);
+        _pinButton.CustomMinimumSize = new Vector2(104, LanConnectHudLegibility.MinTouchTargetPixels);
         _pinButton.TooltipText = "固定聊天浮层";
         _pinButton.Icon = LanConnectChatUiComposition.Icons.Get("pin", 18, TextStrongColor);
         _pinButton.ExpandIcon = true;
         header.AddChild(_pinButton);
 
         Button closeButton = CreateButton("收起", accent: false, ClosePanel);
-        closeButton.CustomMinimumSize = new Vector2(68, 36);
+        closeButton.Name = "ChatCloseButton";
+        closeButton.CustomMinimumSize = new Vector2(68, LanConnectHudLegibility.MinTouchTargetPixels);
         header.AddChild(closeButton);
 
         HBoxContainer tabs = new();
@@ -1515,19 +1516,21 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         button.AddThemeStyleboxOverride("hover", CreateButtonStyle(background.Lightened(0.08f), AccentColor));
         button.AddThemeStyleboxOverride("pressed", CreateButtonStyle(background.Darkened(0.06f), AccentColor));
         button.AddThemeStyleboxOverride("hover_pressed", CreateButtonStyle(background.Lightened(0.04f), AccentColor));
+        button.AddThemeStyleboxOverride("focus", CreateButtonStyle(background, AccentColor, borderWidth: 2));
+        button.CustomMinimumSize = LanConnectHudLegibility.EnsureTouchTarget(button.CustomMinimumSize);
         button.AddThemeColorOverride("font_color", TextStrongColor);
         button.Connect(Button.SignalName.Pressed, Callable.From(onPressed));
         return button;
     }
 
-    private static StyleBoxFlat CreateButtonStyle(Color background, Color border) => new()
+    private static StyleBoxFlat CreateButtonStyle(Color background, Color border, int borderWidth = 1) => new()
     {
         BgColor = background,
         BorderColor = border,
-        BorderWidthLeft = 1,
-        BorderWidthTop = 1,
-        BorderWidthRight = 1,
-        BorderWidthBottom = 1,
+        BorderWidthLeft = borderWidth,
+        BorderWidthTop = borderWidth,
+        BorderWidthRight = borderWidth,
+        BorderWidthBottom = borderWidth,
         CornerRadiusTopLeft = 6,
         CornerRadiusTopRight = 6,
         CornerRadiusBottomLeft = 6,
