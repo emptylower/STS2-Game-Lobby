@@ -196,9 +196,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
             try
             {
-                bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
-                chat.ShowRoomOverlayPreservingSelection(serverSelectable);
-                RefreshFromSource();
+                ShowPanelPreservingSelection(forceBottom: false);
             }
             catch
             {
@@ -665,20 +663,12 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
         bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
         chat.OpenRoomOverlay(serverSelectable);
-        ForceSelectedChannelToBottom(chat);
+        SelectedState(chat)?.SetScrollState(0d, atBottom: true);
         SignalFadeActivity();
         RefreshFromSource();
     }
 
-    private static void ForceSelectedChannelToBottom(LanConnectDualChatState chat)
-    {
-        LanConnectChatChannelState selected = chat.SelectedChannel == LanConnectChatChannel.Room
-            ? chat.Room
-            : chat.Server;
-        selected.SetScrollState(0d, atBottom: true);
-    }
-
-    private void ShowPanelPreservingSelection()
+    private void ShowPanelPreservingSelection(bool forceBottom)
     {
         LanConnectDualChatState? chat = ResolveChat();
         if (chat?.ActiveRoomId == null)
@@ -688,6 +678,10 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
         bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
         chat.ShowRoomOverlayPreservingSelection(serverSelectable);
+        if (forceBottom)
+        {
+            SelectedState(chat)?.SetScrollState(0d, atBottom: true);
+        }
         SignalFadeActivity();
         RefreshFromSource();
     }
@@ -1148,7 +1142,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 ClosePanel();
                 return true;
             case LanConnectChatInputAction.ShowOverlay:
-                ShowPanelPreservingSelection();
+                ShowPanelPreservingSelection(forceBottom: true);
                 return ResolveChat()?.RoomOverlayOpen == true;
             case LanConnectChatInputAction.PinOverlay:
                 SetPinned(true);

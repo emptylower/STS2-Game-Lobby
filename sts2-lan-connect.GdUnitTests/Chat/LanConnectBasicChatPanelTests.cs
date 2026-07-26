@@ -801,6 +801,48 @@ public sealed class LanConnectBasicChatPanelTests
     }
 
     [TestCase]
+    public async Task Successful_send_scrolls_the_sender_to_the_bottom()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        for (int index = 0; index < 40; index++)
+        {
+            state.AppendConfirmedForTests($"message-{index}", "A", $"message {index}", index + 1, false);
+        }
+
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel
+        {
+            CustomMinimumSize = new Vector2(480, 300)
+        })!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        long nextSequence = 100;
+        panel.Bind(
+            state,
+            text =>
+            {
+                state.AppendConfirmedForTests($"sent-{nextSequence}", "Me", text, nextSequence, true);
+                nextSequence++;
+                return Task.CompletedTask;
+            },
+            _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        ScrollBar bar = FindNode<ScrollContainer>(panel, LanConnectConstants.ChatMessagesScrollName).GetVScrollBar();
+        double parked = Math.Max(1d, BottomValue(bar) / 2d);
+        panel.SetScrollForTests(parked, atBottom: false);
+        await runner.AwaitIdleFrame();
+        AssertThat(panel.TestState.IsAtBottom).IsFalse();
+
+        SetDraft(panel, "hello from below");
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(panel.TestState.IsAtBottom).IsTrue();
+        AssertThat(bar.Value).IsEqual(BottomValue(bar));
+    }
+
+    [TestCase]
     public async Task Scrolled_up_panel_preserves_offset_and_exposes_new_message_action()
     {
         LanConnectChatChannelState state = EnabledState();

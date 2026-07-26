@@ -1453,6 +1453,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
             SetOperationStatus("chat.operation.submitted");
             _draftEditor.RefreshFromDraft(preserveFocus: false);
+            ScrollToBottom();
             restoreFocus = true;
         }
         catch (Exception ex)
