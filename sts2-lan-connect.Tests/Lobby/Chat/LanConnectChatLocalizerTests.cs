@@ -136,6 +136,7 @@ public sealed class LanConnectChatLocalizerTests
         "chat.delivery.failed",
         "chat.delivery.unknown",
         "chat.delivery.disconnected_unknown",
+        "chat.delivery.not_delivered",
         "chat.presentation.unsupported",
         "chat.presentation.connecting",
         "chat.presentation.reconnecting",

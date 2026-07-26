@@ -143,6 +143,64 @@ public sealed class LanConnectFlatMessageRowTests
     }
 
     [TestCase]
+    public async Task Failed_messages_retry_button_meets_the_minimum_touch_target_on_both_axes()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.BeginPendingText("flat-touch-target", "Me", "will fail", queuedAt: DateTimeOffset.UtcNow);
+        state.MarkFailed("flat-touch-target", "offline", "offline");
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+            LanConnectChatUiComposition.Icons,
+            ResolveItem))!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        Button retry = FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "flat-touch-target");
+        AssertThat(retry.CustomMinimumSize.X).IsGreaterEqual(LanConnectHudLegibility.MinTouchTargetPixels);
+        AssertThat(retry.CustomMinimumSize.Y).IsGreaterEqual(LanConnectHudLegibility.MinTouchTargetPixels);
+    }
+
+    [TestCase]
+    public async Task Failed_message_row_shows_a_visible_state_label_distinct_from_the_tooltip()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.BeginPendingText("flat-visible-state", "Me", "will fail", queuedAt: DateTimeOffset.UtcNow);
+        state.MarkFailed("flat-visible-state", "offline", "请求过于频繁");
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+            LanConnectChatUiComposition.Icons,
+            ResolveItem))!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        Control row = FindNode<Control>(panel, "ChatMessageRow0");
+        Button retry = FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "flat-visible-state");
+        List<Label> labels = row.FindChildren("*", "Label", true, false).OfType<Label>().ToList();
+
+        AssertThat(labels.Count).IsGreater(0);
+        Label stateLabel = labels.Single();
+        AssertThat(string.IsNullOrEmpty(stateLabel.Text)).IsFalse();
+        AssertThat(stateLabel.Text == retry.TooltipText).IsFalse();
+    }
+
+    [TestCase]
+    public async Task Failed_message_retry_button_tooltip_still_carries_the_detailed_reason()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.BeginPendingText("flat-tooltip-detail", "Me", "will fail", queuedAt: DateTimeOffset.UtcNow);
+        state.MarkFailed("flat-tooltip-detail", "offline", "请求过于频繁");
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+            LanConnectChatUiComposition.Icons,
+            ResolveItem))!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        Button retry = FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "flat-tooltip-detail");
+        AssertThat(retry.TooltipText).Contains("请求过于频繁");
+    }
+
+    [TestCase]
     public async Task Single_item_reference_message_renders_the_verb_phrase()
     {
         LanConnectChatChannelState state = EnabledState();

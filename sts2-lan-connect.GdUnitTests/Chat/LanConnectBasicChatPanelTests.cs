@@ -166,9 +166,12 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(panel.TestState.RetryButtonCount).IsEqual(2);
         AssertThat(HasLabel(panel, "发送中")).IsTrue();
         // HUD style (the default here) collapses the failure/unknown delivery text from its
-        // own always-visible Label into the retry control's hover tooltip -- see
-        // BuildFlatMessageRow. The detail is still reachable, just moved, the same way the
-        // timestamp moved to a row tooltip.
+        // own always-visible full-sentence Label into the retry control's hover tooltip --
+        // see BuildFlatMessageRow. The detail is still reachable, just moved, the same way
+        // the timestamp moved to a row tooltip. A short always-visible state marker stays on
+        // screen next to the retry button, though, because Android has no hover: touch
+        // players need *something* legible without a tooltip.
+        AssertThat(HasLabel(panel, "未送达")).IsTrue();
         AssertThat(FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "client-failed").TooltipText)
             .IsEqual("发送失败：请求过于频繁");
         AssertThat(FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "client-unknown").TooltipText)
@@ -240,12 +243,15 @@ public sealed class LanConnectBasicChatPanelTests
             });
         await runner.AwaitIdleFrame();
 
-        // HUD style (the default here) collapses this delivery text into the retry
-        // control's hover tooltip instead of an always-visible Label -- see
-        // BuildFlatMessageRow / the "client-failed" case above.
+        // HUD style (the default here) collapses this full-sentence delivery text into the
+        // retry control's hover tooltip -- see BuildFlatMessageRow / the "client-failed" case
+        // above. A short always-visible state marker still sits next to the retry button
+        // (Android has no hover), so the detail moved but the fact something needs attention
+        // did not disappear.
         Button crossSessionRetry = FindNode<Button>(
             panel,
             LanConnectConstants.ChatRetryButtonPrefix + "client-cross-session");
+        AssertThat(HasLabel(panel, "未送达")).IsTrue();
         AssertThat(crossSessionRetry.TooltipText).IsEqual("可能已发送，确认后重发");
         crossSessionRetry.EmitSignal(Button.SignalName.Pressed);
         await runner.AwaitIdleFrame();

@@ -1193,7 +1193,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 retryButton.Icon = _icons.Get("refresh-cw", 16, TextStrongColor);
                 retryButton.ExpandIcon = true;
                 retryButton.FocusMode = FocusModeEnum.All;
-                retryButton.CustomMinimumSize = new Vector2(44, 28);
+                // Touch axis must clear the 44px floor (spec §6 item 4); failed messages are
+                // the exception rather than the rule, so a taller row here is an acceptable
+                // trade for a reliably tappable control.
+                retryButton.CustomMinimumSize = LanConnectHudLegibility.EnsureTouchTarget(new Vector2(44, 28));
                 retryButton.Disabled = _retryInFlight.Contains(
                     new RetryOperationKey(state, state.ContextGeneration, stableKey));
                 retryButton.Connect(
@@ -1205,6 +1208,15 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                     {
                         _ = RetryMessageAsync(message, stableKey, retryButton);
                     }));
+
+                // Android has no hover, so the tooltip above is invisible to touch players --
+                // this short always-visible marker is the state cue (spec §5.2); the full
+                // reason stays in the tooltip as progressive disclosure.
+                Label stateLabel = CreateLabel(
+                    Localize("chat.delivery.not_delivered"),
+                    12,
+                    message.Delivery == ServerChatDeliveryState.Failed ? DangerColor : WarningColor);
+                row.AddChild(stateLabel);
                 row.AddChild(retryButton);
             }
             else
