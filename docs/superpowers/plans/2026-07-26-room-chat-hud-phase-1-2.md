@@ -4,13 +4,26 @@
 
 **Goal:** 修复局内聊天打开时不停在最新消息的缺陷，并建立"浮层控件在任意游戏背景下可读"的基建，为后续视觉改造铺路。
 
-**Architecture:** 第 1 期是纯缺陷修复，不含任何视觉改动，可独立发版。根因是 `ScrollContainer` 的滚动条只连了 `value_changed` 而没连 `changed`，导致富文本排版完成、`max_value` 增大之后无人重新贴底。第 2 期新增一个无 Godot 依赖之外的小工具单元 `LanConnectHudLegibility`，集中承载描边、三态底板、焦点框、触摸目标下限四件事，供后续各期复用。
+**Architecture:** 第 1 期是纯缺陷修复，不含任何视觉改动，可独立发版。根因（已实测复现）：面板在频道为空时完成布局，历史批量随后到达；`Refresh()` 与其 `CallDeferred` 补救都在容器重排之前读到空列表的 `MaxValue`，两次都把滚动条写成 `0`；而滚动条只连了 `value_changed`、没连 `changed`，所以重排完成、`MaxValue` 跳到真实值时无人重新贴底。缺陷随后经 `CaptureCurrentViewState` 自我固化，导致每次打开都卡在顶部。第 2 期新增一个无 Godot 依赖之外的小工具单元 `LanConnectHudLegibility`，集中承载描边、三态底板、焦点框、触摸目标下限四件事，供后续各期复用。
 
 **Tech Stack:** Godot 4.5 + .NET 9；xUnit（纯逻辑）+ GdUnit4（场景行为）。
 
 **Spec:** `docs/superpowers/specs/2026-07-26-room-chat-hud-redesign-design.md` §4、§6
 
 **Branch:** `feat/room-chat-hud-redesign`
+
+## 测试基线（2026-07-26 实测，勿用旧数字）
+
+本计划初稿引用的 226 / 672 来自 2026-07-21 的 Phase 0 文档，**已过期**。分支上的实测基线是：
+
+| 套件 | 通过 | 跳过 | 失败 |
+|---|---|---|---|
+| GdUnit | 263 | 0 | 0 |
+| xUnit | 696 | 1 | **1** |
+
+那个 xUnit 失败是 `LanConnectModInventoryBuilderTests.Runtime_metadata_matches_the_supported_version_inventory_contract`（"runtime metadata contract has not been locked for this game version"），**来自 main、与本计划无关**，已通过 stash-and-rerun 确认。本计划的任何任务都不应试图修它，也不应因它而认为自己引入了回归。
+
+各步骤中的绝对期望值请按「基线 + 本任务新增数」理解；数字对不上时以**失败数为 0**（xUnit 为「仅剩那一个既有失败」）作为判据。
 
 ---
 
@@ -39,13 +52,30 @@
 
 ## 第 1 期：贴底缺陷修复
 
-### Task 1: 首次打开停在最新消息
+### Task 1: 空面板先布局、历史后到时仍停在最新消息
 
 **Files:**
-- Test: `sts2-lan-connect.GdUnitTests/Chat/LanConnectBasicChatPanelTests.cs`
+- Test: `sts2-lan-connect.GdUnitTests/Chat/LanConnectChatScrollPinningTests.cs`（复现用例，已在工作区）
 - Modify: `sts2-lan-connect/Scripts/Lobby/Chat/LanConnectBasicChatPanel.cs:740-742`（新增信号连接）、新增 `OnScrollRangeChanged` 方法
 
-- [ ] **Step 1: 写失败测试**
+> **2026-07-26 修订：** 本任务的根因描述与红测试形态已被实测更正两次。当前版本是**已复现确认**的。
+> 决定性形态是「**空面板先完成布局，历史批量随后到达**」——若 `Bind` 时消息已齐备，缺陷不显现，这是前两次未能复现的原因。
+> 失败测试已由调试代理写好，位于工作区未提交的 `sts2-lan-connect.GdUnitTests/Chat/LanConnectChatScrollPinningTests.cs`（3 个用例，全部失败）。
+> 详见 spec §4.2–§4.6。
+
+- [ ] **Step 1: 确认失败测试已就位**
+
+工作区应已存在 `sts2-lan-connect.GdUnitTests/Chat/LanConnectChatScrollPinningTests.cs`，含三个用例：
+`History_arriving_after_the_empty_panel_settles_leaves_the_view_on_the_oldest_message`、
+`Room_overlay_history_batch_leaves_the_view_on_the_oldest_message`、
+`Closing_the_overlay_from_the_stuck_view_pins_every_later_open_to_the_oldest_message`。
+
+若不存在，按 spec §4.4 的场景表自行补写；核心形态是：先 `Bind` 空频道并等布局稳定，**之后**再注入 40 条消息。
+
+另有两个此前留下的守卫测试（均通过，非复现用例），保留：`LanConnectBasicChatPanelTests.cs` 中的 `Fresh_bind_with_overflowing_history_lands_on_the_newest_message`，`LanConnectRoomChatTabsTests.cs` 中的 `History_received_while_the_overlay_is_closed_opens_on_the_newest_message`。
+
+<details>
+<summary>原始（已作废）的 Step 1 测试代码，仅供追溯</summary>
 
 在 `LanConnectBasicChatPanelTests.cs` 中，紧邻既有的 `Scrolled_up_panel_preserves_offset_and_exposes_new_message_action`（`:736`）之前插入：
 
@@ -78,13 +108,15 @@
 
 `AssertThat(BottomValue(bar)).IsGreater(0d)` 不可省略：若内容未溢出，`BottomValue` 为 0，`bar.Value` 也为 0，断言会假性通过，测试变成空转。
 
+</details>
+
 - [ ] **Step 2: 运行测试确认失败**
 
 ```bash
-dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1 --filter "FullyQualifiedName~Fresh_bind_with_overflowing_history"
+dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1 --filter "FullyQualifiedName~LanConnectChatScrollPinningTests"
 ```
 
-预期：FAIL。`bar.Value` 为某个远小于 `BottomValue(bar)` 的值（即视觉上的顶部）。记录实际数值，它即缺陷的量化证据。
+预期：3 个用例全部 FAIL，`bar.Value` 均为 `0`，而 `BottomValue(bar)` 分别为 2336 / 2241 / 3521。
 
 - [ ] **Step 3: 连接 `changed` 信号**
 
@@ -133,35 +165,14 @@ dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --s
 - [ ] **Step 5: 运行测试确认通过**
 
 ```bash
-dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1 --filter "FullyQualifiedName~Fresh_bind_with_overflowing_history"
+dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1 --filter "FullyQualifiedName~LanConnectChatScrollPinningTests"
 ```
 
-预期：PASS。
+预期：3 个用例全部 PASS。
 
-**若仍为 FAIL**，说明 `changed` 在本场景下于 `_suppressScrollChange == true` 期间触发并被跳过。此时在 `Refresh()` 的 `:1019` 处，将：
+第三个用例（关闭 + 新消息 + 重开）之所以也会转绿，是因为首次贴底一旦正确，`CaptureCurrentViewState` 记录的就是正确的 at-bottom 位置，§4.2 描述的自我固化链条从源头断掉。**若前两个转绿而第三个仍红**，说明固化链条另有来源，停下来报告，不要额外打补丁。
 
-```csharp
-            Callable.From(() => ScrollToBottomWithoutConsumingState(binding.Generation)).CallDeferred();
-```
-
-替换为：
-
-```csharp
-            TaskHelper.RunSafely(ScrollToBottomAfterLayoutAsync(binding));
-```
-
-并新增：
-
-```csharp
-    private async Task ScrollToBottomAfterLayoutAsync(ChatBinding binding)
-    {
-        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-        ScrollToBottomWithoutConsumingState(binding.Generation);
-    }
-```
-
-然后重跑本步。
+**不要**改动 `:1019` 的 `CallDeferred`。spec §4.5 第 4 条已说明：`Range.changed` 覆盖了它失败的全部后果，改它属于对已被证伪模型的补丁。
 
 - [ ] **Step 6: 运行全部 GdUnit 确认无回归**
 
@@ -169,13 +180,17 @@ dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --s
 dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1
 ```
 
-预期：227 通过（既有 226 + 新增 1），0 失败。特别确认 `Rebinding_from_empty_channel_restores_saved_non_bottom_offset_after_layout` 仍通过——它锁定的是"非贴底位置必须被保留"，与本修复正交。
+预期：0 失败（实测应为 266 通过 = 基线 263 + 工作区已有的 3 个复现用例 + 2 个守卫用例）。
+
+特别确认这两个仍通过——它们锁定的是"非贴底位置必须被保留"，与本修复正交，是最可能被 `Range.changed` 误伤的地方：
+- `Rebinding_from_empty_channel_restores_saved_non_bottom_offset_after_layout`
+- `Scrolled_up_panel_preserves_offset_and_exposes_new_message_action`
 
 - [ ] **Step 7: 提交**
 
 ```bash
-git add sts2-lan-connect/Scripts/Lobby/Chat/LanConnectBasicChatPanel.cs sts2-lan-connect.GdUnitTests/Chat/LanConnectBasicChatPanelTests.cs
-git commit -m "fix: pin chat to newest message once rich-text layout settles"
+git add sts2-lan-connect/Scripts/Lobby/Chat/LanConnectBasicChatPanel.cs sts2-lan-connect.GdUnitTests/Chat/
+git commit -m "fix: re-pin chat to newest message when the message list finishes sorting"
 ```
 
 ---
@@ -379,7 +394,7 @@ dotnet test sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj --filter "Fully
 dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1
 ```
 
-预期：229 通过，0 失败。
+预期：0 失败（基线 + 本任务新增 1）。
 
 - [ ] **Step 7: 同步修订 spec**
 
@@ -413,13 +428,13 @@ git commit -m "fix: force chat back to newest message when the overlay reopens"
 dotnet test sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj
 ```
 
-预期：673 通过（既有 672 + Task 3 新增 1），1 跳过（既有 monster 双客户端证明测试），0 失败。
+预期：仅剩 `LanConnectModInventoryBuilderTests` 那一个既有失败，无新增失败。
 
 ```bash
 dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1
 ```
 
-预期：229 通过，0 失败。
+预期：0 失败。
 
 - [ ] **Step 2: 实机确认**
 
@@ -537,7 +552,7 @@ internal static class LanConnectHudLegibility
 dotnet test sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj --filter "FullyQualifiedName~LanConnectHudLegibilityTests"
 ```
 
-预期：7 通过，0 失败。
+预期：新增的 7 个用例全部通过，套件无新增失败。
 
 - [ ] **Step 5: 提交**
 
@@ -674,7 +689,7 @@ dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --s
 dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1 --filter "FullyQualifiedName~LanConnectRoomChatHudLegibilityTests"
 ```
 
-预期：3 通过，0 失败。
+预期：新增的 3 个用例全部通过。
 
 - [ ] **Step 5: 提交**
 
@@ -787,7 +802,7 @@ dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --s
 dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1
 ```
 
-预期：233 通过，0 失败。**重点确认 `LanConnectChatResolutionTests` 全部通过**——按钮增高 8px 可能挤压 430×520 面板内的布局，该测试套断言各控件矩形落在视口内。若失败，说明面板高度需相应上调，在 `PanelHeight`（`:41`）中补足差额并记录。
+预期：0 失败。**重点确认 `LanConnectChatResolutionTests` 全部通过**——按钮增高 8px 可能挤压 430×520 面板内的布局，该测试套断言各控件矩形落在视口内。若失败，说明面板高度需相应上调，在 `PanelHeight`（`:41`）中补足差额并记录。
 
 - [ ] **Step 7: 提交**
 
@@ -846,8 +861,8 @@ git commit -m "chore: finalize HUD outline width and rest plate alpha from devic
 
 ## 完成判据
 
-- [ ] `dotnet test sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj` — 680 通过（672 + Task 3 的 1 + Task 5 的 7），1 跳过，0 失败
-- [ ] `dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1` — 233 通过（226 + 7），0 失败
+- [ ] `dotnet test sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj` — 除既有的 `LanConnectModInventoryBuilderTests` 外无失败
+- [ ] `dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1` — 0 失败
 - [ ] 实机：打开聊天直接停在最新消息
 - [ ] 实机：上滑读历史时不被新消息拉回
 - [ ] 实机：三种背景下控件文字均可辨

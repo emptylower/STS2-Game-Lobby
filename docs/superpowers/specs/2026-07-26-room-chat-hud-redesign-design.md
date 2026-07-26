@@ -77,27 +77,67 @@
 
 ### 4.1 现象
 
-打开局内聊天时视图停在**最早**的消息，需手动下滑才能看到最新消息；且此时"N 条新消息"按钮不出现。手动下滑一次后行为恢复正常。
+打开聊天时视图停在**最早**的消息，需手动下滑才能看到最新消息；且此时"N 条新消息"按钮不出现。局内浮层与大厅侧边栏两处皆有，桌面与安卓皆有，**每次打开都出现**。
 
-### 4.2 根因
+### 4.2 根因（已实测复现，见 §4.4）
 
-贴底机制本身是完整的（`IsAtBottom` 默认 `true`、`ScrollToBottomWithoutConsumingState()`、`_newMessagesButton`），失效来自三处协同缺口：
+关键前提是**面板先在频道为空时完成布局，历史批量随后才到达**。这是生产环境的实际形态，也是本缺陷此前两次未能复现的原因——若 `Bind` 时消息就已齐备，首次布局即为满高，缺陷不显现。
 
-1. **`LanConnectBasicChatPanel.cs:1001`** — 在 `AddChild` 完全部消息行后**立即**执行 `bar.Value = atBottom ? BottomValue(bar) : scrollOffset`。此刻 Godot 尚未执行 `sort_children`，`bar.MaxValue` 仍反映旧内容高度，`BottomValue()`（`:2256`，即 `MaxValue - Page`）算出的是一个偏小的值。
-2. **`LanConnectBasicChatPanel.cs:1019`** — 补救仅用 `CallDeferred`，即同帧空闲回调。消息行是 `FitContent = true` + `AutowrapMode.WordSmart` 的富文本（`:1133`），最终高度需等 text server 完成排版，单帧不足。
-3. **`LanConnectBasicChatPanel.cs:740`** — 滚动条只连接了 `Range.ValueChanged`，**未连接 `Range.changed`**。因此当布局完成、`MaxValue` 增大时，没有任何回调重新贴底；滚动条停在原值（视觉上的顶部），而 `IsAtBottom` 状态仍为 `true`，导致"新消息"按钮的判定也被抑制。
+1. 频道为空时滚动条稳定在 `max=19, page=19`，故 `BottomValue()`（`:2256`，即 `MaxValue - Page`）为 `0`。
+2. 历史到达，`Refresh()` 塞入全部消息行后，`:1001` 立即执行 `bar.Value = atBottom ? BottomValue(bar) : scrollOffset`。此刻容器尚未重排，读到的仍是空列表的 `MaxValue`，于是写入 `0`。
+3. `:1019` 的补救 `CallDeferred(() => ScrollToBottomWithoutConsumingState(binding.Generation))` **并非"晚一帧执行"，而是在同一帧的消息队列 flush 中执行，排在新增行链上的 `Container::queue_sort` / `Control::_update_minimum_size` 之前**。因此它读到的依然是 `max=19`，再次写入 `0`。
+4. `:1016` 此前已提交 `_renderedRevision`，`_Process`（`:371`）不会再触发 `Refresh()`；而 `:740` 只连接了 `Range.ValueChanged`、**未连接 `Range.changed`**，所以两帧后 `MaxValue` 涨到真实值时无人重新贴底。`bar.Value` 永久停在 `0`。
+5. `IsAtBottom` 始终为 `true`（无人调用 `SetScrollState`），而 `TrackIncoming`（`LanConnectChatChannelState.cs:1772`）要求 `_isVisible && !_isAtBottom` 才累计 `_newMessagesBelowCount`，故"新消息"按钮一并被抑制。
 
-`RestoreSavedScrollOffsetAfterLayoutAsync`（`:1839`）为"非贴底"分支等待了一帧，恰恰说明作者已意识到布局延迟问题，但贴底分支未获得同等处理。
+**缺陷会自我固化，这是"每次打开都出现"的来源：** 关闭浮层触发 `LanConnectRoomChatOverlay.CaptureCurrentViewState`（`:826`），把错误位置记录为 `SetScrollState(0, atBottom: false)`。此后每次 `Refresh()` 都走 `atBottom == false` 分支写 `bar.Value = scrollOffset = 0`，而恢复分支 `:1021` 是 `else if (scrollOffset > 0)`——对 `0` 不成立，位置再也无法恢复。
 
-### 4.3 修法
+### 4.3 已排除的假设
 
-1. 连接 `_messagesScroll.GetVScrollBar()` 的 `Range.changed` 信号。回调中若 `_state.IsAtBottom == true` 且 `_suppressScrollChange == false` 且当前无用户滚动交互（`_scrollInteractionGeneration` 未变），则重新执行 `ScrollToBottomWithoutConsumingState()`。
-2. 将 `:1019` 的单次 `CallDeferred` 改为等待 `_messagesList` 的 `SortChildren` 信号后再贴底；保留一次 `ProcessFrame` 兜底以防该帧无重排。
-3. 新增**强制贴底时机**，无条件贴底且不读取历史 `ScrollOffset`：
-   - 浮层由关闭态转为打开态
-   - 切换频道（房间 ↔ 频道）
-   - 切换房间（`ActiveRoomId` 变更）
-4. `IsNearBottom` 的 8px 容差（`:2253`）保持不变。
+以下三条曾被写入本文档或据以实施，均已被实测证伪，保留在此以防重复走弯路：
+
+| 假设 | 证伪证据 |
+|---|---|
+| 富文本排版需要多于一帧，`CallDeferred` 读到过期 `MaxValue` | 面板可见且 `Bind` 时消息已齐备的场景下，两帧后 `value=2336 == BottomValue=2336`，贴底正常 |
+| 浮层默认关闭，`_panelFrame.Visible == false` defeat 布局，转可见时无人重新贴底 | 关闭→注入 40 条→打开，两帧后 `value=2241 == BottomValue=2241`，贴底正常 |
+| 生产环境频繁重绑定使待执行的 `CallDeferred` 因 `_bindingGeneration` 守卫作废 | 两个 overlay 的绑定入口均有 `ReferenceEquals` 早退（`LanConnectRoomChatOverlay.cs:613`、`LanConnectLobbyOverlay.cs:1963`），`Bind` 仅在切频道或换 state 对象时触发；失败帧全程 `gen=1` 不变 |
+
+`:1005` 的 `if (!IsBindingCurrent(binding)) return;` 早退确实会跳过 `:1017-1020` 的补救，属真实的潜在漏洞，但不是本缺陷的成因，且因该路径不提交 `_renderedRevision` 而不具粘性。§4.5 的修法顺带覆盖它。
+
+### 4.4 复现
+
+GdUnit 用例 `LanConnectChatScrollPinningTests`，三个场景全部复现：
+
+| 场景 | `BottomValue` | `bar.Value` | `IsAtBottom` |
+|---|---|---|---|
+| 面板层：空面板先布局，随后注入 40 条历史 | 2336 | **0** | true |
+| 房间浮层：首批历史 | 2241 | **0** | true |
+| 房间浮层：关闭 + 20 条新消息 + 重开 | 3521 | **0** | false, offset 0 |
+
+决定性的一帧的插桩轨迹：
+
+```
+Refresh gen=1 atBottom=True off=0 rebuild=True rows=40 pre(value=0,max=19,page=19,bottom=0)
+  -> post value=0
+DEFERRED-PIN gen=1 pre(value=0,max=19,page=19)
+  -> post value=0
+... 其后 5 帧无 Refresh ...
+AFTER HISTORY: value=0 max=2554 page=218 bottom=2336 IsAtBottom=True below=0
+```
+
+`DEFERRED-PIN` 仍读到 `max=19`，是本缺陷的决定性证据：它与 `Refresh` 处于同一次 flush，早于容器重排。
+
+### 4.5 修法
+
+1. 连接 `_messagesScroll.GetVScrollBar()` 的 `Range.changed` 信号。回调中若 `_state.IsAtBottom == true` 且 `_suppressScrollChange == false`，则重新执行 `ScrollToBottomWithoutConsumingState()`。容器完成重排、`MaxValue` 增大时该信号必然触发，因此这一条同时覆盖 §4.2 第 4 步与 §4.3 表中提到的 `:1005` 早退漏洞——它不依赖 `_bindingGeneration`，也不依赖任何特定的触发时机。
+2. 新增**强制贴底时机**，无条件贴底且不读取历史 `ScrollOffset`：浮层由关闭态转为打开态。
+   - **不含**切换频道：频道各自保留浏览位置是有意设计，由 GdUnit `Rebinding_from_empty_channel_restores_saved_non_bottom_offset_after_layout` 锁定。
+   - **不含**切换房间：`LanConnectDualChatState.SetActiveRoom`（`:43`）已调用 `Room.ClearForContextChange()`，其中 `LanConnectChatChannelState.cs:1046-1047` 执行 `_scrollOffset = 0; _isAtBottom = true;`，语义已成立。
+3. `IsNearBottom` 的 8px 容差（`:2253`）保持不变。
+4. 不需要改动 `:1019` 的 `CallDeferred`。第 1 条已覆盖它失败的全部后果；改动它属于对已被证伪的模型的补丁。
+
+### 4.6 约束
+
+修法不得引入"用户主动上滑浏览历史时被强制拉回底部"的回归——这是比原缺陷更严重的体验问题。`OnScrollRangeChanged` 中的 `!_state.IsAtBottom` 守卫是承重的，不得放宽。
 
 **约束**：以上改动不得引入"用户主动上滑浏览历史时被强制拉回底部"的回归——这是比原缺陷更严重的体验问题。`_scrollInteractionGeneration` 是既有的用户交互标记，必须作为守卫条件参与判定。
 
@@ -238,7 +278,7 @@ enum LanConnectPointerMode { Touch, Mouse }
 
 其他风险：
 
-- **贴底修复的反向回归**：见 §4.3 约束。用户上滑浏览历史时被强制拉回底部，比原缺陷更严重。
+- **贴底修复的反向回归**：见 §4.6 约束。用户上滑浏览历史时被强制拉回底部，比原缺陷更严重。
 - **昵称配色与既有强调色冲突**：哈希色板需避开 `AccentColor (0.88,0.58,0.17)` 邻域，否则本地玩家与某位远端玩家难以区分。
 
 ## 10. 验收与测试
@@ -259,7 +299,7 @@ dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj \
 
 ### 10.2 GdUnit（场景行为）
 
-- 贴底：消息注入后视图停在底部；切频道后停在底部；用户上滑后新消息**不**强制拉回且"新消息"按钮出现。
+- 贴底：**空面板先布局、历史随后到达**时视图停在底部（本缺陷的决定性形态）；关闭后重开仍停在底部（验证不再自我固化）；切频道后**保留**各自浏览位置；用户上滑后新消息**不**强制拉回且"新消息"按钮出现。
 - 触摸目标：控件条全部控件与气泡的 `Rect2` 短边 ≥ 44。
 - 焦点：`CreateButton` 产出的按钮具备可见 focus 样式盒；`Tab` 可达行尾重试控件并可由回车触发。
 - 入口：鼠标模式下收起后无可见入口且 `Enter` 可唤回；触摸模式下收起后气泡可见且可点。
