@@ -130,10 +130,27 @@ AFTER HISTORY: value=0 max=2554 page=218 bottom=2336 IsAtBottom=True below=0
 
 1. 连接 `_messagesScroll.GetVScrollBar()` 的 `Range.changed` 信号。回调中若 `_state.IsAtBottom == true` 且 `_suppressScrollChange == false`，则重新执行 `ScrollToBottomWithoutConsumingState()`。容器完成重排、`MaxValue` 增大时该信号必然触发，因此这一条同时覆盖 §4.2 第 4 步与 §4.3 表中提到的 `:1005` 早退漏洞——它不依赖 `_bindingGeneration`，也不依赖任何特定的触发时机。
 2. 新增**强制贴底时机**，无条件贴底且不读取历史 `ScrollOffset`：浮层由关闭态转为打开态。
+
+   **「打开」有三条路径，必须全部覆盖**——只改 `OpenPanel` 会漏掉 F8，而 HUD 改造移除标题栏后桌面端只剩 `Enter` 与 `F8` 两个重开入口：
+
+   | 路径 | 入口 | 处理 |
+   |---|---|---|
+   | 聊天按钮（`:463` → `TogglePanel`） | `OpenPanel` | 强制贴底 |
+   | `Enter`（`OpenAndFocus`） | `OpenPanel` | 强制贴底 |
+   | `F8`（`RouteF8` → `ShowOverlay`） | `ShowPanelPreservingSelection(forceBottom: true)` | 强制贴底 |
+   | 插入物品/战斗引用（`TryInsertEntityAndFocus`） | `ShowPanelPreservingSelection(forceBottom: false)` | **不**强制——用户在编辑而非阅读 |
+
+   `ShowPanelPreservingSelection` 的 `forceBottom` 参数**无默认值**，强制每个调用点显式表态。
+   `forceBottom` 必须在 `chat.ShowRoomOverlayPreservingSelection(...)` 返回**之后**施加：频道选择在该调用后才最终确定，提前施加会贴错频道。
+
+   F8 未覆盖时的表现比"保留位置"更糟，也是它必须修的原因：关闭时存下 `atBottom: false`；关闭期间到达的消息因 `TrackIncoming`（`LanConnectChatChannelState.cs:1763`）的 `!_isVisible` 分支不累计 `NewMessagesBelowCount`；F8 打开时 `MarkReadCore`（`:1737`）又清零 `UnreadCount`。结果是停在历史中间、下方有新消息，而未读徽标与"N 条新消息"按钮**同时缺失**。
+
    - **不含**切换频道：频道各自保留浏览位置是有意设计，由 GdUnit `Rebinding_from_empty_channel_restores_saved_non_bottom_offset_after_layout` 锁定。
    - **不含**切换房间：`LanConnectDualChatState.SetActiveRoom`（`:43`）已调用 `Room.ClearForContextChange()`，其中 `LanConnectChatChannelState.cs:1046-1047` 执行 `_scrollOffset = 0; _isAtBottom = true;`，语义已成立。
-3. `IsNearBottom` 的 8px 容差（`:2253`）保持不变。
-4. 不需要改动 `:1019` 的 `CallDeferred`。第 1 条已覆盖它失败的全部后果；改动它属于对已被证伪的模型的补丁。
+
+3. **发送成功后贴底。** 在 `SendDraftAsync` 的成功分支（非 `catch`）调用 `ScrollToBottom()`。此前 `ScrollToBottom` 只有"N 条新消息"按钮一个调用方，导致用户在上滑状态下发出的**自己的**消息落在屏幕外——而 `TrackIncoming` 对 `isLocal` 提前返回，连按钮都不会出现。失败的发送**不**贴底：失败消息留在原处，重试入口需要保持可见。
+4. `IsNearBottom` 的 8px 容差（`:2253`）保持不变。
+5. 不需要改动 `:1019` 的 `CallDeferred`。第 1 条已覆盖它失败的全部后果；改动它属于对已被证伪的模型的补丁。
 
 ### 4.6 约束
 
