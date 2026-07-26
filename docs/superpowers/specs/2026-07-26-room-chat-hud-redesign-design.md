@@ -223,7 +223,9 @@ AFTER HISTORY: value=0 max=2554 page=218 bottom=2336 IsAtBottom=True below=0
 1. **文字描边，而非底色。** 所有此类 `Label` / `Button` / `RichTextLabel` 设置 `font_outline_color = rgba(0,0,0,0.8)` 与 `outline_size = 3`（初值，随 §9.1 实机确认）。Godot 的描边自字形边缘向外生长并渲染于字形之下，不侵蚀笔画。**代码库当前无任何 `outline_size` / `font_outline_color` 用法，此为新引入手段。**
 2. **静息底板 0.35，而非全透明。** 控件 `normal` 样式盒 `BgColor = rgba(10,10,18,0.35)`；`hover` 0.70 + 强调色描边；`pressed` 0.85 + 强调色描边。既保证亮背景下的对比度，又不读成常驻 chrome。
 3. **补齐 `"focus"` 样式盒。** `LanConnectRoomChatOverlay.CreateButton`（`:1499`）当前未设 focus 样式盒，与仓库其余面板普遍采用的 2px 强调色约定不一致。去除按钮实心底后，此项从可选变为必需。
-4. **触摸目标下限 44×44。** 可见字号可为 13px，但 `CustomMinimumSize` 在触摸轴不低于 44，差额以透明 padding 补足。**顺带修复既有问题**：`固定`(104×36) 与 `收起`(68×36) 当前已低于此下限。
+4. **触摸目标下限 44×44。** 可见字号可为 13px，但 `CustomMinimumSize` 在触摸轴不低于 44，差额以透明 padding 补足。**顺带修复既有问题**：`固定`(104×36)、`收起`(68×36)、频道 tab(×40) 当前均低于此下限。
+
+   **垂直余量（2026-07-26 实测）：** 三者提到 44 之后，面板 body 的 `VBoxContainer` 最小内容高为 `44 + 44 + 390 + 2×10 = 498px`，而 `PanelHeight = 520f`，**余量 22px**。`_panelFrame` 的实际高度由 `ApplyViewportBounds()` 独立设定，聊天面板（`SizeFlagsVertical = ExpandFill`）吸收差额，所以外框未移动、`LanConnectChatResolutionTests` 未破。§5.1 重做外壳时若再增加约 20px 以上的固定高度，`PanelHeight` 就必须同步上调。
 5. **图标依赖第 2 条兜底。** `LanConnectLucideIconLoader.Get(name, size, color)` 仅做重着色，不支持描边；静息底板即为其可读性保障。若实机验证不足，退路是同一图标绘制两遍（黑色副本偏移 1px 垫底）。
 6. **消息底板不得低于 `alpha 0.6`。** 正文依赖底板而非描边保证可读，故底板透明度有下限。
 
@@ -334,6 +336,12 @@ dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj \
 ## 11. 分期实施建议
 
 各期独立可验证、可单独回滚：
+
+> **2026-07-26 排期更正：** 初版把"实机定稿描边宽度与底板透明度"放在第 2 期验收，这是错的。第 2 期只建立 `LanConnectHudLegibility` 这个单元并补齐 focus 框与触摸下限，**描边与底板色并未施加到任何在渲染的控件上**，实机没有可看的东西。
+>
+> 正确的依赖关系是：**第 3 期不依赖这两个值**（消息行压平、昵称配色、动词化措辞都发生在 `alpha 0.75` 的消息底板之上），可以立即开始；**只有第 4 期需要**，因为控件条和面板外壳才是描边与静息底板真正上身的地方。
+>
+> 因此：§9 的验证项 1、2 移到第 4 期验收；第 3 期可与之并行。验证项 1（中文描边是否糊笔画）也可以提前用离线截图靶场回答，不必等游戏。
 
 | 期 | 内容 | 验收 |
 |---|---|---|
