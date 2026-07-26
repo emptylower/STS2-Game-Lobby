@@ -62,6 +62,27 @@ public sealed class LanConnectRoomOverlayFadeTests
     }
 
     [TestCase]
+    public async Task Fully_faded_panel_reaches_zero_effective_alpha_while_toggle_bubble_stays_opaque()
+    {
+        // Guard: the toggle bubble (_toggleButton) is the only way to reopen the overlay on
+        // touch platforms (no keyboard fallback), so it must never fade with the panel. This
+        // walks the real ancestor Modulate chain instead of trusting TestState.PanelAlpha,
+        // so it keeps meaning even as the fade target node changes underneath it.
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        FakeClock clock = new();
+        fixture.Overlay.ConfigureFadeForTests(clock, () => true);
+        clock.NowSeconds = 5d;
+
+        fixture.Overlay.RefreshFadeForTests();
+
+        AssertThat(fixture.Overlay.TestState.FadePhase).IsEqual(LanConnectRoomOverlayFadePhase.Faded);
+        CanvasItem panel = FindNode<PanelContainer>(fixture.Overlay, "RoomChatPanelFrame");
+        CanvasItem toggle = FindNode<Button>(fixture.Overlay, "RoomChatToggleButton");
+        AssertThat(EffectiveAlpha(panel)).IsEqual(0f);
+        AssertThat(EffectiveAlpha(toggle)).IsEqual(1f);
+    }
+
+    [TestCase]
     public async Task Preference_failure_falls_back_to_reduced_motion()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
@@ -366,7 +387,9 @@ public sealed class LanConnectRoomOverlayFadeTests
         clock.NowSeconds = 5d;
         fixture.Overlay.RefreshFadeForTests();
         AssertThat(fixture.Overlay.TestState.TweenActive).IsTrue();
-        PanelContainer frame = FindNode<PanelContainer>(fixture.Overlay, "RoomChatPanelFrame");
+        // The tween targets the fade container (RoomChatPanelFadeContainer), not the panel
+        // frame itself, so that node is what must stop moving once the tween is dead.
+        VBoxContainer fadeTarget = FindNode<VBoxContainer>(fixture.Overlay, "RoomChatPanelFadeContainer");
         if (lifecycle == "close")
         {
             await fixture.Overlay.CloseForTests();
@@ -379,13 +402,13 @@ public sealed class LanConnectRoomOverlayFadeTests
         {
             fixture.Overlay.GetParent().RemoveChild(fixture.Overlay);
         }
-        float alphaAfterLifecycle = frame.Modulate.A;
+        float alphaAfterLifecycle = fadeTarget.Modulate.A;
         await AwaitFrames(fixture.Runner, 60);
 
-        AssertThat(frame.Modulate.A).IsEqual(alphaAfterLifecycle);
+        AssertThat(fadeTarget.Modulate.A).IsEqual(alphaAfterLifecycle);
         if (lifecycle != "exit")
         {
-            AssertThat(frame.Modulate.A).IsEqual(1f);
+            AssertThat(fadeTarget.Modulate.A).IsEqual(1f);
             AssertThat(fixture.Overlay.TestState.TweenActive).IsFalse();
         }
         else
@@ -565,6 +588,24 @@ public sealed class LanConnectRoomOverlayFadeTests
 
     private static T FindNode<T>(Node root, string name) where T : Node =>
         (T)root.FindChild(name, recursive: true, owned: false);
+
+    /// <summary>
+    /// Effective (as-rendered) alpha of a CanvasItem: Modulate does not implicitly inherit a
+    /// stored value from parent to child, but at render time Godot composes it multiplicatively
+    /// with SelfModulate (self only) and every CanvasItem ancestor's Modulate (cascades to
+    /// descendants). This walks that real ancestor chain rather than reading a single property.
+    /// </summary>
+    private static float EffectiveAlpha(CanvasItem node)
+    {
+        float alpha = node.Modulate.A * node.SelfModulate.A;
+        Node? parent = node.GetParent();
+        while (parent is CanvasItem canvasParent)
+        {
+            alpha *= canvasParent.Modulate.A;
+            parent = parent.GetParent();
+        }
+        return alpha;
+    }
 
     private sealed class FakeClock : ILanConnectMonotonicClock
     {

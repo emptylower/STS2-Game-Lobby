@@ -56,6 +56,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private Label? _toggleBadgeLabel;
     private Label? _fadeHint;
     private Button? _toggleButton;
+    private VBoxContainer? _panelFadeContainer;
     private PanelContainer? _panelFrame;
     private Button? _roomTab;
     private Button? _serverTab;
@@ -121,7 +122,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 panelState.NewMessagesRect,
                 RectForTests(_pinButton),
                 FocusTargetRectsForTests(panelState),
-                _panelFrame?.Modulate.A ?? 1f,
+                EffectiveAlpha(_panelFrame),
                 _fadeHint?.Modulate.A ?? 0f,
                 _fadeHint?.Text ?? string.Empty,
                 _fadeController.Phase,
@@ -468,10 +469,17 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         _toggleBadge = CreateUnreadBadge("ChatToggleUnreadBadge", out _toggleBadgeLabel);
         toggleWrap.AddChild(_toggleBadge);
 
+        // Wraps the panel frame (and, in a later change, the control strip that replaces its
+        // title/tab rows) so both fade together as one unit. The toggle bubble and the fade
+        // hint stay outside this container: the bubble is the only way to reopen the overlay
+        // on touch platforms, and the hint has its own independent alpha handling.
+        _panelFadeContainer = new VBoxContainer { Name = "RoomChatPanelFadeContainer" };
+        stack.AddChild(_panelFadeContainer);
+
         _panelFrame = CreatePanel(PanelColor, BorderColor, 10, 14);
         _panelFrame.Name = "RoomChatPanelFrame";
         _panelFrame.CustomMinimumSize = new Vector2(PanelWidth, PanelHeight);
-        stack.AddChild(_panelFrame);
+        _panelFadeContainer.AddChild(_panelFrame);
 
         VBoxContainer body = new();
         body.AddThemeConstantOverride("separation", 10);
@@ -866,7 +874,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     private void UpdateRoomOverlayFade(LanConnectDualChatState? chat)
     {
-        if (_panelFrame == null || _fadeHint == null)
+        if (_panelFadeContainer == null || _fadeHint == null)
         {
             return;
         }
@@ -925,7 +933,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     private void ApplyFadeCommand(LanConnectRoomOverlayFadeCommand command)
     {
-        if (_panelFrame == null)
+        if (_panelFadeContainer == null)
         {
             return;
         }
@@ -941,7 +949,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
         _fadeTween = CreateTween();
         _fadeTween.TweenProperty(
-            _panelFrame,
+            _panelFadeContainer,
             new NodePath("modulate:a"),
             command.TargetAlpha,
             command.DurationSeconds);
@@ -1009,9 +1017,9 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     private void SetPanelAlpha(float alpha)
     {
-        if (_panelFrame != null)
+        if (_panelFadeContainer != null)
         {
-            SetControlAlpha(_panelFrame, alpha);
+            SetControlAlpha(_panelFadeContainer, alpha);
         }
     }
 
@@ -1019,6 +1027,30 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     {
         Color color = control.Modulate;
         control.Modulate = new Color(color.R, color.G, color.B, Mathf.Clamp(alpha, 0f, 1f));
+    }
+
+    /// <summary>
+    /// Effective (as-rendered) alpha of a CanvasItem. A node's own Modulate value is not copied
+    /// down from its parent, but Godot composes the final render color from SelfModulate (self
+    /// only) times Modulate at every CanvasItem ancestor. <see cref="_panelFrame"/>'s own
+    /// Modulate stays at 1 post-refactor; the fade lives on <see cref="_panelFadeContainer"/>
+    /// instead, so callers that need "how faded does this look" must walk the chain.
+    /// </summary>
+    private static float EffectiveAlpha(CanvasItem? node)
+    {
+        if (node == null)
+        {
+            return 1f;
+        }
+
+        float alpha = node.Modulate.A * node.SelfModulate.A;
+        Node? parent = node.GetParent();
+        while (parent is CanvasItem canvasParent)
+        {
+            alpha *= canvasParent.Modulate.A;
+            parent = parent.GetParent();
+        }
+        return alpha;
     }
 
     internal static bool ReducedMotionFromTextEffectsEnabled(bool textEffectsEnabled) =>
