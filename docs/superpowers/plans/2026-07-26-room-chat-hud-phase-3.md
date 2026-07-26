@@ -308,3 +308,28 @@ git commit -m "feat: flatten HUD chat message rows into single rich-text lines"
 - [ ] 大厅侧边栏的气泡、时间戳、左侧强调条一像素未变，且有守卫测试锁定
 - [ ] v0.5.1 线格式未改动——动词措辞纯渲染层
 - [ ] 昵称配色在同一房间内对同一 sender 稳定，且六名测试未靠放宽阈值通过
+
+---
+
+## 第 3 期实际落地记录（2026-07-26）
+
+| 提交 | 内容 |
+|---|---|
+| `2d1c5fc` | `LanConnectChatNameColor`：FNV-1a → 16 色相分桶 + 互质置换，最小色相间隔数学保证 ≥0.0625；避开 `AccentColor` ±0.04 |
+| `6cd055c` | `LanConnectChatVerbPhrase` + 中英本地化键；**仅 card/relic/potion 三条** |
+| `77c6256` | spec 更正：power/target 措辞不可实现的根因 |
+| `47bad39` | 消息行压平（仅 HUD 样式），字号 14→16，昵称并入富文本，时间戳转 tooltip |
+| `31976e3` | 修正压平引入的两处缺陷：重试按钮低于触摸下限、失败原因触屏不可见 |
+
+**最终状态：** GdUnit 284 通过 / 0 失败。xUnit 724 通过 / 1 跳过 / 1 失败（既有的 `LanConnectModInventoryBuilderTests`）。
+
+### 两处需要后续注意的决定
+
+1. **动词措辞只覆盖 item 三类。** power/target 因线格式不携带生物身份而不可实现，详见 spec §5.5.1。已有测试锁定其返回 `null`，防止后续补上一个拿不到真实数据的实现。
+2. **区分中英分隔符的逻辑写在 `LanConnectBasicChatPanel` 内部**（`IsChineseLocale()` / `PlainMessageSeparator()`），而非 `LanConnectChatLocalizer`。当时的取舍是避免为两个标点新增本地化键并动到 `ExpectedKeys` 全量快照。代价是 locale 判断逻辑逸出了 localizer——若后续再出现同类需求，应当收回 localizer 统一处理。
+
+### 压平引入又修掉的两个缺陷，值得记住的教训
+
+`47bad39` 把重试按钮设成 `(44, 28)` 并把失败原因整个移进 tooltip。前者违反第 2 期刚建立的 44px 触摸下限——因为 `LanConnectBasicChatPanel` 有自己的 `CreateButton`，没接 `EnsureTouchTarget`；后者在安卓上直接让"为什么发送失败"不可见。
+
+**同一期建立的契约，在下一个任务里就被绕过了。** 契约若只存在于文档和一个未被普遍调用的 helper 里，就挡不住这类事。§6.4 的控件清单即为此而记。

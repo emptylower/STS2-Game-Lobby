@@ -240,6 +240,20 @@ AFTER HISTORY: value=0 max=2554 page=218 bottom=2336 IsAtBottom=True below=0
 3. **补齐 `"focus"` 样式盒。** `LanConnectRoomChatOverlay.CreateButton`（`:1499`）当前未设 focus 样式盒，与仓库其余面板普遍采用的 2px 强调色约定不一致。去除按钮实心底后，此项从可选变为必需。
 4. **触摸目标下限 44×44。** 可见字号可为 13px，但 `CustomMinimumSize` 在触摸轴不低于 44，差额以透明 padding 补足。**顺带修复既有问题**：`固定`(104×36)、`收起`(68×36)、频道 tab(×40) 当前均低于此下限。
 
+   **`LanConnectBasicChatPanel` 内仍低于下限的控件（2026-07-26 清点，待 §5.1 外壳改造时一并处理）：**
+
+   注意该类有**自己的** `CreateButton`，与 `LanConnectRoomChatOverlay.CreateButton` 不是同一个，后者已接入 `EnsureTouchTarget` 而前者没有——所以契约在面板内部并未自动生效。
+
+   | 控件 | 当前尺寸 | 状态 |
+   |---|---|---|
+   | `_newMessagesButton` | `(0, 34)` | 两轴均低于下限 |
+   | `_emojiButton` | `(38, 42)` / 侧边栏 `(42, 42)` | 两轴均低于下限 |
+   | `_sendButton` | `(74, 42)` / 侧边栏 `(80, 42)` | Y 轴低于下限；§5.1 计划移除该按钮 |
+   | `_referenceButton` | `(44, 44)` | 达标 |
+   | 侧边栏气泡行的重试按钮 | `(64, 34)` | Y 轴低于下限，但属 §2.2 非目标，**不动** |
+
+   HUD 扁平行的重试按钮已在第 3 期修正为 `(44, 44)`。
+
    **垂直余量（2026-07-26 实测）：** 三者提到 44 之后，面板 body 的 `VBoxContainer` 最小内容高为 `44 + 44 + 390 + 2×10 = 498px`，而 `PanelHeight = 520f`，**余量 22px**。`_panelFrame` 的实际高度由 `ApplyViewportBounds()` 独立设定，聊天面板（`SizeFlagsVertical = ExpandFill`）吸收差额，所以外框未移动、`LanConnectChatResolutionTests` 未破。§5.1 重做外壳时若再增加约 20px 以上的固定高度，`PanelHeight` 就必须同步上调。
 5. **图标依赖第 2 条兜底。** `LanConnectLucideIconLoader.Get(name, size, color)` 仅做重着色，不支持描边；静息底板即为其可读性保障。若实机验证不足，退路是同一图标绘制两遍（黑色副本偏移 1px 垫底）。
 6. **消息底板不得低于 `alpha 0.6`。** 正文依赖底板而非描边保证可读，故底板透明度有下限。
