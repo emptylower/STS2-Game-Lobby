@@ -26,7 +26,7 @@ public sealed class LanConnectHudLegibilityTests
     [Fact]
     public void Rest_plate_is_translucent_enough_to_read_as_chrome_free()
     {
-        Assert.InRange(LanConnectHudLegibility.RestPlateColor.A, 0.30f, 0.40f);
+        Assert.InRange(LanConnectHudLegibility.RestPlateColor.A, 0.40f, 0.50f);
         Assert.True(LanConnectHudLegibility.HoverPlateColor.A > LanConnectHudLegibility.RestPlateColor.A);
         Assert.True(LanConnectHudLegibility.PressedPlateColor.A > LanConnectHudLegibility.HoverPlateColor.A);
     }
@@ -38,6 +38,10 @@ public sealed class LanConnectHudLegibilityTests
         Assert.True(LanConnectHudLegibility.OutlineColor.R <= 0.1f);
         Assert.True(LanConnectHudLegibility.OutlineColor.G <= 0.1f);
         Assert.True(LanConnectHudLegibility.OutlineColor.B <= 0.1f);
-        Assert.True(LanConnectHudLegibility.OutlineSize >= 2);
+
+        // Locked at 2, not >= 2: the screenshot harness (LanConnectHudLegibilityScreenshotTests)
+        // showed 3px visibly clogging the 13px Chinese sample's counters on a 10px pixel test font,
+        // while 2px stayed legible on the brightest background band. Don't "improve" this back up.
+        Assert.Equal(2, LanConnectHudLegibility.OutlineSize);
     }
 }

@@ -9,11 +9,11 @@ namespace Sts2LanConnect.Scripts;
 /// </summary>
 internal static class LanConnectHudLegibility
 {
-    internal const int OutlineSize = 3;
+    internal const int OutlineSize = 2;
     internal const int MinTouchTargetPixels = 44;
 
     internal static readonly Color OutlineColor = new(0f, 0f, 0f, 0.8f);
-    internal static readonly Color RestPlateColor = new(0.04f, 0.04f, 0.07f, 0.35f);
+    internal static readonly Color RestPlateColor = new(0.04f, 0.04f, 0.07f, 0.45f);
     internal static readonly Color HoverPlateColor = new(0.04f, 0.04f, 0.07f, 0.7f);
     internal static readonly Color PressedPlateColor = new(0.04f, 0.04f, 0.07f, 0.85f);
 
