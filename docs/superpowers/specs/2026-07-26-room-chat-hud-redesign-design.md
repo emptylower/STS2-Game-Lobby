@@ -62,7 +62,8 @@
 | 正文字号 | `FontSize 18` | 14（`:1133`）；元信息 11–12 | **需改造** |
 | 空闲淡出 | `FadeDelay 5f` / `FadeDuration 0.6f` | `5` / `0.6` | 已一致 |
 | 昵称配色 | `GetPlayerColor(senderId)` 按人区分 | 仅本地/远端两色 | **需改造** |
-| 措辞 | 动词化：`shared a relic: [X]` / `pinged X's status: [Y]` | 段落拼接 | **需改造** |
+| 措辞（item） | 动词化：`shared a relic: [X]` | 段落拼接 | **需改造** |
+| 措辞（power / target） | `pinged X's status: [Y]`，其 `PowerSegment` 自带 `CreatureName` / `CreatureColorHex` | 线格式**不携带**生物身份，无法产出该措辞 | **对方领先，且本期不补**（见 §5.5.1） |
 | 引用入口 | 仅 `Alt + 左键`，键盘依赖 | `Alt+R` + `LanConnectReferenceModeSource.TouchButton` 触屏按钮 | **我方领先** |
 | 消息内链接交互 | 仅 meta hover | 支持 `InputEventScreenTouch`（`LanConnectRichMessageView.cs:160`） | **我方领先** |
 | 物品预览 | 仅 hover 浮现 | 支持 `Pinned` 固定预览（`LanConnectItemPreview.cs:700`） | **我方领先** |
@@ -208,13 +209,27 @@ AFTER HISTORY: value=0 max=2554 page=218 bottom=2336 IsAtBottom=True below=0
 
 依据既有 segment 类型渲染动词短语，**纯客户端渲染层，不触碰线格式**：
 
-| segment | 措辞 |
-|---|---|
-| `LanConnectItemRefSegment`（按 `ItemType`） | `分享了卡牌 / 分享了遗物 / 分享了药水 / 分享了能力：[名称]` |
-| `LanConnectPowerStateSegment` | `报点 {生物} 的状态：[状态名 数值]` |
-| `LanConnectTargetRefSegment` | `报点 {生物}` |
+| segment | 措辞 | 状态 |
+|---|---|---|
+| `LanConnectItemRefSegment` `ItemType == "card"` | `分享了卡牌：[名称]` | 已实现 |
+| 同上 `"relic"` | `分享了遗物：[名称]` | 已实现 |
+| 同上 `"potion"` | `分享了药水：[名称]` | 已实现 |
+| 未知 `ItemType` | `分享了：[名称]`（`chat.verb.shared.item` 兜底） | 已实现 |
+| `LanConnectPowerStateSegment` | ~~`报点 {生物} 的状态：`~~ | **不可实现** |
+| `LanConnectTargetRefSegment` | ~~`报点 {生物}`~~ | **不可实现** |
 
-措辞文案走既有 `LanConnectChatLocalizer`，不硬编码中文。
+措辞文案走既有 `LanConnectChatLocalizer`，不硬编码中文。中英两张表必须同步添加键；`LanConnectChatLocalizerTests.ExpectedKeys` 是全量键快照，加键时须一并更新。
+
+### 5.5.1 为什么 power / target 的动词措辞不可实现
+
+本文档早期版本（及配套 mockup）把 `报点 水蛭 的状态：[易伤 2]` 当作可做的目标，**这是错的**。调研结论：
+
+1. **`LanConnectPowerStateSegment` 没有任何生物字段。** 其字段为 `ModelId`、`Amount`、`RoomSessionId`、`OwnerPlayerNetId`、`ApplierPlayerNetId`（`LanConnectChatProtocolModels.cs:315-320`），其中 owner/applier 是**玩家**而非怪物。捕获端 `LanConnectItemLinkCapture.cs:374` 与解析端 `LanConnectRoomCombatReferenceResolver.ResolvePower`（`:221-273`）都只使用能力自身的标题与数值。线格式里不存在"这个状态挂在哪只怪物身上"这一信息。
+2. **`LanConnectTargetRefSegment` 的怪物分支在生产中无解析路径。** `"player"` 分支可经 `TryGetCurrentPeerName` 解析（这正是 `chat.target_expired` 兜底键的由来）；`"monster"` 在 `Resolve()` 的 switch 中**没有对应分支**，一律落到 `TargetExpired`。底层的 `LanConnectMonsterTargetIdPrototype` 自带常量 `MissingProofReason = "No verified STS2 network monster ID API"`，且在生产中以 `adapter: null` 构造（`LanConnectRoomCombatReferenceResolver.cs:57`），`IsEnabled` 恒为 false。
+
+要补齐必须扩展线格式，而这是 §2.2 非目标第 2 条明确排除的（会破坏与 v0.5.1 客户端的互通）。因此本期实现三条 item 措辞，power/target 维持现状，并由 `LanConnectChatVerbPhraseTests` 锁定其返回 `null`，防止后续有人"顺手补上"一个拿不到真实数据的实现——那会在玩家面前渲染成 `报点  的状态：`。
+
+**这同时更正了 §3.2 对照表的一处误判**：参考 mod 在 power 措辞上领先，根因不是"措辞写法"而是**它的线格式携带 `CreatureName` / `CreatureColorHex` 而我们的不携带**。那是数据能力差异，不是表现层差异。
 
 ## 6. HUD 可读性契约
 
