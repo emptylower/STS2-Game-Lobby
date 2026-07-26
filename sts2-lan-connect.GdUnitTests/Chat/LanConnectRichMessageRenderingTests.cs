@@ -32,7 +32,8 @@ public sealed class LanConnectRichMessageRenderingTests
                 FindNode<Control>(panel, "ChatMessageRow0"));
 
         AssertThat(inline.AutoSizeEnabled).IsFalse();
-        AssertThat(inline.GetThemeFontSize("normal_font_size", "RichTextLabel")).IsEqual(14);
+        // Task 3 of the HUD redesign raises the HUD-style body font 14 -> 16 (spec §5.2).
+        AssertThat(inline.GetThemeFontSize("normal_font_size", "RichTextLabel")).IsEqual(16);
     }
 
     [TestCase]
@@ -143,7 +144,11 @@ public sealed class LanConnectRichMessageRenderingTests
             .OfType<RichTextLabel>().Count()).IsEqual(1);
         AssertThat(confirmedRow.FindChild("ChatMessageRun0", true, false) == null).IsTrue();
         Control view = (Control)inline.GetParent();
-        AssertThat(view.GetMeta("lan_connect_reference_keys").AsString()).IsEqual("ref-1,ref-5");
+        // HUD style (the default here) prepends a name span and a separator span ahead of
+        // the content spans (see BuildFlatMessageRow), so every content span index shifts
+        // by 2: the card at the old index 1 is now index 3, the potion at the old index 5
+        // is now index 7.
+        AssertThat(view.GetMeta("lan_connect_reference_keys").AsString()).IsEqual("ref-3,ref-7");
         AssertThat(Labels(panel)).Contains("发送中");
     }
 
@@ -170,7 +175,9 @@ public sealed class LanConnectRichMessageRenderingTests
         RichTextLabel inline = RichMessageText(firstRow);
         AssertThat(inline.GetParsedText()).Contains("未知遗物");
         AssertThat(inline.GetParsedText()).Contains("Localized Potion");
-        inline.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-5");
+        // The potion segment (index 5 in Content()) shifts to span index 7 once the name +
+        // separator spans are prepended -- see BuildFlatMessageRow.
+        inline.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-7");
         await runner.AwaitIdleFrame();
         AssertThat(panel.ItemPreviewForTests.TestState.Visible).IsTrue();
 
@@ -275,22 +282,29 @@ public sealed class LanConnectRichMessageRenderingTests
         panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
 
+        // This message is a single item-reference segment with no other text, so it
+        // qualifies for verb phrasing (spec §5.5): "Name" + " " + verb phrase + reference,
+        // instead of the plain "Name：content" form. The name span (index 0) and the
+        // " shared a potion: " span (index 1) precede the item span, which shifts its
+        // reference key from ref-0 to ref-2 -- see BuildFlatMessageRow.
         RichTextLabel initial = RichMessageText(FindNode<Control>(panel, "ChatMessageRow0"));
-        AssertThat(initial.GetParsedText()).IsEqual("Potion EN");
-        initial.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-0");
+        AssertThat(initial.GetParsedText()).IsEqual("Silent shared a potion: Potion EN");
+        initial.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-2");
         await runner.AwaitIdleFrame();
         AssertThat(panel.ItemPreviewForTests.TestState.Visible).IsTrue();
 
         port.Title = "药水 CN";
         context = new LanConnectItemResolverContext("zh-CN", "mods-a");
         await runner.AwaitIdleFrame();
-        AssertThat(RichMessageText(FindNode<Control>(panel, "ChatMessageRow0")).GetParsedText()).IsEqual("药水 CN");
+        AssertThat(RichMessageText(FindNode<Control>(panel, "ChatMessageRow0")).GetParsedText())
+            .IsEqual("Silent 分享了药水：药水 CN");
         AssertThat(panel.ItemPreviewForTests.TestState.Visible).IsFalse();
 
         port.Title = "Potion Mod B";
         context = new LanConnectItemResolverContext("zh-CN", "mods-b");
         await runner.AwaitIdleFrame();
-        AssertThat(RichMessageText(FindNode<Control>(panel, "ChatMessageRow0")).GetParsedText()).IsEqual("Potion Mod B");
+        AssertThat(RichMessageText(FindNode<Control>(panel, "ChatMessageRow0")).GetParsedText())
+            .IsEqual("Silent 分享了药水：Potion Mod B");
         AssertThat(port.PotionLookups).IsEqual(3);
     }
 

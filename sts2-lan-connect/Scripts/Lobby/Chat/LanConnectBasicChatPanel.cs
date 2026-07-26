@@ -1037,6 +1037,20 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         ServerChatMessageState message,
         int index)
     {
+        // The lobby sidebar (LanConnectChatVisualStyle.LobbySidebar) is explicitly out of
+        // scope for the HUD redesign (spec §2.2 non-goal 1): bubble, metadata row, and
+        // timestamp all stay pixel-for-pixel as they were. Only the HUD/dark-overlay style
+        // gets the flattened single-line treatment.
+        return UsesLobbyStyle
+            ? BuildLobbyMessageRow(state, message, index)
+            : BuildFlatMessageRow(state, message, index);
+    }
+
+    private Control BuildLobbyMessageRow(
+        LanConnectChatChannelState state,
+        ServerChatMessageState message,
+        int index)
+    {
         PanelContainer row = new();
         row.Name = $"ChatMessageRow{index}";
         row.SizeFlagsHorizontal = SizeFlags.ExpandFill;
@@ -1110,6 +1124,180 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         return row;
     }
+
+    // Flattened HUD message row (room-chat-HUD-redesign phase 3, Task 3): a combat-log
+    // style single line -- coloured sender name, then a separator or verb phrase, then the
+    // content spans -- all inside one LanConnectRichMessageView. No bubble, no metadata
+    // row, no always-on timestamp label; the timestamp moves to a hover tooltip on the row.
+    //
+    // BuildMessageContent() is not called here and is not modified: it already wraps its
+    // spans in its own LanConnectRichMessageView instance, and the name span has to live in
+    // the *same* view as the content (so a single inline reference/selection/copy surface
+    // covers the whole line). Instead this reuses the same untouched BuildMessageSpan /
+    // BuildMessageSpanFallback segment mappers that BuildMessageContent uses internally
+    // (via BuildSegmentSpans below), so both paths render any given segment identically.
+    private Control BuildFlatMessageRow(
+        LanConnectChatChannelState state,
+        ServerChatMessageState message,
+        int index)
+    {
+        HBoxContainer row = new();
+        row.Name = $"ChatMessageRow{index}";
+        row.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        row.AddThemeConstantOverride("separation", 6);
+        row.TooltipText = message.SentAt.ToLocalTime().ToString("HH:mm");
+
+        IReadOnlyList<LanConnectChatSegment> segments = ResolveMessageSegments(message);
+        LanConnectItemRefSegment? soleItemReference = SingleItemReferenceOrNull(segments);
+        string? verbPhrase = soleItemReference == null
+            ? null
+            : LanConnectChatVerbPhrase.PhraseFor(soleItemReference, _localizer, CurrentLocale);
+
+        List<LanConnectRichMessageSpan> spans = new() { NameSpan(message) };
+        if (soleItemReference != null && verbPhrase != null)
+        {
+            // Verb phrasing only applies to a message that is exactly one item reference
+            // (plus optional whitespace-only text) -- see SingleItemReferenceOrNull. A
+            // mixed message (reference alongside real text) keeps the plain form below.
+            spans.Add(PlainSpan(" " + verbPhrase, " " + verbPhrase));
+            spans.AddRange(BuildSegmentSpans([soleItemReference]));
+        }
+        else
+        {
+            string separator = PlainMessageSeparator();
+            spans.Add(PlainSpan(separator, separator));
+            spans.AddRange(BuildSegmentSpans(segments));
+        }
+
+        LanConnectRichMessageView view = new(spans, 16, GetThemeDefaultFont());
+        view.ReferenceHoverStarted += OnMessageReferenceHoverStarted;
+        view.ReferenceHoverEnded += () =>
+            _itemPreview?.Invalidate(LanConnectItemPreviewInvalidation.PointerExited);
+        view.ReferencePressed += OnMessageReferencePressed;
+        row.AddChild(view);
+
+        string deliveryText = DeliveryText(message);
+        if (!string.IsNullOrEmpty(deliveryText))
+        {
+            if (message.Delivery is ServerChatDeliveryState.Failed or ServerChatDeliveryState.DeliveryUnknown)
+            {
+                // Delivery-failure state: collapsed from its own row plus a 64x34 button
+                // into a small inline control at the end of the line. FocusMode stays All
+                // so it remains Tab-reachable and Enter-triggerable -- shrinking it
+                // visually must not cost keyboard accessibility.
+                string stableKey = RetryStableKey(message, index);
+                Button retryButton = CreateButton(Localize("chat.action.retry"), accent: false);
+                retryButton.AccessibilityName = Localize("chat.action.retry");
+                retryButton.TooltipText = deliveryText;
+                retryButton.Name = LanConnectConstants.ChatRetryButtonPrefix + RetryNodeSuffix(message, index);
+                retryButton.Icon = _icons.Get("refresh-cw", 16, TextStrongColor);
+                retryButton.ExpandIcon = true;
+                retryButton.FocusMode = FocusModeEnum.All;
+                retryButton.CustomMinimumSize = new Vector2(44, 28);
+                retryButton.Disabled = _retryInFlight.Contains(
+                    new RetryOperationKey(state, state.ContextGeneration, stableKey));
+                retryButton.Connect(
+                    Control.SignalName.FocusEntered,
+                    Callable.From(() => _messageFocusRestoreGeneration++));
+                retryButton.Connect(
+                    Button.SignalName.Pressed,
+                    Callable.From(() =>
+                    {
+                        _ = RetryMessageAsync(message, stableKey, retryButton);
+                    }));
+                row.AddChild(retryButton);
+            }
+            else
+            {
+                Label delivery = CreateLabel(deliveryText, 12, WarningColor);
+                row.AddChild(delivery);
+            }
+        }
+
+        return row;
+    }
+
+    private static IReadOnlyList<LanConnectChatSegment> ResolveMessageSegments(ServerChatMessageState message)
+    {
+        IReadOnlyList<LanConnectChatSegment> segments = message.Content?.Segments ??
+            Array.Empty<LanConnectChatSegment>();
+        return segments.Count == 0 ? [new LanConnectTextSegment(message.Text)] : segments;
+    }
+
+    // Verb phrasing (spec §5.5) only reads well when the message is a single shared
+    // reference with nothing else attached: exactly one item-reference segment, plus
+    // optionally whitespace-only text. Anything else -- a second segment of any kind, or
+    // real text alongside the reference -- falls back to the plain "Name：content" form;
+    // mixing verb phrasing into a message that also carries real text is what produces the
+    // awkward "shared a relic: some text [X] more text" shape from the reference mod that
+    // this rule is deliberately avoiding.
+    private static LanConnectItemRefSegment? SingleItemReferenceOrNull(
+        IReadOnlyList<LanConnectChatSegment> segments)
+    {
+        LanConnectItemRefSegment? found = null;
+        foreach (LanConnectChatSegment segment in segments)
+        {
+            switch (segment)
+            {
+                case LanConnectItemRefSegment item when found == null:
+                    found = item;
+                    break;
+                case LanConnectTextSegment text when string.IsNullOrWhiteSpace(text.Text):
+                    break;
+                default:
+                    return null;
+            }
+        }
+        return found;
+    }
+
+    private LanConnectRichMessageSpan NameSpan(ServerChatMessageState message)
+    {
+        string senderDisplay = string.IsNullOrWhiteSpace(message.SenderName)
+            ? Localize("chat.unknown_player")
+            : message.SenderName;
+        Color nameColor = LanConnectChatNameColor.ForSender(message.SenderName, message.IsLocal);
+        return new LanConnectRichMessageSpan(senderDisplay, senderDisplay, senderDisplay, nameColor, null, null);
+    }
+
+    // Mirrors the segment -> span loop inside BuildMessageContent (not shared with it -- see
+    // the BuildFlatMessageRow comment above) so the flattened row renders every segment
+    // through the same untouched BuildMessageSpan / BuildMessageSpanFallback mappers.
+    private List<LanConnectRichMessageSpan> BuildSegmentSpans(IReadOnlyList<LanConnectChatSegment> segments)
+    {
+        List<LanConnectRichMessageSpan> spans = new(segments.Count);
+        for (int index = 0; index < segments.Count; index++)
+        {
+            LanConnectChatSegment segment = segments[index];
+            try
+            {
+                spans.Add(BuildMessageSpan(segment));
+            }
+            catch
+            {
+                spans.Add(BuildMessageSpanFallback(segment));
+            }
+        }
+        return spans;
+    }
+
+    // No existing code picks separator punctuation by locale -- the only Chinese/English
+    // branch point anywhere in this file is LanConnectChatLocalizer's own table lookup, and
+    // adding a table entry is out of scope for this task (it is not in the Task 3 file
+    // list, and it would touch LanConnectChatLocalizerTests' full key-set snapshot). So
+    // there is no existing precedent to reuse for this one punctuation choice. English
+    // keeps the "Label: value" colon-space convention already used throughout the English
+    // table (e.g. chat.delivery.failed = "Send failed: {0}"); Chinese uses the full-width
+    // colon with no space, matching chat.delivery.failed / chat.verb.shared.* in the
+    // Chinese table (e.g. "发送失败：{0}").
+    private bool IsChineseLocale()
+    {
+        string locale = CurrentLocale.Trim().Replace('_', '-');
+        return locale.StartsWith("zh-CN", StringComparison.OrdinalIgnoreCase) ||
+            locale.StartsWith("zh-Hans", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string PlainMessageSeparator() => IsChineseLocale() ? "：" : ": ";
 
     private Control BuildMessageContent(ServerChatMessageState message)
     {

@@ -37,7 +37,14 @@ public sealed class LanConnectRoomCombatRenderingTests
 
         LanConnectBasicChatPanel panel = overlay.ChatPanelForTests;
         RichTextLabel inline = MessageText(panel);
-        string staticItemText = TextBetween(inline.GetParsedText(), "Silent", " after ");
+        // The HUD-style row (the default here) prepends the sender name -- "Silent" -- as
+        // its own span (see BuildFlatMessageRow). This message's sender happens to be the
+        // same player the target reference resolves to, so "Silent" now appears twice: once
+        // as the leading name and once as the resolved target. Slice from after " middle "
+        // so this picks out the target's occurrence, not the name prefix's.
+        string afterMiddle = inline.GetParsedText()[
+            (inline.GetParsedText().IndexOf(" middle ", StringComparison.Ordinal) + " middle ".Length)..];
+        string staticItemText = TextBetween(afterMiddle, "Silent", " after ");
         AssertRunMatrix(inline.GetParsedText(), "before ", "Strength +3", " middle ", "Silent", staticItemText, " after ");
         Control view = (Control)inline.GetParent();
         ulong stableViewInstance = view.GetInstanceId();
@@ -118,7 +125,11 @@ public sealed class LanConnectRoomCombatRenderingTests
 
         RichTextLabel inline = MessageText(panel);
         AssertThat(inline.GetParsedText()).Contains("Strength -4");
-        inline.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-1");
+        // Segments are [text("left "), power, text(" right"), item(relic)]. The HUD row
+        // (the default here) prepends a name span and a separator span (see
+        // BuildFlatMessageRow), shifting every content span index by 2, so the power
+        // segment's reference moves from index 1 to index 3.
+        inline.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-3");
         await runner.AwaitIdleFrame();
         AssertThat(panel.ItemPreviewForTests.TestState.Description).Contains("Amount: -4");
         AssertThat(panel.ItemPreviewForTests.TestState.Description).Contains("Owner: Host");
@@ -469,7 +480,11 @@ public sealed class LanConnectRoomCombatRenderingTests
         int firstIndex = text.IndexOf(first, StringComparison.Ordinal);
         int powerIndex = text.IndexOf(power, StringComparison.Ordinal);
         int middleIndex = text.IndexOf(middle, StringComparison.Ordinal);
-        int targetIndex = text.IndexOf(target, StringComparison.Ordinal);
+        // Search for `target` only from `middleIndex` onward -- that is the ordering this
+        // assertion already enforces (middleIndex < targetIndex), and it avoids matching an
+        // unrelated earlier occurrence of the same substring, such as a HUD row's leading
+        // sender-name span coincidentally matching the resolved target name.
+        int targetIndex = text.IndexOf(target, Math.Max(middleIndex, 0), StringComparison.Ordinal);
         int itemIndex = text.IndexOf(item, StringComparison.Ordinal);
         int afterIndex = text.IndexOf(after, StringComparison.Ordinal);
         AssertThat(firstIndex >= 0 &&

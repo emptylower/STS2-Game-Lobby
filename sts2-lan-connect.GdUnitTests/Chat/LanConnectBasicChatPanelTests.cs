@@ -165,8 +165,14 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(panel.TestState.DeliveryUnknownCount).IsEqual(1);
         AssertThat(panel.TestState.RetryButtonCount).IsEqual(2);
         AssertThat(HasLabel(panel, "发送中")).IsTrue();
-        AssertThat(HasLabel(panel, "发送失败：请求过于频繁")).IsTrue();
-        AssertThat(HasLabel(panel, "投递状态未知")).IsTrue();
+        // HUD style (the default here) collapses the failure/unknown delivery text from its
+        // own always-visible Label into the retry control's hover tooltip -- see
+        // BuildFlatMessageRow. The detail is still reachable, just moved, the same way the
+        // timestamp moved to a row tooltip.
+        AssertThat(FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "client-failed").TooltipText)
+            .IsEqual("发送失败：请求过于频繁");
+        AssertThat(FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "client-unknown").TooltipText)
+            .IsEqual("投递状态未知");
     }
 
     [TestCase]
@@ -234,9 +240,14 @@ public sealed class LanConnectBasicChatPanelTests
             });
         await runner.AwaitIdleFrame();
 
-        AssertThat(HasLabel(panel, "可能已发送，确认后重发")).IsTrue();
-        FindNode<Button>(panel, LanConnectConstants.ChatRetryButtonPrefix + "client-cross-session")
-            .EmitSignal(Button.SignalName.Pressed);
+        // HUD style (the default here) collapses this delivery text into the retry
+        // control's hover tooltip instead of an always-visible Label -- see
+        // BuildFlatMessageRow / the "client-failed" case above.
+        Button crossSessionRetry = FindNode<Button>(
+            panel,
+            LanConnectConstants.ChatRetryButtonPrefix + "client-cross-session");
+        AssertThat(crossSessionRetry.TooltipText).IsEqual("可能已发送，确认后重发");
+        crossSessionRetry.EmitSignal(Button.SignalName.Pressed);
         await runner.AwaitIdleFrame();
 
         ConfirmationDialog dialog = FindNode<ConfirmationDialog>(panel, "DisconnectedUnknownConfirmation");
@@ -699,7 +710,14 @@ public sealed class LanConnectBasicChatPanelTests
         await runner.AwaitIdleFrame();
 
         AssertThat(mutated).IsTrue();
-        AssertThat(HasLabel(panel, "during refresh")).IsTrue();
+        // HUD style (the default here) renders "sender：content" as one inline run, so the
+        // row's RichTextLabel text is no longer exactly "during refresh" -- it now contains
+        // the sender name prefix too (see BuildFlatMessageRow). HasLabel's exact-text match
+        // no longer applies; check the message text is present in the merged line instead.
+        bool hasMessageText = panel.FindChildren("*", string.Empty, recursive: true, owned: false)
+            .OfType<RichTextLabel>()
+            .Any(label => label.GetParsedText().Contains("during refresh", StringComparison.Ordinal));
+        AssertThat(hasMessageText).IsTrue();
     }
 
     [TestCase]
