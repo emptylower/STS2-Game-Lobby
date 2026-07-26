@@ -142,3 +142,33 @@ enum LanConnectPointerMode { Touch, Mouse }
 - [ ] Touch→Mouse 的挂起规则有测试锁定
 - [ ] 大厅侧边栏的发送按钮不受指针模式影响，且有守卫测试
 - [ ] 气泡仍不参与淡出
+
+---
+
+## 第 5 期实际落地记录（2026-07-27）
+
+| 提交 | 内容 |
+|---|---|
+| `cfae08a` | `LanConnectPointerModeTracker` 纯逻辑 + 11 个 xUnit 用例 |
+| `c034668` | 浮层与面板消费指针模式；气泡与发送按钮按模式显隐 |
+
+**最终状态：** GdUnit 305 通过 / 0 失败。xUnit 735 通过 / 1 跳过 / 1 失败（既有的 `LanConnectModInventoryBuilderTests`）。
+
+### tracker 的调用契约
+
+- `ReportEvent(kind, context)`，`kind ∈ {Touch, Mouse, Key}`，`context = (PanelOpen, Dragging, TweenRunning)`。
+- **`Mouse` 合并了按钮与移动两类，调用方必须预过滤零位移的 `InputEventMouseMotion`**，否则空闲噪声会误切模式。
+- `NotifyContextChanged(context)`：面板关闭 / 拖动结束 / 补间跑完而**没有新输入事件**时调用，让挂起的 Touch→Mouse 切换落地。
+- `InternalMode` 即时变化，**`EffectiveMode` 才是调用方该消费的**——Touch→Mouse 在其中被挂起到安全时机。
+
+### 测试环境的指针模式
+
+headless 下平台探测解析为 **Mouse**（无触摸屏、无 `mobile` feature）。七个依赖 `ChatSendButtonName` 的测试文件全部经由两个共用夹具（`RoomChatFixture`、`ChatUiFixture`），故只需在这两处显式声明 `ConfigurePointerModeForTests(Touch)`。
+
+**生产默认未被改成 Touch 去迁就测试**——生产默认始终跟随平台探测；需要可见发送按钮的测试自己声明。直接实例化 `LanConnectBasicChatPanel` 的 100 多个测试不受影响，因为面板自身的 `_pointerMode` 默认 `Touch`（"拿不准就给入口"）。
+
+### 接线时发现并修掉的既有 bug
+
+`HandleUnhandledKey` 的 F8 分支原本判断 `ChatAvailable: _toggleButton?.Visible == true`——语义是「触摸气泡恰好可见」，而非「房间存在」。指针模式一旦在桌面端隐藏气泡，**F8 将完全失效**。
+
+它是这样暴露的：F8 本身是 `Key` 类事件，`_Input` 会把它报给 tracker；面板关闭时这次按键立即把 `EffectiveMode` 翻成 Mouse 并隐藏气泡，于是**下一次** F8 被 `ChatAvailable` 挡掉。改回 `chat?.ActiveRoomId != null` 后正常——键盘 F8 必须在气泡隐藏时依然可用，这正是本期特性的意义所在。
