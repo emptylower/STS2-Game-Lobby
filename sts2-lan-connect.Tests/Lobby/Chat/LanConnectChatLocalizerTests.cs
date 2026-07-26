@@ -121,6 +121,7 @@ public sealed class LanConnectChatLocalizerTests
         "chat.action.cancel",
         "chat.empty",
         "chat.input.placeholder",
+        "chat.input.placeholder.hud",
         "chat.confirm.title",
         "chat.confirm.delivery_unknown",
         "chat.new_messages",

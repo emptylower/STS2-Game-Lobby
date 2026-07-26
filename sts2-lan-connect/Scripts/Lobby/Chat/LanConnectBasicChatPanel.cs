@@ -683,13 +683,82 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private void BuildControls()
     {
-        AddThemeConstantOverride("separation", 8);
+        // HUD style only (spec §5.1): the messages area and the input row each get their own
+        // visually distinct plate, separated by a 10px gap, instead of the input reading as
+        // continuous with the messages. The lobby sidebar is explicitly out of scope (§2.2
+        // non-goal 1) and keeps titleRow/messagesScroll/newMessagesButton/inputRow as direct
+        // children of this panel, unchanged -- see
+        // Lobby_sidebar_shell_keeps_its_inline_surface_and_input_row_unchanged.
+        AddThemeConstantOverride("separation", UsesLobbyStyle ? 8 : 10);
         SizeFlagsHorizontal = SizeFlags.ExpandFill;
         SizeFlagsVertical = SizeFlags.ExpandFill;
 
+        Control messagesContainer = this;
+        Control inputContainer = this;
+
+        if (!UsesLobbyStyle)
+        {
+            // The messages plate has a transparent background: LanConnectRoomChatOverlay's
+            // _panelFrame already paints the translucent shell behind it (PanelColor,
+            // alpha 0.75), and painting the same translucent colour again here would stack
+            // alpha and darken it. This plate exists so its Rect is a real sibling rect next
+            // to the input plate's, which is what makes the 10px gap between them measurable
+            // and visible on screen.
+            PanelContainer messagesPlate = new()
+            {
+                Name = "ChatMessagesPlate",
+                SizeFlagsHorizontal = SizeFlags.ExpandFill,
+                SizeFlagsVertical = SizeFlags.ExpandFill
+            };
+            messagesPlate.AddThemeStyleboxOverride("panel", new StyleBoxFlat
+            {
+                BgColor = Colors.Transparent,
+                CornerRadiusTopLeft = 4,
+                CornerRadiusTopRight = 4,
+                CornerRadiusBottomLeft = 4,
+                CornerRadiusBottomRight = 4
+            });
+            AddChild(messagesPlate);
+
+            VBoxContainer messagesStack = new()
+            {
+                SizeFlagsHorizontal = SizeFlags.ExpandFill,
+                SizeFlagsVertical = SizeFlags.ExpandFill
+            };
+            messagesStack.AddThemeConstantOverride("separation", 8);
+            messagesPlate.AddChild(messagesStack);
+            messagesContainer = messagesStack;
+
+            // Independent floating input bar (spec §5.1 / §3.2 reference-mod colours).
+            PanelContainer inputPlate = new()
+            {
+                Name = "ChatInputPlate",
+                SizeFlagsHorizontal = SizeFlags.ExpandFill
+            };
+            inputPlate.AddThemeStyleboxOverride("panel", new StyleBoxFlat
+            {
+                BgColor = new Color(0.08f, 0.08f, 0.15f, 0.9f),
+                BorderColor = new Color(0.3f, 0.35f, 0.5f, 0.6f),
+                BorderWidthLeft = 1,
+                BorderWidthTop = 1,
+                BorderWidthRight = 1,
+                BorderWidthBottom = 1,
+                CornerRadiusTopLeft = 6,
+                CornerRadiusTopRight = 6,
+                CornerRadiusBottomLeft = 6,
+                CornerRadiusBottomRight = 6,
+                ContentMarginLeft = 10,
+                ContentMarginTop = 8,
+                ContentMarginRight = 10,
+                ContentMarginBottom = 8
+            });
+            AddChild(inputPlate);
+            inputContainer = inputPlate;
+        }
+
         HBoxContainer titleRow = new();
         titleRow.AddThemeConstantOverride("separation", 10);
-        AddChild(titleRow);
+        messagesContainer.AddChild(titleRow);
 
         if (UsesLobbyStyle)
         {
@@ -728,7 +797,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             CustomMinimumSize = new Vector2(0, 140),
             FocusMode = FocusModeEnum.All
         };
-        AddChild(_messagesScroll);
+        messagesContainer.AddChild(_messagesScroll);
 
         _messagesList = new VBoxContainer
         {
@@ -754,11 +823,11 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _newMessagesButton.CustomMinimumSize = new Vector2(0, 34);
         _newMessagesButton.Visible = false;
         _newMessagesButton.Connect(Button.SignalName.Pressed, Callable.From(ScrollToBottom));
-        AddChild(_newMessagesButton);
+        messagesContainer.AddChild(_newMessagesButton);
 
         HBoxContainer inputRow = new();
         inputRow.AddThemeConstantOverride("separation", UsesLobbyStyle ? 6 : 8);
-        AddChild(inputRow);
+        inputContainer.AddChild(inputRow);
 
         _draftEditor = new LanConnectRichDraftEditor(
             _localizer,

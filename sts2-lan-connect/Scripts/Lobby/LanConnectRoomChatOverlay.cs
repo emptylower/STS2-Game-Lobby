@@ -44,7 +44,11 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private const float PanelHeight = 520f;
     private const float DragHoldSeconds = 0.28f;
 
-    private static readonly Color PanelColor = new(0.09f, 0.09f, 0.11f, 0.95f);
+    // Flat translucent HUD look (room chat HUD redesign spec §5.1 / §3.2), replacing the old
+    // solid panel + gold border. BorderColor is kept for the toggle bubble's accent-bordered
+    // button style; the panel frame itself no longer draws a border (see CreatePanel call
+    // below, borderWidth: 0).
+    private static readonly Color PanelColor = new(0.05f, 0.05f, 0.1f, 0.75f);
     private static readonly Color BorderColor = new(0.56f, 0.44f, 0.2f, 1f);
     private static readonly Color AccentColor = new(0.86f, 0.69f, 0.33f, 1f);
     private static readonly Color TextStrongColor = new(0.96f, 0.94f, 0.88f, 1f);
@@ -474,7 +478,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         _panelFadeContainer = new VBoxContainer { Name = "RoomChatPanelFadeContainer" };
         stack.AddChild(_panelFadeContainer);
 
-        _panelFrame = CreatePanel(PanelColor, BorderColor, 10, 14);
+        _panelFrame = CreatePanel(PanelColor, Colors.Transparent, 4, 14, borderWidth: 0);
         _panelFrame.Name = "RoomChatPanelFrame";
         _panelFrame.CustomMinimumSize = new Vector2(PanelWidth, PanelHeight);
         _panelFadeContainer.AddChild(_panelFrame);
@@ -1516,17 +1520,22 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         ContentMarginBottom = 1
     };
 
-    private static PanelContainer CreatePanel(Color background, Color border, int radius, int padding)
+    private static PanelContainer CreatePanel(
+        Color background,
+        Color border,
+        int radius,
+        int padding,
+        int borderWidth = 1)
     {
         PanelContainer panel = new();
         panel.AddThemeStyleboxOverride("panel", new StyleBoxFlat
         {
             BgColor = background,
             BorderColor = border,
-            BorderWidthLeft = 1,
-            BorderWidthTop = 1,
-            BorderWidthRight = 1,
-            BorderWidthBottom = 1,
+            BorderWidthLeft = borderWidth,
+            BorderWidthTop = borderWidth,
+            BorderWidthRight = borderWidth,
+            BorderWidthBottom = borderWidth,
             CornerRadiusTopLeft = radius,
             CornerRadiusTopRight = radius,
             CornerRadiusBottomLeft = radius,

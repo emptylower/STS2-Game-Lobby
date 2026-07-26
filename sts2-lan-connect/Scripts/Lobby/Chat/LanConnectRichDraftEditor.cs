@@ -106,6 +106,12 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     private Color TextMutedColor => UsesLobbyStyle ? LobbyTextMutedColor : DarkTextMutedColor;
     private Color AccentColor => UsesLobbyStyle ? LobbyAccentColor : DarkAccentColor;
 
+    // HUD style only: the placeholder tells the user the shortcut (spec §5.1), in the spirit
+    // of the reference mod's "Enter to send, Esc to cancel...". The lobby sidebar keeps its
+    // existing placeholder unchanged.
+    private string DraftPlaceholderText => Localize(
+        UsesLobbyStyle ? "chat.input.placeholder" : "chat.input.placeholder.hud");
+
     internal event Action? SubmitRequested;
 
     internal event Action? DraftChanged;
@@ -580,7 +586,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
                 ? LanConnectConstants.ChatDraftInputName
                 : LanConnectConstants.ChatDraftRunPrefix + runIndex,
             Text = run.Text,
-            PlaceholderText = textIndex == 0 ? Localize("chat.input.placeholder") : string.Empty,
+            PlaceholderText = textIndex == 0 ? DraftPlaceholderText : string.Empty,
             SizeFlagsHorizontal = UsesLobbyStyle || expandToFill
                 ? SizeFlags.ExpandFill
                 : SizeFlags.Fill,
@@ -612,7 +618,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
                 ? LanConnectConstants.ChatDraftInputName
                 : LanConnectConstants.ChatDraftRunPrefix + $"Boundary{runIndex}_{boundaryOffset}",
             Text = string.Empty,
-            PlaceholderText = textIndex == 0 ? Localize("chat.input.placeholder") : string.Empty,
+            PlaceholderText = textIndex == 0 ? DraftPlaceholderText : string.Empty,
             SizeFlagsHorizontal = UsesLobbyStyle ? SizeFlags.ExpandFill : SizeFlags.Fill,
             FocusMode = _editable ? FocusModeEnum.All : FocusModeEnum.None,
             Editable = _editable,

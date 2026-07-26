@@ -351,10 +351,19 @@ public sealed class LanConnectRoomRichScreenshotTests
         Rect2 logical = owner.LogicalClip is { } clip
             ? owner.LogicalBounds.Intersection(clip)
             : owner.LogicalBounds;
-        int left = Math.Max(0, Mathf.FloorToInt(logical.Position.X * uiScale) - 1);
-        int top = Math.Max(0, Mathf.FloorToInt(logical.Position.Y * uiScale) - 1);
-        int right = Math.Min(physicalSize.X, Mathf.CeilToInt(logical.End.X * uiScale) + 1);
-        int bottom = Math.Min(physicalSize.Y, Mathf.CeilToInt(logical.End.Y * uiScale) + 1);
+        // Room chat HUD redesign (§5.1): rounded-corner HUD controls now sit directly on top
+        // of opaque-ish chrome (the messages/input plates) instead of a near-transparent
+        // backdrop. That raises the colour delta of the 1-physical-pixel anti-aliased halo
+        // every rounded StyleBoxFlat edge already produced -- previously small enough to stay
+        // under PixelChannelNoiseTolerance, now occasionally just over it. The boundary
+        // padding widens by one physical pixel to absorb that halo; the colour-tolerance
+        // check above (still `<= PixelChannelNoiseTolerance`) is unchanged, so this does not
+        // loosen what counts as a "real" pixel change, only how close to the edge it may land.
+        const int boundaryPaddingPixels = 2;
+        int left = Math.Max(0, Mathf.FloorToInt(logical.Position.X * uiScale) - boundaryPaddingPixels);
+        int top = Math.Max(0, Mathf.FloorToInt(logical.Position.Y * uiScale) - boundaryPaddingPixels);
+        int right = Math.Min(physicalSize.X, Mathf.CeilToInt(logical.End.X * uiScale) + boundaryPaddingPixels);
+        int bottom = Math.Min(physicalSize.Y, Mathf.CeilToInt(logical.End.Y * uiScale) + boundaryPaddingPixels);
         int changed = 0;
         for (int offset = 0; offset < baseline.Length; offset += 4)
         {
