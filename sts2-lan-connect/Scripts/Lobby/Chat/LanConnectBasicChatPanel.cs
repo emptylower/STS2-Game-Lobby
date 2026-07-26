@@ -142,6 +142,12 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private int _visibilityPublishSuppressionDepth;
     private bool _publishVisibilityWhenSuppressionEnds;
 
+    // Safe default: until a caller (LanConnectRoomChatOverlay) says otherwise, keep the touch
+    // entry point visible -- "unsure -> give the entry point" (room chat HUD redesign spec
+    // §7.4). This also means every test that instantiates this panel directly (bypassing the
+    // overlay's pointer-mode wiring entirely) keeps seeing the send button, unmodified.
+    private LanConnectPointerMode _pointerMode = LanConnectPointerMode.Touch;
+
     internal LanConnectChatVisualStyle ChatVisualStyle { get; init; } =
         LanConnectChatVisualStyle.DarkOverlay;
 
@@ -594,6 +600,25 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             _messagesScroll.CustomMinimumSize = new Vector2(0, compact ? 72 : 140);
         }
         _draftEditor?.SetCompactLayout(compact);
+    }
+
+    // The send button is a touch-only affordance for the dark-overlay HUD (room chat HUD
+    // redesign spec §7.5): keyboard/mouse users already have Enter. The lobby sidebar is an
+    // explicit non-goal (§2.2) -- its send button must stay visible regardless of pointer
+    // mode, which is why UsesLobbyStyle short-circuits the gate below. Do not drop that
+    // clause: Sidebar_send_button_stays_visible_regardless_of_pointer_mode guards it.
+    internal void SetPointerMode(LanConnectPointerMode mode)
+    {
+        _pointerMode = mode;
+        ApplySendButtonVisibility();
+    }
+
+    private void ApplySendButtonVisibility()
+    {
+        if (_sendButton != null && GodotObject.IsInstanceValid(_sendButton))
+        {
+            _sendButton.Visible = UsesLobbyStyle || _pointerMode == LanConnectPointerMode.Touch;
+        }
     }
 
     internal void ReleaseDraftFocus()
@@ -2176,6 +2201,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         _emojiPicker?.SetAvailable(emojiAvailable && editable);
         ApplyReferenceModePresentation(CurrentReferenceModePresentation());
+        ApplySendButtonVisibility();
         _sendButton.Disabled = !editable ||
             (!CanSendCurrentDraft() && !IsBlankDraft());
         string operationStatus = OperationStatusText();

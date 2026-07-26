@@ -466,6 +466,10 @@ internal sealed class ChatUiFixture : IDisposable
             dual,
             (_, _) => Task.CompletedTask,
             (_, _) => Task.CompletedTask);
+        // Headless test runner platform probe resolves to Mouse (no touchscreen); this fixture's
+        // consumers assert on the room chat bubble and send button being visible and in bounds,
+        // so state the pointer mode explicitly rather than relying on the platform probe.
+        room.ConfigurePointerModeForTests(LanConnectPointerMode.Touch);
         richPanel.BindStructured(
             richState,
             (_, _) => Task.CompletedTask,

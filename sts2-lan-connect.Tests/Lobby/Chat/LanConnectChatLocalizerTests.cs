@@ -126,6 +126,7 @@ public sealed class LanConnectChatLocalizerTests
         "chat.confirm.delivery_unknown",
         "chat.new_messages",
         "chat.fade.unread_hint",
+        "chat.fade.reopen_hint",
         "chat.operation.unavailable",
         "chat.operation.submitted",
         "chat.operation.send_failed",

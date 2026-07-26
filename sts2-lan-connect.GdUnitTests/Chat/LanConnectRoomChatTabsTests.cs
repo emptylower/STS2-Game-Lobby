@@ -396,6 +396,11 @@ internal sealed class RoomChatFixture : IDisposable
             state,
             (_, _) => Task.CompletedTask,
             (_, _) => Task.CompletedTask);
+        // The headless test runner's platform probe resolves to Mouse (no touchscreen), which
+        // would hide the chat bubble and send button that most of this fixture's consumers
+        // assert on. Tests exercising the pointer-mode-adaptive behaviour itself override this
+        // explicitly via ConfigurePointerModeForTests (see LanConnectPointerModeOverlayTests).
+        overlay.ConfigurePointerModeForTests(LanConnectPointerMode.Touch);
         await runner.AwaitIdleFrame();
         return new RoomChatFixture(overlay, state, runner);
     }

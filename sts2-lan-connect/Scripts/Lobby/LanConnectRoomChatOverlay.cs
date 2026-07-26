@@ -94,6 +94,14 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private bool _panelHovered;
     private long _fadeActivityToken;
 
+    // Entry-point adaptivity (room chat HUD redesign spec §7): the chat bubble and the send
+    // button exist solely so touch players -- who have no keyboard fallback -- can reopen and
+    // use chat. On a mouse/keyboard setup they're redundant chrome, so this tracker decides
+    // which world we're in and LanConnectBasicChatPanel.SetPointerMode carries the same
+    // decision to the send button.
+    private LanConnectPointerModeTracker _pointerModeTracker =
+        new(new GodotMonotonicClock(), DefaultPlatformPointerMode());
+
     internal LanConnectRoomChatOverlayTestState TestState
     {
         get
@@ -266,6 +274,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     public override void _Input(InputEvent inputEvent)
     {
+        ReportPointerModeInput(inputEvent);
+
         if (!_dragPointerDown)
         {
             return;
@@ -409,6 +419,18 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     internal void RefreshFadeForTests() => UpdateRoomOverlayFade(ResolveChat());
 
+    // The headless test environment's platform probe reliably resolves to Mouse (no
+    // touchscreen, no "mobile" feature), which would hide the bubble/send button and turn a
+    // great many existing green tests red. Production always follows the real platform probe
+    // (DefaultPlatformPointerMode) -- this seam exists solely so tests can state the pointer
+    // mode they actually want to exercise, the same way ConfigureFadeForTests lets a test pick
+    // its own clock instead of the real one.
+    internal void ConfigurePointerModeForTests(LanConnectPointerMode mode)
+    {
+        _pointerModeTracker = new LanConnectPointerModeTracker(new GodotMonotonicClock(), mode);
+        RefreshFromSource();
+    }
+
     private static void InstallDeferred()
     {
         if (Engine.GetMainLoop() is not SceneTree tree || tree.Root == null)
@@ -547,15 +569,17 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     {
         RefreshCombatRenderingProvider();
         LanConnectDualChatState? chat = ResolveChat();
+        // No new input event accompanies a panel close, a drag ending, or a fade tween
+        // finishing, so a Touch -> Mouse switch withheld earlier can only land here (spec
+        // §7.4 / §7.5) -- this runs every frame plus whenever a test calls RefreshFromSource
+        // directly, so it never needs its own call site at each of those three spots.
+        _pointerModeTracker.NotifyContextChanged(CurrentPointerModeContext());
         bool hasRoom = chat?.ActiveRoomId != null;
         if (_root != null)
         {
             _root.Visible = hasRoom;
         }
-        if (_toggleButton != null)
-        {
-            _toggleButton.Visible = hasRoom;
-        }
+        ApplyPointerModeVisibility(chat);
         if (!hasRoom || chat == null)
         {
             _chatPanel?.CloseTransientUi(restoreFocus: false);
@@ -877,10 +901,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         {
             _serverUnreadDot.Visible = serverUnread > 0;
         }
-        if (_toggleBadge != null)
-        {
-            _toggleBadge.Visible = roomUnread > 0;
-        }
+        // _toggleBadge.Visible is owned by ApplyPointerModeVisibility (it also gates on
+        // pointer mode, not just unread count); only the label text is this method's job.
         if (_toggleBadgeLabel != null)
         {
             _toggleBadgeLabel.Text = BadgeText(roomUnread);
@@ -927,10 +949,16 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 ReducedMotion: reducedMotion));
 
         int hintCount = roomUnread + roomNewBelow;
-        string hintText = LanConnectChatUiComposition.Localizer.Format(
-            TranslationServer.GetLocale(),
-            "chat.fade.unread_hint",
-            hintCount);
+        // Mouse mode has no bubble to tap (spec §7.6), so the idle-fade hint has to spell out
+        // the actual reopen mechanism (Enter) instead of the touch-oriented unread count.
+        string hintText = IsTouchPointerMode
+            ? LanConnectChatUiComposition.Localizer.Format(
+                TranslationServer.GetLocale(),
+                "chat.fade.unread_hint",
+                hintCount)
+            : LanConnectChatUiComposition.Localizer.Get(
+                TranslationServer.GetLocale(),
+                "chat.fade.reopen_hint");
         _fadeHint.Text = hintText;
         _fadeHint.AccessibilityName = hintText;
         SetControlAlpha(
@@ -987,6 +1015,64 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
         _panelHovered = hovered;
         SignalFadeActivity();
+    }
+
+    private bool IsTouchPointerMode => _pointerModeTracker.EffectiveMode == LanConnectPointerMode.Touch;
+
+    // Mirrors the Dragging definition already used by the fade controller (UpdateRoomOverlayFade
+    // below), so "a drag is running" means the same thing to both safety gates.
+    private LanConnectPointerModeContext CurrentPointerModeContext() => new(
+        PanelOpen: ResolveChat()?.RoomOverlayOpen == true,
+        Dragging: _dragPointerDown || _dragging,
+        TweenRunning: IsFadeTweenActive());
+
+    // Single source of truth for "does the touch entry point show right now": the toggle
+    // bubble, its unread badge, and (via LanConnectBasicChatPanel.SetPointerMode) the send
+    // button all key off IsTouchPointerMode here, and nowhere else. Called both once per frame
+    // (RefreshFromSource) and immediately after every classified input event, so tests that
+    // read TestState synchronously (no awaited frame) still see the current mode applied.
+    private void ApplyPointerModeVisibility(LanConnectDualChatState? chat)
+    {
+        bool hasRoom = chat?.ActiveRoomId != null;
+        bool touch = IsTouchPointerMode;
+        if (_toggleButton != null)
+        {
+            _toggleButton.Visible = hasRoom && touch;
+        }
+        if (_toggleBadge != null)
+        {
+            _toggleBadge.Visible = touch && (chat?.Room.UnreadCount ?? 0) > 0;
+        }
+        _chatPanel?.SetPointerMode(_pointerModeTracker.EffectiveMode);
+    }
+
+    // Room chat HUD redesign spec §7.4: uncertain -> Touch (an extra entry point is always
+    // safe; a missing one on a no-keyboard device is not). Names verified against Godot 4.5's
+    // C# bindings (GodotSharp.dll): OS.HasFeature(string) and DisplayServer.IsTouchscreenAvailable()
+    // both exist exactly as named here -- this codebase had never called either before.
+    private static LanConnectPointerMode DefaultPlatformPointerMode() =>
+        OS.HasFeature("mobile") || DisplayServer.IsTouchscreenAvailable()
+            ? LanConnectPointerMode.Touch
+            : LanConnectPointerMode.Mouse;
+
+    private static LanConnectPointerModeEventKind? ClassifyPointerModeInput(InputEvent inputEvent) => inputEvent switch
+    {
+        InputEventScreenTouch or InputEventScreenDrag => LanConnectPointerModeEventKind.Touch,
+        InputEventMouseButton => LanConnectPointerModeEventKind.Mouse,
+        InputEventMouseMotion motion when motion.Relative != Vector2.Zero => LanConnectPointerModeEventKind.Mouse,
+        InputEventKey { Pressed: true } => LanConnectPointerModeEventKind.Key,
+        _ => null
+    };
+
+    private void ReportPointerModeInput(InputEvent inputEvent)
+    {
+        LanConnectPointerModeEventKind? kind = ClassifyPointerModeInput(inputEvent);
+        if (kind == null)
+        {
+            return;
+        }
+        _pointerModeTracker.ReportEvent(kind.Value, CurrentPointerModeContext());
+        ApplyPointerModeVisibility(ResolveChat());
     }
 
     private bool HasPanelFocus()
@@ -1137,7 +1223,11 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                     TextInputHasFocus: LanConnectAccessibilityKeyboard.IsTextInput(GetViewport().GuiGetFocusOwner()),
                     InviteDialogVisible: false,
                     ClipboardHasInvite: false,
-                    ChatAvailable: _toggleButton?.Visible == true,
+                    // A room existing is what makes chat available, not whether the pointer-
+                    // mode-adaptive touch bubble happens to be rendered right now (spec §7) --
+                    // those are independent concerns, and F8 must work from a real keyboard
+                    // even when the bubble is hidden for exactly that reason.
+                    ChatAvailable: chat?.ActiveRoomId != null,
                     BlockingModalVisible: modalVisible));
             if (hotkeyRoute.Action != LanConnectAccessibilityHotkeyAction.ToggleChat)
             {
