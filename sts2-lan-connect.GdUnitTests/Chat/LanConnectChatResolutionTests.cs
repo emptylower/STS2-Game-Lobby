@@ -56,8 +56,7 @@ public sealed class LanConnectChatResolutionTests
             AssertThat(fixture.Lobby.TestState.ServerChatPanelState.DeliveryUnknownCount).IsEqual(1);
             AssertThat(fixture.Room.TestState.RoomUnread).IsGreaterEqual(10);
             AssertThat(fixture.Room.TestState.ServerUnread).IsGreaterEqual(10);
-            AssertThat(fixture.RoomUnreadBadgeText.Length).IsGreaterEqual(2);
-            AssertThat(fixture.ServerUnreadBadgeText).IsEqual("0");
+            AssertThat(fixture.ServerUnreadDotVisible).IsTrue();
             AssertThat(fixture.ToggleUnreadBadgeText)
                 .IsEqual(fixture.Room.TestState.RoomUnread.ToString());
             IReadOnlyList<string> overlaps = fixture.OverlappingNamedControls();
@@ -389,9 +388,7 @@ internal sealed class ChatUiFixture : IDisposable
             .Select(label => label.Text)
             .Concat(RichMessageTexts().Select(label => label.GetParsedText())));
 
-    internal string RoomUnreadBadgeText => Find<Label>(Room, "RoomUnreadBadge").Text;
-
-    internal string ServerUnreadBadgeText => Find<Label>(Room, "ServerUnreadBadge").Text;
+    internal bool ServerUnreadDotVisible => Find<Control>(Room, "ServerUnreadDot").Visible;
 
     internal string ToggleUnreadBadgeText =>
         Find<Control>(Room, "ChatToggleUnreadBadge").GetChildOrNull<Label>(0) is Label label

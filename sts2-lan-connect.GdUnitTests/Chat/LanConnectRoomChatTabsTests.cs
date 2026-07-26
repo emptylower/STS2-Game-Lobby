@@ -10,16 +10,15 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 public sealed class LanConnectRoomChatTabsTests
 {
     [TestCase]
-    public async Task Builds_stable_fixed_width_tab_panel_and_pin_nodes()
+    public async Task Builds_channel_switch_buttons_room_panel_and_pin_nodes()
     {
+        // The channel switcher no longer has a fixed-width tab shape (that box-tab identity is
+        // gone by design — see the control strip redesign), so this only locks in what is still
+        // real: both channel buttons and the room panel exist, and the pin button still works.
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
 
-        Button roomTab = FindNode<Button>(fixture.Overlay, "RoomChatTab");
-        Button serverTab = FindNode<Button>(fixture.Overlay, "ServerChatTab");
-        AssertThat(roomTab.CustomMinimumSize.X).IsGreater(0f);
-        AssertThat(serverTab.CustomMinimumSize.X).IsEqual(roomTab.CustomMinimumSize.X);
-        AssertThat(FindNode<Label>(fixture.Overlay, "RoomUnreadBadge")).IsNotNull();
-        AssertThat(FindNode<Label>(fixture.Overlay, "ServerUnreadBadge")).IsNotNull();
+        AssertThat(FindNode<Button>(fixture.Overlay, "RoomChatTab")).IsNotNull();
+        AssertThat(FindNode<Button>(fixture.Overlay, "ServerChatTab")).IsNotNull();
         AssertThat(FindNode<LanConnectBasicChatPanel>(fixture.Overlay, "RoomChatPanel")).IsNotNull();
 
         Button pin = FindNode<Button>(fixture.Overlay, "ChatPinButton");
@@ -130,28 +129,33 @@ public sealed class LanConnectRoomChatTabsTests
     }
 
     [TestCase]
-    public async Task Server_unread_never_drives_room_toggle_or_tab_badges()
+    public async Task Server_unread_shows_only_on_the_channel_dot_never_on_the_toggle_bubble()
     {
+        // Behaviour change from the pre-redesign shape (not a rename): the old ServerUnreadBadge
+        // was hardcoded to always render "0", so server unread never surfaced anywhere on the
+        // strip. The control strip redesign gives 频道 a real 6px unread dot (design spec §5.3),
+        // so server unread now shows there. The toggle bubble's own badge, however, still must
+        // never react to server unread — that invariant is unchanged.
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
         await fixture.Overlay.CloseForTests();
         fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Server, sequence: 20);
         await fixture.Overlay.RefreshForTests();
         Control toggleBadge = FindNode<Control>(fixture.Overlay, "ChatToggleUnreadBadge");
-        Control serverBadge = FindNode<Control>(fixture.Overlay, "ServerUnreadBadge");
+        Control serverDot = FindNode<Control>(fixture.Overlay, "ServerUnreadDot");
         AssertThat(toggleBadge.Visible).IsFalse();
-        AssertThat(serverBadge.Visible).IsFalse();
+        AssertThat(serverDot.Visible).IsTrue();
 
         fixture.State.Server.SetPresentationForTests(LanConnectServerChatPresentation.Unsupported);
         await fixture.Overlay.RefreshForTests();
         AssertThat(fixture.Overlay.TestState.ServerUnread).IsEqual(1);
         AssertThat(toggleBadge.Visible).IsFalse();
-        AssertThat(serverBadge.Visible).IsFalse();
+        AssertThat(serverDot.Visible).IsTrue();
 
         fixture.State.Server.SetPresentationForTests(LanConnectServerChatPresentation.Ready);
         await fixture.Overlay.RefreshForTests();
         AssertThat(fixture.Overlay.TestState.ServerUnread).IsEqual(1);
         AssertThat(toggleBadge.Visible).IsFalse();
-        AssertThat(serverBadge.Visible).IsFalse();
+        AssertThat(serverDot.Visible).IsTrue();
     }
 
     [TestCase]

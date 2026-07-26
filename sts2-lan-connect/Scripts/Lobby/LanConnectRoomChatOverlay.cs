@@ -42,7 +42,6 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private const float DefaultTopMargin = 96f;
     private const float PanelWidth = 430f;
     private const float PanelHeight = 520f;
-    private const float TabWidth = 142f;
     private const float DragHoldSeconds = 0.28f;
 
     private static readonly Color PanelColor = new(0.09f, 0.09f, 0.11f, 0.95f);
@@ -60,8 +59,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private PanelContainer? _panelFrame;
     private Button? _roomTab;
     private Button? _serverTab;
-    private Label? _roomUnreadBadge;
-    private Label? _serverUnreadBadge;
+    private Control? _serverUnreadDot;
     private Button? _pinButton;
     private LanConnectBasicChatPanel? _chatPanel;
     private LanConnectDualChatState? _boundChat;
@@ -469,8 +467,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         _toggleBadge = CreateUnreadBadge("ChatToggleUnreadBadge", out _toggleBadgeLabel);
         toggleWrap.AddChild(_toggleBadge);
 
-        // Wraps the panel frame (and, in a later change, the control strip that replaces its
-        // title/tab rows) so both fade together as one unit. The toggle bubble and the fade
+        // Wraps the panel frame, whose body contains the control strip that replaced the old
+        // title/tab rows, so both fade together as one unit. The toggle bubble and the fade
         // hint stay outside this container: the bubble is the only way to reopen the overlay
         // on touch platforms, and the hint has its own independent alpha handling.
         _panelFadeContainer = new VBoxContainer { Name = "RoomChatPanelFadeContainer" };
@@ -485,40 +483,50 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         body.AddThemeConstantOverride("separation", 10);
         _panelFrame.AddChild(body);
 
-        HBoxContainer header = new();
-        header.MouseDefaultCursorShape = Control.CursorShape.Drag;
-        header.TooltipText = "长按标题栏可拖动聊天区";
-        header.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnDragHandleGuiInput));
-        body.AddChild(header);
+        // The slim control strip that replaces the old title bar + tab bar (see the room chat
+        // HUD redesign spec §5.3). Channel switching now reads as highlighted-vs-dimmed text
+        // rather than two fixed-width tabs, and the unread state that used to live on two
+        // numeric badges collapses into a single dot on the 频道 control (§ design decision:
+        // the room channel's unread is already surfaced by the toggle bubble's badge, so this
+        // strip only needs to expose the channel that has no other indicator while the panel
+        // is open — the server/频道 channel).
+        HBoxContainer strip = new() { Name = "RoomChatControlStrip" };
+        strip.AddThemeConstantOverride("separation", 8);
+        body.AddChild(strip);
 
-        Label title = CreateLabel("聊天", 18, TextStrongColor);
-        title.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-        header.AddChild(title);
+        _roomTab = CreateStripButton("RoomChatTab", "房间", () => SelectChannel(LanConnectChatChannel.Room));
+        strip.AddChild(_roomTab);
 
-        _pinButton = CreateButton("固定", accent: false, TogglePinned);
-        _pinButton.Name = "ChatPinButton";
-        _pinButton.CustomMinimumSize = new Vector2(104, LanConnectHudLegibility.MinTouchTargetPixels);
+        _serverTab = CreateStripButton("ServerChatTab", "频道", () => SelectChannel(LanConnectChatChannel.Server));
+        strip.AddChild(_serverTab);
+
+        _serverUnreadDot = CreateUnreadDot("ServerUnreadDot");
+        _serverTab.AddChild(_serverUnreadDot);
+
+        // The drag handle used to live on the header HBox, whose blank space (behind the
+        // title label) caught long-press input that wasn't already consumed by a button. The
+        // header is gone, so this dedicated spacer plays the same role: it is the only
+        // non-button surface on the strip, it expands to fill the leftover width, and it is
+        // the sole node wired to OnDragHandleGuiInput. This preserves the touch long-press
+        // reposition capability the redesign explicitly promises not to lose.
+        Control dragZone = new()
+        {
+            Name = "RoomChatStripDragZone",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            MouseDefaultCursorShape = Control.CursorShape.Drag,
+            TooltipText = "长按可拖动聊天区"
+        };
+        dragZone.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnDragHandleGuiInput));
+        strip.AddChild(dragZone);
+
+        _pinButton = CreateStripButton("ChatPinButton", "固定", TogglePinned);
         _pinButton.TooltipText = "固定聊天浮层";
         _pinButton.Icon = LanConnectChatUiComposition.Icons.Get("pin", 18, TextStrongColor);
         _pinButton.ExpandIcon = true;
-        header.AddChild(_pinButton);
+        strip.AddChild(_pinButton);
 
-        Button closeButton = CreateButton("收起", accent: false, ClosePanel);
-        closeButton.Name = "ChatCloseButton";
-        closeButton.CustomMinimumSize = new Vector2(68, LanConnectHudLegibility.MinTouchTargetPixels);
-        header.AddChild(closeButton);
-
-        HBoxContainer tabs = new();
-        tabs.AddThemeConstantOverride("separation", 8);
-        body.AddChild(tabs);
-
-        _roomTab = CreateTab("RoomChatTab", "房间聊天", "RoomUnreadBadge", out _roomUnreadBadge);
-        _roomTab.Connect(Button.SignalName.Pressed, Callable.From(() => SelectChannel(LanConnectChatChannel.Room)));
-        tabs.AddChild(_roomTab);
-
-        _serverTab = CreateTab("ServerChatTab", "频道聊天", "ServerUnreadBadge", out _serverUnreadBadge);
-        _serverTab.Connect(Button.SignalName.Pressed, Callable.From(() => SelectChannel(LanConnectChatChannel.Server)));
-        tabs.AddChild(_serverTab);
+        Button closeButton = CreateStripButton("ChatCloseButton", "收起", ClosePanel);
+        strip.AddChild(closeButton);
 
         _chatPanel = new LanConnectBasicChatPanel(LanConnectChatUiComposition.Icons)
         {
@@ -860,8 +868,11 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private void RefreshBadges(LanConnectDualChatState? chat)
     {
         int roomUnread = chat?.Room.UnreadCount ?? 0;
-        SetBadge(_roomUnreadBadge, roomUnread);
-        SetBadge(_serverUnreadBadge, 0);
+        int serverUnread = chat?.Server.UnreadCount ?? 0;
+        if (_serverUnreadDot != null)
+        {
+            _serverUnreadDot.Visible = serverUnread > 0;
+        }
         if (_toggleBadge != null)
         {
             _toggleBadge.Visible = roomUnread > 0;
@@ -1219,16 +1230,6 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
     }
 
-    private static void SetBadge(Label? badge, int count)
-    {
-        if (badge == null)
-        {
-            return;
-        }
-        badge.Visible = count > 0;
-        badge.Text = BadgeText(count);
-    }
-
     private static string BadgeText(int count) => count > 99 ? "99+" : count.ToString();
 
     private static void ApplyTabStyle(Button? tab, bool selected)
@@ -1237,7 +1238,6 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         {
             return;
         }
-        tab.ButtonPressed = selected;
         tab.AddThemeColorOverride("font_color", selected ? TextStrongColor : TextMutedColor);
     }
 
@@ -1436,30 +1436,45 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
     }
 
-    private static Button CreateTab(string name, string text, string badgeName, out Label badge)
+    private static Button CreateStripButton(string name, string text, Action onPressed)
     {
-        Button tab = CreateButton(text, accent: false, static () => { });
-        tab.Name = name;
-        tab.ToggleMode = true;
-        tab.ActionMode = BaseButton.ActionModeEnum.Release;
-        tab.CustomMinimumSize = new Vector2(TabWidth, LanConnectHudLegibility.MinTouchTargetPixels);
-        tab.SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin;
-
-        badge = CreateLabel(string.Empty, 11, Colors.White);
-        badge.Name = badgeName;
-        badge.SetAnchorsPreset(Control.LayoutPreset.TopRight);
-        badge.OffsetLeft = -34;
-        badge.OffsetTop = 2;
-        badge.OffsetRight = -6;
-        badge.OffsetBottom = 22;
-        badge.HorizontalAlignment = HorizontalAlignment.Center;
-        badge.VerticalAlignment = VerticalAlignment.Center;
-        badge.MouseFilter = Control.MouseFilterEnum.Ignore;
-        badge.AddThemeStyleboxOverride("normal", CreateBadgeStyle());
-        badge.Visible = false;
-        tab.AddChild(badge);
-        return tab;
+        Button button = new()
+        {
+            Name = name,
+            Text = text,
+            MouseDefaultCursorShape = Control.CursorShape.PointingHand
+        };
+        button.AddThemeFontSizeOverride("font_size", 13);
+        LanConnectHudLegibility.ApplyHudButtonStyle(button, AccentColor);
+        button.Connect(Button.SignalName.Pressed, Callable.From(onPressed));
+        return button;
     }
+
+    private static Control CreateUnreadDot(string name)
+    {
+        Panel dot = new()
+        {
+            Name = name,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            Visible = false
+        };
+        dot.SetAnchorsPreset(Control.LayoutPreset.TopRight);
+        dot.OffsetLeft = -12f;
+        dot.OffsetTop = 4f;
+        dot.OffsetRight = -6f;
+        dot.OffsetBottom = 10f;
+        dot.AddThemeStyleboxOverride("panel", CreateDotStyle());
+        return dot;
+    }
+
+    private static StyleBoxFlat CreateDotStyle() => new()
+    {
+        BgColor = new Color(0.82f, 0.12f, 0.16f, 1f),
+        CornerRadiusTopLeft = 3,
+        CornerRadiusTopRight = 3,
+        CornerRadiusBottomLeft = 3,
+        CornerRadiusBottomRight = 3
+    };
 
     private static Control CreateUnreadBadge(string name, out Label label)
     {
