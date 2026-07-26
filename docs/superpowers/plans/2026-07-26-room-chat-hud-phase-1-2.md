@@ -18,7 +18,7 @@
 
 | 套件 | 通过 | 跳过 | 失败 |
 |---|---|---|---|
-| GdUnit | 263 | 0 | 0 |
+| GdUnit | 258（`d204024` 后 263，`a7cba21` 后 264） | 0 | 0 |
 | xUnit | 696 | 1 | **1** |
 
 那个 xUnit 失败是 `LanConnectModInventoryBuilderTests.Runtime_metadata_matches_the_supported_version_inventory_contract`（"runtime metadata contract has not been locked for this game version"），**来自 main、与本计划无关**，已通过 stash-and-rerun 确认。本计划的任何任务都不应试图修它，也不应因它而认为自己引入了回归。
@@ -180,7 +180,7 @@ dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --s
 dotnet test sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1
 ```
 
-预期：0 失败（实测应为 266 通过 = 基线 263 + 工作区已有的 3 个复现用例 + 2 个守卫用例）。
+预期：0 失败（`d204024` 落地后实测 263 通过，其中已包含 3 个复现用例与 2 个守卫用例）。
 
 特别确认这两个仍通过——它们锁定的是"非贴底位置必须被保留"，与本修复正交，是最可能被 `Range.changed` 误伤的地方：
 - `Rebinding_from_empty_channel_restores_saved_non_bottom_offset_after_layout`

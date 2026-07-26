@@ -139,7 +139,11 @@ AFTER HISTORY: value=0 max=2554 page=218 bottom=2336 IsAtBottom=True below=0
 
 修法不得引入"用户主动上滑浏览历史时被强制拉回底部"的回归——这是比原缺陷更严重的体验问题。`OnScrollRangeChanged` 中的 `!_state.IsAtBottom` 守卫是承重的，不得放宽。
 
-**约束**：以上改动不得引入"用户主动上滑浏览历史时被强制拉回底部"的回归——这是比原缺陷更严重的体验问题。`_scrollInteractionGeneration` 是既有的用户交互标记，必须作为守卫条件参与判定。
+**不得把 `_scrollInteractionGeneration` 加进这个守卫。** 本文档早期版本要求过这一条，是错的：
+
+- 该 token 回答的问题是"我在 await 期间用户滚动过吗"，所以 `RestoreSavedScrollOffsetAfterLayoutAsync`（`:1857`）需要它——它在 `:1027` 捕获决策后会让出控制权。`OnScrollRangeChanged` 全程同步、不让出，不存在决策过期的窗口。
+- `OnScrollChanged`（`:1790`）在每次真实用户滚动时同步更新 `_state.IsAtBottom`，`!_state.IsAtBottom` 已经涵盖了它要防的情形。
+- 决定性的是：**`_scrollInteractionGeneration` 从不重置**。一旦作为守卫，用户滚动一次就会永久关闭本面板的自动贴底——包括用户点击"N 条新消息"主动回到底部之后。
 
 ## 5. 视觉与信息架构改造
 
