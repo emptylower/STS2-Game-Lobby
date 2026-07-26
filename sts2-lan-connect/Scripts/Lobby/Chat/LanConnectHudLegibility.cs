@@ -20,4 +20,40 @@ internal static class LanConnectHudLegibility
     internal static Vector2 EnsureTouchTarget(Vector2 requested) => new(
         Mathf.Max(requested.X, MinTouchTargetPixels),
         Mathf.Max(requested.Y, MinTouchTargetPixels));
+
+    internal static void ApplyTextOutline(Control control)
+    {
+        control.AddThemeColorOverride("font_outline_color", OutlineColor);
+        control.AddThemeConstantOverride("outline_size", OutlineSize);
+    }
+
+    internal static void ApplyHudButtonStyle(Button button, Color accent)
+    {
+        button.AddThemeStyleboxOverride("normal", Plate(RestPlateColor, Colors.Transparent, 0));
+        button.AddThemeStyleboxOverride("hover", Plate(HoverPlateColor, accent, 1));
+        button.AddThemeStyleboxOverride("pressed", Plate(PressedPlateColor, accent, 1));
+        button.AddThemeStyleboxOverride("hover_pressed", Plate(PressedPlateColor, accent, 1));
+        button.AddThemeStyleboxOverride("focus", Plate(RestPlateColor, accent, 2));
+        button.CustomMinimumSize = EnsureTouchTarget(button.CustomMinimumSize);
+        button.FocusMode = Control.FocusModeEnum.All;
+        ApplyTextOutline(button);
+    }
+
+    private static StyleBoxFlat Plate(Color background, Color border, int borderWidth) => new()
+    {
+        BgColor = background,
+        BorderColor = border,
+        BorderWidthLeft = borderWidth,
+        BorderWidthTop = borderWidth,
+        BorderWidthRight = borderWidth,
+        BorderWidthBottom = borderWidth,
+        CornerRadiusTopLeft = 5,
+        CornerRadiusTopRight = 5,
+        CornerRadiusBottomLeft = 5,
+        CornerRadiusBottomRight = 5,
+        ContentMarginLeft = 10,
+        ContentMarginTop = 6,
+        ContentMarginRight = 10,
+        ContentMarginBottom = 6
+    };
 }
