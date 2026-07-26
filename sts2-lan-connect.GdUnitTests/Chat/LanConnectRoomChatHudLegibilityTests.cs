@@ -76,6 +76,8 @@ public sealed class LanConnectRoomChatHudLegibilityTests
 
         Button pin = (Button)overlay.FindChild("ChatPinButton", recursive: true, owned: false);
         Button close = (Button)overlay.FindChild("ChatCloseButton", recursive: true, owned: false);
+        Button roomTab = (Button)overlay.FindChild("RoomChatTab", recursive: true, owned: false);
+        Button serverTab = (Button)overlay.FindChild("ServerChatTab", recursive: true, owned: false);
 
         AssertThat(pin.CustomMinimumSize.Y)
             .IsGreaterEqual(LanConnectHudLegibility.MinTouchTargetPixels);
@@ -84,5 +86,13 @@ public sealed class LanConnectRoomChatHudLegibilityTests
         AssertThat(close.CustomMinimumSize.Y)
             .IsGreaterEqual(LanConnectHudLegibility.MinTouchTargetPixels);
         AssertThat(close.HasThemeStyleboxOverride("focus")).IsTrue();
+
+        AssertThat(roomTab.CustomMinimumSize.Y)
+            .IsGreaterEqual(LanConnectHudLegibility.MinTouchTargetPixels);
+        AssertThat(roomTab.HasThemeStyleboxOverride("focus")).IsTrue();
+
+        AssertThat(serverTab.CustomMinimumSize.Y)
+            .IsGreaterEqual(LanConnectHudLegibility.MinTouchTargetPixels);
+        AssertThat(serverTab.HasThemeStyleboxOverride("focus")).IsTrue();
     }
 }

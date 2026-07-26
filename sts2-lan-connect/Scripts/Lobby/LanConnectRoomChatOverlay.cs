@@ -1410,7 +1410,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         tab.Name = name;
         tab.ToggleMode = true;
         tab.ActionMode = BaseButton.ActionModeEnum.Release;
-        tab.CustomMinimumSize = new Vector2(TabWidth, 40);
+        tab.CustomMinimumSize = new Vector2(TabWidth, LanConnectHudLegibility.MinTouchTargetPixels);
         tab.SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin;
 
         badge = CreateLabel(string.Empty, 11, Colors.White);
