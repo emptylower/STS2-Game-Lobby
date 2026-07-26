@@ -869,3 +869,26 @@ git commit -m "chore: finalize HUD outline width and rest plate alpha from devic
 - [ ] `OutlineSize` 与 `RestPlateColor` 已依据实机结论定稿并写回 spec §9
 
 以上全部满足后，第 3、4、5 期方可开始写计划。
+
+---
+
+## 第 1 期实际落地记录（2026-07-26）
+
+第 1 期的范围在执行中扩大了：计划原本只有"打开面板时贴底"，代码审查发现 `OpenPanel` 只是三条「关闭→打开」路径之一，另外还暴露出发送路径的同类问题。
+
+| 提交 | 内容 |
+|---|---|
+| `d204024` | 连接 `Range.changed`，容器重排后重新贴底（核心修复） |
+| `c39781e` | 修正 spec 根因；留档三条已证伪假设 |
+| `a7cba21` | 复现测试改名为其守护的不变式；新增防拉回守卫锁 |
+| `592a82e` | 删除 spec 中会引入新问题的 `_scrollInteractionGeneration` 守卫要求 |
+| `b90485b` | `OpenPanel` 强制贴底 |
+| `54c205e` | F8 路径强制贴底；发送成功后贴底；复用 `SelectedState` |
+| `1878c3a` | spec 记录三条打开路径与发送贴底规则 |
+| `c482bec` | 锁定插入引用不贴底、发送失败不贴底；`ShowOverlay` 自证前置条件 |
+
+**最终状态：** GdUnit 269 通过 / 0 失败。xUnit 696 通过 / 1 跳过 / 1 失败（既有的 `LanConnectModInventoryBuilderTests`）。
+
+**两个已确认的偶发抖动**，与本期改动无关，重跑不复现：截图像素漂移用例；`ReconnectUsesJitteredBackoffAndFreshProbeTicketTransport`（隔离重跑 3/3 通过）。
+
+**剩余：** Task 8 之外，第 1 期只差实机验证（本文件 Task 4），需真实游戏，代理无法完成。
