@@ -174,7 +174,7 @@ AFTER HISTORY: value=0 max=2554 page=218 bottom=2336 IsAtBottom=True below=0
 | 圆角 | 10 | 4 |
 | 标题栏 | "聊天" + 固定 + 收起（`:482-502`） | 移除；控件迁至控件条（§5.3） |
 | tab 栏 | 双 142px tab + 数字徽标（`:504-514`） | 移除；频道切换迁至控件条 |
-| 输入区 | 面板内嵌，含独立"发送"按钮 | 独立浮条，与消息底板间隔 10px；移除发送按钮（`Enter` 即发送） |
+| 输入区 | 面板内嵌，含独立"发送"按钮 | 消息区与输入区各自底板、间隔 10px（**视觉分离，不做结构搬迁**）；**发送按钮本期保留** |
 
 ### 5.2 消息行
 
@@ -189,9 +189,17 @@ AFTER HISTORY: value=0 max=2554 page=218 bottom=2336 IsAtBottom=True below=0
 
 ### 5.3 控件条
 
-消息底板右上方外侧一行，常驻（不因输入方式变化）：
+消息底板上方一行，常驻（不因输入方式变化）：
 
-`房间` `频道`（含 6px 未读红点） … `引用(⌗)` `固定(⇱)` `收起(✕)`
+`房间` `频道`（含 6px 未读红点） …拖动区… `固定` `收起`
+
+**实施期的三处偏离，均已落地：**
+
+1. **引用按钮不上控件条。** `_referenceButton` 位于 `LanConnectBasicChatPanel` 的输入行、与大厅侧边栏共用，搬到浮层会牵动 §2.2 的非目标区域。保持原位。
+2. **房间未读徽标移除，不是搬迁。** 房间未读已由常驻的气泡角标 `ChatToggleUnreadBadge` 覆盖（`roomUnread > 0` 即显示，与面板开合无关），控件条上再放一个数字是重复。
+3. **频道未读圆点是新增能力，不只是换形态。** 原 `ServerUnreadBadge` 被硬编码为 `SetBadge(_serverUnreadBadge, 0)`——频道未读在浮层上**从未真正显示过**。新的 `ServerUnreadDot` 按 `chat.Server.UnreadCount > 0` 真实反映。语义自洽：`Server.SetVisible(RoomOverlayOpen && SelectedChannel == Server)` 已保证看着频道时即时已读，故圆点只在「面板开着、停在房间、频道有未读」时亮。
+
+**拖动区：** 原标题栏兼作长按拖动手柄，其可拖动表面实为标题 `Label` 背后的空白（`Label` 的 `MouseFilter` 默认 `Ignore`，输入穿透到 header 的 `GuiInput`；而 pin/close 按钮的 `Stop` 自行吞掉点击）。控件条没有非交互标签，故显式插入空白 `Control`（`RoomChatStripDragZone`，`SizeFlagsHorizontal = ExpandFill`）承担同一角色，是条上唯一接 `OnDragHandleGuiInput` 的节点。
 
 - 频道切换以高亮/暗淡区分当前流，取代原双 tab + 双数字徽标。
 - 每个控件遵守 §6 的可读性契约。

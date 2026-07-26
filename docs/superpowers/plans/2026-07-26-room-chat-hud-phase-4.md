@@ -222,3 +222,32 @@ spec §6.4 已清点（`LanConnectBasicChatPanel` 有自己的 `CreateButton`，
 - [ ] 大厅侧边栏的气泡、时间戳、左侧强调条、输入区内嵌形态一像素未变，且有守卫测试
 - [ ] 控件条全部控件满足可读性契约（描边、三态底板、focus 框、44px）
 - [ ] v0.5.1 线格式未改动
+
+---
+
+## 第 4 期实际落地记录（2026-07-27）
+
+| 提交 | 内容 |
+|---|---|
+| `0cc56de` | 离线截图靶场（`SubViewport` 渲染，PNG 不入库） |
+| `a3e6778` | 取值定稿：`OutlineSize` 3→2、`RestPlateColor` alpha 0.35→0.45 |
+| `e6f1acf` | 淡出目标改为 `RoomChatPanelFadeContainer`，气泡与 `_fadeHint` 排除在外 |
+| `e32a244` | 控件条取代标题栏与 tab 栏 |
+| `17b528d` | 面板外壳扁平化 + 消息/输入双底板视觉分离 + HUD 占位符文案 |
+| `07c07c9` | 面板内三个控件补齐 44px 触摸下限 |
+
+**最终状态：** GdUnit 299 通过 / 0 失败。xUnit 724 通过 / 1 跳过 / 1 失败（既有的 `LanConnectModInventoryBuilderTests`）。
+
+**垂直余量：** 控件条比原「标题栏 + tab 栏」矮 54px，body VBox 最小内容高 498 → 444，对 `PanelHeight = 520` 的余量从 22px 增至 **76px**。输入行增高 2px 被 `ApplyViewportBounds` 硬设的 `_chatPanel.CustomMinimumSize.Y = 390`（compact 180）完全吸收，未触及该余量。
+
+### 需要留在记录里的三件事
+
+1. **取值定稿的证据边界。** 截图靶场用的是仓库固定测试字体 `ark-pixel-10px-proportional-zh_cn.otf`，一个 10px 像素字体，**不是游戏实际字体**。它证明了「描边必需」和「0.45 优于 0.35」——这两条是合成层面的结论，与字体无关；它**没有**证明 3px 会不会糊游戏真实字体的中文笔画。降到 2 是基于「Godot 描边自字形边缘向外生长、13px 中文字腔仅 1–2px 宽」的推理 + 「2 已足够」的观测。**最终仍需在真实字体下看一眼**，属验收范围。
+
+2. **唯一一次放宽容差。** `LanConnectRoomRichScreenshotTests.AssertDifferentialOwnership` 的边界 padding 由 1px 放宽至 2px。原因是圆角抗锯齿光晕：它一直存在，但此前压在近透明背景上未超噪声阈值，改为不透明输入底板后超了。论证过程包含 stash 确认改前通过、插桩定位、以 30px 内边距排除「边距/圆角邻近」解释。内部色差检查未动。
+
+3. **`ServerUnreadDot` 是修了一个既有 bug。** 见 spec §5.3 第 3 条——频道未读此前在浮层上从未显示过。
+
+### 遗留到第 5 期
+
+- **发送按钮的去留。** 本期只补了它的触摸下限。移除会让安卓失去可点的发送入口，须由指针模式决定：鼠标模式隐藏，触摸模式保留——与气泡同策略。
