@@ -6,24 +6,31 @@ using static GdUnit4.Assertions;
 namespace Sts2LanConnect.GdUnitTests.Chat;
 
 /// <summary>
-/// Reproduces the "chat opens on the oldest message" defect.
+/// Guards the invariant that history arriving after the panel has already settled
+/// on an empty channel still lands the view on the newest message.
 ///
-/// Production shape: the chat panel is built and laid out while the channel is still
+/// Decisive shape: the chat panel is built and laid out while the channel is still
 /// empty, and the history arrives afterwards in one batch (snapshot / history epoch).
-/// The single <c>Refresh()</c> that renders that batch pins the scrollbar with the
-/// ScrollContainer's not-yet-recomputed <c>MaxValue</c>/<c>Page</c>, the compensating
-/// deferred re-pin runs in the same message-queue flush and reads the same stale
-/// values, and <c>_renderedRevision</c> is then up to date so no further
-/// <c>Refresh()</c> ever runs. The list is left on the oldest message while the
-/// channel state still reports <c>IsAtBottom == true</c>, which is also why the
-/// "N new messages" button never appears.
+/// That is why these tests bind the panel before appending any messages instead of
+/// binding once history is already present — collapsing the two steps into a single
+/// bind-with-messages-already-present shape would not exercise the bug this guards
+/// against and must not be used to "simplify" these tests.
+///
+/// Historical defect (fixed by the <c>Range.Changed</c> connection and
+/// <c>OnScrollRangeChanged</c> callback): the single <c>Refresh()</c> that rendered
+/// that batch used to pin the scrollbar with the ScrollContainer's not-yet-recomputed
+/// <c>MaxValue</c>/<c>Page</c>, the compensating deferred re-pin ran in the same
+/// message-queue flush and read the same stale values, and <c>_renderedRevision</c>
+/// was then up to date so no further <c>Refresh()</c> ever ran. The list was left on
+/// the oldest message while the channel state still reported <c>IsAtBottom == true</c>,
+/// which was also why the "N new messages" button never appeared.
 /// </summary>
 [TestSuite]
 [RequireGodotRuntime]
 public sealed class LanConnectChatScrollPinningTests
 {
     [TestCase]
-    public async Task History_arriving_after_the_empty_panel_settles_leaves_the_view_on_the_oldest_message()
+    public async Task History_arriving_after_the_empty_panel_settles_lands_on_the_newest_message()
     {
         LanConnectChatChannelState state = EnabledState();
         LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel
@@ -54,17 +61,17 @@ public sealed class LanConnectChatScrollPinningTests
         // Non-vacuous: the list really does overflow, so there is a bottom to be at.
         AssertThat(BottomValue(bar)).IsGreater(0d);
 
-        // The panel believes it is following the newest message, which is why it
+        // The panel is following the newest message, which is why it correctly
         // never offers the "N new messages" escape hatch.
         AssertThat(state.IsAtBottom).IsTrue();
         AssertThat(state.NewMessagesBelowCount).IsEqual(0);
 
-        // But the user is looking at the oldest message.
+        // The user is looking at the newest message.
         AssertThat(bar.Value).IsEqual(BottomValue(bar));
     }
 
     [TestCase]
-    public async Task Room_overlay_history_batch_leaves_the_view_on_the_oldest_message()
+    public async Task Room_overlay_history_batch_lands_on_the_newest_message()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
         await fixture.Runner.AwaitIdleFrame();
@@ -89,7 +96,7 @@ public sealed class LanConnectChatScrollPinningTests
     }
 
     [TestCase]
-    public async Task Closing_the_overlay_from_the_stuck_view_pins_every_later_open_to_the_oldest_message()
+    public async Task Reopening_after_a_close_still_lands_on_the_newest_message()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
         await fixture.Runner.AwaitIdleFrame();
@@ -105,7 +112,7 @@ public sealed class LanConnectChatScrollPinningTests
         await fixture.Runner.AwaitIdleFrame();
         await fixture.Runner.AwaitIdleFrame();
 
-        // Closing captures the (wrong) view position into the channel state.
+        // Closing captures the (correct, at-bottom) view position into the channel state.
         await fixture.Overlay.CloseForTests();
         await fixture.Runner.AwaitIdleFrame();
 

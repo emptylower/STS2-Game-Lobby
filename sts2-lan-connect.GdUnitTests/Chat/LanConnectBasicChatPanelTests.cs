@@ -758,6 +758,48 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(panel.TestState.IsAtBottom).IsTrue();
     }
 
+    // Guards the `!_state.IsAtBottom` condition in OnScrollRangeChanged: that guard is
+    // the only thing stopping a reader who has scrolled up from being yanked back to
+    // the bottom when the list grows underneath them. If it is ever weakened or
+    // removed, this test must fail.
+    [TestCase]
+    public async Task Scrolled_up_reader_is_not_yanked_to_bottom_when_the_list_grows()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        for (int index = 0; index < 40; index++)
+        {
+            state.AppendConfirmedForTests($"message-{index}", "A", $"message {index}", index + 1, false);
+        }
+
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel
+        {
+            CustomMinimumSize = new Vector2(480, 300)
+        })!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(state, _ => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        ScrollBar bar = FindNode<ScrollContainer>(panel, LanConnectConstants.ChatMessagesScrollName).GetVScrollBar();
+        double parked = Math.Max(1d, BottomValue(bar) / 2d);
+        panel.SetScrollForTests(parked, atBottom: false);
+        await runner.AwaitIdleFrame();
+
+        state.AppendConfirmedForTests(
+            "late",
+            "A",
+            "一条足够长的迟到消息，用来撑高列表并触发 changed 信号重新计算 max_value",
+            100,
+            false);
+        await panel.RefreshForTests();
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(bar.Value).IsEqual(parked);
+        AssertThat(panel.TestState.IsAtBottom).IsFalse();
+        AssertThat(panel.TestState.NewMessagesBelowCount).IsEqual(1);
+    }
+
     [TestCase]
     public async Task Scrolled_up_panel_preserves_offset_and_exposes_new_message_action()
     {
