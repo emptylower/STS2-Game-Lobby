@@ -665,8 +665,17 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
         bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
         chat.OpenRoomOverlay(serverSelectable);
+        ForceSelectedChannelToBottom(chat);
         SignalFadeActivity();
         RefreshFromSource();
+    }
+
+    private static void ForceSelectedChannelToBottom(LanConnectDualChatState chat)
+    {
+        LanConnectChatChannelState selected = chat.SelectedChannel == LanConnectChatChannel.Room
+            ? chat.Room
+            : chat.Server;
+        selected.SetScrollState(0d, atBottom: true);
     }
 
     private void ShowPanelPreservingSelection()

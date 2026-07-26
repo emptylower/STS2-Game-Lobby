@@ -252,6 +252,35 @@ public sealed class LanConnectRoomChatTabsTests
         AssertThat(bar.Value).IsEqual(BottomValue(bar));
     }
 
+    [TestCase]
+    public async Task Reopening_the_overlay_returns_a_scrolled_up_reader_to_the_newest_message()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        LanConnectRoomChatOverlay overlay = fixture.Overlay;
+        for (int index = 0; index < 40; index++)
+        {
+            fixture.State.Room.AppendConfirmedForTests(
+                $"room-{index}", "A", $"room message {index}", index + 1, false);
+        }
+        await overlay.RefreshForTests();
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+
+        overlay.SelectChannelForTests(LanConnectChatChannel.Room);
+        overlay.SetScrollForTests(0d, atBottom: false);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.State.Room.IsAtBottom).IsFalse();
+
+        await overlay.CloseForTests();
+        await fixture.Runner.AwaitIdleFrame();
+        await overlay.OpenForTests();
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.State.Room.IsAtBottom).IsTrue();
+        AssertThat(fixture.State.Room.NewMessagesBelowCount).IsEqual(0);
+    }
+
     private static double BottomValue(ScrollBar bar) =>
         Math.Max(bar.MinValue, bar.MaxValue - bar.Page);
 

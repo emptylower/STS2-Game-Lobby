@@ -560,6 +560,19 @@ public sealed class LanConnectChatChannelStateTests
     }
 
     [Fact]
+    public void ClearForContextChangeResetsScrollToBottom()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        state.AppendConfirmedForTests("m-1", "A", "hello", 1, false);
+        state.SetScrollState(240d, atBottom: false);
+
+        state.ClearForContextChange();
+
+        Assert.Equal(0d, state.ScrollOffset);
+        Assert.True(state.IsAtBottom);
+    }
+
+    [Fact]
     public void BroadcastBeforeAckMergesPendingAndRollsBackHiddenUnread()
     {
         LanConnectChatChannelState state = new(LanConnectChatChannel.Server);
