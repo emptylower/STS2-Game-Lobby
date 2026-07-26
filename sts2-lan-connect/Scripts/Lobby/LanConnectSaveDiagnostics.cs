@@ -42,7 +42,6 @@ internal static class LanConnectSaveDiagnostics
     {
         try
         {
-            bool hasRunSave = SaveManager.Instance.HasMultiplayerRunSave;
             bool hasActiveHostedRoom = LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true;
             string activeRoomId = LanConnectLobbyRuntime.Instance?.ActiveRoomId ?? "<none>";
             string effectiveEndpoint = string.IsNullOrWhiteSpace(LanConnectConfig.LobbyServerBaseUrl)
@@ -50,8 +49,14 @@ internal static class LanConnectSaveDiagnostics
                 : LanConnectConfig.LobbyServerBaseUrl;
             int profileId = SaveManager.Instance.CurrentProfileId;
             string multiplayerSavePath = SaveManager.Instance.GetProfileScopedPath(Path.Combine("saves", "current_run_mp.save"));
-            string multiplayerSaveTimestamp = File.Exists(multiplayerSavePath)
-                ? File.GetLastWriteTimeUtc(multiplayerSavePath).ToString("O")
+            // GetProfileScopedPath returns a Godot user:// path that System.IO cannot see.
+            string globalizedSavePath = ProjectSettings.GlobalizePath(multiplayerSavePath);
+            // Mirror the vanilla existence check instead of reading SaveManager.HasMultiplayerRunSave:
+            // BaseLib patches that getter into a destructive load-and-validate pass, and diagnostics
+            // must never be able to trigger it (it used to corrupt the save mid-SaveRun).
+            bool hasRunSave = File.Exists(globalizedSavePath) || File.Exists(globalizedSavePath + ".backup");
+            string multiplayerSaveTimestamp = File.Exists(globalizedSavePath)
+                ? File.GetLastWriteTimeUtc(globalizedSavePath).ToString("O")
                 : "<missing>";
 
             if (!hasRunSave)

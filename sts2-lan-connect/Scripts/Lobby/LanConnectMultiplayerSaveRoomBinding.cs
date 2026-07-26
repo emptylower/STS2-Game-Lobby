@@ -69,16 +69,15 @@ internal static class LanConnectMultiplayerSaveRoomBinding
     public static bool TryLoadCurrentMultiplayerRun(out SerializableRun? run, out string failureReason)
     {
         run = null;
-        if (!SaveManager.Instance.HasMultiplayerRunSave)
-        {
-            failureReason = "no_multiplayer_run_save";
-            return false;
-        }
-
+        // Do not gate on SaveManager.HasMultiplayerRunSave: BaseLib patches that getter into a
+        // destructive load-and-validate pass (renames the save to *.corrupt on identity mismatch).
+        // The raw load below answers "no save" via FileNotFound without touching the getter.
         ReadSaveResult<SerializableRun> readResult = LoadRawCurrentMultiplayerRun();
         if (!readResult.Success || readResult.SaveData == null)
         {
-            failureReason = $"load_failed:{readResult.Status}";
+            failureReason = readResult.Status == ReadSaveStatus.FileNotFound
+                ? "no_multiplayer_run_save"
+                : $"load_failed:{readResult.Status}";
             return false;
         }
 

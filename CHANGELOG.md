@@ -2,6 +2,16 @@
 
 本项目从 v0.5.0 起在此记录客户端 MOD 与 lobby-service 的公开版本变更。
 
+## [Unreleased]
+
+### Fixed
+
+- 修复安装 BaseLib（及依赖它的角色/观战 MOD）后多人存档必现损坏的问题：MOD 加载顺序把本 MOD 排在 BaseLib 之前时，原有的 BaseLib 存档守卫从未生效，BaseLib 用 Steam 身份校验 LAN 存档失败后会把 `current_run_mp.save` 改名为 `.corrupt`。守卫现在会在 BaseLib 程序集加载时自动补挂（issue #40）。
+- 新增游戏侧兜底防护：`RunSaveManager.RenameBrokenMultiplayerRunSave` 被拦截，只要存档能用任一 LAN 身份正常 canonicalize 就拒绝改名毁档，防止任何探测路径误毁有效的多人存档。
+- 修复安卓（无 Steam 平台）打开“加入好友”页面时，游戏本体自动向 `127.0.0.1:33771` 发起调试直连、必须等满 ENet 超时报错才能操作的问题；现在仅在显式传入 `fastmp` 命令行参数时才保留该开发者行为（issue #40）。
+- 存档完整性与加入页守卫补丁不再因检测到 RMP MOD 而被跳过。
+- 修复存档诊断日志里 `mpSaveUpdatedAt` 因 `user://` 虚拟路径始终显示 `<missing>` 的问题，并让诊断不再触碰被 BaseLib 补丁过的 `HasMultiplayerRunSave` getter。
+
 ## [0.5.2] - 2026-07-22
 
 正式客户端标签为 [`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)，并在 GitHub Release 完成后同步更新 Steam Workshop。lobby-service 继续使用 `0.5.1`。
