@@ -336,6 +336,41 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
             power);
     }
 
+    // The item-insert route deliberately does NOT force-scroll to the newest message: the
+    // user is composing a reference into the draft, not reading the backlog. This is
+    // specified in spec §4.5 item 2. Guards forceBottom: false at
+    // LanConnectRoomChatOverlay.cs:199 (TryInsertEntityAndFocus) — flip it to true and this
+    // test must fail.
+    [TestCase]
+    public async Task Inserting_an_item_reference_does_not_drag_a_scrolled_up_reader_to_the_bottom()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        LanConnectRoomChatOverlay overlay = fixture.Overlay;
+        fixture.State.Room.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 1));
+        for (int index = 0; index < 40; index++)
+        {
+            fixture.State.Room.AppendConfirmedForTests(
+                $"room-{index}", "A", $"room message {index}", index + 1, false);
+        }
+        await overlay.RefreshForTests();
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+
+        overlay.SelectChannelForTests(LanConnectChatChannel.Room);
+        overlay.SetScrollForTests(0d, atBottom: false);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.State.Room.IsAtBottom).IsFalse();
+        double scrolledOffset = fixture.State.Room.ScrollOffset;
+
+        AssertThat(overlay.TryInsertItemAndFocus(
+            fixture.State.Room,
+            new LanConnectItemRun("card", "MegaCrit.Strike", 1))).IsTrue();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.State.Room.IsAtBottom).IsFalse();
+        AssertThat(fixture.State.Room.ScrollOffset).IsEqual(scrolledOffset);
+    }
+
     [TestCase]
     public async Task Server_combat_candidate_shows_warning_without_marking_input_handled()
     {

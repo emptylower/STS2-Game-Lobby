@@ -1142,7 +1142,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 ClosePanel();
                 return true;
             case LanConnectChatInputAction.ShowOverlay:
-                ShowPanelPreservingSelection(forceBottom: true);
+                ShowPanelPreservingSelection(forceBottom: !overlayOpen);
                 return ResolveChat()?.RoomOverlayOpen == true;
             case LanConnectChatInputAction.PinOverlay:
                 SetPinned(true);

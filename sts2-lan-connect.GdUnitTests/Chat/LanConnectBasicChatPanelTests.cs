@@ -287,16 +287,30 @@ public sealed class LanConnectBasicChatPanelTests
     public async Task Structured_send_failure_retains_text_entity_order_and_real_text_focus()
     {
         LanConnectChatChannelState state = EnabledState(rich: true);
+        for (int index = 0; index < 40; index++)
+        {
+            state.AppendConfirmedForTests($"message-{index}", "A", $"message {index}", index + 1, false);
+        }
         state.RichDraft.ReplaceAllWithText("发送前");
         state.RichDraft.InsertEntity(new LanConnectItemRun("card", "MegaCrit.Strike", 1));
         state.RichDraft.InsertText("发送后");
-        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel
+        {
+            CustomMinimumSize = new Vector2(480, 300)
+        })!;
         using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
         panel.BindStructured(
             state,
             (_, _) => Task.FromException(new InvalidOperationException("offline")),
             _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        ScrollBar bar = FindNode<ScrollContainer>(panel, LanConnectConstants.ChatMessagesScrollName).GetVScrollBar();
+        double parked = Math.Max(1d, BottomValue(bar) / 2d);
+        panel.SetScrollForTests(parked, atBottom: false);
+        await runner.AwaitIdleFrame();
+        AssertThat(panel.TestState.IsAtBottom).IsFalse();
 
         FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName)
             .EmitSignal(Button.SignalName.Pressed);
@@ -311,6 +325,10 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(panel.GetViewport().GuiGetFocusOwner() is TextEdit).IsTrue();
         AssertThat(FindNode<Label>(panel, LanConnectConstants.ChatStatusLabelName).Text)
             .Contains("offline");
+        // A failed send deliberately does not scroll: the message stays in place so its
+        // retry affordance remains visible.
+        AssertThat(panel.TestState.IsAtBottom).IsFalse();
+        AssertThat(bar.Value).IsEqual(parked);
     }
 
     [TestCase]
@@ -820,6 +838,55 @@ public sealed class LanConnectBasicChatPanelTests
             text =>
             {
                 state.AppendConfirmedForTests($"sent-{nextSequence}", "Me", text, nextSequence, true);
+                nextSequence++;
+                return Task.CompletedTask;
+            },
+            _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        ScrollBar bar = FindNode<ScrollContainer>(panel, LanConnectConstants.ChatMessagesScrollName).GetVScrollBar();
+        double parked = Math.Max(1d, BottomValue(bar) / 2d);
+        panel.SetScrollForTests(parked, atBottom: false);
+        await runner.AwaitIdleFrame();
+        AssertThat(panel.TestState.IsAtBottom).IsFalse();
+
+        SetDraft(panel, "hello from below");
+        FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName).EmitSignal(Button.SignalName.Pressed);
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+
+        AssertThat(panel.TestState.IsAtBottom).IsTrue();
+        AssertThat(bar.Value).IsEqual(BottomValue(bar));
+    }
+
+    // Successful_send_scrolls_the_sender_to_the_bottom above binds via Bind(), which takes
+    // the binding.SendText != null branch in SendDraftAsync. Real gameplay only reaches
+    // BindStructured (LanConnectRoomChatOverlay.BindSelectedChannel picks it whenever
+    // _testSend is null), taking the binding.SendContent != null branch instead. Both
+    // branches converge before ScrollToBottom(), but only this variant proves the
+    // production path actually scrolls the sender to the bottom.
+    [TestCase]
+    public async Task Successful_structured_send_scrolls_the_sender_to_the_bottom()
+    {
+        LanConnectChatChannelState state = new(LanConnectChatChannel.Room);
+        for (int index = 0; index < 40; index++)
+        {
+            state.AppendConfirmedForTests($"message-{index}", "A", $"message {index}", index + 1, false);
+        }
+
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel
+        {
+            CustomMinimumSize = new Vector2(480, 300)
+        })!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        long nextSequence = 100;
+        panel.BindStructured(
+            state,
+            (_, _) =>
+            {
+                state.AppendConfirmedForTests(
+                    $"sent-{nextSequence}", "Me", "hello from below", nextSequence, true);
                 nextSequence++;
                 return Task.CompletedTask;
             },
