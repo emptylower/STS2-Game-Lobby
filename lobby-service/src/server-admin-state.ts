@@ -24,6 +24,7 @@ export interface ServerAdminState {
   capacitySource: string;
   announcements: ServerAnnouncement[];
   extraMetadata: Record<string, string>;
+  sensitiveFilterEnabled: boolean;
   chatFeatures: ChatFeatureGovernance;
 }
 
@@ -37,12 +38,14 @@ export interface ServerAdminSettingsView {
   capacitySource: string;
   announcements: ServerAnnouncement[];
   extraMetadata: Record<string, string>;
+  sensitiveFilterEnabled: boolean;
   chatFeatures: ChatFeatureGovernance;
 }
 
 export interface ServerAdminStateDefaults {
   publicListingEnabledDefault?: boolean;
   modSyncEnabledDefault?: boolean;
+  sensitiveFilterEnabledDefault?: boolean;
   chatFeaturesDefault: ChatFeatureGovernance;
 }
 
@@ -57,6 +60,7 @@ export class ServerAdminStateStore {
       defaults.publicListingEnabledDefault ?? true,
       defaults.modSyncEnabledDefault ?? true,
       defaults.chatFeaturesDefault,
+      defaults.sensitiveFilterEnabledDefault ?? true,
     );
   }
 
@@ -75,6 +79,7 @@ export class ServerAdminStateStore {
       capacitySource: this.state.capacitySource,
       announcements: this.state.announcements.map(cloneAnnouncement),
       extraMetadata: { ...this.state.extraMetadata },
+      sensitiveFilterEnabled: this.state.sensitiveFilterEnabled,
       chatFeatures: { ...this.state.chatFeatures },
     };
   }
@@ -86,6 +91,7 @@ export class ServerAdminStateStore {
     bandwidthCapacityMbps?: number | null | undefined;
     announcements?: unknown;
     extraMetadata?: Record<string, string> | undefined;
+    sensitiveFilterEnabled?: boolean;
     chatFeatures?: Partial<ChatFeatureGovernance> | undefined;
   }) {
     const staged = cloneState(this.state);
@@ -106,6 +112,9 @@ export class ServerAdminStateStore {
     }
     if (next.extraMetadata !== undefined) {
       staged.extraMetadata = sanitizeMetadata(next.extraMetadata);
+    }
+    if (next.sensitiveFilterEnabled !== undefined) {
+      staged.sensitiveFilterEnabled = next.sensitiveFilterEnabled;
     }
     if (next.chatFeatures !== undefined) {
       staged.chatFeatures = mergeChatFeatures(staged.chatFeatures, next.chatFeatures);
@@ -166,6 +175,7 @@ function loadState(
   publicListingDefault: boolean,
   modSyncEnabledDefault: boolean,
   chatFeaturesDefault: ChatFeatureGovernance,
+  sensitiveFilterEnabledDefault: boolean,
 ): ServerAdminState {
   try {
     const raw = readFileSync(path, "utf8");
@@ -174,6 +184,7 @@ function loadState(
       publicListingDefault,
       modSyncEnabledDefault,
       chatFeaturesDefault,
+      sensitiveFilterEnabledDefault,
     );
   } catch {
     return {
@@ -186,6 +197,7 @@ function loadState(
       capacitySource: "unknown",
       announcements: [],
       extraMetadata: {},
+      sensitiveFilterEnabled: sensitiveFilterEnabledDefault,
       chatFeatures: { ...chatFeaturesDefault },
     };
   }
@@ -196,6 +208,7 @@ function normalizeState(
   publicListingDefault: boolean,
   modSyncEnabledDefault: boolean,
   chatFeaturesDefault: ChatFeatureGovernance,
+  sensitiveFilterEnabledDefault: boolean,
 ): ServerAdminState {
   const data = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return {
@@ -212,6 +225,7 @@ function normalizeState(
     capacitySource: sanitizeCapacitySource(typeof data.capacitySource === "string" ? data.capacitySource : "unknown"),
     announcements: sanitizeAnnouncements(data.announcements),
     extraMetadata: sanitizeMetadata(data.extraMetadata),
+    sensitiveFilterEnabled: booleanOrDefault(data.sensitiveFilterEnabled, sensitiveFilterEnabledDefault),
     chatFeatures: normalizeChatFeatures(data.chatFeatures, chatFeaturesDefault),
   };
 }

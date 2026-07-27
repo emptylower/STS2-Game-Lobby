@@ -276,3 +276,44 @@ test("write failure leaves memory disk and prior settings unchanged", () => {
     rmSync(temp.directory, { recursive: true, force: true });
   }
 });
+
+test("sensitiveFilterEnabled defaults to true and persists across reload", () => {
+  const temp = createTempStatePath();
+  try {
+    const store = createStore(temp.path);
+    assert.equal(store.getSettingsView().sensitiveFilterEnabled, true);
+    store.updateSettings({ sensitiveFilterEnabled: false });
+    assert.equal(store.getSettingsView().sensitiveFilterEnabled, false);
+    const reloaded = createStore(temp.path);
+    assert.equal(reloaded.getSettingsView().sensitiveFilterEnabled, false);
+  } finally {
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("sensitiveFilterEnabled falls back to env seed default when persisted value absent", () => {
+  const temp = createTempStatePath();
+  try {
+    const store = new ServerAdminStateStore(temp.path, {
+      chatFeaturesDefault: chatDefaults,
+      sensitiveFilterEnabledDefault: false,
+    });
+    assert.equal(store.getSettingsView().sensitiveFilterEnabled, false);
+  } finally {
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("updateSettings without sensitiveFilterEnabled keeps current value", () => {
+  const temp = createTempStatePath();
+  try {
+    const store = new ServerAdminStateStore(temp.path, {
+      chatFeaturesDefault: chatDefaults,
+      sensitiveFilterEnabledDefault: false,
+    });
+    store.updateSettings({ displayName: "新名字" });
+    assert.equal(store.getSettingsView().sensitiveFilterEnabled, false);
+  } finally {
+    rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
