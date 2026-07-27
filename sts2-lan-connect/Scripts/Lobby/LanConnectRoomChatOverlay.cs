@@ -595,6 +595,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             return;
         }
 
+        MaybeSurfaceForRemoteArrival(chat);
+
         bool serverSupported = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
         if (_serverTab != null)
         {
@@ -729,6 +731,29 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
         SignalFadeActivity();
         RefreshFromSource();
+    }
+
+    // Room chat HUD redesign regression fix: the reference mod's chat log is visible whenever
+    // there are messages; ours has an explicit open/closed state that nothing used to reopen on
+    // arrival (touch hides the bubble once it fades, desktop never had one at all -- see the bug
+    // report this fixes). LanConnectDualChatState.HasUnseenRemoteArrival is edge-triggered off
+    // LanConnectChatChannelState.RemoteArrivalRevision, which TrackIncoming only bumps for
+    // remote messages, so a player's own outgoing chat never lands here. Preserving the
+    // selection (not OpenRoomOverlay's server-selectable heuristic) matters: the player didn't
+    // ask for this, a message arriving is a "show me what's new" event, not an invitation to
+    // yank them off whatever channel they were already reading. A drag or an active fade tween
+    // is left alone rather than interrupted -- HasUnseenRemoteArrival's "seen" baseline only
+    // advances on close/leave, so it simply stays true and this runs again next frame once the
+    // gesture or tween finishes.
+    private void MaybeSurfaceForRemoteArrival(LanConnectDualChatState chat)
+    {
+        if (!chat.HasUnseenRemoteArrival || _dragPointerDown || _dragging || IsFadeTweenActive())
+        {
+            return;
+        }
+
+        bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
+        chat.ShowRoomOverlayPreservingSelection(serverSelectable);
     }
 
     private void ClosePanel()

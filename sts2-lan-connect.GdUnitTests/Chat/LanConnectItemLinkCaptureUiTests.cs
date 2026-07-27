@@ -454,6 +454,12 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         bound.RichDraft.SetCaret(new LanConnectDraftPosition(0, 1));
         fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Server, sequence: 20);
         await fixture.Overlay.RefreshForTests();
+        // The overlay was never opened, so the arrival above now auto-surfaces it (room chat
+        // HUD redesign regression fix -- see LanConnectRoomChatAutoSurfaceTests). This test's
+        // subject is item-link-insert failures leaving the overlay's open state alone, so close
+        // it back up to restore the "insert attempted while collapsed" scenario it actually
+        // exercises.
+        await fixture.Overlay.CloseForTests();
         LanConnectBasicChatPanel panel = fixture.Overlay.ChatPanelForTests;
         LanConnectChatChannel selectedBefore = fixture.State.SelectedChannel;
         Button previousFocus = new() { Name = "OutsideItemCaptureFocus" };

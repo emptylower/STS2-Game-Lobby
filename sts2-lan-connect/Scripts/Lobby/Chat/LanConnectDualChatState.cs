@@ -6,6 +6,8 @@ internal sealed class LanConnectDualChatState
 {
     private bool _openedOnce;
     private LanConnectChatChannel _lastSelected = LanConnectChatChannel.Room;
+    private long _seenRoomRemoteArrivalRevision;
+    private long _seenServerRemoteArrivalRevision;
 
     internal LanConnectDualChatState(LanConnectChatChannelState server)
     {
@@ -28,6 +30,22 @@ internal sealed class LanConnectDualChatState
     internal bool RoomOverlayOpen { get; private set; }
 
     internal LanConnectChatChannel SelectedChannel { get; private set; } = LanConnectChatChannel.Room;
+
+    /// <summary>
+    /// True when a remote (never local -- see LanConnectChatChannelState.TrackIncoming) message
+    /// has landed on either channel since the overlay was last closed, or since construction if
+    /// it has never been opened. Room chat HUD redesign regression fix: touch hides the reopen
+    /// bubble on collapse and desktop never had one, so nothing used to bring the overlay back
+    /// when a message arrived while it was closed. The "seen" baseline only advances here and in
+    /// CloseRoomOverlay/LeaveRoom (not on every read), so a caller that finds this true and can't
+    /// act on it yet (drag in progress, fade tween running) can just check again next frame --
+    /// see LanConnectRoomChatOverlay.MaybeSurfaceForRemoteArrival, the only reader.
+    /// </summary>
+    internal bool HasUnseenRemoteArrival =>
+        !RoomOverlayOpen &&
+        ActiveRoomId != null &&
+        (Room.RemoteArrivalRevision != _seenRoomRemoteArrivalRevision ||
+         Server.RemoteArrivalRevision != _seenServerRemoteArrivalRevision);
 
     internal void EnterRoom(string roomId)
     {
@@ -58,6 +76,7 @@ internal sealed class LanConnectDualChatState
             return;
         }
 
+        MarkRemoteArrivalsSeen();
         RoomOverlayOpen = false;
         Room.SetVisible(false);
         Server.SetVisible(false);
@@ -101,6 +120,7 @@ internal sealed class LanConnectDualChatState
 
     internal void CloseRoomOverlay()
     {
+        MarkRemoteArrivalsSeen();
         RoomOverlayOpen = false;
         ApplyVisibility();
     }
@@ -122,6 +142,12 @@ internal sealed class LanConnectDualChatState
     {
         Room.SetVisible(RoomOverlayOpen && SelectedChannel == LanConnectChatChannel.Room);
         Server.SetVisible(RoomOverlayOpen && SelectedChannel == LanConnectChatChannel.Server);
+    }
+
+    private void MarkRemoteArrivalsSeen()
+    {
+        _seenRoomRemoteArrivalRevision = Room.RemoteArrivalRevision;
+        _seenServerRemoteArrivalRevision = Server.RemoteArrivalRevision;
     }
 
     private LanConnectChatChannel ChooseForOpen()
