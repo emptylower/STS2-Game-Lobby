@@ -1627,6 +1627,7 @@ export function renderServerAdminPage(serviceVersion: string) {
                 displayName: next.displayName || "",
                 publicListingEnabled: Boolean(next.publicListingEnabled),
                 modSyncEnabled: next.modSyncEnabled !== false,
+                sensitiveFilterEnabled: next.sensitiveFilter ? next.sensitiveFilter.enabled !== false : true,
                 bandwidthCapacityMbps: next.bandwidthCapacityMbps,
                 chatFeatures: normalizeChatFeatures(next.chatFeatures),
               });
