@@ -12,6 +12,20 @@
 - 存档完整性与加入页守卫补丁不再因检测到 RMP MOD 而被跳过。
 - 修复存档诊断日志里 `mpSaveUpdatedAt` 因 `user://` 虚拟路径始终显示 `<missing>` 的问题，并让诊断不再触碰被 BaseLib 补丁过的 `HasMultiplayerRunSave` getter。
 
+## [0.5.3] - 2026-07-27
+
+lobby-service 单独正式版，标签为 [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)。客户端保持 `0.5.2` 不变，聊天与加入协议完全兼容。发布说明见 [`docs/RELEASE_NOTES_V0.5.3_ZH.md`](./docs/RELEASE_NOTES_V0.5.3_ZH.md)。
+
+### Added
+
+- 大厅敏感词过滤：词库快照自 [konsheng/Sensitive-lexicon](https://github.com/konsheng/Sensitive-lexicon)（MIT，49,172 词随包分发）。聊天消息命中时等量 `*` 打码（大厅与房间，广播/历史统一打码版）；房间名、玩家昵称、续局槽位名、MOD 预检名等名称类字段命中时拒绝（`400` +「包含敏感词内容，请修改后重试」）。匹配带归一化（全半角/大小写/符号剔除/重复压缩）与间隙感知 ASCII 词边界，防插空格/符号绕过且不误伤 `have`/`standard` 等正常英文。
+- 管理面板新增「敏感词过滤」开关（默认开，热切换并持久化）与状态展示（词数/打码数/拒绝数）；词库加载失败 fail-open 不阻断启动。
+- 新环境变量 `SENSITIVE_FILTER_ENABLED`、`SENSITIVE_LEXICON_DIR`（仅首次启动种子值）。
+
+### Fixed
+
+- Dockerfile 补充打包 `lexicon/`（此前 Docker 镜像缺词库会 fail-open 不过滤）。
+
 ## [0.5.2] - 2026-07-22
 
 正式客户端标签为 [`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)，并在 GitHub Release 完成后同步更新 Steam Workshop。lobby-service 继续使用 `0.5.1`。

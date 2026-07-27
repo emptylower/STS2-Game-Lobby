@@ -53,7 +53,7 @@
 ### 当前版本
 
 - 客户端 MOD：[`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)
-- 大厅服务：`0.5.3`
+- 大厅服务：[`0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)
 - GitHub 稳定版：[`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)
 - Steam 创意工坊：[`v0.5.2 游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 
@@ -174,6 +174,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 | 文档 | 说明 |
 |------|------|
 | [`CHANGELOG.md`](./CHANGELOG.md) | 客户端与服务端版本更新日志 |
+| [`docs/RELEASE_NOTES_V0.5.3_ZH.md`](./docs/RELEASE_NOTES_V0.5.3_ZH.md) | v0.5.3 服务端发布说明：敏感词过滤、升级与回滚步骤 |
 | [`docs/RELEASE_NOTES_V0.5.2_ZH.md`](./docs/RELEASE_NOTES_V0.5.2_ZH.md) | v0.5.2 客户端发布说明、引用操作、兼容范围与回滚步骤 |
 | [`docs/RELEASE_NOTES_V0.5.1_ZH.md`](./docs/RELEASE_NOTES_V0.5.1_ZH.md) | v0.5.1 发布说明、升级与回滚步骤 |
 | [`lobby-service/README.md`](./lobby-service/README.md) | 服主 / 运维手册：推荐部署路径、运维入口、环境变量、API |
