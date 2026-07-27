@@ -2969,3 +2969,198 @@ test("admin settings expose and toggle the sensitive filter at runtime", async (
     cleanupTempDir(config);
   }
 });
+
+test("join room rejects sensitive playerName with 400", async () => {
+  const config = testConfig({ port: 0, sensitiveLexiconDir: writeTestLexicon() });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  try {
+    const created = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "正常房间",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(created.status, 201);
+    const createdBody = await created.json() as { roomId: string };
+
+    const joinWith = (playerName: string) => fetch(`http://127.0.0.1:${address.port}/rooms/${createdBody.roomId}/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        playerName,
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+      }),
+    });
+
+    const rejected = await joinWith("白痴玩家");
+    assert.equal(rejected.status, 400);
+    const rejectedBody = await rejected.json() as { code: string; message: string; details?: unknown };
+    assert.equal(rejectedBody.code, "invalid_request");
+    assert.equal(rejectedBody.message, "包含敏感词内容，请修改后重试");
+    assert.deepEqual(rejectedBody.details, { reason: "sensitive_content" });
+
+    // 同样的 body 形状换干净名字即可加入，证明 400 来自敏感词过滤。
+    const allowed = await joinWith("正常玩家");
+    assert.equal(allowed.status, 200);
+    const allowedBody = await allowed.json() as { roomId: string; ticketId: string };
+    assert.equal(allowedBody.roomId, createdBody.roomId);
+    assert.ok(allowedBody.ticketId);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("create room rejects sensitive savedRun slot characterName", async () => {
+  const config = testConfig({ port: 0, sensitiveLexiconDir: writeTestLexicon() });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "正常续局房",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+        savedRun: {
+          saveKey: "save-key-1",
+          slots: [
+            {
+              netId: "net-host-1",
+              characterId: "ironclad",
+              characterName: "白痴角色",
+              playerName: "Host",
+              isHost: true,
+            },
+          ],
+          connectedPlayerNetIds: ["net-host-1"],
+        },
+      }),
+    });
+    assert.equal(response.status, 400);
+    const body = await response.json() as { code: string; message: string; details?: unknown };
+    assert.equal(body.code, "invalid_request");
+    assert.equal(body.message, "包含敏感词内容，请修改后重试");
+    assert.deepEqual(body.details, { reason: "sensitive_content" });
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("mod preflight rejects sensitive playerName with 400", async () => {
+  const config = testConfig({ port: 0, sensitiveLexiconDir: writeTestLexicon() });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  try {
+    const created = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "正常房间",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(created.status, 201);
+    const createdBody = await created.json() as { roomId: string };
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/rooms/${createdBody.roomId}/mod-preflight`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        playerName: "白痴玩家",
+        gameVersion: "1.0.0",
+        modSyncProtocolVersion: 1,
+        localMods: [],
+      }),
+    });
+    assert.equal(response.status, 400);
+    const body = await response.json() as { code: string; message: string; details?: unknown };
+    assert.equal(body.code, "invalid_request");
+    assert.equal(body.message, "包含敏感词内容，请修改后重试");
+    assert.deepEqual(body.details, { reason: "sensitive_content" });
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("server chat history snapshot replays the masked message to a new connection", async () => {
+  const base = testConfig({ port: 0, sensitiveLexiconDir: writeTestLexicon() });
+  const config = {
+    ...base,
+    chat: { ...base.chat, features: { ...base.chat.features, serverChatEnabled: true } },
+  };
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  let first: WebSocket | undefined;
+  let second: WebSocket | undefined;
+  try {
+    const firstTicketResponse = await postChatTicket(address.port);
+    assert.equal(firstTicketResponse.status, 200);
+    const firstIssued = await firstTicketResponse.json() as { ticket: string; webSocketUrl: string };
+    first = await openChatWebSocket(firstIssued.webSocketUrl, firstIssued.ticket);
+    await waitForChatFrame(first, (frame) => frame.type === "chat_ready");
+
+    const clientMessageId = "35353535-3535-4535-8535-353535353535";
+    const ackPromise = waitForChatFrame(
+      first,
+      (frame) => frame.type === "chat_ack" && frame.clientMessageId === clientMessageId,
+    );
+    first.send(JSON.stringify({
+      type: "chat_send",
+      protocolVersion: 1,
+      channel: "server",
+      clientMessageId,
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "你是白痴吗" }] },
+    }));
+    const ack = await ackPromise;
+    const ackMessage = ack.message as { content: { segments: unknown[] } };
+    assert.deepEqual(ackMessage.content.segments, [{ kind: "text", text: "你是**吗" }]);
+
+    // 新票据开第二个连接：历史快照里存的应当是打码版。
+    const secondTicketResponse = await postChatTicket(address.port, {
+      body: ticketBody({ playerNetId: "net-player-2", playerName: "Defect" }),
+    });
+    assert.equal(secondTicketResponse.status, 200);
+    const secondIssued = await secondTicketResponse.json() as { ticket: string; webSocketUrl: string };
+    second = await openChatWebSocket(secondIssued.webSocketUrl, secondIssued.ticket);
+
+    const snapshotBegin = await waitForChatFrame(second, (frame) => frame.type === "chat_snapshot_begin");
+    assert.equal(snapshotBegin.totalMessages, 1);
+    const snapshotChunk = await waitForChatFrame(second, (frame) => frame.type === "chat_snapshot_chunk");
+    await waitForChatFrame(second, (frame) => frame.type === "chat_snapshot_end");
+
+    const replayed = snapshotChunk.messages as Array<{ content: { segments: unknown[] } }>;
+    assert.equal(replayed.length, 1);
+    assert.deepEqual(replayed[0]!.content.segments, [{ kind: "text", text: "你是**吗" }]);
+  } finally {
+    first?.terminate();
+    second?.terminate();
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
