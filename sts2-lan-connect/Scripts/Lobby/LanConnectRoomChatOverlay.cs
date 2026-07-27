@@ -95,6 +95,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private Func<bool> _reducedMotionProvider = ReadReducedMotionPreference;
     private Tween? _fadeTween;
     private bool _panelHovered;
+    private bool _passivelySurfaced;
     private long _fadeActivityToken;
 
     // Entry-point adaptivity (room chat HUD redesign spec §7): the chat bubble and the send
@@ -610,6 +611,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             }
             CancelDrag();
             _panelHovered = false;
+            _passivelySurfaced = false;
             RefreshBadges(chat);
             ResetFadeVisual();
             return;
@@ -758,22 +760,22 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     // arrival (touch hides the bubble once it fades, desktop never had one at all -- see the bug
     // report this fixes). LanConnectDualChatState.HasUnseenRemoteArrival is edge-triggered off
     // LanConnectChatChannelState.RemoteArrivalRevision, which TrackIncoming only bumps for
-    // remote messages, so a player's own outgoing chat never lands here. Preserving the
-    // selection (not OpenRoomOverlay's server-selectable heuristic) matters: the player didn't
-    // ask for this, a message arriving is a "show me what's new" event, not an invitation to
-    // yank them off whatever channel they were already reading. A drag or an active fade tween
-    // is left alone rather than interrupted -- HasUnseenRemoteArrival's "seen" baseline only
-    // advances on close/leave, so it simply stays true and this runs again next frame once the
-    // gesture or tween finishes.
+    // remote messages, so a player's own outgoing chat never lands here. The arriving channel
+    // is selected because this is a "show me what's new" event; preserving a hidden room tab
+    // made server messages look lost on touch devices. A drag or an active fade tween is left
+    // alone rather than interrupted -- the "seen" baseline only advances on close/leave, so the
+    // arrival stays pending and this runs again next frame once the gesture or tween finishes.
     private void MaybeSurfaceForRemoteArrival(LanConnectDualChatState chat)
     {
-        if (!chat.HasUnseenRemoteArrival || _dragPointerDown || _dragging || IsFadeTweenActive())
+        LanConnectChatChannel? arrivalChannel = chat.UnseenRemoteArrivalChannel;
+        if (!arrivalChannel.HasValue || _dragPointerDown || _dragging || IsFadeTweenActive())
         {
             return;
         }
 
         bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
-        chat.ShowRoomOverlayPreservingSelection(serverSelectable);
+        chat.ShowRoomOverlayForRemoteArrival(arrivalChannel.Value, serverSelectable);
+        _passivelySurfaced = true;
     }
 
     private void ClosePanel()
@@ -978,7 +980,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 Open: chat?.RoomOverlayOpen == true,
                 Pinned: _pinned,
                 HasFocus: HasPanelFocus(),
-                Hovered: _panelHovered,
+                Hovered: _panelHovered && !_passivelySurfaced,
                 Dragging: _dragPointerDown || _dragging,
                 PreviewVisible: _chatPanel?.PreviewVisible == true,
                 PickerOrConfirmationVisible: _chatPanel?.PopupVisible == true,
@@ -1045,6 +1047,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     private void SignalFadeActivity()
     {
+        _passivelySurfaced = false;
         unchecked
         {
             _fadeActivityToken++;
@@ -1059,6 +1062,11 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             return;
         }
         _panelHovered = hovered;
+        if (_passivelySurfaced)
+        {
+            UpdateRoomOverlayFade(ResolveChat());
+            return;
+        }
         SignalFadeActivity();
     }
 
@@ -1115,6 +1123,10 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         if (kind == null)
         {
             return;
+        }
+        if (_passivelySurfaced)
+        {
+            SignalFadeActivity();
         }
         _pointerModeTracker.ReportEvent(kind.Value, CurrentPointerModeContext());
         ApplyPointerModeVisibility(ResolveChat());

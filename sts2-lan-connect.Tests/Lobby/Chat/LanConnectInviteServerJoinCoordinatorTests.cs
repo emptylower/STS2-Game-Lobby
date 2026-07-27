@@ -77,6 +77,29 @@ public sealed class LanConnectInviteServerJoinCoordinatorTests
     }
 
     [Fact]
+    public async Task SameServerInviteInitializesFreshRuntimeBeforeRoomLookup()
+    {
+        FakeInvitePorts ports = new("https://one.example")
+        {
+            ServerContextInitialized = false,
+            RoomExists = true
+        };
+        LanConnectInviteServerJoinCoordinator sut = new(ports);
+
+        LanConnectInviteJoinResult result = await sut.JoinAsync(
+            Invite("https://one.example", "room-a"),
+            CancellationToken.None);
+
+        Assert.Equal(LanConnectInviteJoinResult.JoinStarted, result);
+        Assert.Equal(new[]
+        {
+            "switch:https://one.example",
+            "rooms:https://one.example",
+            "join:room-a:"
+        }, ports.Calls);
+    }
+
+    [Fact]
     public async Task RoomIdMatchIsOrdinalAndDoesNotStartWrongJoin()
     {
         FakeInvitePorts ports = new("http://one.example")
@@ -267,6 +290,8 @@ public sealed class LanConnectInviteServerJoinCoordinatorTests
 
         public string CurrentServer { get; private set; }
 
+        public bool ServerContextInitialized { get; set; } = true;
+
         public bool IsSwitchInProgress { get; set; }
 
         public bool CancelSwitchContext { get; set; }
@@ -295,6 +320,7 @@ public sealed class LanConnectInviteServerJoinCoordinatorTests
             _currentContext.Cancel();
             _currentContext.ReleaseOwner();
             _currentContext = new LanConnectServerContextHolder();
+            ServerContextInitialized = true;
             if (CancelSwitchContext)
             {
                 _currentContext.Cancel();

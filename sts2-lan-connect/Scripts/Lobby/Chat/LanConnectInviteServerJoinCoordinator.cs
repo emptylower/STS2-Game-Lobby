@@ -9,6 +9,8 @@ internal interface ILanConnectInviteServerJoinPorts
 {
     string CurrentServer { get; }
 
+    bool ServerContextInitialized { get; }
+
     bool IsSwitchInProgress { get; }
 
     LanConnectServerContextLease AcquireCurrentServerContext();
@@ -78,7 +80,7 @@ internal sealed class LanConnectInviteServerJoinCoordinator
         LanConnectServerContextLease? serverContextLease = null;
         try
         {
-            if (crossServer)
+            if (crossServer || !_ports.ServerContextInitialized)
             {
                 serverContextLease = await _ports.SwitchServerAsync(inviteServer, cancellationToken);
             }

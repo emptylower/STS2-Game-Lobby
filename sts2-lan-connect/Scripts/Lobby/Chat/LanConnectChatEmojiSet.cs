@@ -5,7 +5,8 @@ namespace Sts2LanConnect.Scripts;
 internal sealed record LanConnectEmojiDescriptor(
     string Id,
     string LucideIcon,
-    string LabelKey);
+    string LabelKey,
+    string PlainTextFallback);
 
 internal static class LanConnectChatEmojiSet
 {
@@ -13,24 +14,24 @@ internal static class LanConnectChatEmojiSet
 
     private static readonly ReadOnlyCollection<LanConnectEmojiDescriptor> Published = Array.AsReadOnly(
     [
-        Emoji("smile"),
-        Emoji("laugh"),
-        Emoji("heart"),
-        Emoji("thumbs-up"),
-        Emoji("thumbs-down"),
-        Emoji("sparkles"),
-        Emoji("flame"),
-        Emoji("zap"),
-        Emoji("shield"),
-        Emoji("swords"),
-        Emoji("target"),
-        Emoji("crown"),
-        Emoji("skull"),
-        Emoji("ghost"),
-        Emoji("eye"),
-        Emoji("message-circle"),
-        Emoji("check"),
-        Emoji("x")
+        Emoji("smile", "🙂"),
+        Emoji("laugh", "😂"),
+        Emoji("heart", "❤️"),
+        Emoji("thumbs-up", "👍"),
+        Emoji("thumbs-down", "👎"),
+        Emoji("sparkles", "✨"),
+        Emoji("flame", "🔥"),
+        Emoji("zap", "⚡"),
+        Emoji("shield", "🛡"),
+        Emoji("swords", "⚔"),
+        Emoji("target", "🎯"),
+        Emoji("crown", "👑"),
+        Emoji("skull", "💀"),
+        Emoji("ghost", "👻"),
+        Emoji("eye", "👁"),
+        Emoji("message-circle", "💬"),
+        Emoji("check", "✅"),
+        Emoji("x", "❌")
     ]);
 
     private static readonly IReadOnlyDictionary<string, LanConnectEmojiDescriptor> ById =
@@ -50,6 +51,6 @@ internal static class LanConnectChatEmojiSet
         return false;
     }
 
-    private static LanConnectEmojiDescriptor Emoji(string id) =>
-        new(id, id, $"chat.emoji.{id}");
+    private static LanConnectEmojiDescriptor Emoji(string id, string plainTextFallback) =>
+        new(id, id, $"chat.emoji.{id}", plainTextFallback);
 }

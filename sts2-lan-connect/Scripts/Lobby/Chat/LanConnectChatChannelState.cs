@@ -131,6 +131,7 @@ internal sealed class LanConnectChatChannelState
 {
     private static readonly TimeSpan StalePendingThreshold = TimeSpan.FromSeconds(10);
     private static readonly LanConnectChatArrivalSequenceClock SharedArrivalClock = new();
+    private static readonly LanConnectChatArrivalSequenceClock SharedRemoteArrivalOrderClock = new();
 
     private readonly object _mutationLock = new();
     private readonly List<ServerChatMessageState> _messages = new();
@@ -143,6 +144,7 @@ internal sealed class LanConnectChatChannelState
     private SnapshotAssembly? _snapshotAssembly;
     private long _revision;
     private long _remoteArrivalRevision;
+    private long _latestRemoteArrivalOrder;
     private long _contextGeneration;
     private long _draftGeneration;
     private long _observedDraftContentRevision;
@@ -213,6 +215,17 @@ internal sealed class LanConnectChatChannelState
             lock (_mutationLock)
             {
                 return _remoteArrivalRevision;
+            }
+        }
+    }
+
+    internal long LatestRemoteArrivalOrder
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _latestRemoteArrivalOrder;
             }
         }
     }
@@ -1755,6 +1768,7 @@ internal sealed class LanConnectChatChannelState
         }
 
         _remoteArrivalRevision++;
+        _latestRemoteArrivalOrder = SharedRemoteArrivalOrderClock.Next();
         if (string.IsNullOrEmpty(messageId))
         {
             return;

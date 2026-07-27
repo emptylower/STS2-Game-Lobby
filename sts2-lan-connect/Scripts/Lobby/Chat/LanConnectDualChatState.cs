@@ -42,10 +42,30 @@ internal sealed class LanConnectDualChatState
     /// see LanConnectRoomChatOverlay.MaybeSurfaceForRemoteArrival, the only reader.
     /// </summary>
     internal bool HasUnseenRemoteArrival =>
-        !RoomOverlayOpen &&
-        ActiveRoomId != null &&
-        (Room.RemoteArrivalRevision != _seenRoomRemoteArrivalRevision ||
-         Server.RemoteArrivalRevision != _seenServerRemoteArrivalRevision);
+        UnseenRemoteArrivalChannel.HasValue;
+
+    internal LanConnectChatChannel? UnseenRemoteArrivalChannel
+    {
+        get
+        {
+            if (RoomOverlayOpen || ActiveRoomId == null)
+            {
+                return null;
+            }
+
+            bool roomUnseen = Room.RemoteArrivalRevision != _seenRoomRemoteArrivalRevision;
+            bool serverUnseen = Server.RemoteArrivalRevision != _seenServerRemoteArrivalRevision;
+            return (roomUnseen, serverUnseen) switch
+            {
+                (true, false) => LanConnectChatChannel.Room,
+                (false, true) => LanConnectChatChannel.Server,
+                (true, true) => Room.LatestRemoteArrivalOrder >= Server.LatestRemoteArrivalOrder
+                    ? LanConnectChatChannel.Room
+                    : LanConnectChatChannel.Server,
+                _ => null
+            };
+        }
+    }
 
     internal void EnterRoom(string roomId)
     {
@@ -112,6 +132,24 @@ internal sealed class LanConnectDualChatState
         {
             SelectedChannel = LanConnectChatChannel.Room;
         }
+        RoomOverlayOpen = true;
+        Select(SelectedChannel);
+        _openedOnce = true;
+        return SelectedChannel;
+    }
+
+    internal LanConnectChatChannel ShowRoomOverlayForRemoteArrival(
+        LanConnectChatChannel arrivalChannel,
+        bool serverSelectable = true)
+    {
+        if (ActiveRoomId == null)
+        {
+            throw new InvalidOperationException("A room must be active before showing room chat.");
+        }
+
+        SelectedChannel = arrivalChannel == LanConnectChatChannel.Server && !serverSelectable
+            ? LanConnectChatChannel.Room
+            : arrivalChannel;
         RoomOverlayOpen = true;
         Select(SelectedChannel);
         _openedOnce = true;

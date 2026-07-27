@@ -626,6 +626,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             ApplyMessagesPlateHeight();
         }
         _draftEditor?.SetCompactLayout(compact);
+        ApplySendButtonPresentation();
     }
 
     // Recomputes the messages ScrollContainer's own minimum height from the actual rendered
@@ -2111,8 +2112,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         if (_sendButton != null && GodotObject.IsInstanceValid(_sendButton))
         {
-            _sendButton.Text = DisplayText(Localize("chat.action.send"));
-            _sendButton.AccessibilityName = Localize("chat.action.send");
+            ApplySendButtonPresentation();
         }
         _itemPreview?.ConfigureAccessibility(Localize("chat.preview.close"));
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
@@ -2186,6 +2186,19 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
     }
 
+    private void ApplySendButtonPresentation()
+    {
+        if (_sendButton == null || !GodotObject.IsInstanceValid(_sendButton))
+        {
+            return;
+        }
+        bool iconOnly = UsesLobbyStyle && _compactLayout;
+        _sendButton.Text = iconOnly ? string.Empty : DisplayText(Localize("chat.action.send"));
+        _sendButton.AccessibilityName = Localize("chat.action.send");
+        _sendButton.CustomMinimumSize = LanConnectHudLegibility.EnsureTouchTarget(
+            new Vector2(iconOnly ? 42 : UsesLobbyStyle ? 80 : 74, 42));
+    }
+
     private void ScrollToBottomWithoutConsumingState()
     {
         if (_messagesScroll?.GetVScrollBar() is not ScrollBar bar)
@@ -2252,14 +2265,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         }
         _draftEditor.Editable = editable;
         LanConnectChatFeatureVersions features = _state.EnabledRichFeatures;
-        bool emojiAvailable = features.RichContentVersion == 1 &&
-                              features.EmojiSetVersion == LanConnectChatEmojiSet.Version;
+        bool structuredEmojiAvailable = features.RichContentVersion == 1 &&
+                                        features.EmojiSetVersion == LanConnectChatEmojiSet.Version;
         if (_emojiButton != null && GodotObject.IsInstanceValid(_emojiButton))
         {
-            _emojiButton.Visible = emojiAvailable;
+            _emojiButton.Visible = ready;
             _emojiButton.Disabled = !editable;
         }
-        _emojiPicker?.SetAvailable(emojiAvailable && editable);
+        _emojiPicker?.SetAvailable(editable, structuredEmojiAvailable);
         ApplyReferenceModePresentation(CurrentReferenceModePresentation());
         ApplySendButtonVisibility();
         _sendButton.Disabled = !editable ||

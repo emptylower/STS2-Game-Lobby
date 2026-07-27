@@ -205,6 +205,7 @@ internal sealed partial class LanConnectLobbyRuntime :
     private double _timeUntilHeartbeat;
     private LanConnectRotatingServerChatPort? _chatOwner;
     private LanConnectServerSwitchCoordinator? _serverSwitchCoordinator;
+    private int _lobbyServerContextInitialized;
     private string? _serverChatPlayerNetId;
     private bool _chatEnabled = true;
     private int _chatEnabledRevision;
@@ -1599,30 +1600,36 @@ internal sealed partial class LanConnectLobbyRuntime :
     internal Task StopServerChatAsync(CancellationToken cancellationToken = default) =>
         GetChatCoordinator().StopServerAsync(cancellationToken);
 
-    internal Task SwitchLobbyServerAsync(
+    internal async Task SwitchLobbyServerAsync(
         string baseUrl,
         CancellationToken cancellationToken = default)
     {
         LanConnectServerSwitchCoordinator coordinator = _serverSwitchCoordinator ??
             throw new InvalidOperationException("Server switching is unavailable before the lobby runtime is ready.");
-        return coordinator.SwitchAsync(
+        await coordinator.SwitchAsync(
             baseUrl,
             ResolveCurrentPlayerNetId(),
             LanConnectConfig.GetEffectivePlayerDisplayName(),
             cancellationToken);
+        Interlocked.Exchange(ref _lobbyServerContextInitialized, 1);
     }
 
-    internal Task<LanConnectServerContextLease> SwitchLobbyServerWithContextAsync(
+    internal async Task<LanConnectServerContextLease> SwitchLobbyServerWithContextAsync(
         string baseUrl,
         CancellationToken cancellationToken = default)
     {
         LanConnectServerSwitchCoordinator coordinator = _serverSwitchCoordinator ??
             throw new InvalidOperationException("Server switching is unavailable before the lobby runtime is ready.");
-        return coordinator.SwitchWithContextAsync(
+        LanConnectServerContextLease context = await coordinator.SwitchWithContextAsync(
             baseUrl,
             ResolveCurrentPlayerNetId(),
             LanConnectConfig.GetEffectivePlayerDisplayName(),
             cancellationToken);
+        if (!context.Token.IsCancellationRequested)
+        {
+            Interlocked.Exchange(ref _lobbyServerContextInitialized, 1);
+        }
+        return context;
     }
 
     internal LanConnectServerContextLease AcquireCurrentServerContext() =>
@@ -1631,6 +1638,9 @@ internal sealed partial class LanConnectLobbyRuntime :
         .AcquireCurrentServerContext();
 
     internal bool IsLobbyServerSwitchInProgress => _serverSwitchCoordinator?.IsSwitchInProgress == true;
+
+    internal bool IsLobbyServerContextInitialized =>
+        Volatile.Read(ref _lobbyServerContextInitialized) != 0;
 
     private async Task SendLegacyRoomChatEnvelopeAsync(
         string messageId,

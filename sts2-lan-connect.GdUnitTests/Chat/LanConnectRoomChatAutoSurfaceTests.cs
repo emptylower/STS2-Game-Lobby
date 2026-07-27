@@ -60,21 +60,42 @@ public sealed class LanConnectRoomChatAutoSurfaceTests
     }
 
     [TestCase]
-    public async Task Idle_fade_still_takes_a_surfaced_panel_to_zero_alpha()
+    public async Task Server_arrival_while_room_is_selected_surfaces_the_server_channel()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.CreateNeverOpenedWithServerSupport();
+        AssertThat(fixture.Overlay.TestState.SelectedChannel).IsEqual(LanConnectChatChannel.Room);
+
+        fixture.State.Server.AppendConfirmedForTests(
+            "server-arrival-while-room-selected",
+            "Ally",
+            "大厅消息",
+            1,
+            isLocal: false);
+        await fixture.Overlay.RefreshForTests();
+
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
+        AssertThat(fixture.Overlay.TestState.SelectedChannel).IsEqual(LanConnectChatChannel.Server);
+        AssertThat(fixture.Overlay.ChatPanelForTests.TestState.MessageCount).IsEqual(1);
+    }
+
+    [TestCase]
+    public async Task Passive_hover_does_not_block_idle_fade_after_remote_arrival_surfaces_panel()
     {
         using RoomChatFixture fixture = await RoomChatFixture.CreateNeverOpenedWithServerSupport();
         FakeClock clock = new();
-        fixture.Overlay.ConfigureFadeForTests(clock, () => true);
+        fixture.Overlay.ConfigureFadeForTests(clock);
 
         fixture.State.Room.AppendConfirmedForTests("remote-arrival-1", "Ally", "hello", 1, isLocal: false);
         await fixture.Overlay.RefreshForTests();
         AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
+        FindNode<Control>(fixture.Overlay, "RoomChatOverlayRoot")
+            .EmitSignal(Control.SignalName.MouseEntered);
 
         clock.NowSeconds = 5d;
         fixture.Overlay.RefreshFadeForTests();
 
-        AssertThat(fixture.Overlay.TestState.FadePhase).IsEqual(LanConnectRoomOverlayFadePhase.Faded);
-        AssertThat(fixture.Overlay.TestState.PanelAlpha).IsEqual(0f);
+        AssertThat(fixture.Overlay.TestState.FadePhase).IsEqual(LanConnectRoomOverlayFadePhase.Fading);
+        AssertThat(fixture.Overlay.TestState.TweenActive).IsTrue();
     }
 
     // The regression that matters most: on desktop, IsTouchPointerMode is false, so the toggle

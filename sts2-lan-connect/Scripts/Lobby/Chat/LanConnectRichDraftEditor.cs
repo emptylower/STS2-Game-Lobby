@@ -30,6 +30,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     private const float MinimumEditorWidth = 220f;
     private const float MinimumLobbyEditorWidth = 176f;
+    private const float MinimumCompactLobbyEditorWidth = 124f;
     private const float MinimumTextRunWidth = 72f;
     private const float MaximumTextRunWidth = 260f;
     private const float EntityChipWidth = 112f;
@@ -53,6 +54,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     private Action<long>? _draftContentChangedHandler;
     private bool _draftContentChangedSubscribed;
     private long _bindingGeneration;
+    private bool _compactLayout;
     private LanConnectChatFeatureVersions _enabled = new();
     private string _senderName = string.Empty;
     private Func<LanConnectDraftRun, string> _accessibleLabel;
@@ -251,7 +253,13 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     internal void SetCompactLayout(bool compact)
     {
-        _ = compact;
+        _compactLayout = compact;
+        if (_flow != null && GodotObject.IsInstanceValid(_flow))
+        {
+            _flow.CustomMinimumSize = new Vector2(
+                MinimumEditorWidthForLayout(),
+                UsesLobbyStyle ? 28f : 34f);
+        }
         UpdateMinimumSizeForDraft(_draft?.Runs);
     }
 
@@ -298,6 +306,17 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             return;
         }
         MutateDocument(() => _draft.InsertText("\n"));
+    }
+
+    internal bool InsertText(string text)
+    {
+        if (!_editable || _draft == null || string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+        long revision = _draft.ContentRevision;
+        MutateDocument(() => _draft.InsertText(text));
+        return _draft.ContentRevision != revision;
     }
 
     internal bool InsertEmoji(string id)
@@ -435,7 +454,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
             return;
         }
         Name = LanConnectConstants.ChatRichDraftEditorName;
-        float minimumEditorWidth = UsesLobbyStyle ? MinimumLobbyEditorWidth : MinimumEditorWidth;
+        float minimumEditorWidth = MinimumEditorWidthForLayout();
         CustomMinimumSize = new Vector2(minimumEditorWidth, 42f);
         SizeFlagsHorizontal = SizeFlags.ExpandFill;
         MouseFilter = MouseFilterEnum.Pass;
@@ -561,7 +580,7 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     private void UpdateMinimumSizeForDraft(IReadOnlyList<LanConnectDraftRun>? runs)
     {
-        float minimumWidth = UsesLobbyStyle ? MinimumLobbyEditorWidth : MinimumEditorWidth;
+        float minimumWidth = MinimumEditorWidthForLayout();
         float minimumHeight = 42f;
         if (!UsesLobbyStyle && runs != null)
         {
@@ -573,6 +592,10 @@ internal sealed partial class LanConnectRichDraftEditor : Control
         }
         CustomMinimumSize = new Vector2(minimumWidth, minimumHeight);
     }
+
+    private float MinimumEditorWidthForLayout() => UsesLobbyStyle
+        ? _compactLayout ? MinimumCompactLobbyEditorWidth : MinimumLobbyEditorWidth
+        : MinimumEditorWidth;
 
     private TextEdit BuildTextRun(
         LanConnectTextRun run,

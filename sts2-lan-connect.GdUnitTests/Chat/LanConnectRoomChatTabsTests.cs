@@ -33,6 +33,25 @@ public sealed class LanConnectRoomChatTabsTests
     }
 
     [TestCase]
+    public async Task Enabled_emoji_capability_survives_switching_between_both_chat_streams()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        LanConnectChatFeatureVersions features = new(1, 1, 1, 1);
+        fixture.State.Room.SetEnabledRichFeatures(features);
+        fixture.State.Server.SetEnabledRichFeatures(features);
+        await fixture.Overlay.RefreshForTests();
+
+        Button emoji = FindNode<Button>(fixture.Overlay, LanConnectEmojiPicker.ToggleButtonName);
+        AssertThat(emoji.Visible).IsTrue();
+
+        fixture.Overlay.SelectChannelForTests(LanConnectChatChannel.Server);
+        await fixture.Overlay.RefreshForTests();
+
+        emoji = FindNode<Button>(fixture.Overlay, LanConnectEmojiPicker.ToggleButtonName);
+        AssertThat(emoji.Visible).IsTrue();
+    }
+
+    [TestCase]
     public async Task Tabs_preserve_drafts_scroll_and_badges_independently()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
@@ -138,6 +157,7 @@ public sealed class LanConnectRoomChatTabsTests
         // never react to server unread — that invariant is unchanged.
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
         await fixture.Overlay.CloseForTests();
+        fixture.State.Server.SetPresentationForTests(LanConnectServerChatPresentation.Unsupported);
         fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Server, sequence: 20);
         await fixture.Overlay.RefreshForTests();
         Control toggleBadge = FindNode<Control>(fixture.Overlay, "ChatToggleUnreadBadge");
@@ -145,8 +165,6 @@ public sealed class LanConnectRoomChatTabsTests
         AssertThat(toggleBadge.Visible).IsFalse();
         AssertThat(serverDot.Visible).IsTrue();
 
-        fixture.State.Server.SetPresentationForTests(LanConnectServerChatPresentation.Unsupported);
-        await fixture.Overlay.RefreshForTests();
         AssertThat(fixture.Overlay.TestState.ServerUnread).IsEqual(1);
         AssertThat(toggleBadge.Visible).IsFalse();
         AssertThat(serverDot.Visible).IsTrue();

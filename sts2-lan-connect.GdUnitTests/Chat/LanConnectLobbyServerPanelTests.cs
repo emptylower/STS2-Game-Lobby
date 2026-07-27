@@ -109,10 +109,12 @@ public sealed class LanConnectLobbyServerPanelTests
         using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
             new Vector2I(1920, 1080),
             LanConnectServerChatPresentation.Ready);
+        fixture.ServerState.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 1, 0));
         fixture.ServerState.AppendConfirmedForTests("message", "A", "hello", 1, false);
         await fixture.Runner.AwaitIdleFrame();
 
         LanConnectBasicChatPanel panel = fixture.Overlay.ServerChatPanelForTests;
+        AssertThat(Find<Button>(panel, LanConnectEmojiPicker.ToggleButtonName).Visible).IsTrue();
         AssertThat(panel.ChatVisualStyle).IsEqual(LanConnectChatVisualStyle.LobbySidebar);
         Label title = Find<Label>(panel, "ChatChannelTitle");
         AssertThat(title.GetThemeColor("font_color").R).IsLess(0.4f);

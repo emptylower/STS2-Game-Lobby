@@ -5452,6 +5452,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         public string CurrentServer => LanConnectConfig.LobbyServerBaseUrl;
 
+        public bool ServerContextInitialized =>
+            LanConnectLobbyRuntime.Instance?.IsLobbyServerContextInitialized == true;
+
         public bool IsSwitchInProgress =>
             LanConnectLobbyRuntime.Instance?.IsLobbyServerSwitchInProgress == true;
 

@@ -519,7 +519,7 @@ public sealed partial class LanConnectItemLinkCaptureUiTests
         modal?.QueueFree();
         await fixture.Runner.AwaitIdleFrame();
         await fixture.Overlay.OpenForTests();
-        AssertThat(fixture.State.SelectedChannel).IsEqual(LanConnectChatChannel.Room);
+        AssertThat(fixture.State.SelectedChannel).IsEqual(selectedBefore);
     }
 
     [TestCase]

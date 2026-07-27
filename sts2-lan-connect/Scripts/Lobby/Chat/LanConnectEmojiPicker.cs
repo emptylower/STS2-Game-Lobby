@@ -33,6 +33,7 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
     private GridContainer? _grid;
     private Control? _previousFocus;
     private bool _available = true;
+    private bool _structuredEmojiAvailable = true;
     private bool _openIntent;
     private long _bindingGeneration;
     private long _focusIntentGeneration;
@@ -111,8 +112,9 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
         Bind(editor, emojis, name => icons.Get(name, 20, iconColor), localize);
     }
 
-    internal void SetAvailable(bool available)
+    internal void SetAvailable(bool available, bool structuredEmojiAvailable = true)
     {
+        _structuredEmojiAvailable = structuredEmojiAvailable;
         if (_available == available)
         {
             return;
@@ -465,10 +467,13 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
         {
             return;
         }
-        string id = _emojis[index].Id;
-        if (_editor.InsertEmoji(id))
+        LanConnectEmojiDescriptor emoji = _emojis[index];
+        bool inserted = _structuredEmojiAvailable
+            ? _editor.InsertEmoji(emoji.Id)
+            : _editor.InsertText(emoji.PlainTextFallback);
+        if (inserted)
         {
-            Inserted?.Invoke(id);
+            Inserted?.Invoke(emoji.Id);
         }
         if (index < _buttons.Count && GodotObject.IsInstanceValid(_buttons[index]))
         {

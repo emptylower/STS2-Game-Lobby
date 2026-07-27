@@ -246,7 +246,7 @@ public sealed class LanConnectRichMessageRenderingTests
 
         Button emoji = FindNode<Button>(panel, LanConnectEmojiPicker.ToggleButtonName);
         Button send = FindNode<Button>(panel, LanConnectConstants.ChatSendButtonName);
-        AssertThat(emoji.Visible).IsFalse();
+        AssertThat(emoji.Visible).IsTrue();
         AssertThat(send.Disabled).IsTrue();
 
         room.SetEnabledRichFeatures(new LanConnectChatFeatureVersions(1, 1, 0, 0));

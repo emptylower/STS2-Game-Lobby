@@ -22,6 +22,7 @@ public sealed partial class LanConnectRoomChatFocusTests
             "ServerChatTab",
             LanConnectConstants.ChatMessagesScrollName,
             LanConnectConstants.ChatDraftInputName,
+            LanConnectEmojiPicker.ToggleButtonName,
             LanConnectConstants.ChatSendButtonName,
             "ChatPinButton"
         };
@@ -46,6 +47,7 @@ public sealed partial class LanConnectRoomChatFocusTests
             "ServerChatTab",
             LanConnectConstants.ChatMessagesScrollName,
             LanConnectConstants.ChatDraftInputName,
+            LanConnectEmojiPicker.ToggleButtonName,
             LanConnectConstants.ChatSendButtonName,
             LanConnectConstants.ChatRetryButtonPrefix + "focus-failed",
             "ChatPinButton"
@@ -72,6 +74,7 @@ public sealed partial class LanConnectRoomChatFocusTests
             LanConnectConstants.ChatMessagesScrollName,
             LanConnectConstants.ChatNewMessagesButtonName,
             LanConnectConstants.ChatDraftInputName,
+            LanConnectEmojiPicker.ToggleButtonName,
             LanConnectConstants.ChatSendButtonName,
             "ChatPinButton"
         };

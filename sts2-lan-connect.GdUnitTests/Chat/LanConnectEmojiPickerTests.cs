@@ -265,16 +265,15 @@ public sealed class LanConnectEmojiPickerTests
         AssertThat(roomPicker.Visible).IsFalse();
     }
 
-    [TestCase(1, 1, true)]
-    [TestCase(0, 1, false)]
-    [TestCase(1, 0, false)]
-    [TestCase(2, 1, false)]
-    [TestCase(1, 2, false)]
-    [TestCase(2, 2, false)]
-    public async Task Capability_requires_exact_rich_and_emoji_version_one(
+    [TestCase(1, 1)]
+    [TestCase(0, 1)]
+    [TestCase(1, 0)]
+    [TestCase(2, 1)]
+    [TestCase(1, 2)]
+    [TestCase(2, 2)]
+    public async Task Picker_remains_available_when_structured_emoji_is_not_negotiated(
         int richVersion,
-        int emojiVersion,
-        bool expected)
+        int emojiVersion)
     {
         LanConnectChatChannelState state = EnabledState(emojiVersion, richVersion);
         LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
@@ -283,11 +282,11 @@ public sealed class LanConnectEmojiPickerTests
         await runner.AwaitIdleFrame();
 
         AssertThat(FindNode<Button>(panel, LanConnectEmojiPicker.ToggleButtonName).Visible)
-            .IsEqual(expected);
+            .IsTrue();
     }
 
     [TestCase]
-    public async Task Capability_downgrade_closes_picker_and_restores_draft_focus()
+    public async Task Capability_downgrade_keeps_picker_open_and_switches_to_text_fallback()
     {
         LanConnectChatChannelState state = EnabledState(emojiVersion: 1);
         LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
@@ -307,9 +306,10 @@ public sealed class LanConnectEmojiPickerTests
         await panel.RefreshForTests();
         await runner.AwaitIdleFrame();
 
-        AssertThat(picker.Visible).IsFalse();
-        AssertThat(FindNode<Button>(panel, LanConnectEmojiPicker.ToggleButtonName).Visible).IsFalse();
-        AssertThat(panel.DraftHasFocus).IsTrue();
+        AssertThat(picker.Visible).IsTrue();
+        EmojiButtons(picker)[0].EmitSignal(Button.SignalName.Pressed);
+        AssertThat(state.RichDraft.Runs).ContainsExactly(
+            new LanConnectTextRun(LanConnectChatEmojiSet.Version1[0].PlainTextFallback));
     }
 
     [TestCase]
@@ -496,17 +496,25 @@ public sealed class LanConnectEmojiPickerTests
     }
 
     [TestCase]
-    public async Task Panel_hides_capability_zero_and_enabled_picker_inserts_without_send()
+    public async Task Panel_capability_zero_inserts_text_fallback_and_enabled_picker_inserts_structured_without_send()
     {
         LanConnectChatChannelState disabled = EnabledState(emojiVersion: 0);
+        disabled.RichDraft.ReplaceAllWithText("ab");
+        disabled.RichDraft.SetCaret(new LanConnectDraftPosition(0, 1));
         LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
         using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
         int sends = 0;
         panel.Bind(disabled, _ => { sends++; return Task.CompletedTask; }, _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
         Button toggle = FindNode<Button>(panel, LanConnectEmojiPicker.ToggleButtonName);
-        AssertThat(toggle.Visible).IsFalse();
-        AssertThat(panel.PopupVisible).IsFalse();
+        AssertThat(toggle.Visible).IsTrue();
+        toggle.EmitSignal(Button.SignalName.Pressed);
+        await runner.AwaitIdleFrame();
+        LanConnectEmojiPicker picker = FindNode<LanConnectEmojiPicker>(panel, LanConnectEmojiPicker.PickerName);
+        EmojiButtons(picker)[0].EmitSignal(Button.SignalName.Pressed);
+        AssertThat(disabled.RichDraft.Runs).ContainsExactly(
+            new LanConnectTextRun("a" + LanConnectChatEmojiSet.Version1[0].PlainTextFallback + "b"));
+        AssertThat(sends).IsEqual(0);
 
         LanConnectChatChannelState enabled = EnabledState(emojiVersion: 1);
         enabled.RichDraft.ReplaceAllWithText("ab");
@@ -526,7 +534,7 @@ public sealed class LanConnectEmojiPickerTests
                 LanConnectConstants.ChatSendButtonName);
         toggle.EmitSignal(Button.SignalName.Pressed);
         await runner.AwaitIdleFrame();
-        LanConnectEmojiPicker picker = FindNode<LanConnectEmojiPicker>(panel, LanConnectEmojiPicker.PickerName);
+        picker = FindNode<LanConnectEmojiPicker>(panel, LanConnectEmojiPicker.PickerName);
         EmojiButtons(picker)[0].EmitSignal(Button.SignalName.Pressed);
 
         AssertThat(enabled.RichDraft.Runs).ContainsExactly(
