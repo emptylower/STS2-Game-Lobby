@@ -2846,3 +2846,126 @@ test("clean names and clean chat work unchanged when filter enabled", async () =
     cleanupTempDir(config);
   }
 });
+
+test("admin settings expose and toggle the sensitive filter at runtime", async () => {
+  const password = "sensitive-toggle-password";
+  const base = testConfig({
+    port: 0,
+    sensitiveLexiconDir: writeTestLexicon(),
+    serverAdminPasswordHash: hashServerAdminPassword(password),
+    serverAdminSessionSecret: "sensitive-toggle-session-secret",
+  });
+  const config = {
+    ...base,
+    chat: { ...base.chat, features: { ...base.chat.features, serverChatEnabled: true } },
+  };
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  try {
+    const login = await fetch(`http://127.0.0.1:${address.port}/server-admin/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "admin", password }),
+    });
+    assert.equal(login.status, 200);
+    const loginBody = await login.json() as { csrfToken: string };
+    const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+    assert.ok(cookie);
+    const authHeaders = { cookie, "x-csrf-token": loginBody.csrfToken };
+
+    // GET 响应带 sensitiveFilter 状态。
+    const initial = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      headers: authHeaders,
+    });
+    assert.equal(initial.status, 200);
+    const initialSettings = await initial.json() as {
+      sensitiveFilterEnabled: boolean;
+      sensitiveFilter: {
+        enabled: boolean; wordCount: number; maskedMessages: number; rejectedNames: number; loadError: string | null;
+      };
+    };
+    assert.equal(initialSettings.sensitiveFilterEnabled, true);
+    assert.equal(initialSettings.sensitiveFilter.enabled, true);
+    assert.equal(initialSettings.sensitiveFilter.wordCount, 2);
+    assert.equal(initialSettings.sensitiveFilter.loadError, null);
+
+    // 开启状态下建房被拒绝。
+    const rejected = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "敏感词房",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(rejected.status, 400);
+
+    // 面板关闭开关，即时生效：同名可建。
+    const patchOff = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", ...authHeaders },
+      body: JSON.stringify({ sensitiveFilterEnabled: false }),
+    });
+    assert.equal(patchOff.status, 200);
+    const offSettings = await patchOff.json() as { sensitiveFilterEnabled: boolean; sensitiveFilter: { enabled: boolean; rejectedNames: number } };
+    assert.equal(offSettings.sensitiveFilterEnabled, false);
+    assert.equal(offSettings.sensitiveFilter.enabled, false);
+    assert.equal(offSettings.sensitiveFilter.rejectedNames, 1);
+
+    const allowed = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "敏感词房",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(allowed.status, 201);
+
+    // 再打开，拒绝恢复。
+    const patchOn = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", ...authHeaders },
+      body: JSON.stringify({ sensitiveFilterEnabled: true }),
+    });
+    assert.equal(patchOn.status, 200);
+    const rejectedAgain = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "敏感词房二号",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(rejectedAgain.status, 400);
+
+    // 非布尔值被拒绝。
+    const patchInvalid = await fetch(`http://127.0.0.1:${address.port}/server-admin/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", ...authHeaders },
+      body: JSON.stringify({ sensitiveFilterEnabled: "yes" }),
+    });
+    assert.equal(patchInvalid.status, 400);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});

@@ -853,6 +853,7 @@ export async function createLobbyService(
         bandwidthCapacityMbps?: number | null;
         announcements?: unknown;
         chatFeatures?: unknown;
+        sensitiveFilterEnabled?: boolean;
       } | undefined;
       const update: Parameters<ServerAdminStateStore["updateSettings"]>[0] = {};
       if (body && Object.hasOwn(body, "displayName")) {
@@ -883,10 +884,17 @@ export async function createLobbyService(
       if (body && Object.hasOwn(body, "chatFeatures")) {
         update.chatFeatures = parseChatFeaturesPatch(body.chatFeatures);
       }
+      if (body && Object.hasOwn(body, "sensitiveFilterEnabled")) {
+        if (typeof body.sensitiveFilterEnabled !== "boolean") {
+          throw new InputError("sensitiveFilterEnabled 必须为布尔值。");
+        }
+        update.sensitiveFilterEnabled = body.sensitiveFilterEnabled;
+      }
       const settings = await enqueueServerAdminMutation(async () => {
         await dependencies.beforeServerAdminMutation?.("settings");
         const committed = serverAdminStateStore.updateSettings(update);
         await applyChatGovernance(committed.chatFeatures);
+        moderation.setEnabled(committed.sensitiveFilterEnabled);
         return committed;
       });
       res.json(buildServerAdminSettingsResponse(settings));
@@ -1878,6 +1886,7 @@ export async function createLobbyService(
       serverFeatures: resolveAdminFeatures(settings.chatFeatures, "server"),
       roomFeatures: resolveAdminFeatures(settings.chatFeatures, "room"),
       metrics: buildChatMetrics(),
+      sensitiveFilter: moderation.stats(),
       update: serviceUpdateManager.getStatus(),
     };
   }
