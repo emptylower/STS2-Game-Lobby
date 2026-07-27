@@ -178,6 +178,7 @@ public sealed class LanConnectModInventoryBuilderTests
                 Assert.DoesNotContain("workshopId", modFields);
                 break;
             case "v0.109.0":
+            case "v0.109.1":
                 Assert.Contains("workshopId", modFields);
                 break;
             default:

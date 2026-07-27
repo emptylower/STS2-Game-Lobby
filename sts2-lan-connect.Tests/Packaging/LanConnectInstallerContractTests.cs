@@ -79,7 +79,8 @@ public sealed class LanConnectInstallerContractTests
             "--install",
             "--skip-codesign",
             "--no-save-sync");
-        Assert.Equal(0, installed.ExitCode);
+        Assert.True(installed.ExitCode == 0,
+            $"exit={installed.ExitCode}\nSTDOUT:\n{installed.Stdout}\nSTDERR:\n{installed.Stderr}");
 
         string[] installedFiles = Directory.EnumerateFiles(fixture.TargetModDirectory)
             .Select(Path.GetFileName)
