@@ -47,11 +47,11 @@ public sealed class LanConnectPackageContentTests
 
         using JsonDocument manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
-        Assert.Equal("0.5.2", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("0.5.3", manifest.RootElement.GetProperty("version").GetString());
         FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
             Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
-        Assert.Equal("0.5.2.0", assemblyVersion.FileVersion);
-        Assert.StartsWith("0.5.2", assemblyVersion.ProductVersion, StringComparison.Ordinal);
+        Assert.Equal("0.5.3.0", assemblyVersion.FileVersion);
+        Assert.StartsWith("0.5.3", assemblyVersion.ProductVersion, StringComparison.Ordinal);
 
         foreach (string packagePath in ExpectedFiles)
         {
@@ -75,14 +75,14 @@ public sealed class LanConnectPackageContentTests
     }
 
     [Fact]
-    public void Client_v052_candidate_documents_the_new_reference_paths_without_requiring_a_service_upgrade()
+    public void Client_v053_release_documents_the_continue_channel_split_without_requiring_a_service_upgrade()
     {
         using Fixture fixture = new();
         string changelog = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "CHANGELOG.md"));
         string releaseNotes = File.ReadAllText(Path.Combine(
             fixture.RepositoryRoot,
             "docs",
-            "RELEASE_NOTES_V0.5.2_ZH.md"));
+            "RELEASE_NOTES_V0.5.3_CLIENT_ZH.md"));
         string clientReadme = File.ReadAllText(Path.Combine(
             fixture.RepositoryRoot,
             "docs",
@@ -98,14 +98,14 @@ public sealed class LanConnectPackageContentTests
 
         foreach (string text in new[] { changelog, releaseNotes, clientReadme, userGuide, workshop })
         {
-            Assert.Contains("0.5.2", text, StringComparison.Ordinal);
-            Assert.Contains("一次性引用", text, StringComparison.Ordinal);
+            Assert.Contains("0.5.3", text, StringComparison.Ordinal);
+            Assert.Contains("续局", text, StringComparison.Ordinal);
         }
-        Assert.Contains("Alt+R", releaseNotes, StringComparison.Ordinal);
-        Assert.Contains("Alt+左键", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("STS2LANRESUME:", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("HostChannel", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("Android", releaseNotes, StringComparison.Ordinal);
-        Assert.Contains("点击", releaseNotes, StringComparison.Ordinal);
-        Assert.Contains("lobby-service 0.5.1", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("续局身份码", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("lobby-service", releaseNotes, StringComparison.Ordinal);
     }
 
     [Fact]

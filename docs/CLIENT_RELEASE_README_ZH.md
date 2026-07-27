@@ -14,14 +14,14 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.5.2` |
+| 客户端版本 | `0.5.3` |
 | 默认大厅 | `47.111.146.69:8787`（兜底社区节点，可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `test_relaxed + relay-only` |
 
-`0.5.2` 主要改进聊天引用体验：Android 点击输入区旁的“引用”按钮，桌面按 `Alt+R`，即可进入一次性引用模式；成功捕获一个卡牌、遗物、药水、状态或玩家后会自动退出并回到真实文本输入位置。原有 `Alt+左键` 直接引用继续保留。消息改为单一行内富文本自然换行，卡牌与其他引用使用游戏原生预览，动态 Power 说明按实际层数和玩家上下文生成。Android 还可以点击消息引用打开固定预览。
+`0.5.3` 拆分 LAN 与大厅续局通道：多人存档记住创建入口，纯 LAN 存档续局不再被误发布到公共大厅；房主可在续局等待页把按角色/玩家名对应的单条 `STS2LANRESUME:` 续局身份码发给队友，队友在手动 LAN/IP 加入页粘贴即可回到自己的槽位。同时修复了 BaseLib 共存导致的多人存档损坏（`.corrupt`）、安卓打开“加入好友”页强制等待调试直连超时的问题；“永久放弃多人存档”前会自动备份到 `user://sts2_lan_connect/save-backups/`。局内聊天改为扁平半透明 HUD：单行富文本消息、按玩家稳定配色、收到新消息自动浮现。
 
-当前稳定版通过 GitHub Release [`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2) 与 [Steam 创意工坊](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) 提供。v0.5.2 只更新客户端，继续使用 lobby-service 0.5.1 和 v0.5.1 聊天协议；同一客户端包以游戏 `0.107.1` 与 `0.109.0` 为加载目标。
+当前稳定版通过 GitHub Release [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3) 与 [Steam 创意工坊](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) 提供。v0.5.3 只更新客户端，与 lobby-service 0.5.1/0.5.2/0.5.3 及 v0.5.1+ 客户端均可互通，聊天与加入线协议不变；同一客户端包以游戏 `0.107.1`、`0.109.0`、`0.109.1` 为加载目标。
 
 同一房间内的所有玩家必须使用完全相同的游戏版本。房主和客户端版本不同时，加入流程会直接提示双方版本并中止；普通非联机 MOD 不进入预检、不提示、不禁用，也不影响加入。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。
 
@@ -32,6 +32,8 @@
 - 多出 gameplay MOD：列表默认全部不勾选；只有选中并完成二次确认后才修改本机启用状态。
 - 用户可在 relaxed 配置允许时选择“仍然尝试加入”，但该入口只适用于 MOD 差异，不能跳过游戏版本不一致。
 - 安装或禁用完成后按提示重启游戏。公开房会恢复并重新预检；密码房会再次要求密码。
+
+`0.5.2` 主要改进（保留作历史参考）：聊天引用体验升级——Android 点击输入区旁的“引用”按钮，桌面按 `Alt+R`，即可进入一次性引用模式；消息改为单一行内富文本自然换行，引用使用游戏原生预览，动态 Power 说明按实际层数和玩家上下文生成。
 
 `0.5.0` 主要改进（保留作历史参考）：大厅新增节点级频道聊天；房间聊天升级为 Emoji、物品引用与 generation 校验的战斗状态引用，并完成 Android 输入、布局和图标修复。
 
@@ -175,14 +177,14 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.5.2` |
+| Client version | `0.5.3` |
 | Default lobby | `47.111.146.69:8787` fallback community node |
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `test_relaxed + relay-only` |
 
-`0.5.2` upgrades rich chat references. On Android, tap the Reference button beside the composer; on desktop, press `Alt+R`. The one-shot reference mode exits after one successful card, relic, potion, power, or player capture and returns focus to the real text input. The existing `Alt+left-click` path remains available. Messages now use one inline rich-text control, native game previews, and complete dynamic Power descriptions. Android can tap a message reference to open a pinned preview.
+`0.5.3` splits the LAN and lobby continue-run channels: multiplayer saves remember their origin, and LAN-origin saves are no longer auto-published to the public lobby on resume. The host can share a per-character `STS2LANRESUME:` resume code from the continue-run waiting page; teammates paste it on the manual LAN/IP join page to reclaim their own slots. This release also fixes BaseLib coexistence corrupting multiplayer saves (`.corrupt` renames) and Android's Join Friend screen blocking on a debug-connection timeout, and abandoning a multiplayer save now backs it up to `user://sts2_lan_connect/save-backups/` first. In-run chat is now a flat translucent HUD with single-line rich-text messages, stable per-player name colors, and auto-appear on new messages.
 
-After player acceptance, the candidate will be published as GitHub v0.5.2. Steam users can subscribe to [游戏大厅](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330). v0.5.2 is client-only and continues to use lobby-service 0.5.1 and the v0.5.1 chat protocol. The supported game loading targets are `0.107.1` and `0.109.0`.
+The stable build ships via GitHub Release [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3) and [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330). v0.5.3 is client-only and interoperates with lobby-service 0.5.1/0.5.2/0.5.3 and v0.5.1+ clients without changing the chat or join wire protocols. The supported game loading targets are `0.107.1`, `0.109.0`, and `0.109.1`.
 
 ### MOD Preflight Before Join
 

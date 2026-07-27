@@ -10,7 +10,16 @@
 
 # STS2 LAN Connect 使用说明
 
-当前稳定版为 [`GitHub v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)，Steam 用户也可订阅创意工坊条目 [`游戏大厅 v0.5.2`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。安装或更新客户端后必须完整重启游戏。
+当前稳定版为 [`GitHub v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)，Steam 用户也可订阅创意工坊条目 [`游戏大厅 v0.5.3`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。安装或更新客户端后必须完整重启游戏。
+
+## v0.5.3 续局通道拆分与聊天 HUD
+
+- 多人存档现在记住创建入口：纯 LAN 创建的存档续局时不再被自动发布到公共大厅；大厅创建的存档续局行为不变，仍自动恢复房间。
+- 纯 LAN 存档续局时，房主在续局等待页点击「续局身份码」，把与角色/玩家名一一对应的单条 `STS2LANRESUME:` 码发给队友；队友在手动 LAN/IP 加入页粘贴该码即可回到自己的槽位。身份码不要互换，一次粘贴多条会被拒绝。
+- 「永久放弃多人存档」前会自动把存档备份到 `user://sts2_lan_connect/save-backups/`，备份失败则拒绝删除；并修复了与 BaseLib 共存时多人存档被误改名 `.corrupt` 的问题。
+- 修复安卓打开「加入好友」页自动发起调试直连、必须等满超时才能操作的问题。
+- 局内聊天改为扁平半透明 HUD：单行富文本消息、按玩家稳定配色、收到新消息自动浮现、打开时稳定停在最新消息。
+- v0.5.3 只更新客户端，与 lobby-service 0.5.1/0.5.2/0.5.3 及 v0.5.1+ 客户端均可互通；游戏加载目标为 `0.107.1`、`0.109.0` 与 `0.109.1`。
 
 ## v0.5.2 一次性引用与原生预览
 
@@ -243,7 +252,16 @@
 
 # STS2 LAN Connect User Guide
 
-The stable download is [`GitHub v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2). Steam users can also subscribe to the [`游戏大厅 v0.5.2`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) Workshop item. Fully restart the game after installing or updating the client.
+The stable download is [`GitHub v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3). Steam users can also subscribe to the [`游戏大厅 v0.5.3`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) Workshop item. Fully restart the game after installing or updating the client.
+
+## v0.5.3 Continue-Channel Split and Chat HUD
+
+- Multiplayer saves now remember their origin: saves created over plain LAN are no longer auto-published to the public lobby on resume; lobby-origin saves keep the existing auto-restore behavior.
+- When resuming a LAN-origin save, the host taps "Resume Code" on the waiting page and shares the per-character single `STS2LANRESUME:` code with each teammate; teammates paste it on the manual LAN/IP join page to reclaim their own slots. Do not swap codes, and pasting multiple codes at once is rejected.
+- Abandoning a multiplayer save now backs it up to `user://sts2_lan_connect/save-backups/` first, and the deletion is refused if the backup fails. Also fixed LAN saves being renamed `.corrupt` when BaseLib is installed.
+- Fixed Android's Join Friend screen auto-dialing a debug connection and blocking until the timeout.
+- In-run chat is now a flat translucent HUD: single-line rich-text messages, stable per-player name colors, auto-appear on new messages, and the view stays pinned to the latest message.
+- v0.5.3 is client-only and interoperates with lobby-service 0.5.1/0.5.2/0.5.3 and v0.5.1+ clients. Supported game loading targets are `0.107.1`, `0.109.0`, and `0.109.1`.
 
 ## v0.5.2 One-Shot References and Native Previews
 

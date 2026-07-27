@@ -4,27 +4,40 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- 修复安装 BaseLib（及依赖它的角色/观战 MOD）后多人存档必现损坏的问题：MOD 加载顺序把本 MOD 排在 BaseLib 之前时，原有的 BaseLib 存档守卫从未生效，BaseLib 用 Steam 身份校验 LAN 存档失败后会把 `current_run_mp.save` 改名为 `.corrupt`。守卫现在会在 BaseLib 程序集加载时自动补挂（issue #40）。
-- 新增游戏侧兜底防护：`RunSaveManager.RenameBrokenMultiplayerRunSave` 被拦截，只要存档能用任一 LAN 身份正常 canonicalize 就拒绝改名毁档，防止任何探测路径误毁有效的多人存档。
-- 修复安卓（无 Steam 平台）打开“加入好友”页面时，游戏本体自动向 `127.0.0.1:33771` 发起调试直连、必须等满 ENet 超时报错才能操作的问题；现在仅在显式传入 `fastmp` 命令行参数时才保留该开发者行为（issue #40）。
-- 存档完整性与加入页守卫补丁不再因检测到 RMP MOD 而被跳过。
-- 修复存档诊断日志里 `mpSaveUpdatedAt` 因 `user://` 虚拟路径始终显示 `<missing>` 的问题，并让诊断不再触碰被 BaseLib 补丁过的 `HasMultiplayerRunSave` getter。
-
 ## [0.5.3] - 2026-07-27
 
-lobby-service 单独正式版，标签为 [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)。客户端保持 `0.5.2` 不变，聊天与加入协议完全兼容。发布说明见 [`docs/RELEASE_NOTES_V0.5.3_ZH.md`](./docs/RELEASE_NOTES_V0.5.3_ZH.md)。
+服务端与客户端同步正式版，标签为 [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)：lobby-service 发布说明见 [`docs/RELEASE_NOTES_V0.5.3_ZH.md`](./docs/RELEASE_NOTES_V0.5.3_ZH.md)，客户端 `0.5.3` 发布说明见 [`docs/RELEASE_NOTES_V0.5.3_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.3_CLIENT_ZH.md)。聊天与加入线协议不变，客户端与服务端各历史版本可交叉互通。
 
 ### Added
 
-- 大厅敏感词过滤：词库快照自 [konsheng/Sensitive-lexicon](https://github.com/konsheng/Sensitive-lexicon)（MIT，49,172 词随包分发）。聊天消息命中时等量 `*` 打码（大厅与房间，广播/历史统一打码版）；房间名、玩家昵称、续局槽位名、MOD 预检名等名称类字段命中时拒绝（`400` +「包含敏感词内容，请修改后重试」）。匹配带归一化（全半角/大小写/符号剔除/重复压缩）与间隙感知 ASCII 词边界，防插空格/符号绕过且不误伤 `have`/`standard` 等正常英文。
-- 管理面板新增「敏感词过滤」开关（默认开，热切换并持久化）与状态展示（词数/打码数/拒绝数）；词库加载失败 fail-open 不阻断启动。
-- 新环境变量 `SENSITIVE_FILTER_ENABLED`、`SENSITIVE_LEXICON_DIR`（仅首次启动种子值）。
+- （服务端）大厅敏感词过滤：词库快照自 [konsheng/Sensitive-lexicon](https://github.com/konsheng/Sensitive-lexicon)（MIT，49,172 词随包分发）。聊天消息命中时等量 `*` 打码（大厅与房间，广播/历史统一打码版）；房间名、玩家昵称、续局槽位名、MOD 预检名等名称类字段命中时拒绝（`400` +「包含敏感词内容，请修改后重试」）。匹配带归一化（全半角/大小写/符号剔除/重复压缩）与间隙感知 ASCII 词边界，防插空格/符号绕过且不误伤 `have`/`standard` 等正常英文。
+- （服务端）管理面板新增「敏感词过滤」开关（默认开，热切换并持久化）与状态展示（词数/打码数/拒绝数）；词库加载失败 fail-open 不阻断启动。
+- （服务端）新环境变量 `SENSITIVE_FILTER_ENABLED`、`SENSITIVE_LEXICON_DIR`（仅首次启动种子值）。
+- （客户端）LAN 与大厅续局通道拆分（issue #40）：多人存档本地绑定新增持久化 `HostChannel`（`lan` / `lobby`）。纯 LAN 创建的存档续局时不再自动发布到公共大厅（日志 `decision=skip_lan_origin`），大厅创建的存档保持自动恢复房间行为；缺失/空值/未知通道一律按 `lobby` 处理，旧存档行为不变。
+- （客户端）LAN 续局身份码：房主在续局等待页点击「续局身份码」，把与角色/玩家名一一对应的单条 `STS2LANRESUME:` 码发给队友，队友在手动 LAN/IP 加入页粘贴即可回到自己的槽位；一次粘贴多条会被拒绝。新游戏与普通直连使用安装级 LAN 身份，超时以同一身份重试一次。
+- （客户端）「永久放弃多人存档」前自动把 `current_run_mp.save` 备份到 `user://sts2_lan_connect/save-backups/`，备份失败则拒绝删除，并同步清理对应房间绑定。
+- （客户端）局内聊天 HUD 化改造：扁平半透明外壳与细控制条、单行富文本消息、按参与者稳定配色、44px 触达目标、指针模式自适应（触屏保留气泡入口与发送按钮）、收到新消息自动浮现。
+
+### Changed
+
+- （客户端）续局通道判断前移到大厅端点预检之前，LAN 存档续局不再发起 `POST /rooms`、不建中继/控制通道；诊断日志新增 `bindingHostChannel` / `effectiveHostChannel` / 续局 `decision`。
+- （客户端）进入大厅时剪贴板含 `STS2LANRESUME:` 码会显示使用指引而非静默忽略。
 
 ### Fixed
 
-- Dockerfile 补充打包 `lexicon/`（此前 Docker 镜像缺词库会 fail-open 不过滤）。
+- （服务端）Dockerfile 补充打包 `lexicon/`（此前 Docker 镜像缺词库会 fail-open 不过滤）。
+- （客户端）修复安装 BaseLib（及依赖它的角色/观战 MOD）后多人存档必现损坏的问题：MOD 加载顺序把本 MOD 排在 BaseLib 之前时，原有的 BaseLib 存档守卫从未生效，BaseLib 用 Steam 身份校验 LAN 存档失败后会把 `current_run_mp.save` 改名为 `.corrupt`。守卫现在会在 BaseLib 程序集加载时自动补挂（issue #40）。
+- （客户端）新增游戏侧兜底防护：`RunSaveManager.RenameBrokenMultiplayerRunSave` 被拦截，只要存档能用任一 LAN 身份正常 canonicalize 就拒绝改名毁档，防止任何探测路径误毁有效的多人存档。
+- （客户端）修复安卓（无 Steam 平台）打开“加入好友”页面时，游戏本体自动向 `127.0.0.1:33771` 发起调试直连、必须等满 ENet 超时报错才能操作的问题；现在仅在显式传入 `fastmp` 命令行参数时才保留该开发者行为（issue #40）。
+- （客户端）修复 LAN safe load 误把大厅存档绑定迁移为 `lan` 通道，导致大厅续局不再发布房间、一键重开失效的问题。
+- （客户端）修复局内聊天打开/切频道/收消息时视图停在最早消息、不贴底的问题，「N 条新消息」按钮恢复工作；恢复受邀频道聊天与表情选择器；回车发送优先于竞争输入钩子；发送失败态触屏可见可点。
+- （客户端）存档完整性与加入页守卫补丁不再因检测到 RMP MOD 而被跳过。
+- （客户端）修复存档诊断日志里 `mpSaveUpdatedAt` 因 `user://` 虚拟路径始终显示 `<missing>` 的问题，并让诊断不再触碰被 BaseLib 补丁过的 `HasMultiplayerRunSave` getter。
+
+### Security and Compatibility
+
+- 客户端 `0.5.3` 与服务端 `0.5.1` / `0.5.2` / `0.5.3` 均兼容；`HostChannel` 仅存于客户端本地配置，不改变服务端 API、中继/控制/心跳协议；聊天与加入线格式不变，与 v0.5.1+ 客户端互通不受影响。
+- 客户端以游戏 `0.107.1`、`0.109.0`、`0.109.1` 为加载兼容目标；`0.108.0` 不在适配范围内。
 
 ## [0.5.2] - 2026-07-22
 
@@ -125,6 +138,7 @@ lobby-service 单独正式版，标签为 [`v0.5.3`](https://github.com/emptylow
 - 移除 lobby-service 对 `SERVER_REGISTRY_*` 的运行时依赖。
 - 完善客户端服务器选择、键盘/手柄导航、邀请快捷键和无障碍软桥接。
 
+[0.5.3]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3
 [0.5.2]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2
 [0.5.2-rc.1]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2-rc.1
 [0.5.1]: https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1

@@ -127,6 +127,7 @@ public sealed class LanConnectInstallerContractTests
             "sts2 installer contract " + Guid.NewGuid().ToString("N"));
         private readonly string _repositoryRoot = FindRepositoryRoot();
         private readonly string _fakeTool;
+        private readonly string _fakeBin;
 
         internal Fixture()
         {
@@ -153,6 +154,15 @@ public sealed class LanConnectInstallerContractTests
                 "#!/bin/sh\nprintf called > \"$STS2_TEST_TOOL_MARKER\"\nexit 99\n");
             File.SetUnixFileMode(
                 _fakeTool,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            // Shadow pgrep so the installer's "game still running" guard never matches the
+            // real game process on the developer machine; 1 means "no processes matched".
+            _fakeBin = Path.Combine(_root, "fake-bin");
+            Directory.CreateDirectory(_fakeBin);
+            string fakePgrep = Path.Combine(_fakeBin, "pgrep");
+            File.WriteAllText(fakePgrep, "#!/bin/sh\nexit 1\n");
+            File.SetUnixFileMode(
+                fakePgrep,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
 
@@ -217,6 +227,7 @@ public sealed class LanConnectInstallerContractTests
             }
             startInfo.Environment["HOME"] = Path.Combine(_root, "Home With Spaces");
             startInfo.Environment["TMPDIR"] = Path.Combine(_root, "tmp");
+            startInfo.Environment["PATH"] = _fakeBin + ":/usr/bin:/bin:/usr/sbin:/sbin";
             startInfo.Environment["STS2_APP_PATH"] = AppPath;
             startInfo.Environment["STS2_USERDATA_DIR"] = UserDataDirectory;
             startInfo.Environment["DOTNET_BIN"] = _fakeTool;
