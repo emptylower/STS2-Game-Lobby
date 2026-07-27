@@ -7,6 +7,7 @@ import {
   canonicalizeRoomContent,
   canonicalizeChatContent,
   canonicalizeServerContent,
+  ChatProtocolError,
   type CanonicalChatMessage,
   type ChatContent,
   deterministicContentJson,
@@ -1431,3 +1432,56 @@ function withPollutedObjectPrototype(
     }
   }
 }
+
+test("canonicalizeChatContent applies maskText to text segments only", () => {
+  const content = canonicalizeChatContent(
+    {
+      formatVersion: 1,
+      segments: [
+        { kind: "text", text: "你是白痴" },
+        { kind: "emoji", emojiId: "smile" },
+        { kind: "text", text: "吗" },
+      ],
+    },
+    { richContentVersion: 1, emojiSetVersion: 1, itemRefVersion: 1, combatRefVersion: 0 },
+    (text) => ({ text: text.replaceAll("白痴", "**"), masked: text.includes("白痴") }),
+  );
+  assert.deepEqual(content.segments, [
+    { kind: "text", text: "你是**" },
+    { kind: "emoji", emojiId: "smile" },
+    { kind: "text", text: "吗" },
+  ]);
+});
+
+test("canonicalizeChatContent without maskText leaves text untouched", () => {
+  const content = canonicalizeChatContent(
+    { formatVersion: 1, segments: [{ kind: "text", text: "白痴" }] },
+    { richContentVersion: 1, emojiSetVersion: 1, itemRefVersion: 1, combatRefVersion: 0 },
+  );
+  assert.deepEqual(content.segments, [{ kind: "text", text: "白痴" }]);
+});
+
+test("maskText runs after structural validation so invalid content still rejects", () => {
+  assert.throws(
+    () => canonicalizeChatContent(
+      { formatVersion: 2, segments: [{ kind: "text", text: "hi" }] },
+      { richContentVersion: 1, emojiSetVersion: 1, itemRefVersion: 1, combatRefVersion: 0 },
+      (text) => ({ text, masked: false }),
+    ),
+    (error: unknown) => error instanceof ChatProtocolError && error.code === "invalid_content",
+  );
+});
+
+test("canonicalizeRoomContent applies maskText with room context", () => {
+  const content = canonicalizeRoomContent(
+    { formatVersion: 1, segments: [{ kind: "text", text: "你是白痴" }] },
+    { richContentVersion: 1, emojiSetVersion: 1, itemRefVersion: 1, combatRefVersion: 1 },
+    {
+      envelopeRoomSessionId: "session-1",
+      activeRoomSessionId: "session-1",
+      peerPlayerNetIds: new Set<string>(),
+    },
+    (text) => ({ text: text.replaceAll("白痴", "**"), masked: text.includes("白痴") }),
+  );
+  assert.deepEqual(content.segments, [{ kind: "text", text: "你是**" }]);
+});
