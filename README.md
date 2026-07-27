@@ -4,7 +4,7 @@
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 ![Client](https://img.shields.io/badge/client-v0.5.2-green)
-![Service](https://img.shields.io/badge/service-v0.5.2-green)
+![Service](https://img.shields.io/badge/service-v0.5.3-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
 **[中文](#中文) · [English](#english)**
@@ -17,7 +17,7 @@
 
 ## 中文
 
-**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前正式客户端与大厅服务均为 **v0.5.2**，主要服务对象是：
+**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前正式客户端为 **v0.5.2**、大厅服务为 **v0.5.3**，主要服务对象是：
 
 - 想自行部署大厅服务的服主 / 运维
 - 想构建或分发客户端 MOD 的维护者
@@ -53,7 +53,7 @@
 ### 当前版本
 
 - 客户端 MOD：[`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)
-- 大厅服务：`0.5.2`
+- 大厅服务：`0.5.3`
 - GitHub 稳定版：[`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)
 - Steam 创意工坊：[`v0.5.2 游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 
@@ -195,7 +195,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 ## English
 
-**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current stable client and lobby service are both **v0.5.2**.
+**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current stable client is **v0.5.2** and the lobby service is **v0.5.3**.
 
 ### What is in this repository
 
