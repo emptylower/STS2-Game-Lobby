@@ -56,9 +56,10 @@ v0.5.3 服务端与客户端 `0.5.3` 同步发布于同一 GitHub Release。聊�
 
 ## 正式资产
 
+- `sts2_lan_connect-release.zip`：客户端 0.5.3（Windows / macOS / Android），LAN 与大厅续局通道拆分、存档保护与聊天 HUD，详见 [`RELEASE_NOTES_V0.5.3_CLIENT_ZH.md`](./RELEASE_NOTES_V0.5.3_CLIENT_ZH.md)。
 - `sts2_lobby_service.zip`：Linux systemd / Docker 服务端源码、词库与安装材料。
-- 客户端仍为 [`v0.5.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2)，本 release 不含客户端资产。
 
+- 客户端 ZIP SHA-256：`b24f48bfd7349f91fef89323e1f63c773baace30736d06efa126d9f342f5462d`
 - 服务端 ZIP SHA-256：`ccb4c781db7367063b0a0db303e666fb2f7cdb597b15c119bc0fb74927baa4a4`
 
 ## 验证结果
