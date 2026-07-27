@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import type { ConnectionStrategy } from "./store.js";
 import type { ChatFeatureGovernance } from "./chat/feature-resolver.js";
 
@@ -71,6 +73,10 @@ export interface LobbyServiceConfig {
   serverAdminSessionSecret?: string;
   serverAdminSessionTtlMs: number;
   serverAdminStateFile: string;
+  serverUpdateEnabled: boolean;
+  serverUpdateDataDir: string;
+  serverUpdateCheckIntervalMs: number;
+  serverUpdateReleaseApiUrl?: string;
   peerPublicListingEnabledDefault: boolean;
   peer: {
     enabled: boolean;
@@ -79,6 +85,8 @@ export interface LobbyServiceConfig {
     stateDir: string;
     displayNameOverride: string;
   };
+  sensitiveFilterEnabled: boolean;
+  sensitiveLexiconDir: string;
   chat: ChatConfig;
 }
 
@@ -89,6 +97,7 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
   const createRoomToken = optionalEnv(source.CREATE_ROOM_TOKEN) ?? optionalEnv(source.LOBBY_ACCESS_TOKEN);
   const serverAdminPasswordHash = optionalEnv(source.SERVER_ADMIN_PASSWORD_HASH);
   const serverAdminSessionSecret = optionalEnv(source.SERVER_ADMIN_SESSION_SECRET);
+  const serverUpdateReleaseApiUrl = optionalEnv(source.SERVER_UPDATE_RELEASES_API_URL);
 
   return {
     host,
@@ -123,6 +132,10 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
     ...(serverAdminSessionSecret == null ? {} : { serverAdminSessionSecret }),
     serverAdminSessionTtlMs: parseLegacyInteger(source, "SERVER_ADMIN_SESSION_TTL_HOURS", 168) * 60 * 60 * 1000,
     serverAdminStateFile: source.SERVER_ADMIN_STATE_FILE ?? `${process.cwd()}/data/server-admin.json`,
+    serverUpdateEnabled: parseBoolean(source, "SERVER_UPDATE_ENABLED", true),
+    serverUpdateDataDir: source.SERVER_UPDATE_DATA_DIR ?? `${process.cwd()}/data/service-update`,
+    serverUpdateCheckIntervalMs: parseInteger(source, "SERVER_UPDATE_CHECK_INTERVAL_MINUTES", 360, 15, 1440) * 60 * 1000,
+    ...(serverUpdateReleaseApiUrl == null ? {} : { serverUpdateReleaseApiUrl }),
     peerPublicListingEnabledDefault: parseLegacyBoolean(source.PEER_PUBLIC_LISTING_ENABLED, true),
     peer: {
       enabled: source.PEER_NETWORK_ENABLED !== "false",
@@ -131,6 +144,8 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
       stateDir: source.PEER_STATE_DIR ?? "./data/peer",
       displayNameOverride: (source.PEER_DISPLAY_NAME ?? "").trim(),
     },
+    sensitiveFilterEnabled: parseBoolean(source, "SENSITIVE_FILTER_ENABLED", true),
+    sensitiveLexiconDir: source.SENSITIVE_LEXICON_DIR ?? defaultLexiconDir(),
     chat: loadChatConfig(source),
   };
 }
@@ -283,4 +298,12 @@ function parseCommaSeparatedValues(value: string | undefined): string[] {
 function optionalEnv(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+/**
+ * 默认词库目录：包根下的 lexicon/（dist/config.js 的上一级即包根）。
+ * 与 readLobbyServiceVersion 读取 ../package.json 同款相对定位。
+ */
+function defaultLexiconDir(): string {
+  return fileURLToPath(new URL("../lexicon/", import.meta.url));
 }

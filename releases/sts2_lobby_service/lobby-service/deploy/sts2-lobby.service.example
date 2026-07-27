@@ -36,6 +36,10 @@ Environment="SERVER_CHAT_SLOW_CLIENT_BYTES=262144"
 Environment="MOD_SYNC_ENABLED=true"
 Environment="MOD_SYNC_MAX_DESCRIPTORS=64"
 Environment="MOD_SYNC_MAX_PAYLOAD_BYTES=65536"
+Environment="SERVER_UPDATE_ENABLED=true"
+Environment="SERVER_UPDATE_DATA_DIR=/opt/sts2-lobby/lobby-service/data/service-update"
+Environment="SERVER_UPDATE_CHECK_INTERVAL_MINUTES=360"
+Environment="SERVER_UPDATE_DEPLOYMENT_MODE=systemd"
 EnvironmentFile=/opt/sts2-lobby/lobby-service/.env
 ExecStart=/usr/bin/npm start
 Restart=always

@@ -256,19 +256,24 @@ function assertNoDisallowedChars(text: string): void {
   }
 }
 
+/** 打码函数：输入 text segment 原文，返回打码结果。由 ModerationService 注入。 */
+export type ChatTextMaskFn = (text: string) => { text: string; masked: boolean };
+
 export function canonicalizeChatContent(
   input: unknown,
   features: EnabledRichFeatures,
+  maskText?: ChatTextMaskFn,
 ): ChatContent {
-  return canonicalizeContent(input, features, false);
+  return canonicalizeContent(input, features, false, undefined, maskText);
 }
 
 export function canonicalizeRoomContent(
   input: unknown,
   features: EnabledRichFeatures,
   context: RoomContentContext,
+  maskText?: ChatTextMaskFn,
 ): ChatContent {
-  return canonicalizeContent(input, features, false, context);
+  return canonicalizeContent(input, features, false, context, maskText);
 }
 
 function canonicalizeContent(
@@ -276,6 +281,7 @@ function canonicalizeContent(
   features: EnabledRichFeatures,
   legacyRichKindPrecedence: boolean,
   roomContext?: RoomContentContext,
+  maskText?: ChatTextMaskFn,
 ): ChatContent {
   if (!isPlainObject(input)) {
     throw new ChatProtocolError("invalid_content", "content must be an object");
@@ -519,6 +525,16 @@ function canonicalizeContent(
   }
   if (requiresCombatRef && (features.richContentVersion !== 1 || features.combatRefVersion !== 1)) {
     throw new ChatProtocolError("feature_disabled", "combat reference segments are not enabled");
+  }
+
+  // 结构校验与预算检查全部通过后才打码。打码为等量替换，不改变长度，
+  // 因此前面的 300 字符预算与后续 wire 预算依然成立。
+  if (maskText !== undefined) {
+    for (const segment of canonicalSegments) {
+      if (segment.kind === "text") {
+        segment.text = maskText(segment.text).text;
+      }
+    }
   }
 
   return {

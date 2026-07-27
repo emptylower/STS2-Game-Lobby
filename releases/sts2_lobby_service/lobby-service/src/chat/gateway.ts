@@ -19,6 +19,7 @@ import {
 } from "./feature-resolver.js";
 import { RateLimitError, SlidingWindowLimiter, TokenBucketLimiter } from "./rate-limiter.js";
 import type { ReservedChatTicket } from "./ticket-store.js";
+import type { ModerationService } from "../moderation/moderation-service.js";
 
 export interface ServerChatGatewayOptions {
   peerRegistry?: ChatPeerRegistry;
@@ -40,6 +41,7 @@ export interface ServerChatGatewayOptions {
   compiledFeatures?: ChatFeatureVersions;
   configuredFeatures?: ChatFeatureVersions;
   adminFeatures?: Partial<ChatFeatureVersions>;
+  moderation?: ModerationService;
 }
 
 export interface ServerChatGovernanceState {
@@ -90,6 +92,7 @@ export class ServerChatGateway {
   private readonly connections = new Map<string, ConnectionState>();
   private chatEnabled: boolean;
   private desiredChatEnabled: boolean;
+  private readonly moderation: ModerationService | null;
   private governanceRevision = 0;
   private events: Promise<void> = Promise.resolve();
   private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -100,6 +103,7 @@ export class ServerChatGateway {
     this.peerRegistry = options.peerRegistry ?? new ChatPeerRegistry();
     this.chatEnabled = options.chatEnabled ?? false;
     this.desiredChatEnabled = this.chatEnabled;
+    this.moderation = options.moderation ?? null;
     this.maxPayloadBytes = options.maxPayloadBytes ?? 8192;
     this.now = options.now ?? Date.now;
     this.randomUuid = options.randomUuid ?? randomUUID;
@@ -428,12 +432,13 @@ export class ServerChatGateway {
     let canonicalJson: string;
     try {
       const enabledFeatures = this.resolveFeatures(true);
+      const moderation = this.moderation;
       content = canonicalizeChatContent(envelope.content, {
         richContentVersion: enabledFeatures.richContentVersion,
         emojiSetVersion: enabledFeatures.emojiSetVersion,
         itemRefVersion: enabledFeatures.itemRefVersion,
         combatRefVersion: 0,
-      });
+      }, moderation === null ? undefined : (text) => moderation.maskChatText(text));
       canonicalJson = deterministicContentJson(content);
     } catch (error) {
       if (error instanceof ChatProtocolError) {

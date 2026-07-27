@@ -22,6 +22,7 @@ import {
   type LobbyModDescriptor,
 } from "./mod-sync/protocol.js";
 import { ModSyncValidationError, validateModInventory } from "./mod-sync/validator.js";
+import { ModerationService } from "./moderation/moderation-service.js";
 import { RoomRelayManager } from "./relay.js";
 import { cleanupExpiredRooms } from "./room-cleanup.js";
 import {
@@ -34,6 +35,7 @@ import {
 } from "./server-admin-auth.js";
 import { ServerAdminStateStore } from "./server-admin-state.js";
 import { renderServerAdminPage } from "./server-admin-ui.js";
+import { ServiceUpdateManager } from "./service-update.js";
 import {
   LobbyStore,
   LobbyStoreError,
@@ -107,7 +109,14 @@ const lobbyServiceVersion = readLobbyServiceVersion();
 
 type PeerRuntimeState = "disabled" | "unconfigured" | "private" | "joining" | "joined";
 
-class InputError extends Error {}
+class InputError extends Error {
+  readonly details?: Record<string, unknown> | undefined;
+
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message);
+    this.details = details;
+  }
+}
 
 type RateLimitBucket = {
   hits: number[];
@@ -231,6 +240,19 @@ export async function createLobbyService(
     publicListingEnabledDefault: env.peerPublicListingEnabledDefault,
     modSyncEnabledDefault: env.modSyncEnabled,
     chatFeaturesDefault: env.chat.features,
+    sensitiveFilterEnabledDefault: env.sensitiveFilterEnabled,
+  });
+  const moderation = ModerationService.create({
+    lexiconDir: env.sensitiveLexiconDir,
+    enabled: serverAdminStateStore.getState().sensitiveFilterEnabled,
+    log: (message) => console.error(message),
+  });
+  const serviceUpdateManager = new ServiceUpdateManager({
+    currentVersion: lobbyServiceVersion,
+    enabled: env.serverUpdateEnabled,
+    dataDir: env.serverUpdateDataDir,
+    checkIntervalMs: env.serverUpdateCheckIntervalMs,
+    ...(env.serverUpdateReleaseApiUrl == null ? {} : { releaseApiUrl: env.serverUpdateReleaseApiUrl }),
   });
   const initialChatGovernance = serverAdminStateStore.getState().chatFeatures;
   const createRoomBandwidthGuard = new CreateRoomBandwidthGuard();
@@ -262,6 +284,7 @@ export async function createLobbyService(
     connectionBurst: env.chat.connectionBurst,
     connectionRefillMs: env.chat.connectionRefillMs,
     ipMessagesPerMinute: env.chat.ipMessagesPerMinute,
+    moderation,
     ...dependencies.chatGatewayOptions,
   });
   const currentRoomChatFeatures = resolveEnabledFeatures({
@@ -277,6 +300,7 @@ export async function createLobbyService(
     adminFeatures: governanceToFeatureVersions(initialChatGovernance, "room"),
     roomV2Enabled: initialChatGovernance.roomChatV2Enabled,
     getRoomChatContext: (roomId) => store.getRoomChatContext(roomId),
+    moderation,
   });
   const reservedChatTicketsByUpgrade = new WeakMap<IncomingMessage, ReservedChatTicket>();
   let peerStore: PeerStore | null = null;
@@ -293,6 +317,13 @@ export async function createLobbyService(
       throw new Error("peer store is not initialized");
     }
     return peerStore;
+  }
+
+  function assertNameAllowedByModeration(value: string): void {
+    if (moderation.containsSensitiveName(value)) {
+      moderation.recordNameRejection();
+      throw new InputError("包含敏感词内容，请修改后重试", { reason: "sensitive_content" });
+    }
   }
 
   const app = express();
@@ -417,6 +448,8 @@ export async function createLobbyService(
     if (typeof body.playerNetId !== "string" || typeof body.playerName !== "string") {
       throw new InputError("playerNetId 与 playerName 必须为字符串。");
     }
+
+    assertNameAllowedByModeration(body.playerName);
 
     let issued: { ticket: string; expiresAt: string };
     try {
@@ -548,6 +581,17 @@ export async function createLobbyService(
         };
       }
 
+      assertNameAllowedByModeration(roomInput.roomName);
+      assertNameAllowedByModeration(roomInput.hostPlayerName);
+      for (const slot of roomInput.savedRun?.slots ?? []) {
+        if (slot.characterName !== undefined) {
+          assertNameAllowedByModeration(slot.characterName);
+        }
+        if (slot.playerName !== undefined) {
+          assertNameAllowedByModeration(slot.playerName);
+        }
+      }
+
       const room = store.createRoom(roomInput, requestIp(req));
       createdRoom = {
         roomId: room.roomId,
@@ -582,6 +626,9 @@ export async function createLobbyService(
       assertCreateJoinRateLimit(req, "join_room");
       cleanupExpiredRoomsNow();
       const body = req.body as Partial<JoinRoomInput> | undefined;
+      if (typeof body?.playerName === "string") {
+        assertNameAllowedByModeration(body.playerName);
+      }
       const response = store.joinRoom(req.params.id, {
         playerName: boundedString(body?.playerName, "playerName", MaxPlayerNameLength),
         password: optionalBoundedString(body?.password, "password", MaxPasswordLength),
@@ -620,6 +667,10 @@ export async function createLobbyService(
       ]);
       if (!body || Array.isArray(body) || Object.keys(body).some((key) => !allowedFields.has(key))) {
         throw new InputError("MOD 预检请求包含不支持的字段。");
+      }
+
+      if (typeof body.playerName === "string") {
+        assertNameAllowedByModeration(body.playerName);
       }
 
       const playerName = boundedString(body.playerName, "playerName", MaxPlayerNameLength);
@@ -802,6 +853,7 @@ export async function createLobbyService(
         bandwidthCapacityMbps?: number | null;
         announcements?: unknown;
         chatFeatures?: unknown;
+        sensitiveFilterEnabled?: boolean;
       } | undefined;
       const update: Parameters<ServerAdminStateStore["updateSettings"]>[0] = {};
       if (body && Object.hasOwn(body, "displayName")) {
@@ -832,16 +884,44 @@ export async function createLobbyService(
       if (body && Object.hasOwn(body, "chatFeatures")) {
         update.chatFeatures = parseChatFeaturesPatch(body.chatFeatures);
       }
+      if (body && Object.hasOwn(body, "sensitiveFilterEnabled")) {
+        if (typeof body.sensitiveFilterEnabled !== "boolean") {
+          throw new InputError("sensitiveFilterEnabled 必须为布尔值。");
+        }
+        update.sensitiveFilterEnabled = body.sensitiveFilterEnabled;
+      }
       const settings = await enqueueServerAdminMutation(async () => {
         await dependencies.beforeServerAdminMutation?.("settings");
         const committed = serverAdminStateStore.updateSettings(update);
         await applyChatGovernance(committed.chatFeatures);
+        moderation.setEnabled(committed.sensitiveFilterEnabled);
         return committed;
       });
       res.json(buildServerAdminSettingsResponse(settings));
     })().catch((error) => {
       next(error);
     });
+  });
+
+  app.post("/server-admin/update/check", (req, res, next) => {
+    (async () => {
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
+      res.json(await serviceUpdateManager.check());
+    })().catch(next);
+  });
+
+  app.post("/server-admin/update/install", (req, res, next) => {
+    try {
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
+      void serviceUpdateManager.install().catch((error) => {
+        console.error("[service-update] installation failed", error);
+      });
+      res.status(202).json(serviceUpdateManager.getStatus());
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.post("/server-admin/chat/clear-history", (req, res, next) => {
@@ -882,6 +962,7 @@ export async function createLobbyService(
       res.status(400).json({
         code: "invalid_request",
         message: error.message,
+        ...(error.details === undefined ? {} : { details: error.details }),
       });
       return;
     }
@@ -1321,6 +1402,7 @@ export async function createLobbyService(
 
       relayManager.start();
       await startPeerRuntime();
+      serviceUpdateManager.start();
 
       started = true;
       return boundAddress;
@@ -1352,6 +1434,7 @@ export async function createLobbyService(
     }
 
     peerStore = null;
+    serviceUpdateManager.stop();
 
     try {
       relayManager.close();
@@ -1402,6 +1485,7 @@ export async function createLobbyService(
     closed = true;
     started = false;
     boundAddress = null;
+    serviceUpdateManager.stop();
 
     if (cleanupInterval) {
       clearInterval(cleanupInterval);
@@ -1802,6 +1886,8 @@ export async function createLobbyService(
       serverFeatures: resolveAdminFeatures(settings.chatFeatures, "server"),
       roomFeatures: resolveAdminFeatures(settings.chatFeatures, "room"),
       metrics: buildChatMetrics(),
+      sensitiveFilter: moderation.stats(),
+      update: serviceUpdateManager.getStatus(),
     };
   }
 

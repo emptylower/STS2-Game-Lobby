@@ -40,6 +40,10 @@ SERVER_ADMIN_PASSWORD_HASH="${STS2_SERVER_ADMIN_PASSWORD_HASH:-}"
 SERVER_ADMIN_SESSION_SECRET="${STS2_SERVER_ADMIN_SESSION_SECRET:-}"
 SERVER_ADMIN_SESSION_TTL_HOURS="${STS2_SERVER_ADMIN_SESSION_TTL_HOURS:-168}"
 SERVER_ADMIN_STATE_FILE="${STS2_SERVER_ADMIN_STATE_FILE:-./data/server-admin.json}"
+SERVER_UPDATE_ENABLED="${STS2_SERVER_UPDATE_ENABLED:-true}"
+SERVER_UPDATE_DATA_DIR="${STS2_SERVER_UPDATE_DATA_DIR:-./data/service-update}"
+SERVER_UPDATE_CHECK_INTERVAL_MINUTES="${STS2_SERVER_UPDATE_CHECK_INTERVAL_MINUTES:-360}"
+SERVER_UPDATE_RELEASES_API_URL="${STS2_SERVER_UPDATE_RELEASES_API_URL:-}"
 # Decentralized peer network (v0.4.0+). PEER_SELF_ADDRESS is derived from
 # --relay-public-host below when not explicitly provided.
 PEER_NETWORK_ENABLED="${STS2_PEER_NETWORK_ENABLED:-true}"
@@ -238,6 +242,16 @@ done
 [[ -n "$NPM_BIN" && -x "$NPM_BIN" ]] || die "npm was not found. Install Node.js 20+ first."
 [[ -f "$SOURCE_DIR/package.json" ]] || die "Source directory '$SOURCE_DIR' does not contain package.json"
 
+if ! command -v unzip >/dev/null 2>&1; then
+  if [[ $EUID -eq 0 ]] && command -v apt-get >/dev/null 2>&1; then
+    log "Installing unzip for validated one-click service updates"
+    apt-get update
+    apt-get install -y --no-install-recommends unzip
+  else
+    log "WARNING: unzip was not found; the admin panel update preflight will remain blocked until it is installed."
+  fi
+fi
+
 node_major="$("$NODE_BIN" -p 'process.versions.node.split(".")[0]')"
 if [[ "$node_major" -lt 20 ]]; then
   die "Node.js 20+ is required. Current version: $("$NODE_BIN" -v)"
@@ -304,6 +318,11 @@ SERVER_ADMIN_PASSWORD_HASH=$SERVER_ADMIN_PASSWORD_HASH
 SERVER_ADMIN_SESSION_SECRET=$SERVER_ADMIN_SESSION_SECRET
 SERVER_ADMIN_SESSION_TTL_HOURS=$SERVER_ADMIN_SESSION_TTL_HOURS
 SERVER_ADMIN_STATE_FILE=$SERVER_ADMIN_STATE_FILE
+SERVER_UPDATE_ENABLED=$SERVER_UPDATE_ENABLED
+SERVER_UPDATE_DATA_DIR=$SERVER_UPDATE_DATA_DIR
+SERVER_UPDATE_CHECK_INTERVAL_MINUTES=$SERVER_UPDATE_CHECK_INTERVAL_MINUTES
+SERVER_UPDATE_RELEASES_API_URL=$SERVER_UPDATE_RELEASES_API_URL
+SERVER_UPDATE_DEPLOYMENT_MODE=systemd
 PEER_NETWORK_ENABLED=$PEER_NETWORK_ENABLED
 PEER_SELF_ADDRESS=$PEER_SELF_ADDRESS
 PEER_CF_DISCOVERY_BASE_URL=$PEER_CF_DISCOVERY_BASE_URL
