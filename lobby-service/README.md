@@ -12,9 +12,9 @@
 
 # STS2 Lobby Service
 
-> 本文档对应 **v0.5.2**。本版在保留既有节点网络、聊天与 MOD 预检协议的基础上，新增服务端自动更新与响应式运维 Dashboard。
+> 本文档对应 **v0.5.3**。本版在保留既有节点网络、聊天与 MOD 预检协议的基础上，新增大厅敏感词过滤（49,172 词随包分发，聊天打码 + 名称拒绝，管理面板可控），并包含 0.5.3 预发布周期引入的服务端自动更新与响应式运维 Dashboard。
 
-正式服务端源码包见 [GitHub v0.5.2 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2) 中的 `sts2_lobby_service.zip`。
+正式服务端源码包见 [GitHub v0.5.3 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3) 中的 `sts2_lobby_service.zip`。
 
 ## 文档定位
 
@@ -23,7 +23,7 @@
 它主要回答：
 
 - 该服务负责什么、**不**负责什么
-- 当前 v0.5.2 推荐的部署路径是什么
+- 当前 v0.5.3 推荐的部署路径是什么
 - 首次部署完成后先检查哪些项目
 - 如何配置节点网络、私有访问、管理面板与客户端默认大厅
 - 需要深入查阅时，环境变量和 API 在哪里看
@@ -475,6 +475,15 @@ MOD 同步只允许客户端在明确确认后调用 Steam Workshop 订阅，以
 - `current` 是活动更新槽位，`rollback` 保留上一槽位。Docker 使用 `/app/data/service-update`；systemd 默认使用服务目录下的 `data/service-update`。
 - 更新完成后进程以专用退出码结束，由 Docker `restart: unless-stopped` 或 systemd `Restart=always` 自动拉起。重启会清空内存中的管理会话和当前房间连接，需要重新登录面板。
 
+### 敏感词过滤 —— v0.5.3 新增
+
+| 变量 | 说明 |
+|------|------|
+| `SENSITIVE_FILTER_ENABLED` | 仅首次启动种子值（默认 `true`）；之后以管理面板「敏感词过滤」开关为准，保存即时生效并持久化 |
+| `SENSITIVE_LEXICON_DIR` | 词库目录，默认包根 `lexicon/`（49,172 词随包分发，含 `SOURCES.md` 来源说明） |
+
+说明：聊天消息命中时等量 `*` 打码（大厅频道与房间聊天，广播/历史统一打码版）；房间名、玩家昵称、续局槽位名、MOD 预检名等名称类字段命中时拒绝并返回 `400`。词库缺失、为空或读取失败时服务 fail-open（不过滤但正常启动），面板显示「词库加载失败」，启动日志含 `[moderation]` 行。打码/拒绝统计自进程启动起累计，重启清零。
+
 ### 节点网络（PEER_*）—— v0.4.0 新增
 
 | 变量 | 说明 |
@@ -562,9 +571,9 @@ MOD 同步只允许客户端在明确确认后调用 Steam Workshop 订阅，以
 
 # STS2 Lobby Service
 
-> Targets **v0.5.2**. It retains the existing peer, chat, and MOD-preflight protocols while adding service self-update and a responsive operations dashboard.
+> Targets **v0.5.3**. It retains the existing peer, chat, and MOD-preflight protocols while adding lobby sensitive-word filtering (49,172 words bundled, chat masking + name rejection, controllable from the admin dashboard), plus the service self-update and responsive operations dashboard introduced during the 0.5.3 prerelease cycle.
 
-The official service source package is `sts2_lobby_service.zip` in the [GitHub v0.5.2 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2).
+The official service source package is `sts2_lobby_service.zip` in the [GitHub v0.5.3 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3).
 
 This README is the **operator/admin guide** for `lobby-service`.
 
@@ -642,4 +651,4 @@ When `LOBBY_ACCESS_TOKEN` is unset, `CREATE_ROOM_TOKEN` also authorizes protecte
 
 - Environment variables: see [`../deploy/lobby-service.env.example`](../deploy/lobby-service.env.example)
 - Current deployment guide (Chinese): [`../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md)
-- Historical compatibility notes are intentionally demoted and not part of the v0.5.2 path
+- Historical compatibility notes are intentionally demoted and not part of the v0.5.3 path
