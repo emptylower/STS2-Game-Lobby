@@ -36,6 +36,12 @@ const expectedFiles = [
   "lobby-service/deploy/docker-compose.lobby-service.yml",
   "lobby-service/deploy/lobby-service.docker.env.example",
   "lobby-service/deploy/sts2-lobby.service.example",
+  "lobby-service/lexicon/SOURCES.md",
+  "lobby-service/lexicon/ads.txt",
+  "lobby-service/lexicon/misc.txt",
+  "lobby-service/lexicon/politics.txt",
+  "lobby-service/lexicon/porn.txt",
+  "lobby-service/lexicon/violence.txt",
   "lobby-service/package-lock.json",
   "lobby-service/package.json",
   "lobby-service/scripts/generate-server-admin-password-hash.mjs",
@@ -58,6 +64,11 @@ const expectedFiles = [
   "lobby-service/src/mod-sync/diff.ts",
   "lobby-service/src/mod-sync/protocol.ts",
   "lobby-service/src/mod-sync/validator.ts",
+  "lobby-service/src/moderation/dfa.ts",
+  "lobby-service/src/moderation/filter.ts",
+  "lobby-service/src/moderation/lexicon-loader.ts",
+  "lobby-service/src/moderation/moderation-service.ts",
+  "lobby-service/src/moderation/normalize.ts",
   "lobby-service/src/peer/auto-announce.ts",
   "lobby-service/src/peer/bootstrap.ts",
   "lobby-service/src/peer/gossip.ts",
@@ -228,9 +239,9 @@ test("service package uses exact production allowlist and deterministic temporar
       version?: unknown;
       packages?: Record<string, { version?: unknown }>;
     };
-    assert.equal(packageJson.version, "0.5.2");
-    assert.equal(packageLock.version, "0.5.2");
-    assert.equal(packageLock.packages?.[""]?.version, "0.5.2");
+    assert.equal(packageJson.version, "0.5.3");
+    assert.equal(packageLock.version, "0.5.3");
+    assert.equal(packageLock.packages?.[""]?.version, "0.5.3");
 
     for (const packagePath of expectedFiles) {
       assert.deepEqual(
@@ -283,7 +294,7 @@ test("service package rejects malformed protected traversal and symlink outputs"
   }
 });
 
-test("release sources pin service and client v0.5.2 while preserving older fixtures", () => {
+test("release sources pin service v0.5.3 and client v0.5.2 while preserving older fixtures", () => {
   const servicePackage = JSON.parse(readFileSync(join(repositoryRoot, "lobby-service/package.json"), "utf8")) as {
     version?: unknown;
   };
@@ -295,9 +306,9 @@ test("release sources pin service and client v0.5.2 while preserving older fixtu
     version?: unknown;
   };
   const clientProject = readFileSync(join(repositoryRoot, "sts2-lan-connect/sts2_lan_connect.csproj"), "utf8");
-  assert.equal(servicePackage.version, "0.5.2");
-  assert.equal(serviceLock.version, "0.5.2");
-  assert.equal(serviceLock.packages?.[""]?.version, "0.5.2");
+  assert.equal(servicePackage.version, "0.5.3");
+  assert.equal(serviceLock.version, "0.5.3");
+  assert.equal(serviceLock.packages?.[""]?.version, "0.5.3");
   assert.equal(clientManifest.version, "0.5.2");
   assert.match(clientProject, /<Version>0\.5\.2<\/Version>/);
   assert.match(clientProject, /<AssemblyVersion>0\.5\.2\.0<\/AssemblyVersion>/);

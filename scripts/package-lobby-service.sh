@@ -79,6 +79,12 @@ lobby-service/deploy/.env.example
 lobby-service/deploy/docker-compose.lobby-service.yml
 lobby-service/deploy/lobby-service.docker.env.example
 lobby-service/deploy/sts2-lobby.service.example
+lobby-service/lexicon/SOURCES.md
+lobby-service/lexicon/ads.txt
+lobby-service/lexicon/misc.txt
+lobby-service/lexicon/politics.txt
+lobby-service/lexicon/porn.txt
+lobby-service/lexicon/violence.txt
 lobby-service/src/app.ts
 lobby-service/src/bandwidth-guard.ts
 lobby-service/src/client-ip.ts
@@ -87,6 +93,11 @@ lobby-service/src/join-guard.ts
 lobby-service/src/mod-sync/diff.ts
 lobby-service/src/mod-sync/protocol.ts
 lobby-service/src/mod-sync/validator.ts
+lobby-service/src/moderation/dfa.ts
+lobby-service/src/moderation/filter.ts
+lobby-service/src/moderation/lexicon-loader.ts
+lobby-service/src/moderation/moderation-service.ts
+lobby-service/src/moderation/normalize.ts
 lobby-service/src/relay.ts
 lobby-service/src/rolling-bandwidth.ts
 lobby-service/src/room-cleanup.ts
