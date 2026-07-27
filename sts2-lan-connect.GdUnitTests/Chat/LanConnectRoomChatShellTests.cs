@@ -198,6 +198,105 @@ public sealed class LanConnectRoomChatShellTests
     }
 
     [TestCase]
+    public async Task Hud_message_plate_hugs_a_small_history_well_below_the_old_390px_floor()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        AppendRoomMessages(fixture.State.Room, count: 4);
+        await fixture.Overlay.RefreshForTests();
+        await AwaitStableLayout(fixture.Runner);
+
+        PanelContainer messagesPlate = FindNode<PanelContainer>(fixture.Overlay, "ChatMessagesPlate");
+        ScrollContainer messagesScroll = FindNode<ScrollContainer>(
+            fixture.Overlay,
+            LanConnectConstants.ChatMessagesScrollName);
+
+        // Four short flattened rows fit inside the 140px readability floor. The enclosing
+        // plate also contains the channel title and its 8px gap, but must remain comfortably
+        // below 300px instead of inheriting the overlay's former fixed 390px minimum.
+        AssertThat(messagesScroll.CustomMinimumSize.Y).IsEqual(140f);
+        AssertThat(messagesPlate.Size.Y).IsLess(300f);
+    }
+
+    [TestCase]
+    public async Task Hud_message_plate_caps_a_long_history_at_260px_and_remains_scrollable()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        AppendRoomMessages(fixture.State.Room, count: 40);
+        await fixture.Overlay.RefreshForTests();
+        await AwaitStableLayout(fixture.Runner);
+
+        ScrollContainer messagesScroll = FindNode<ScrollContainer>(
+            fixture.Overlay,
+            LanConnectConstants.ChatMessagesScrollName);
+        ScrollBar bar = messagesScroll.GetVScrollBar();
+
+        // The reference mod caps at 250px. Our flattened rows carry additional inline
+        // delivery metadata, so this HUD deliberately allows 10px more before scrolling.
+        AssertThat(messagesScroll.CustomMinimumSize.Y).IsEqual(260f);
+        AssertThat(Math.Max(bar.MinValue, bar.MaxValue - bar.Page)).IsGreater(0d);
+    }
+
+    [TestCase]
+    public async Task Compact_portrait_viewport_keeps_the_message_scroll_at_72px()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport(new Vector2I(720, 1280));
+        AppendRoomMessages(fixture.State.Room, count: 20);
+        await fixture.Overlay.RefreshForTests();
+        await AwaitStableLayout(fixture.Runner);
+
+        PanelContainer messagesPlate = FindNode<PanelContainer>(fixture.Overlay, "ChatMessagesPlate");
+        ScrollContainer messagesScroll = FindNode<ScrollContainer>(
+            fixture.Overlay,
+            LanConnectConstants.ChatMessagesScrollName);
+
+        AssertThat(messagesScroll.CustomMinimumSize.Y).IsEqual(72f);
+        AssertThat(messagesPlate.Size.Y).IsLessEqual(140f);
+        AssertThat(messagesPlate.GetGlobalRect().End.Y).IsLessEqual(1280f);
+    }
+
+    [TestCase]
+    public async Task Touch_toggle_is_a_round_56px_icon_bubble()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        Button toggle = FindNode<Button>(fixture.Overlay, "RoomChatToggleButton");
+
+        AssertThat(MathF.Abs(toggle.Size.X - toggle.Size.Y)).IsLessEqual(2f);
+        AssertThat(toggle.Size.X).IsGreaterEqual(56f);
+        AssertThat(toggle.Size.Y).IsGreaterEqual(56f);
+        AssertThat(toggle.Text).IsEmpty();
+        AssertThat(toggle.Icon).IsNotNull();
+
+        int expectedRadius = Mathf.RoundToInt(toggle.Size.X / 2f);
+        foreach (string styleName in new[] { "normal", "hover", "pressed", "hover_pressed", "focus" })
+        {
+            StyleBoxFlat style = (StyleBoxFlat)toggle.GetThemeStylebox(styleName);
+            AssertThat(style.CornerRadiusTopLeft).IsEqual(expectedRadius);
+            AssertThat(style.CornerRadiusTopRight).IsEqual(expectedRadius);
+            AssertThat(style.CornerRadiusBottomLeft).IsEqual(expectedRadius);
+            AssertThat(style.CornerRadiusBottomRight).IsEqual(expectedRadius);
+        }
+    }
+
+    [TestCase]
+    public async Task Toggle_unread_badge_still_overlays_the_bubble_and_clears_when_room_is_read()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        fixture.Overlay.SelectChannelForTests(LanConnectChatChannel.Server);
+        fixture.Overlay.InjectRemoteForTests(LanConnectChatChannel.Room, sequence: 7);
+        await fixture.Overlay.RefreshForTests();
+        await AwaitStableLayout(fixture.Runner);
+
+        Button toggle = FindNode<Button>(fixture.Overlay, "RoomChatToggleButton");
+        Control badge = FindNode<Control>(fixture.Overlay, "ChatToggleUnreadBadge");
+        AssertThat(badge.Visible).IsTrue();
+        AssertThat(badge.GetGlobalRect().Intersects(toggle.GetGlobalRect())).IsTrue();
+
+        fixture.Overlay.SelectChannelForTests(LanConnectChatChannel.Room);
+        await fixture.Overlay.RefreshForTests();
+        AssertThat(badge.Visible).IsFalse();
+    }
+
+    [TestCase]
     public async Task Hud_draft_input_placeholder_is_localized_and_not_a_bare_key()
     {
         // The placeholder must come from the localizer (both English and SimplifiedChinese
@@ -209,6 +308,14 @@ public sealed class LanConnectRoomChatShellTests
 
         AssertThat(draftInput.PlaceholderText).IsNotEmpty();
         AssertThat(draftInput.PlaceholderText.StartsWith("chat.", StringComparison.Ordinal)).IsFalse();
+        AssertThat(draftInput.GetThemeColor("font_placeholder_color"))
+            .IsEqual(new Color(0.55f, 0.55f, 0.65f, 1f));
+
+        // ChatInputPlate owns the reference-coloured surface. Individual text runs stay
+        // transparent at rest so a second dark rectangle is not nested inside that plate.
+        StyleBoxFlat normal = (StyleBoxFlat)draftInput.GetThemeStylebox("normal");
+        AssertThat(normal.BgColor).IsEqual(Colors.Transparent);
+        AssertThat(normal.BorderWidthLeft).IsEqual(0);
     }
 
     [TestCase]
@@ -223,6 +330,10 @@ public sealed class LanConnectRoomChatShellTests
             ChatVisualStyle = LanConnectChatVisualStyle.LobbySidebar
         })!;
         using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.Bind(
+            new LanConnectChatChannelState(LanConnectChatChannel.Server),
+            _ => Task.CompletedTask,
+            _ => Task.CompletedTask);
         await runner.AwaitIdleFrame();
 
         AssertThat(panel.FindChild("ChatMessagesPlate", recursive: true, owned: false)).IsNull();
@@ -230,12 +341,23 @@ public sealed class LanConnectRoomChatShellTests
 
         ScrollContainer messagesScroll = FindNode<ScrollContainer>(panel, LanConnectConstants.ChatMessagesScrollName);
         AssertThat(messagesScroll.GetParent()).IsSame(panel);
+        AssertThat(messagesScroll.CustomMinimumSize).IsEqual(new Vector2(0f, 140f));
         AssertThat(panel.GetThemeConstant("separation")).IsEqual(8);
 
         Control draftEditor = FindNode<Control>(panel, LanConnectConstants.ChatRichDraftEditorName);
         Control inputRow = (Control)draftEditor.GetParent()!;
         AssertThat(inputRow.GetParent()).IsSame(panel);
         AssertThat(inputRow.GetThemeConstant("separation")).IsEqual(6);
+
+        TextEdit draftInput = FindNode<TextEdit>(panel, LanConnectConstants.ChatDraftInputName);
+        AssertThat(draftInput.GetThemeColor("font_placeholder_color"))
+            .IsEqual(new Color(0.46f, 0.36f, 0.31f, 1f));
+        StyleBoxFlat normal = (StyleBoxFlat)draftInput.GetThemeStylebox("normal");
+        AssertThat(normal.BgColor).IsEqual(Colors.Transparent);
+        AssertThat(normal.ContentMarginLeft).IsEqual(0f);
+        AssertThat(normal.ContentMarginTop).IsEqual(0f);
+        AssertThat(normal.ContentMarginRight).IsEqual(0f);
+        AssertThat(normal.ContentMarginBottom).IsEqual(0f);
     }
 
     private static readonly string[] StripButtonNames =
@@ -245,6 +367,27 @@ public sealed class LanConnectRoomChatShellTests
 
     private static T FindNode<T>(Node root, string name) where T : Node =>
         (T)root.FindChild(name, recursive: true, owned: false);
+
+    private static void AppendRoomMessages(LanConnectChatChannelState state, int count)
+    {
+        for (int index = 0; index < count; index++)
+        {
+            state.AppendConfirmedForTests(
+                $"hud-shell-{index}",
+                "A",
+                $"message {index}",
+                index + 1,
+                false);
+        }
+    }
+
+    private static async Task AwaitStableLayout(ISceneRunner runner)
+    {
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+        await runner.AwaitIdleFrame();
+    }
 
     /// <summary>
     /// Effective (as-rendered) alpha of a CanvasItem: Modulate does not implicitly inherit a

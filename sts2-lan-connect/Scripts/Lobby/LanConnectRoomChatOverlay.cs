@@ -44,12 +44,15 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private const float PanelHeight = 520f;
     private const float DragHoldSeconds = 0.28f;
 
+    // Touch entry point (spec §7.6): a circular bubble, not the old 132x44 rectangular
+    // "聊天" button. Diameter also feeds the corner radius (half of it) used to round its
+    // stylebox -- see CreateToggleBubbleButton.
+    private const float ToggleBubbleDiameter = 56f;
+
     // Flat translucent HUD look (room chat HUD redesign spec §5.1 / §3.2), replacing the old
-    // solid panel + gold border. BorderColor is kept for the toggle bubble's accent-bordered
-    // button style; the panel frame itself no longer draws a border (see CreatePanel call
-    // below, borderWidth: 0).
+    // solid panel + gold border. The panel frame itself no longer draws a border (see
+    // CreatePanel call below, borderWidth: 0).
     private static readonly Color PanelColor = new(0.05f, 0.05f, 0.1f, 0.75f);
-    private static readonly Color BorderColor = new(0.56f, 0.44f, 0.2f, 1f);
     private static readonly Color AccentColor = new(0.86f, 0.69f, 0.33f, 1f);
     private static readonly Color TextStrongColor = new(0.96f, 0.94f, 0.88f, 1f);
     private static readonly Color TextMutedColor = new(0.76f, 0.74f, 0.69f, 1f);
@@ -478,15 +481,12 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
         Control toggleWrap = new()
         {
-            CustomMinimumSize = new Vector2(132f, 44f),
+            CustomMinimumSize = new Vector2(ToggleBubbleDiameter, ToggleBubbleDiameter),
             MouseFilter = Control.MouseFilterEnum.Pass
         };
         topRow.AddChild(toggleWrap);
 
-        _toggleButton = CreateButton("聊天", accent: true, TogglePanel);
-        _toggleButton.Name = "RoomChatToggleButton";
-        _toggleButton.CustomMinimumSize = new Vector2(132f, 44f);
-        _toggleButton.TooltipText = "点击打开聊天，长按可拖动位置";
+        _toggleButton = CreateToggleBubbleButton(TogglePanel);
         _toggleButton.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnDragHandleGuiInput));
         toggleWrap.AddChild(_toggleButton);
 
@@ -502,7 +502,11 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
         _panelFrame = CreatePanel(PanelColor, Colors.Transparent, 4, 14, borderWidth: 0);
         _panelFrame.Name = "RoomChatPanelFrame";
-        _panelFrame.CustomMinimumSize = new Vector2(PanelWidth, PanelHeight);
+        // Width is pinned; height is deliberately left at 0 (= "no override, use the
+        // content's natural minimum") so the frame hugs whatever the messages plate and
+        // input plate actually need instead of forcing a fixed tall box (see the messages
+        // plate content-sizing fix in ApplyViewportBounds below).
+        _panelFrame.CustomMinimumSize = new Vector2(PanelWidth, 0f);
         _panelFadeContainer.AddChild(_panelFrame);
 
         VBoxContainer body = new();
@@ -557,8 +561,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         _chatPanel = new LanConnectBasicChatPanel(LanConnectChatUiComposition.Icons)
         {
             Name = "RoomChatPanel",
-            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(0, 390)
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill
         };
         body.AddChild(_chatPanel);
         RefreshCombatRenderingProvider();
@@ -1480,16 +1483,23 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         Vector2 viewportSize = GetViewport()?.GetVisibleRect().Size ?? new Vector2(1920f, 1080f);
         bool compact = viewportSize.X <= 1280f || viewportSize.Y <= 720f;
         _currentPanelWidth = MathF.Min(PanelWidth, MathF.Max(300f, viewportSize.X - 36f));
+        // _currentPanelHeight is no longer used to force the frame's rendered height (see
+        // below) -- it now only feeds ClampOverlayOffset's drag-bound math, where it acts as
+        // a conservative worst-case reservation. Kept as an upper estimate for that purpose.
         float availablePanelHeight = MathF.Max(270f, viewportSize.Y - 90f);
         _currentPanelHeight = MathF.Min(PanelHeight, availablePanelHeight);
 
         if (_panelFrame != null && GodotObject.IsInstanceValid(_panelFrame))
         {
-            _panelFrame.CustomMinimumSize = new Vector2(_currentPanelWidth, _currentPanelHeight);
+            // Height stays at 0 (auto): forcing it to _currentPanelHeight used to make the
+            // frame -- and via SizeFlagsVertical.ExpandFill, the messages plate inside it --
+            // always render at up to 520px regardless of how many messages there were. The
+            // messages plate now bounds its own height to content (see
+            // LanConnectBasicChatPanel.ApplyMessagesPlateHeight); the frame just wraps it.
+            _panelFrame.CustomMinimumSize = new Vector2(_currentPanelWidth, 0f);
         }
         if (_chatPanel != null && GodotObject.IsInstanceValid(_chatPanel))
         {
-            _chatPanel.CustomMinimumSize = new Vector2(0, compact ? 180 : 390);
             _chatPanel.SetCompactLayout(compact);
         }
 
@@ -1671,45 +1681,41 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         return label;
     }
 
-    private static Button CreateButton(string text, bool accent, Action onPressed)
+    // Circular touch entry point (room chat HUD redesign spec §7.6, real-device fix):
+    // replaces the old 132x44 rectangular "聊天" button with a ~56x56 round bubble carrying
+    // an icon instead of text. Styled through LanConnectHudLegibility.ApplyHudButtonStyle --
+    // the same treatment the control strip buttons use (CreateStripButton) -- so it matches
+    // the rest of the HUD, then the resulting square StyleBoxFlats are rounded into circles
+    // by setting each corner radius to half the button's side. message-circle is the icon
+    // the spec names for this bubble; it is one of the SVGs LanConnectLucideIconLoader ships
+    // (LanConnectEmbeddedLucideResources.SvgByName) -- confirmed loadable by reading that
+    // table and by Touch_toggle_is_a_round_56px_icon_bubble rendering it through the loader.
+    private static Button CreateToggleBubbleButton(Action onPressed)
     {
         Button button = new()
         {
-            Text = text,
+            Name = "RoomChatToggleButton",
             MouseDefaultCursorShape = Control.CursorShape.PointingHand,
-            FocusMode = Control.FocusModeEnum.All
+            CustomMinimumSize = new Vector2(ToggleBubbleDiameter, ToggleBubbleDiameter),
+            TooltipText = "点击打开聊天，长按可拖动位置",
+            Icon = LanConnectChatUiComposition.Icons.Get("message-circle", 32, TextStrongColor),
+            ExpandIcon = true
         };
-        Color background = accent
-            ? new Color(0.28f, 0.21f, 0.08f, 0.96f)
-            : new Color(0.14f, 0.14f, 0.16f, 0.96f);
-        Color border = accent ? AccentColor : BorderColor;
-        button.AddThemeStyleboxOverride("normal", CreateButtonStyle(background, border));
-        button.AddThemeStyleboxOverride("hover", CreateButtonStyle(background.Lightened(0.08f), AccentColor));
-        button.AddThemeStyleboxOverride("pressed", CreateButtonStyle(background.Darkened(0.06f), AccentColor));
-        button.AddThemeStyleboxOverride("hover_pressed", CreateButtonStyle(background.Lightened(0.04f), AccentColor));
-        button.AddThemeStyleboxOverride("focus", CreateButtonStyle(background, AccentColor, borderWidth: 2));
-        button.CustomMinimumSize = LanConnectHudLegibility.EnsureTouchTarget(button.CustomMinimumSize);
-        button.AddThemeColorOverride("font_color", TextStrongColor);
+        LanConnectHudLegibility.ApplyHudButtonStyle(button, AccentColor);
+
+        int radius = (int)(ToggleBubbleDiameter / 2f);
+        foreach (string styleName in new[] { "normal", "hover", "pressed", "hover_pressed", "focus" })
+        {
+            if (button.GetThemeStylebox(styleName) is StyleBoxFlat style)
+            {
+                style.CornerRadiusTopLeft = radius;
+                style.CornerRadiusTopRight = radius;
+                style.CornerRadiusBottomLeft = radius;
+                style.CornerRadiusBottomRight = radius;
+            }
+        }
+
         button.Connect(Button.SignalName.Pressed, Callable.From(onPressed));
         return button;
     }
-
-    private static StyleBoxFlat CreateButtonStyle(Color background, Color border, int borderWidth = 1) => new()
-    {
-        BgColor = background,
-        BorderColor = border,
-        BorderWidthLeft = borderWidth,
-        BorderWidthTop = borderWidth,
-        BorderWidthRight = borderWidth,
-        BorderWidthBottom = borderWidth,
-        CornerRadiusTopLeft = 6,
-        CornerRadiusTopRight = 6,
-        CornerRadiusBottomLeft = 6,
-        CornerRadiusBottomRight = 6,
-        ContentMarginLeft = 10,
-        ContentMarginTop = 7,
-        ContentMarginRight = 10,
-        ContentMarginBottom = 7
-    };
-
 }

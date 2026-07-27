@@ -93,6 +93,22 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private static readonly Color LobbyBorderColor = new(0.80f, 0.65f, 0.53f, 1f);
     private static readonly Color LobbyPrimaryForegroundColor = new(0.15f, 0.05f, 0.00f, 1f);
 
+    // Messages plate content-sizing (room chat HUD redesign, real-device fix): the plate
+    // used to render at a fixed 390px (180 compact) via
+    // LanConnectRoomChatOverlay.ApplyViewportBounds regardless of how many messages were
+    // present -- a mostly-empty dark box with only a handful of messages. HUD style now
+    // hugs the scroll container to the actual rendered message-list height (see
+    // ApplyMessagesPlateHeight), floored and capped by these. The floor/compact values are
+    // unchanged from what SetCompactLayout already used; the lobby sidebar keeps using them
+    // as fixed values too (§2.2 non-goal 1 -- no dynamic hug/cap for the sidebar).
+    // Reference mod's MessageAreaHeight is 250f, but our flattened rows carry more inline
+    // metadata per line than the reference's (verb phrasing, inline delivery-state label +
+    // retry control) so rows run a little taller on average; 260 keeps roughly the
+    // reference's "how many messages fit before it scrolls" feel with that padding.
+    private const float MessagesScrollFloorHeight = 140f;
+    private const float MessagesScrollCapHeight = 260f;
+    private const float MessagesScrollCompactHeight = 72f;
+
     private readonly LanConnectLucideIconLoader _icons;
     private readonly Func<LanConnectItemRun, LanConnectResolvedItem> _resolveItem;
     private readonly Func<LanConnectItemResolverContext>? _resolverContextProvider;
@@ -595,11 +611,49 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     internal void SetCompactLayout(bool compact)
     {
         _compactLayout = compact;
-        if (_messagesScroll != null && GodotObject.IsInstanceValid(_messagesScroll))
+        if (UsesLobbyStyle)
         {
-            _messagesScroll.CustomMinimumSize = new Vector2(0, compact ? 72 : 140);
+            // Lobby sidebar (§2.2 non-goal 1): unchanged fixed floor, no dynamic hug/cap.
+            if (_messagesScroll != null && GodotObject.IsInstanceValid(_messagesScroll))
+            {
+                _messagesScroll.CustomMinimumSize = new Vector2(
+                    0,
+                    compact ? MessagesScrollCompactHeight : MessagesScrollFloorHeight);
+            }
+        }
+        else
+        {
+            ApplyMessagesPlateHeight();
         }
         _draftEditor?.SetCompactLayout(compact);
+    }
+
+    // Recomputes the messages ScrollContainer's own minimum height from the actual rendered
+    // message-list height (HUD style only), so the plate hugs a few short messages instead
+    // of always rendering at the old fixed floor. Reads the scrollbar's post-layout
+    // MaxValue -- the same value, and the same Range.Changed trigger (see
+    // OnScrollRangeChanged below), that the scroll-pin fix already relies on to avoid the
+    // pre-layout stale reads that caused that historical bug (see
+    // LanConnectChatScrollPinningTests). Compact viewport keeps a fixed height (no hug/cap):
+    // a phone in portrait must not end up with a tall plate eating the screen.
+    private void ApplyMessagesPlateHeight()
+    {
+        if (UsesLobbyStyle ||
+            _messagesScroll == null ||
+            !GodotObject.IsInstanceValid(_messagesScroll))
+        {
+            return;
+        }
+
+        ScrollBar bar = _messagesScroll.GetVScrollBar();
+        float target = _compactLayout
+            ? MessagesScrollCompactHeight
+            : Mathf.Clamp((float)bar.MaxValue, MessagesScrollFloorHeight, MessagesScrollCapHeight);
+        Vector2 desired = new(0f, target);
+        if (_messagesScroll.CustomMinimumSize != desired)
+        {
+            _messagesScroll.CustomMinimumSize = desired;
+        }
     }
 
     // The send button is a touch-only affordance for the dark-overlay HUD (room chat HUD
@@ -819,7 +873,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             SizeFlagsVertical = SizeFlags.ExpandFill,
             HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
             FollowFocus = true,
-            CustomMinimumSize = new Vector2(0, 140),
+            CustomMinimumSize = new Vector2(0, MessagesScrollFloorHeight),
             FocusMode = FocusModeEnum.All
         };
         messagesContainer.AddChild(_messagesScroll);
@@ -2098,6 +2152,12 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     private void OnScrollRangeChanged()
     {
+        // Piggybacks on the same post-layout signal the scroll-pin re-pin below relies on:
+        // by the time Range.Changed fires, the scrollbar's MaxValue reflects the real,
+        // just-recomputed message-list height, not the pre-layout stale value that caused
+        // the historical scroll-pin bug (see ApplyMessagesPlateHeight's own comment).
+        ApplyMessagesPlateHeight();
+
         if (_suppressScrollChange ||
             _state == null ||
             _messagesScroll == null ||

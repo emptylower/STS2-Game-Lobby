@@ -1847,10 +1847,17 @@ internal sealed partial class LanConnectRichDraftEditor : Control
 
     private string Localize(string key) => _localizer.Get(CurrentLocale, key);
 
+    // Reference mod's placeholder colour (room chat HUD redesign, real-device fix): Typing's
+    // ChatPanel.cs PlaceholderColor is (0.55,0.55,0.65). HUD style only -- the lobby sidebar
+    // keeps using the shared TextMutedColor, unchanged.
+    private static readonly Color HudPlaceholderColor = new(0.55f, 0.55f, 0.65f, 1f);
+
     private void ApplyTextRunStyle(TextEdit input)
     {
         input.AddThemeColorOverride("font_color", TextStrongColor);
-        input.AddThemeColorOverride("font_placeholder_color", TextMutedColor);
+        input.AddThemeColorOverride(
+            "font_placeholder_color",
+            UsesLobbyStyle ? TextMutedColor : HudPlaceholderColor);
         if (UsesLobbyStyle)
         {
             StyleBoxFlat transparent = CreateStyle(Colors.Transparent, Colors.Transparent, borderWidth: 0, contentMargin: 0);
@@ -1867,15 +1874,30 @@ internal sealed partial class LanConnectRichDraftEditor : Control
                 contentMargin: 0));
             return;
         }
+
+        // HUD style only: each text run used to paint its own near-opaque box (BgColor
+        // (0.11,0.11,0.13,0.98), muted brownish border (0.34,0.32,0.29)) *inside*
+        // LanConnectBasicChatPanel's ChatInputPlate, which already paints the reference
+        // mod's InputBgColor (0.08,0.08,0.15,0.9) / InputBorderColor (0.3,0.35,0.5,0.6)
+        // (design spec §5.1/§3.2) around the whole input row. Two differently-coloured
+        // nested boxes at rest was exactly the "doesn't look like Typing" gap from
+        // real-device feedback. The run's own box now stays transparent at rest so the
+        // plate is the input row's only visible surface (mirroring how the lobby sidebar's
+        // runs above already defer to their own surrounding chrome), and lights up -- from
+        // the same InputBgColor family, not the old unrelated near-black/brownish scheme --
+        // only while actually focused, so focus feedback isn't lost: the HUD draft editor
+        // has no surrounding surface of its own to show it (see SetLobbySurfaceFocused
+        // above, which no-ops for this style).
+        Color hudInputBackground = new(0.08f, 0.08f, 0.15f, 0.9f);
         input.AddThemeStyleboxOverride(
             "normal",
-            CreateStyle(new Color(0.11f, 0.11f, 0.13f, 0.98f), new Color(0.34f, 0.32f, 0.29f, 1f)));
+            CreateStyle(Colors.Transparent, Colors.Transparent, borderWidth: 0));
         input.AddThemeStyleboxOverride(
             "focus",
-            CreateStyle(new Color(0.13f, 0.13f, 0.15f, 1f), AccentColor));
+            CreateStyle(hudInputBackground.Lightened(0.12f), AccentColor));
         input.AddThemeStyleboxOverride(
             "read_only",
-            CreateStyle(new Color(0.09f, 0.09f, 0.1f, 0.9f), new Color(0.28f, 0.27f, 0.25f, 1f)));
+            CreateStyle(new Color(hudInputBackground, 0.5f), Colors.Transparent, borderWidth: 0));
     }
 
     private void ApplyEntityChipStyle(Button chip)
