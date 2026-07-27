@@ -1,14 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using Godot;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
-using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
-using MegaCrit.Sts2.Core.Nodes.Screens.CustomRun;
-using MegaCrit.Sts2.Core.Nodes.Screens.DailyRun;
 using MegaCrit.Sts2.Core.Platform;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
@@ -19,10 +15,6 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
 {
     private const string HookedMetaKey = "sts2_lan_connect_continue_run_hooks";
     private const double RetryIntervalSeconds = 5d;
-
-    private static readonly FieldInfo? MultiplayerLoadLobbyField = typeof(NMultiplayerLoadGameScreen).GetField("_runLobby", BindingFlags.Instance | BindingFlags.NonPublic);
-    private static readonly FieldInfo? CustomLoadLobbyField = typeof(NCustomRunLoadScreen).GetField("_lobby", BindingFlags.Instance | BindingFlags.NonPublic);
-    private static readonly FieldInfo? DailyLoadLobbyField = typeof(NDailyRunLoadScreen).GetField("_lobby", BindingFlags.Instance | BindingFlags.NonPublic);
 
     private static readonly HashSet<ulong> InFlightScreens = new();
     private static readonly HashSet<ulong> CompletedScreens = new();
@@ -91,6 +83,29 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
             return;
         }
 
+        // Resolve host channel before lobby-endpoint preflight so pure-LAN saves never
+        // depend on lobby URL or show "未绑定大厅服务" when they should not publish.
+        LanConnectResolvedRoomBinding earlyBinding = LanConnectMultiplayerSaveRoomBinding.Resolve(context.Run);
+        LanConnectSavedRoomBinding? earlyStored = LanConnectConfig.TryGetSaveRoomBinding(earlyBinding.SaveKey);
+        string? earlyPersistedChannel = earlyStored?.HostChannel ?? earlyBinding.HostChannel;
+        if (!string.IsNullOrWhiteSpace(earlyPersistedChannel) && !LanConnectHostChannels.IsValid(earlyPersistedChannel))
+        {
+            GD.Print(
+                $"sts2_lan_connect continue_run_publish: warning unknown hostChannel={LanConnectHostChannels.DescribePersisted(earlyPersistedChannel)}, treating as lobby");
+        }
+
+        string earlyEffectiveChannel = LanConnectHostChannels.Resolve(earlyPersistedChannel);
+        LanConnectContinueRunPublishDecisionKind earlyDecision =
+            LanConnectContinueRunPublishDecision.Decide(earlyEffectiveChannel);
+        if (earlyDecision == LanConnectContinueRunPublishDecisionKind.SkipLanOrigin)
+        {
+            CompletedScreens.Add(instanceId);
+            LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(screen, "continue_lan_resume");
+            GD.Print(
+                $"sts2_lan_connect continue_run_publish: skip LAN-origin save screen={context.ScreenType}, saveKey={earlyBinding.SaveKey}, storedBinding={earlyBinding.HasStoredBinding}, persistedHostChannel={LanConnectHostChannels.DescribePersisted(earlyPersistedChannel)}, effectiveHostChannel={earlyEffectiveChannel}, decision=skip_lan_origin, source={source}");
+            return;
+        }
+
         if (!HasAvailableLobbyEndpoint())
         {
             CompletedScreens.Add(instanceId);
@@ -117,11 +132,29 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
         LanConnectSavedRoomBinding? storedBinding = LanConnectConfig.TryGetSaveRoomBinding(binding.SaveKey);
         Dictionary<ulong, string> storedPlayerNames = LanConnectMultiplayerSaveRoomBinding.ParsePlayerNames(storedBinding?.PlayerNames);
         LobbySavedRunInfo savedRunInfo = LanConnectMultiplayerSaveRoomBinding.BuildSavedRunInfo(context.Run, context.NetService.NetId, storedPlayerNames);
+
+        string? persistedHostChannel = storedBinding?.HostChannel ?? binding.HostChannel;
+        if (!string.IsNullOrWhiteSpace(persistedHostChannel) && !LanConnectHostChannels.IsValid(persistedHostChannel))
+        {
+            GD.Print(
+                $"sts2_lan_connect continue_run_publish: warning unknown hostChannel={LanConnectHostChannels.DescribePersisted(persistedHostChannel)}, treating as lobby");
+        }
+
+        string effectiveHostChannel = LanConnectHostChannels.Resolve(persistedHostChannel);
+        LanConnectContinueRunPublishDecisionKind decision = LanConnectContinueRunPublishDecision.Decide(effectiveHostChannel);
         GD.Print(
-            $"sts2_lan_connect continue_run_publish: attempt screen={context.ScreenType}, source={source}, saveKey={binding.SaveKey}, storedBinding={binding.HasStoredBinding}, roomName='{binding.RoomName}', passwordSet={!string.IsNullOrWhiteSpace(binding.Password)}");
+            $"sts2_lan_connect continue_run_publish: attempt screen={context.ScreenType}, source={source}, saveKey={binding.SaveKey}, storedBinding={binding.HasStoredBinding}, roomName='{binding.RoomName}', passwordSet={!string.IsNullOrWhiteSpace(binding.Password)}, persistedHostChannel={LanConnectHostChannels.DescribePersisted(persistedHostChannel)}, effectiveHostChannel={effectiveHostChannel}, decision={LanConnectContinueRunPublishDecision.ToLogToken(decision)}");
 
         try
         {
+            if (decision == LanConnectContinueRunPublishDecisionKind.SkipLanOrigin)
+            {
+                CompletedScreens.Add(screen.GetInstanceId());
+                GD.Print(
+                    $"sts2_lan_connect continue_run_publish: skip screen={context.ScreenType}, saveKey={binding.SaveKey}, decision=skip_lan_origin");
+                return;
+            }
+
             bool published = await LanConnectHostFlow.PublishExistingHostToLobbyAsync(
                 context.NetService,
                 binding.RoomName,
@@ -138,7 +171,13 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                 return;
             }
 
-            LanConnectMultiplayerSaveRoomBinding.PersistBinding(context.Run, binding.RoomName, binding.Password, binding.GameMode, "continue_save_publish");
+            LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+                context.Run,
+                binding.RoomName,
+                binding.Password,
+                binding.GameMode,
+                LanConnectHostChannels.Lobby,
+                "continue_save_publish");
             CompletedScreens.Add(screen.GetInstanceId());
             LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(screen, "continue_save_publish");
             GD.Print(
@@ -153,13 +192,9 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
 
     private static bool TryResolveContext(Control screen, out ContinuedRunHostContext context)
     {
-        LoadRunLobby? lobby = screen switch
-        {
-            NMultiplayerLoadGameScreen multiplayerLoadScreen => GetLobby(screen, MultiplayerLoadLobbyField, multiplayerLoadScreen),
-            NCustomRunLoadScreen customRunLoadScreen => GetLobby(screen, CustomLoadLobbyField, customRunLoadScreen),
-            NDailyRunLoadScreen dailyRunLoadScreen => GetLobby(screen, DailyLoadLobbyField, dailyRunLoadScreen),
-            _ => null
-        };
+        LoadRunLobby? lobby = LanConnectLoadedRunContext.TryResolve(screen, out LoadRunLobby resolvedLobby)
+            ? resolvedLobby
+            : null;
 
         if (lobby?.NetService is not NetHostGameService netService)
         {
@@ -169,17 +204,6 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
 
         context = new ContinuedRunHostContext(netService, lobby.Run, lobby.GameMode, screen.GetType().Name);
         return true;
-    }
-
-    private static LoadRunLobby? GetLobby(Control screen, FieldInfo? field, object instance)
-    {
-        if (field == null)
-        {
-            GD.Print($"sts2_lan_connect continue_run_publish: missing reflection field for {screen.GetType().Name}");
-            return null;
-        }
-
-        return field.GetValue(instance) as LoadRunLobby;
     }
 
     private static bool HasAvailableLobbyEndpoint()

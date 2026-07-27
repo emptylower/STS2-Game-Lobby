@@ -1,8 +1,14 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Reflection;
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Logging;
+using MegaCrit.Sts2.Core.Multiplayer;
+using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
 using MegaCrit.Sts2.Core.Nodes.Multiplayer;
 using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.addons.mega_text;
@@ -190,7 +196,8 @@ internal static class LanConnectInviteButtonPatch
         Control? nativeInviteContainer = existing == null ? FindNativeInviteContainer(screen) : FindNativeInviteContainer(existing);
         Control? nativeInviteControl = existing == null ? FindNativeInviteControl(screen, nativeInviteContainer) : FindNativeInviteControl(existing, nativeInviteContainer);
         NInvitePlayersButton? nativeInvite = nativeInviteControl as NInvitePlayersButton ?? FindNativeInviteButton(screen);
-        bool shouldShow = LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true;
+        bool isLanResumeHost = TryResolveLanResumeHost(screen, out _);
+        bool shouldShow = isLanResumeHost || LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true;
         if (!shouldShow)
         {
             if (existing != null)
@@ -209,7 +216,7 @@ internal static class LanConnectInviteButtonPatch
                 existing.Visible = false;
             }
 
-            RepurposeNativeInviteButton(nativeInvite);
+            RepurposeNativeInviteButton(nativeInvite, isLanResumeHost);
             return;
         }
 
@@ -220,7 +227,7 @@ internal static class LanConnectInviteButtonPatch
                 existing.Visible = false;
             }
 
-            RepurposeNativeInviteControl(nativeInviteControl, nativeInviteContainer);
+            RepurposeNativeInviteControl(nativeInviteControl, nativeInviteContainer, isLanResumeHost);
             return;
         }
 
@@ -230,11 +237,11 @@ internal static class LanConnectInviteButtonPatch
             ReparentAndPositionContinueRunInvite(screen, existing);
             if (nativeInvite != null)
             {
-                RepurposeNativeInviteButton(nativeInvite);
+                RepurposeNativeInviteButton(nativeInvite, isLanResumeHost);
             }
             else if (nativeInviteControl != null)
             {
-                RepurposeNativeInviteControl(nativeInviteControl, nativeInviteContainer);
+                RepurposeNativeInviteControl(nativeInviteControl, nativeInviteContainer, isLanResumeHost);
             }
             return;
         }
@@ -320,7 +327,7 @@ internal static class LanConnectInviteButtonPatch
             return true;
         }
 
-        OnLobbyInvitePressed();
+        OnManagedInvitePressed(__instance);
         return false;
     }
 
@@ -331,7 +338,7 @@ internal static class LanConnectInviteButtonPatch
             return;
         }
 
-        RepurposeNativeInviteButton(__instance);
+        RepurposeNativeInviteButton(__instance, IsLanResumeHostNode(__instance));
     }
 
     private static bool ShouldInterceptNativeInviteRelease(Node inviteButtonNode)
@@ -346,14 +353,17 @@ internal static class LanConnectInviteButtonPatch
     {
         return GodotObject.IsInstanceValid(inviteButtonNode)
                && inviteButtonNode.IsInsideTree()
-               && LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true;
+               && (LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true
+                   || IsLanResumeHostNode(inviteButtonNode));
     }
 
-    private static void RepurposeNativeInviteButton(NInvitePlayersButton nativeButton)
+    private static void RepurposeNativeInviteButton(NInvitePlayersButton nativeButton, bool isLanResumeHost = false)
     {
         nativeButton.SetMeta(NativeInviteManagedMetaKey, true);
         nativeButton.Visible = true;
-        nativeButton.TooltipText = "生成邀请码并复制到剪贴板，发给朋友即可一键加入。";
+        nativeButton.TooltipText = isLanResumeHost
+            ? "复制旧存档中每个队友槽位的 LAN 续局身份码。"
+            : "生成邀请码并复制到剪贴板，发给朋友即可一键加入。";
         if (nativeButton.GetParent() is Control container)
         {
             container.Visible = true;
@@ -361,16 +371,18 @@ internal static class LanConnectInviteButtonPatch
 
         if (nativeButton.GetNodeOrNull<MegaRichTextLabel>("Label") is { } label)
         {
-            label.SetTextAutoSize("大厅邀请");
+            label.SetTextAutoSize(isLanResumeHost ? "续局身份码" : "大厅邀请");
         }
     }
 
-    private static void RepurposeNativeInviteControl(Control nativeControl, Control? container)
+    private static void RepurposeNativeInviteControl(Control nativeControl, Control? container, bool isLanResumeHost = false)
     {
         nativeControl.SetMeta(NativeInviteManagedMetaKey, true);
         nativeControl.Visible = true;
         nativeControl.MouseFilter = Control.MouseFilterEnum.Stop;
-        nativeControl.TooltipText = "生成邀请码并复制到剪贴板，发给朋友即可一键加入。";
+        nativeControl.TooltipText = isLanResumeHost
+            ? "复制旧存档中每个队友槽位的 LAN 续局身份码。"
+            : "生成邀请码并复制到剪贴板，发给朋友即可一键加入。";
         if (container != null)
         {
             container.Visible = true;
@@ -382,7 +394,7 @@ internal static class LanConnectInviteButtonPatch
 
         if (nativeControl.GetNodeOrNull<MegaRichTextLabel>("Label") is { } label)
         {
-            label.SetTextAutoSize("大厅邀请");
+            label.SetTextAutoSize(isLanResumeHost ? "续局身份码" : "大厅邀请");
         }
 
         if (!nativeControl.HasMeta(NativeInviteControlHookedMetaKey))
@@ -390,12 +402,19 @@ internal static class LanConnectInviteButtonPatch
             nativeControl.SetMeta(NativeInviteControlHookedMetaKey, true);
             if (nativeControl is Button button)
             {
-                button.Pressed += OnLobbyInvitePressed;
+                button.Pressed += () => OnManagedInvitePressed(nativeControl);
             }
             else
             {
-                nativeControl.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnNativeInviteControlGuiInput));
+                nativeControl.Connect(
+                    Control.SignalName.GuiInput,
+                    Callable.From<InputEvent>(inputEvent => OnNativeInviteControlGuiInput(nativeControl, inputEvent)));
             }
+        }
+
+        if (nativeControl is Button textButton)
+        {
+            textButton.Text = isLanResumeHost ? "续局身份码" : "大厅邀请";
         }
     }
 
@@ -417,13 +436,13 @@ internal static class LanConnectInviteButtonPatch
         }
     }
 
-    private static void OnNativeInviteControlGuiInput(InputEvent inputEvent)
+    private static void OnNativeInviteControlGuiInput(Control source, InputEvent inputEvent)
     {
         switch (inputEvent)
         {
             case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false }:
             case InputEventScreenTouch { Pressed: false }:
-                OnLobbyInvitePressed();
+                OnManagedInvitePressed(source);
                 break;
         }
     }
@@ -468,6 +487,88 @@ internal static class LanConnectInviteButtonPatch
 
         screen.AddChild(inviteButton);
         Log.Info("sts2_lan_connect: lobby invite button created on character select screen");
+    }
+
+    private static void OnManagedInvitePressed(Node? source)
+    {
+        if (source != null
+            && LanConnectLoadedRunContext.FindScreen(source) is Control screen
+            && TryResolveLanResumeHost(screen, out LoadRunLobby lobby))
+        {
+            CopyLanResumeCodes(lobby);
+            return;
+        }
+
+        OnLobbyInvitePressed();
+    }
+
+    private static bool IsLanResumeHostNode(Node node)
+    {
+        return LanConnectLoadedRunContext.FindScreen(node) is Control screen
+               && TryResolveLanResumeHost(screen, out _);
+    }
+
+    private static bool TryResolveLanResumeHost(Control screen, out LoadRunLobby lobby)
+    {
+        if (!LanConnectLoadedRunContext.TryResolve(screen, out lobby)
+            || lobby.NetService.Type != NetGameType.Host)
+        {
+            lobby = null!;
+            return false;
+        }
+
+        LanConnectResolvedRoomBinding binding = LanConnectMultiplayerSaveRoomBinding.Resolve(lobby.Run);
+        return string.Equals(binding.EffectiveHostChannel, LanConnectHostChannels.Lan, StringComparison.Ordinal);
+    }
+
+    private static void CopyLanResumeCodes(LoadRunLobby lobby)
+    {
+        try
+        {
+            string saveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(lobby.Run);
+            LanConnectSavedRoomBinding? storedBinding = LanConnectConfig.TryGetSaveRoomBinding(saveKey);
+            Dictionary<ulong, string> storedNames =
+                LanConnectMultiplayerSaveRoomBinding.ParsePlayerNames(storedBinding?.PlayerNames);
+            LobbySavedRunInfo savedRunInfo =
+                LanConnectMultiplayerSaveRoomBinding.BuildSavedRunInfo(lobby.Run, lobby.NetService.NetId, storedNames);
+            List<(string Label, string Code, ulong NetId)> codes = savedRunInfo.Slots
+                .Where(static slot => !slot.IsHost)
+                .Select(slot =>
+                {
+                    bool parsed = LanConnectClientIdentity.TryParse(slot.NetId, out ulong netId);
+                    string label = string.IsNullOrWhiteSpace(slot.PlayerName)
+                        ? slot.CharacterName
+                        : $"{slot.CharacterName} / {slot.PlayerName}";
+                    string code = parsed
+                        ? LanConnectLanResumeCode.Encode(saveKey, netId, slot.CharacterName, slot.PlayerName)
+                        : string.Empty;
+                    return (Label: label, Code: code, NetId: netId);
+                })
+                .Where(static entry => !string.IsNullOrWhiteSpace(entry.Code))
+                .ToList();
+
+            if (codes.Count == 0)
+            {
+                LanConnectPopupUtil.ShowInfo("这个存档没有可供队友恢复的槽位。房主无需使用续局身份码。");
+                return;
+            }
+
+            string clipboardText = codes.Count == 1
+                ? codes[0].Code
+                : string.Join(System.Environment.NewLine, codes.Select(static entry => $"{entry.Label}: {entry.Code}"));
+            DisplayServer.ClipboardSet(clipboardText);
+            GD.Print(
+                $"sts2_lan_connect lan_resume_code: copied saveKey={saveKey}, slotCount={codes.Count}, netIds=[{string.Join(',', codes.Select(static entry => entry.NetId.ToString(CultureInfo.InvariantCulture)))}]");
+            string message = codes.Count == 1
+                ? "续局身份码已复制。把它发给队友；对方在 LAN/IP 调试直连页粘贴到“旧存档续局身份码”输入框。"
+                : $"已复制 {codes.Count} 条续局身份码。请按角色/玩家名，只把对应的一行发给每位队友；不要让队友使用别人的身份码。";
+            LanConnectPopupUtil.ShowInfo(message);
+        }
+        catch (Exception ex)
+        {
+            GD.Print($"sts2_lan_connect lan_resume_code: failed to copy -> {ex}");
+            LanConnectPopupUtil.ShowInfo($"复制续局身份码失败：{ex.Message}");
+        }
     }
 
     private static Control CreateContinueRunInviteControl()

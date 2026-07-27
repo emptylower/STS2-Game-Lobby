@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -15,6 +16,8 @@ internal readonly record struct LanConnectPersistedLobbyServerAddress(
 internal sealed class LanConnectConfigData
 {
     public string LastEndpoint { get; set; } = string.Empty;
+
+    public string LanClientNetId { get; set; } = string.Empty;
 
     public string LobbyServerBaseUrl { get; set; } = string.Empty;
 
@@ -75,6 +78,33 @@ internal static class LanConnectConfig
                 _data.LastEndpoint = value;
                 SaveUnsafe();
             }
+        }
+    }
+
+    public static ulong GetOrCreateClientNetId()
+    {
+        lock (Sync)
+        {
+            LanConnectClientIdentityResolution resolution = LanConnectClientIdentity.Resolve(
+                _data.LanClientNetId,
+                LanConnectNetUtil.GenerateClientNetId);
+            if (!string.Equals(_data.LanClientNetId, resolution.PersistedValue, StringComparison.Ordinal))
+            {
+                _data.LanClientNetId = resolution.PersistedValue;
+                SaveUnsafe();
+            }
+
+            return resolution.NetId;
+        }
+    }
+
+    internal static string GetPersistedClientNetIdForDiagnostics()
+    {
+        lock (Sync)
+        {
+            return LanConnectClientIdentity.TryParse(_data.LanClientNetId, out ulong netId)
+                ? netId.ToString(CultureInfo.InvariantCulture)
+                : string.Empty;
         }
     }
 
@@ -504,6 +534,10 @@ internal static class LanConnectConfig
 
     private static void NormalizeDefaultsUnsafe()
     {
+        _data.LanClientNetId = LanConnectClientIdentity.TryParse(_data.LanClientNetId, out ulong clientNetId)
+            ? clientNetId.ToString(CultureInfo.InvariantCulture)
+            : string.Empty;
+
         if (LanConnectLobbyEndpointDefaults.IsLegacyLocalhostBaseUrl(_data.LobbyServerBaseUrl))
         {
             _data.LobbyServerBaseUrl = string.Empty;
@@ -567,7 +601,9 @@ internal static class LanConnectConfig
             PlayerCount = binding.PlayerCount,
             PlayerSignature = binding.PlayerSignature,
             PlayerNames = binding.PlayerNames,
-            UpdatedAtUnixSeconds = binding.UpdatedAtUnixSeconds
+            UpdatedAtUnixSeconds = binding.UpdatedAtUnixSeconds,
+            // Preserve empty HostChannel for legacy bindings; do not rewrite to lobby.
+            HostChannel = binding.HostChannel ?? string.Empty
         };
     }
 

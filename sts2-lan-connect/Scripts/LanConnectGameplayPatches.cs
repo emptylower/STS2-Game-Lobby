@@ -18,16 +18,20 @@ internal static class LanConnectGameplayPatches
 
         _initialized = true;
 
-        if (LanConnectExternalModDetection.IsRmpModLoaded)
-        {
-            Log.Info("sts2_lan_connect gameplay: RMP mod detected, skipping gameplay patches.");
-            return;
-        }
-
         var applied = 0;
         var failed = 0;
 
+        // Compatibility guards are load-bearing for save integrity and the Android join screen;
+        // they must apply even when RMP is present and gameplay patches are skipped.
         if (TryApplyGroup("SaveManager", () => LanConnectSaveManagerPatches.Apply(HarmonyInstance))) applied++; else failed++;
+        if (TryApplyGroup("JoinScreenAutoJoin", () => LanConnectJoinScreenAutoJoinPatches.Apply(HarmonyInstance))) applied++; else failed++;
+
+        if (LanConnectExternalModDetection.IsRmpModLoaded)
+        {
+            Log.Info($"sts2_lan_connect gameplay: RMP mod detected, skipping gameplay patches. compatibility groups applied={applied}, failed={failed}.");
+            return;
+        }
+
         if (TryApplyGroup("DifficultyScaling", () => DifficultyScalingPatches.Apply(HarmonyInstance))) applied++; else failed++;
         if (TryApplyGroup("RestSite", () => RestSitePatches.Apply(HarmonyInstance))) applied++; else failed++;
         if (TryApplyGroup("Merchant", () => MerchantPatches.Apply(HarmonyInstance))) applied++; else failed++;

@@ -103,6 +103,26 @@ internal static class LanConnectMultiplayerSaveCompatibility
                 return Task.CompletedTask;
             }
 
+            LanConnectResolvedRoomBinding binding = LanConnectMultiplayerSaveRoomBinding.Resolve(run);
+            LanConnectLanSafeLoadChannelActionKind channelAction = LanConnectLanSafeLoadChannelDecision.Decide(binding.HostChannel);
+            if (channelAction == LanConnectLanSafeLoadChannelActionKind.KeepBinding)
+            {
+                GD.Print(
+                    $"sts2_lan_connect save_compat: keeping lobby host binding for saveKey={binding.SaveKey}; lobby room will be republished after load.");
+            }
+            else if (!string.Equals(binding.HostChannel, LanConnectHostChannels.Lan, StringComparison.Ordinal))
+            {
+                LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+                    run,
+                    binding.RoomName,
+                    binding.Password,
+                    binding.GameMode,
+                    LanConnectHostChannels.Lan,
+                    "explicit_lan_load_action");
+                GD.Print(
+                    $"sts2_lan_connect save_compat: migrated host channel from {LanConnectHostChannels.DescribePersisted(binding.HostChannel)} to lan because user selected LAN safe load. saveKey={binding.SaveKey}");
+            }
+
             GD.Print(
                 $"sts2_lan_connect save_compat: starting loaded multiplayer run via ENet override. players=[{string.Join(",", run.Players.Select(static player => player.NetId))}]");
             PushLoadedRunScreen(stack, netService, run);
@@ -140,51 +160,104 @@ internal static class LanConnectMultiplayerSaveCompatibility
 
     public static async Task AbandonCurrentRunAsync(NMultiplayerSubmenu submenu)
     {
-        LocString header = new("main_menu_ui", "ABANDON_RUN_CONFIRMATION.header");
-        LocString body = new("main_menu_ui", "ABANDON_RUN_CONFIRMATION.body");
-        LocString yesButton = new("main_menu_ui", "GENERIC_POPUP.confirm");
-        LocString noButton = new("main_menu_ui", "GENERIC_POPUP.cancel");
-        NGenericPopup? popup = NGenericPopup.Create();
-        if (popup == null)
+        if (!await ConfirmPermanentAbandonAsync(submenu))
         {
             return;
         }
 
-        if (NModalContainer.Instance == null)
+        if (!TryLoadSafeCurrentRun(out SerializableRun? run, out string failureReason) || run == null)
         {
+            Log.Error($"ERROR: Refusing to delete unreadable multiplayer save: {failureReason}");
+            GD.Print($"sts2_lan_connect save_compat: abandon blocked because save load failed reason={failureReason}");
+            LanConnectPopupUtil.ShowInfo("无法安全读取当前多人存档，因此没有执行删除。请先复制调试报告并联系开发者。");
             return;
         }
 
-        NModalContainer.Instance.Add(popup);
-        if (!await popup.WaitForConfirmation(body, header, noButton, yesButton))
+        string sourceSavePath = ProjectSettings.GlobalizePath(
+            SaveManager.Instance.GetProfileScopedPath(Path.Combine("saves", "current_run_mp.save")));
+        string backupRoot = Path.Combine(LanConnectPaths.ResolveWritableDataDirectory(), "save-backups");
+        if (!LanConnectSaveBackup.TryCreate(
+                sourceSavePath,
+                backupRoot,
+                SaveManager.Instance.CurrentProfileId,
+                DateTimeOffset.UtcNow,
+                out string backupPath,
+                out string backupError))
         {
+            Log.Error($"ERROR: Refusing to delete multiplayer save because backup failed: {backupError}");
+            GD.Print($"sts2_lan_connect save_compat: abandon blocked because backup failed source={sourceSavePath}, reason={backupError}");
+            LanConnectPopupUtil.ShowInfo($"删除前备份失败，因此没有删除存档。\n原因：{backupError}");
             return;
         }
 
-        if (TryLoadSafeCurrentRun(out SerializableRun? run, out string failureReason) && run != null)
+        GD.Print($"sts2_lan_connect save_compat: abandon backup created path={backupPath}");
+        try
         {
-            try
+            SaveManager.Instance.UpdateProgressWithRunData(run, victory: false);
+            RunHistoryUtilities.CreateRunHistoryEntry(run, victory: false, isAbandoned: true, run.PlatformType);
+            if (run.DailyTime.HasValue)
             {
-                SaveManager.Instance.UpdateProgressWithRunData(run, victory: false);
-                RunHistoryUtilities.CreateRunHistoryEntry(run, victory: false, isAbandoned: true, run.PlatformType);
-                if (run.DailyTime.HasValue)
-                {
-                    int score = ScoreUtility.CalculateScore(run, won: false);
-                    _ = TaskHelper.RunSafely(DailyRunUtility.UploadScore(run.DailyTime.Value, score, run.Players));
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"ERROR: Failed to upload run history/metrics: {ex}");
+                int score = ScoreUtility.CalculateScore(run, won: false);
+                _ = TaskHelper.RunSafely(DailyRunUtility.UploadScore(run.DailyTime.Value, score, run.Players));
             }
         }
-        else
+        catch (Exception ex)
         {
-            Log.Error($"ERROR: Failed to load multiplayer run save through LAN compatibility path: {failureReason}. Deleting current run...");
+            Log.Error($"ERROR: Failed to upload run history/metrics: {ex}");
         }
 
-        SaveManager.Instance.DeleteCurrentMultiplayerRun();
+        try
+        {
+            SaveManager.Instance.DeleteCurrentMultiplayerRun();
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"ERROR: Failed to delete multiplayer save after backup: {ex}");
+            LanConnectPopupUtil.ShowInfo($"存档删除失败；备份仍保留在：\n{backupPath}");
+            return;
+        }
+
+        string saveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run);
+        bool removedBinding = LanConnectConfig.RemoveSaveRoomBinding(saveKey);
+        GD.Print(
+            $"sts2_lan_connect save_compat: abandon completed removedBinding={removedBinding}, saveKey={saveKey}, backupPath={backupPath}");
         submenu.Call(NMultiplayerSubmenu.MethodName.UpdateButtons);
+        LanConnectPopupUtil.ShowInfo($"多人存档已放弃。删除前备份保存在：\n{backupPath}");
+    }
+
+    private static async Task<bool> ConfirmPermanentAbandonAsync(NMultiplayerSubmenu submenu)
+    {
+        ConfirmationDialog confirmation = new()
+        {
+            Name = "LanConnectSafeAbandonConfirmation",
+            Title = "确认永久放弃多人存档",
+            DialogText =
+                "此操作会结束当前多人进度，并删除游戏使用的 current_run_mp.save。\n\n" +
+                "LAN Connect 会先在 user://sts2_lan_connect/save-backups/ 创建可恢复备份；如果读取或备份失败，删除会自动取消。",
+            OkButtonText = "备份并永久放弃",
+            CancelButtonText = "保留存档",
+            Exclusive = true,
+            Unresizable = false,
+            MinSize = new Vector2I(560, 300)
+        };
+        TaskCompletionSource<bool> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        confirmation.Confirmed += () => completion.TrySetResult(true);
+        confirmation.Canceled += () => completion.TrySetResult(false);
+        confirmation.CloseRequested += () => completion.TrySetResult(false);
+        submenu.AddChild(confirmation);
+        try
+        {
+            confirmation.PopupCenteredClamped(new Vector2I(680, 380), 0.9f);
+            confirmation.GetCancelButton().GrabFocus();
+            return await completion.Task;
+        }
+        finally
+        {
+            if (GodotObject.IsInstanceValid(confirmation))
+            {
+                confirmation.QueueFree();
+            }
+        }
     }
 
     private static bool TryLoadSafeCurrentRun(out SerializableRun? run, out string failureReason)
