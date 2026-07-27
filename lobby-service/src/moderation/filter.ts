@@ -1,5 +1,26 @@
-import { findMatches, type TrieNode } from "./dfa.js";
+import { findMatches, type MatchSpan, type TrieNode } from "./dfa.js";
 import { normalizeForMatch } from "./normalize.js";
+
+const ASCII_ALNUM_PATTERN = /^[a-z0-9]$/;
+
+function isAsciiAlnum(ch: string | undefined): boolean {
+  return ch !== undefined && ASCII_ALNUM_PATTERN.test(ch);
+}
+
+/**
+ * ASCII 词边界规则：命中词首/尾若是 ASCII 字母数字，
+ * 则对应外侧的相邻字符不得也是 ASCII 字母数字。
+ * 防止 "av" 误伤 "have"、"da" 误伤 "standard"。
+ */
+function spanRespectsAsciiBoundaries(chars: string[], span: MatchSpan): boolean {
+  if (isAsciiAlnum(chars[span.startChar]) && isAsciiAlnum(chars[span.startChar - 1])) {
+    return false;
+  }
+  if (isAsciiAlnum(chars[span.endChar - 1]) && isAsciiAlnum(chars[span.endChar])) {
+    return false;
+  }
+  return true;
+}
 
 export interface MaskResult {
   text: string;
@@ -28,13 +49,16 @@ export class LexiconSensitiveWordFilter implements SensitiveWordFilter {
   ) {}
 
   contains(text: string): boolean {
-    return findMatches(this.root, normalizeForMatch(text).chars).length > 0;
+    const normalized = normalizeForMatch(text);
+    return findMatches(this.root, normalized.chars)
+      .some((span) => spanRespectsAsciiBoundaries(normalized.chars, span));
   }
 
   mask(text: string): MaskResult {
     const nfc = text.normalize("NFC");
     const normalized = normalizeForMatch(nfc);
-    const spans = findMatches(this.root, normalized.chars);
+    const spans = findMatches(this.root, normalized.chars)
+      .filter((span) => spanRespectsAsciiBoundaries(normalized.chars, span));
     if (spans.length === 0) {
       return { text, masked: false };
     }
