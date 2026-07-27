@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   PHASE_3_CHAT_FEATURES,
   type ChatFeatureVersions,
 } from "./feature-resolver.js";
 import type { RoomChatContext } from "../store.js";
+import { ModerationService } from "../moderation/moderation-service.js";
 import {
   RoomChatGateway,
   type RoomChatGatewayOptions,
@@ -2068,3 +2072,85 @@ function withPollutedObjectPrototype(
     }
   }
 }
+
+function testModeration(words: string[] = ["白痴"]): ModerationService {
+  const dir = mkdtempSync(join(tmpdir(), "sts2-room-moderation-"));
+  writeFileSync(join(dir, "words.txt"), words.join("\n"), "utf8");
+  return ModerationService.create({ lexiconDir: dir, enabled: true });
+}
+
+test("hello with sensitive player name is rejected with invalid_message", () => {
+  const gateway = createGateway({ moderation: testModeration() });
+  const client = peer("client-connection");
+  gateway.registerPeer(client.registration);
+
+  assert.equal(
+    gateway.handleControlEnvelope("client-connection", hello("白痴玩家", "net:alice")),
+    true,
+  );
+  const error = client.frames.at(-1);
+  assert.equal(error?.type, "room_chat_error");
+  assert.equal(error?.code, "invalid_message");
+  assert.equal(gateway.getLockedIdentity("client-connection"), null);
+});
+
+test("legacy hello with sensitive player name is rejected", () => {
+  const gateway = createGateway({ moderation: testModeration() });
+  const client = peer("client-connection");
+  gateway.registerPeer(client.registration);
+
+  const legacyHello = {
+    type: "client_hello",
+    roomId: "room-1",
+    controlChannelId: "control-1",
+    role: "client",
+    playerName: "白痴玩家",
+    playerNetId: "net:alice",
+  };
+  assert.equal(gateway.handleControlEnvelope("client-connection", legacyHello), true);
+  const error = client.frames.at(-1);
+  assert.equal(error?.type, "room_chat_error");
+  assert.equal(error?.code, "invalid_message");
+  assert.equal(gateway.getLockedIdentity("client-connection"), null);
+});
+
+test("clean hello still locks identity when moderation is enabled", () => {
+  const gateway = createGateway({ moderation: testModeration() });
+  const client = peer("client-connection");
+  gateway.registerPeer(client.registration);
+
+  assert.equal(
+    gateway.handleControlEnvelope("client-connection", hello("Alice", "net:alice")),
+    true,
+  );
+  assert.deepEqual(gateway.getLockedIdentity("client-connection"), {
+    playerName: "Alice",
+    playerNetId: "net:alice",
+  });
+});
+
+test("room chat message masks sensitive text before broadcast", () => {
+  const gateway = createGateway({ moderation: testModeration() });
+  const client = peer("client-connection");
+  const host = peer("host-connection", "host");
+  gateway.registerPeer(client.registration);
+  gateway.registerPeer(host.registration);
+  gateway.handleControlEnvelope("client-connection", hello("Alice", "net:alice"));
+  gateway.handleControlEnvelope("host-connection", hostHello("Host", "net:host"));
+  client.frames.length = 0;
+  host.frames.length = 0;
+
+  assert.equal(gateway.handleControlEnvelope(
+    "client-connection",
+    roomSend("33333333-3333-4333-8333-333333333333", textContent("你是白痴")),
+  ), true);
+
+  const ack = client.frames.find((frame) => frame.type === "room_chat_ack");
+  const delivered = host.frames.find((frame) => frame.type === "room_chat_message");
+  assert.ok(ack, "expected a room_chat_ack frame");
+  assert.ok(delivered, "expected a room_chat_message frame");
+  const ackMessage = ack.message as { content: { segments: unknown[] } };
+  const deliveredMessage = delivered.message as { content: { segments: unknown[] } };
+  assert.deepEqual(ackMessage.content.segments, [{ kind: "text", text: "你是**" }]);
+  assert.deepEqual(deliveredMessage.content.segments, [{ kind: "text", text: "你是**" }]);
+});

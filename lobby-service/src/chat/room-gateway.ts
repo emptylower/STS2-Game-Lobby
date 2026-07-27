@@ -348,6 +348,12 @@ export class RoomChatGateway {
         playerName: normalizePlayerName(envelope.playerName),
         playerNetId: normalizePlayerNetId(envelope.playerNetId),
       };
+      const moderation = this.moderation;
+      if (moderation?.containsSensitiveName(identity.playerName) === true) {
+        moderation.recordNameRejection();
+        this.sendError(peer, "invalid_message", "");
+        return;
+      }
       declaredFeatures = parseDeclaredFeatures(envelope.roomChatVersions);
     } catch {
       this.rejectHello(peer, true);
@@ -418,6 +424,12 @@ export class RoomChatGateway {
         return;
       }
       const playerName = normalizePlayerName(envelope.playerName);
+      const moderation = this.moderation;
+      if (moderation?.containsSensitiveName(playerName) === true) {
+        moderation.recordNameRejection();
+        this.sendError(peer, "invalid_message", "");
+        return;
+      }
       if (peer.role === "client") {
         if (!Object.hasOwn(envelope, "playerNetId")) return;
         legacyClientIdentity = {
