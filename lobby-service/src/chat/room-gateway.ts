@@ -20,6 +20,7 @@ import {
 } from "./feature-resolver.js";
 import { RateLimitError, SlidingWindowLimiter, TokenBucketLimiter } from "./rate-limiter.js";
 import type { RoomChatContext } from "../store.js";
+import type { ModerationService } from "../moderation/moderation-service.js";
 
 export interface RoomChatPeerRegistration {
   connectionSessionId: string;
@@ -48,6 +49,7 @@ export interface RoomChatGatewayOptions {
   ipMessagesPerMinute?: number;
   connectionLimiterMaxKeys?: number;
   ipLimiterMaxKeys?: number;
+  moderation?: ModerationService;
 }
 
 export interface RoomChatGovernanceState {
@@ -126,6 +128,7 @@ export class RoomChatGateway {
   private desiredAdminFeatures: Partial<ChatFeatureVersions> | undefined;
   private desiredRoomV2Enabled: boolean;
   private readonly getRoomChatContext: (roomId: string) => RoomChatContext | undefined;
+  private readonly moderation: ModerationService | null;
   private readonly now: () => number;
   private readonly randomUuid: () => string;
   private readonly maxPeersTotal: number;
@@ -151,6 +154,7 @@ export class RoomChatGateway {
     this.roomV2Enabled = options.roomV2Enabled ?? true;
     this.desiredRoomV2Enabled = this.roomV2Enabled;
     this.getRoomChatContext = options.getRoomChatContext;
+    this.moderation = options.moderation ?? null;
     this.now = options.now ?? Date.now;
     this.randomUuid = options.randomUuid ?? randomUUID;
     this.maxPeersTotal = options.maxPeersTotal ?? DEFAULT_MAX_PEERS_TOTAL;
@@ -485,6 +489,7 @@ export class RoomChatGateway {
     let canonicalJson: string;
     try {
       const senderFeatures = this.resolveFeatures(peer, peer, true);
+      const moderation = this.moderation;
       content = canonicalizeRoomContent(envelope.content, {
         richContentVersion: senderFeatures.richContentVersion,
         emojiSetVersion: senderFeatures.emojiSetVersion,
@@ -494,7 +499,7 @@ export class RoomChatGateway {
         envelopeRoomSessionId: envelope.roomSessionId,
         activeRoomSessionId: receiveContext.roomSessionId,
         peerPlayerNetIds: receiveContext.peerPlayerNetIds,
-      });
+      }, moderation === null ? undefined : (text) => moderation.maskChatText(text));
       canonicalJson = deterministicContentJson(content);
     } catch (error) {
       if (!this.activeContext(peer, envelope.roomSessionId)) {

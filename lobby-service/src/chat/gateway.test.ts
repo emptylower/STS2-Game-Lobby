@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -1075,6 +1075,9 @@ test("close releases a protocol-error barrier even when socket send stalls", asy
 
 test("lobby service commits a chat ticket into a ready gateway connection", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "sts2-chat-gateway-"));
+  // Empty lexicon keeps this test hermetic: the production word list rejects fixture names via substring matching.
+  const emptyLexiconDir = join(tempDir, "empty-lexicon");
+  mkdirSync(emptyLexiconDir, { recursive: true });
   const config = loadLobbyServiceConfig({
     HOST: "127.0.0.1",
     PORT: "0",
@@ -1083,6 +1086,7 @@ test("lobby service commits a chat ticket into a ready gateway connection", asyn
     PEER_CF_DISCOVERY_BASE_URL: "",
     PEER_STATE_DIR: join(tempDir, "peer"),
     SERVER_ADMIN_STATE_FILE: join(tempDir, "admin.json"),
+    SENSITIVE_LEXICON_DIR: emptyLexiconDir,
     ENFORCE_LOBBY_ACCESS_TOKEN: "false",
     ENFORCE_CREATE_ROOM_TOKEN: "false",
     SERVER_CHAT_ENABLED: "true",

@@ -22,6 +22,7 @@ import {
   type LobbyModDescriptor,
 } from "./mod-sync/protocol.js";
 import { ModSyncValidationError, validateModInventory } from "./mod-sync/validator.js";
+import { ModerationService } from "./moderation/moderation-service.js";
 import { RoomRelayManager } from "./relay.js";
 import { cleanupExpiredRooms } from "./room-cleanup.js";
 import {
@@ -108,7 +109,14 @@ const lobbyServiceVersion = readLobbyServiceVersion();
 
 type PeerRuntimeState = "disabled" | "unconfigured" | "private" | "joining" | "joined";
 
-class InputError extends Error {}
+class InputError extends Error {
+  readonly details?: Record<string, unknown> | undefined;
+
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message);
+    this.details = details;
+  }
+}
 
 type RateLimitBucket = {
   hits: number[];
@@ -232,6 +240,12 @@ export async function createLobbyService(
     publicListingEnabledDefault: env.peerPublicListingEnabledDefault,
     modSyncEnabledDefault: env.modSyncEnabled,
     chatFeaturesDefault: env.chat.features,
+    sensitiveFilterEnabledDefault: env.sensitiveFilterEnabled,
+  });
+  const moderation = ModerationService.create({
+    lexiconDir: env.sensitiveLexiconDir,
+    enabled: serverAdminStateStore.getState().sensitiveFilterEnabled,
+    log: (message) => console.error(message),
   });
   const serviceUpdateManager = new ServiceUpdateManager({
     currentVersion: lobbyServiceVersion,
@@ -270,6 +284,7 @@ export async function createLobbyService(
     connectionBurst: env.chat.connectionBurst,
     connectionRefillMs: env.chat.connectionRefillMs,
     ipMessagesPerMinute: env.chat.ipMessagesPerMinute,
+    moderation,
     ...dependencies.chatGatewayOptions,
   });
   const currentRoomChatFeatures = resolveEnabledFeatures({
@@ -285,6 +300,7 @@ export async function createLobbyService(
     adminFeatures: governanceToFeatureVersions(initialChatGovernance, "room"),
     roomV2Enabled: initialChatGovernance.roomChatV2Enabled,
     getRoomChatContext: (roomId) => store.getRoomChatContext(roomId),
+    moderation,
   });
   const reservedChatTicketsByUpgrade = new WeakMap<IncomingMessage, ReservedChatTicket>();
   let peerStore: PeerStore | null = null;
@@ -301,6 +317,13 @@ export async function createLobbyService(
       throw new Error("peer store is not initialized");
     }
     return peerStore;
+  }
+
+  function assertNameAllowedByModeration(value: string): void {
+    if (moderation.containsSensitiveName(value)) {
+      moderation.recordNameRejection();
+      throw new InputError("包含敏感词内容，请修改后重试", { reason: "sensitive_content" });
+    }
   }
 
   const app = express();
@@ -425,6 +448,8 @@ export async function createLobbyService(
     if (typeof body.playerNetId !== "string" || typeof body.playerName !== "string") {
       throw new InputError("playerNetId 与 playerName 必须为字符串。");
     }
+
+    assertNameAllowedByModeration(body.playerName);
 
     let issued: { ticket: string; expiresAt: string };
     try {
@@ -556,6 +581,17 @@ export async function createLobbyService(
         };
       }
 
+      assertNameAllowedByModeration(roomInput.roomName);
+      assertNameAllowedByModeration(roomInput.hostPlayerName);
+      for (const slot of roomInput.savedRun?.slots ?? []) {
+        if (slot.characterName !== undefined) {
+          assertNameAllowedByModeration(slot.characterName);
+        }
+        if (slot.playerName !== undefined) {
+          assertNameAllowedByModeration(slot.playerName);
+        }
+      }
+
       const room = store.createRoom(roomInput, requestIp(req));
       createdRoom = {
         roomId: room.roomId,
@@ -590,6 +626,9 @@ export async function createLobbyService(
       assertCreateJoinRateLimit(req, "join_room");
       cleanupExpiredRoomsNow();
       const body = req.body as Partial<JoinRoomInput> | undefined;
+      if (typeof body?.playerName === "string") {
+        assertNameAllowedByModeration(body.playerName);
+      }
       const response = store.joinRoom(req.params.id, {
         playerName: boundedString(body?.playerName, "playerName", MaxPlayerNameLength),
         password: optionalBoundedString(body?.password, "password", MaxPasswordLength),
@@ -628,6 +667,10 @@ export async function createLobbyService(
       ]);
       if (!body || Array.isArray(body) || Object.keys(body).some((key) => !allowedFields.has(key))) {
         throw new InputError("MOD 预检请求包含不支持的字段。");
+      }
+
+      if (typeof body.playerName === "string") {
+        assertNameAllowedByModeration(body.playerName);
       }
 
       const playerName = boundedString(body.playerName, "playerName", MaxPlayerNameLength);
@@ -911,6 +954,7 @@ export async function createLobbyService(
       res.status(400).json({
         code: "invalid_request",
         message: error.message,
+        ...(error.details === undefined ? {} : { details: error.details }),
       });
       return;
     }

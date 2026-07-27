@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,6 +64,10 @@ const disabledVersions = {
 
 function compatibilityConfig(tempDir: string): LobbyServiceConfig {
   const relayPortStart = 45_000 + (process.pid % 10_000);
+  // Empty lexicon keeps these tests hermetic: the production word list rejects
+  // fixture names containing substrings like "test"/"da".
+  const emptyLexiconDir = join(tempDir, "empty-lexicon");
+  mkdirSync(emptyLexiconDir, { recursive: true });
   return loadLobbyServiceConfig({
     HOST: "127.0.0.1",
     PORT: "0",
@@ -72,6 +76,7 @@ function compatibilityConfig(tempDir: string): LobbyServiceConfig {
     PEER_CF_DISCOVERY_BASE_URL: "",
     SERVER_ADMIN_STATE_FILE: join(tempDir, "server-admin.json"),
     PEER_STATE_DIR: join(tempDir, "peer"),
+    SENSITIVE_LEXICON_DIR: emptyLexiconDir,
     ENFORCE_LOBBY_ACCESS_TOKEN: "false",
     ENFORCE_CREATE_ROOM_TOKEN: "false",
     SERVER_CHAT_ENABLED: "true",

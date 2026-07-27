@@ -55,6 +55,12 @@ function createServerAdminMutationBarrier() {
 
 function testConfig(overrides: Partial<LobbyServiceConfig> = {}): LobbyServiceConfig {
   const tempDir = mkdtempSync(join(tmpdir(), "sts2-lobby-app-"));
+  // Point the sensitive-word filter at an empty lexicon by default so existing
+  // tests stay hermetic (the production lexicon rejects names containing
+  // substrings like "test"/"da"). Tests that exercise moderation pass their
+  // own sensitiveLexiconDir override via writeTestLexicon().
+  const emptyLexiconDir = join(tempDir, "empty-lexicon");
+  mkdirSync(emptyLexiconDir, { recursive: true });
   const base = loadLobbyServiceConfig({
     HOST: "127.0.0.1",
     PORT: "0",
@@ -63,6 +69,7 @@ function testConfig(overrides: Partial<LobbyServiceConfig> = {}): LobbyServiceCo
     PEER_CF_DISCOVERY_BASE_URL: "",
     SERVER_ADMIN_STATE_FILE: join(tempDir, "server-admin.json"),
     PEER_STATE_DIR: join(tempDir, "peer"),
+    SENSITIVE_LEXICON_DIR: emptyLexiconDir,
     ENFORCE_LOBBY_ACCESS_TOKEN: "false",
     ENFORCE_CREATE_ROOM_TOKEN: "false",
   });
@@ -2689,4 +2696,153 @@ test("server admin cookie trusts forwarded HTTPS only from configured proxies", 
     chat: { ...trustedBase.chat, trustedProxyCidrs: ["127.0.0.0/8"] },
   });
   assert.match(trusted, /; Secure(?:;|$)/);
+});
+
+function writeTestLexicon(words: string[] = ["白痴", "敏感词"]): string {
+  const dir = mkdtempSync(join(tmpdir(), "sts2-lexicon-it-"));
+  writeFileSync(join(dir, "words.txt"), words.join("\n"), "utf8");
+  return dir;
+}
+
+test("create room rejects sensitive roomName with 400 and reason detail", async () => {
+  const config = testConfig({ port: 0, sensitiveLexiconDir: writeTestLexicon() });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "敏感词专用房",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(response.status, 400);
+    const body = await response.json() as { code: string; message: string; details?: unknown };
+    assert.equal(body.code, "invalid_request");
+    assert.equal(body.message, "包含敏感词内容，请修改后重试");
+    assert.deepEqual(body.details, { reason: "sensitive_content" });
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("create room rejects sensitive hostPlayerName", async () => {
+  const config = testConfig({ port: 0, sensitiveLexiconDir: writeTestLexicon() });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "正常房间",
+        hostPlayerName: "白痴房主",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(response.status, 400);
+    const body = await response.json() as { message: string };
+    assert.equal(body.message, "包含敏感词内容，请修改后重试");
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("chat ticket rejects sensitive playerName", async () => {
+  const config = testConfig({ port: 0, sensitiveLexiconDir: writeTestLexicon() });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  try {
+    const response = await postChatTicket(address.port, {
+      body: ticketBody({ playerName: "白痴玩家" }),
+    });
+    assert.equal(response.status, 400);
+    const body = await response.json() as { code: string; message: string };
+    assert.equal(body.code, "invalid_request");
+    assert.equal(body.message, "包含敏感词内容，请修改后重试");
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("server chat masks sensitive text before ack and broadcast", async () => {
+  const base = testConfig({ port: 0, sensitiveLexiconDir: writeTestLexicon() });
+  const config = {
+    ...base,
+    chat: { ...base.chat, features: { ...base.chat.features, serverChatEnabled: true } },
+  };
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  let socket: WebSocket | undefined;
+  try {
+    const ticketResponse = await postChatTicket(address.port);
+    assert.equal(ticketResponse.status, 200);
+    const issued = await ticketResponse.json() as { ticket: string; webSocketUrl: string };
+    socket = await openChatWebSocket(issued.webSocketUrl, issued.ticket);
+    await waitForChatFrame(socket, (frame) => frame.type === "chat_ready");
+
+    const clientMessageId = "25252525-2525-4525-8525-252525252525";
+    const ackPromise = waitForChatFrame(
+      socket,
+      (frame) => frame.type === "chat_ack" && frame.clientMessageId === clientMessageId,
+    );
+    const broadcastPromise = waitForChatFrame(socket, (frame) => frame.type === "chat_message");
+    socket.send(JSON.stringify({
+      type: "chat_send",
+      protocolVersion: 1,
+      channel: "server",
+      clientMessageId,
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "你是白痴吗" }] },
+    }));
+    const [ack, broadcast] = await Promise.all([ackPromise, broadcastPromise]);
+    const ackMessage = ack.message as { content: { segments: unknown[] } };
+    const broadcastMessage = broadcast.message as { content: { segments: unknown[] } };
+    assert.deepEqual(ackMessage.content.segments, [{ kind: "text", text: "你是**吗" }]);
+    assert.deepEqual(broadcastMessage.content.segments, [{ kind: "text", text: "你是**吗" }]);
+  } finally {
+    socket?.terminate();
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("clean names and clean chat work unchanged when filter enabled", async () => {
+  const config = testConfig({ port: 0, sensitiveLexiconDir: writeTestLexicon() });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "正常房间",
+        hostPlayerName: "正常玩家",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(response.status, 201);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -28,12 +28,17 @@ const HOST_INVENTORY: LobbyModDescriptor[] = [
 
 function testConfig(overrides: Partial<LobbyServiceConfig> = {}): LobbyServiceConfig {
   const tempDir = mkdtempSync(join(tmpdir(), "sts2-mod-preflight-"));
+  // Empty lexicon keeps these tests hermetic: the production word list rejects
+  // fixture names like "mod-preflight" via substring matching.
+  const emptyLexiconDir = join(tempDir, "empty-lexicon");
+  mkdirSync(emptyLexiconDir, { recursive: true });
   const base = loadLobbyServiceConfig({
     HOST: "127.0.0.1",
     PORT: "0",
     PEER_NETWORK_ENABLED: "false",
     SERVER_ADMIN_STATE_FILE: join(tempDir, "server-admin.json"),
     PEER_STATE_DIR: join(tempDir, "peer"),
+    SENSITIVE_LEXICON_DIR: emptyLexiconDir,
     ENFORCE_LOBBY_ACCESS_TOKEN: "false",
     ENFORCE_CREATE_ROOM_TOKEN: "false",
     PUBLIC_ROOM_LIST_ENABLED: "true",

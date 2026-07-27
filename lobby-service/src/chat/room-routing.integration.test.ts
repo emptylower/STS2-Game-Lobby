@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -106,6 +106,9 @@ function openPeer(name: string, url: string): Promise<TrackedPeer> {
 
 test("host reconnect keeps generation while delete and republish creates a new generation", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "sts2-room-generation-routing-"));
+  // Empty lexicon keeps this test hermetic: the production word list rejects fixture names via substring matching.
+  const emptyLexiconDir = join(tempDir, "empty-lexicon");
+  mkdirSync(emptyLexiconDir, { recursive: true });
   const relayPortStart = 44_000 + ((process.pid * 19) % 15_000);
   const config = loadLobbyServiceConfig({
     HOST: "127.0.0.1",
@@ -115,6 +118,7 @@ test("host reconnect keeps generation while delete and republish creates a new g
     PEER_CF_DISCOVERY_BASE_URL: "",
     SERVER_ADMIN_STATE_FILE: join(tempDir, "server-admin.json"),
     PEER_STATE_DIR: join(tempDir, "peer"),
+    SENSITIVE_LEXICON_DIR: emptyLexiconDir,
     ENFORCE_LOBBY_ACCESS_TOKEN: "false",
     ENFORCE_CREATE_ROOM_TOKEN: "false",
     SERVER_CHAT_ENABLED: "true",
@@ -224,6 +228,9 @@ test("host reconnect keeps generation while delete and republish creates a new g
 
 test("real room service routes each whole combat message by recipient capability", async () => {
   const tempDir = mkdtempSync(join(tmpdir(), "sts2-room-routing-"));
+  // Empty lexicon keeps this test hermetic: the production word list rejects fixture names via substring matching.
+  const emptyLexiconDir = join(tempDir, "empty-lexicon");
+  mkdirSync(emptyLexiconDir, { recursive: true });
   const relayPortStart = 46_000 + ((process.pid * 17) % 15_000);
   const config = loadLobbyServiceConfig({
     HOST: "127.0.0.1",
@@ -233,6 +240,7 @@ test("real room service routes each whole combat message by recipient capability
     PEER_CF_DISCOVERY_BASE_URL: "",
     SERVER_ADMIN_STATE_FILE: join(tempDir, "server-admin.json"),
     PEER_STATE_DIR: join(tempDir, "peer"),
+    SENSITIVE_LEXICON_DIR: emptyLexiconDir,
     ENFORCE_LOBBY_ACCESS_TOKEN: "false",
     ENFORCE_CREATE_ROOM_TOKEN: "false",
     SERVER_CHAT_ENABLED: "true",
