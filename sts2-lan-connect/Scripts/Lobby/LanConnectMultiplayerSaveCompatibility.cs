@@ -104,7 +104,13 @@ internal static class LanConnectMultiplayerSaveCompatibility
             }
 
             LanConnectResolvedRoomBinding binding = LanConnectMultiplayerSaveRoomBinding.Resolve(run);
-            if (!string.Equals(binding.HostChannel, LanConnectHostChannels.Lan, StringComparison.Ordinal))
+            LanConnectLanSafeLoadChannelActionKind channelAction = LanConnectLanSafeLoadChannelDecision.Decide(binding.HostChannel);
+            if (channelAction == LanConnectLanSafeLoadChannelActionKind.KeepBinding)
+            {
+                GD.Print(
+                    $"sts2_lan_connect save_compat: keeping lobby host binding for saveKey={binding.SaveKey}; lobby room will be republished after load.");
+            }
+            else if (!string.Equals(binding.HostChannel, LanConnectHostChannels.Lan, StringComparison.Ordinal))
             {
                 LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
                     run,

@@ -201,6 +201,15 @@ internal static class MultiplayerSubmenuPatches
                 overlay.ShowOverlay();
                 return;
             }
+
+            if (LanConnectLanResumeCode.TryDecode(clipboardText, out _, out _))
+            {
+                GD.Print("sts2_lan_connect lobby entry: LAN resume code detected in clipboard, showing usage hint");
+                LanConnectPopupUtil.ShowInfo(
+                    "检测到剪贴板里是 LAN 续局身份码，它不能直接用于联机大厅。\n" +
+                    "· 房主是 LAN 直连续局：请打开“加入好友”页面，把身份码粘贴到续局身份码输入框，再填房主 IP 连接。\n" +
+                    "· 想通过联机大厅续局：让房主在多人页面载入该存档（大厅房间会自动恢复），再把大厅邀请码发给你。");
+            }
         }
         catch (Exception ex)
         {
