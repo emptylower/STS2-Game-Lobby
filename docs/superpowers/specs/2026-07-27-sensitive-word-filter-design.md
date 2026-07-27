@@ -144,3 +144,11 @@ interface SensitiveFilter {
 - 命中趋势图、统计持久化
 - 存量房间/昵称的追溯清理
 - 客户端侧过滤（过滤权威在服务端）
+
+## 9. 实施期修订（2026-07-27，已随实现落地）
+
+1. **ASCII 词边界规则**：真实词库含短 ASCII 词（`da`、`av`、`sm`、`b` 等），纯子串匹配会误伤 "have"/"small"/"standard"。规则：命中词首/尾是 ASCII 字母数字时，外侧相邻字符不得也是 ASCII 字母数字。**间隙感知**：相邻字符在原文中被剔除字符（空白/标点）隔开时视为存在边界（"av movie"、"a v" 命中；"have"、"testing" 不命中）。已知代价："da vinci" 会命中 `da`（词库垃圾词所致，可接受）。
+2. **NFC 下标契约**：`normalizeForMatch` 的原文下标相对 NFC 串；`filter.mask` 先转 NFC 再套用 span，非 NFC 输入返回其 NFC 形式的打码结果。
+3. **既有测试与生产词库解耦**：测试夹具名（"standard"、"close-test"）会被真实词库误伤，集成/单测默认指向空词库目录（fail-open），过滤行为一律用显式小词表测试。
+4. **WS hello 拒绝机制**：用既有 `sendError("invalid_message")` + return（非终态，可用正确名字重试），而非计划中的 throw——既有 catch 会把 throw 统一压成 protocol_mismatch 终态。
+5. **package.json 无 `files` 字段**：分发走打包脚本白名单（EXPECTED_MANIFEST + package-content.test.ts），lexicon/ 已加入清单，功能等价于 spec §7 的 files 方案。
