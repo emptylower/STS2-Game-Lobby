@@ -83,14 +83,27 @@ test("pure CJK words keep substring matching without boundary rules", () => {
 test("single ASCII letter word only matches standalone", () => {
   const filter = filterWith(["b"]);
   assert.equal(filter.contains("black"), false);
-  assert.equal(filter.contains("a b c"), false); // "a b c" 归一化后是 abc，b 两侧紧邻 a/c
+  assert.equal(filter.contains("a b c"), true); // "a b c" 中 b 与 a/c 之间有空白间隙 → 存在边界 → 命中
   assert.equal(filter.contains("甲b乙"), true);
 });
 
 test("mask applies spans to the NFC-normalized text so non-NFC input stays aligned", () => {
-  // "Á" 是两个 UTF-16 unit，NFC 后合并为 "Á"（一个 unit）。
+  // "Á" 是两个 UTF-16 unit，NFC 后合并为 "Á"（一个 unit）。
   // 打码必须作用于 NFC 串，否则 span 下标会与原串错位。
   const filter = filterWith(["敏感词"]);
-  const result = filter.mask("Á敏感词");
+  const result = filter.mask("Á敏感词");
   assert.deepEqual(result, { text: "Á***", masked: true });
+});
+
+test("ASCII boundary respects gaps from stripped whitespace and punctuation", () => {
+  const filter = filterWith(["av", "test"]);
+  // 原文直接相邻 → 词内部 → 不命中。
+  assert.equal(filter.contains("have"), false);
+  assert.equal(filter.contains("testing"), false);
+  // 间隙（被剔除的空白/标点）构成边界 → 命中。
+  assert.equal(filter.contains("av movie"), true);
+  assert.equal(filter.contains("a v"), true);
+  assert.equal(filter.contains("test room"), true);
+  assert.equal(filter.contains("av.movie"), true);
+  assert.deepEqual(filter.mask("av movie"), { text: "** movie", masked: true });
 });
