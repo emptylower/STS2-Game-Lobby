@@ -417,6 +417,31 @@ test("mod sync config defaults enabled with protocol safety limits", () => {
   assert.equal(config.modSyncMaxPayloadBytes, 65_536);
 });
 
+test("sensitive filter config defaults", () => {
+  const config = loadLobbyServiceConfig({});
+  assert.equal(config.sensitiveFilterEnabled, true);
+  assert.ok(
+    config.sensitiveLexiconDir.replaceAll("\\", "/").endsWith("lexicon/"),
+    `expected default lexicon dir to end with lexicon/, got ${config.sensitiveLexiconDir}`,
+  );
+});
+
+test("sensitive filter config honors env overrides", () => {
+  const config = loadLobbyServiceConfig({
+    SENSITIVE_FILTER_ENABLED: "false",
+    SENSITIVE_LEXICON_DIR: "/tmp/custom-lexicon",
+  });
+  assert.equal(config.sensitiveFilterEnabled, false);
+  assert.equal(config.sensitiveLexiconDir, "/tmp/custom-lexicon");
+});
+
+test("sensitive filter config rejects invalid boolean", () => {
+  assert.throws(
+    () => loadLobbyServiceConfig({ SENSITIVE_FILTER_ENABLED: "maybe" }),
+    (error: unknown) => error instanceof LobbyServiceConfigError && error.code === "invalid_boolean",
+  );
+});
+
 test("mod sync config parses explicit enable and bounded limits", () => {
   const config = loadLobbyServiceConfig({
     MOD_SYNC_ENABLED: "true",

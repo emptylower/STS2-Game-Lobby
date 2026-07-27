@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import type { ConnectionStrategy } from "./store.js";
 import type { ChatFeatureGovernance } from "./chat/feature-resolver.js";
 
@@ -83,6 +85,8 @@ export interface LobbyServiceConfig {
     stateDir: string;
     displayNameOverride: string;
   };
+  sensitiveFilterEnabled: boolean;
+  sensitiveLexiconDir: string;
   chat: ChatConfig;
 }
 
@@ -140,6 +144,8 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
       stateDir: source.PEER_STATE_DIR ?? "./data/peer",
       displayNameOverride: (source.PEER_DISPLAY_NAME ?? "").trim(),
     },
+    sensitiveFilterEnabled: parseBoolean(source, "SENSITIVE_FILTER_ENABLED", true),
+    sensitiveLexiconDir: source.SENSITIVE_LEXICON_DIR ?? defaultLexiconDir(),
     chat: loadChatConfig(source),
   };
 }
@@ -292,4 +298,12 @@ function parseCommaSeparatedValues(value: string | undefined): string[] {
 function optionalEnv(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+/**
+ * 默认词库目录：包根下的 lexicon/（dist/config.js 的上一级即包根）。
+ * 与 readLobbyServiceVersion 读取 ../package.json 同款相对定位。
+ */
+function defaultLexiconDir(): string {
+  return fileURLToPath(new URL("../lexicon/", import.meta.url));
 }
