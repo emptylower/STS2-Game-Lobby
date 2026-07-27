@@ -1073,6 +1073,16 @@ export function renderServerAdminPage(serviceVersion: string) {
           };
         }
 
+        function sensitiveFilterExtra(filter) {
+          if (!filter) {
+            return "默认开启。聊天内容命中敏感词时自动以 * 替代；用户名、房间名等名称类字段命中时会被拒绝。";
+          }
+          if (filter.loadError) {
+            return \`词库不可用（\${filter.loadError}），过滤当前不生效，请检查服务端 lexicon 目录。\`;
+          }
+          return \`词库 \${filter.wordCount} 词 · 已打码 \${filter.maskedMessages} 条消息 · 已拒绝 \${filter.rejectedNames} 个名称\`;
+        }
+
         function formatDateTime(value) {
           if (!value) {
             return "未记录";
@@ -2211,6 +2221,7 @@ export function renderServerAdminPage(serviceVersion: string) {
                                 displayName: settings.displayName || "",
                                 publicListingEnabled: Boolean(settings.publicListingEnabled),
                                 modSyncEnabled: settings.modSyncEnabled !== false,
+                                sensitiveFilterEnabled: settings.sensitiveFilter ? settings.sensitiveFilter.enabled !== false : true,
                                 bandwidthCapacityMbps: settings.bandwidthCapacityMbps,
                                 chatFeatures: normalizeChatFeatures(settings.chatFeatures),
                               },
@@ -2245,6 +2256,15 @@ export function renderServerAdminPage(serviceVersion: string) {
                                 extra: "默认开启。关闭后，客户端会回退旧版加入流程，不再提供 Workshop 自动订阅或选择性禁用提示。",
                               },
                               h(ToggleButton, null)
+                            ),
+                            h(
+                              Form.Item,
+                              {
+                                name: "sensitiveFilterEnabled",
+                                label: "敏感词过滤",
+                                extra: sensitiveFilterExtra(settings.sensitiveFilter),
+                              },
+                              h(ToggleButton, { activeLabel: "已开启", inactiveLabel: "已关闭" })
                             ),
                             h(Title, { level: 5, style: { marginTop: 4, marginBottom: 8 } }, "聊天治理（持久化开关）"),
                             h(

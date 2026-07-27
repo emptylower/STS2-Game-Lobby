@@ -295,3 +295,9 @@ test("server admin page mobile layout wraps actions and collapses dashboard grid
   assert.match(html, /\.update-layout \{[\s\S]*grid-template-columns: 1fr/);
   assert.match(html, /\.toggle-button \{[\s\S]*width: 100%/);
 });
+
+test("admin page renders the sensitive filter toggle", () => {
+  const html = renderServerAdminPage("0.5.3");
+  assert.ok(html.includes("敏感词过滤"));
+  assert.ok(html.includes("sensitiveFilterEnabled"));
+});
