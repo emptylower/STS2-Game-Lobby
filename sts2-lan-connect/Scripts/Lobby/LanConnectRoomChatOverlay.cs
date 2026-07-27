@@ -268,7 +268,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             return;
         }
 
-        HandleUnhandledKey(
+        HandleChatKey(
             keyEvent.Keycode,
             keyEvent.ShiftPressed,
             HasBlockingModalOutsideOverlay(),
@@ -278,6 +278,23 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     public override void _Input(InputEvent inputEvent)
     {
         ReportPointerModeInput(inputEvent);
+
+        if (inputEvent is InputEventKey
+            {
+                Pressed: true,
+                Echo: false,
+                Keycode: Key.Enter or Key.KpEnter
+            } keyEvent)
+        {
+            // Route Enter before another mod can mark the viewport input as handled. The normal
+            // _UnhandledInput path is too late when an accessibility or controller hook consumes
+            // Enter during _Input.
+            HandleChatKey(
+                keyEvent.Keycode,
+                keyEvent.ShiftPressed,
+                HasBlockingModalOutsideOverlay(),
+                markHandled: true);
+        }
 
         if (!_dragPointerDown)
         {
@@ -394,7 +411,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     internal void RouteKeyForTests(Key key, bool shiftPressed = false, bool blockingModalVisible = false)
     {
-        HandleUnhandledKey(key, shiftPressed, blockingModalVisible, markHandled: false);
+        HandleChatKey(key, shiftPressed, blockingModalVisible, markHandled: false);
     }
 
     internal void FocusDraftForTests() => _chatPanel?.FocusDraft();
@@ -1202,7 +1219,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         return chat.SelectedChannel == LanConnectChatChannel.Room ? chat.Room : chat.Server;
     }
 
-    private void HandleUnhandledKey(
+    private void HandleChatKey(
         Key key,
         bool shiftPressed,
         bool blockingModalVisible,

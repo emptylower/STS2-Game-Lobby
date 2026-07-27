@@ -7,7 +7,7 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 
 [TestSuite]
 [RequireGodotRuntime]
-public sealed class LanConnectRoomChatFocusTests
+public sealed partial class LanConnectRoomChatFocusTests
 {
     [TestCase]
     public async Task Focus_next_follows_tabs_messages_draft_send_and_pin()
@@ -283,6 +283,37 @@ public sealed class LanConnectRoomChatFocusTests
         AssertThat(fixture.Overlay.TestState.Draft).IsEqual("server draft\n");
     }
 
+    [TestCase(Key.Enter)]
+    [TestCase(Key.KpEnter)]
+    public async Task Chat_handles_enter_before_an_earlier_input_node_can_swallow_it(Key key)
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        fixture.Overlay.ConfigurePointerModeForTests(LanConnectPointerMode.Mouse);
+        await fixture.Overlay.CloseForTests();
+
+        Node root = fixture.Overlay.GetParent();
+        EnterSwallowingInputNode swallower = new();
+        root.AddChild(swallower);
+        root.MoveChild(swallower, 0);
+        await fixture.Runner.AwaitIdleFrame();
+
+        PushKey(fixture.Overlay.GetViewport(), key);
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(swallower.SwallowedCount).IsEqual(0);
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
+        AssertThat(fixture.Overlay.TestState.FocusOwnerName)
+            .IsEqual(LanConnectConstants.ChatDraftInputName);
+
+        fixture.Overlay.SetDraftForTests("send despite competing input hook");
+        PushKey(fixture.Overlay.GetViewport(), key);
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(swallower.SwallowedCount).IsEqual(0);
+        AssertThat(fixture.Overlay.TestState.Draft).IsEqual(string.Empty);
+    }
+
     private static async Task AssertFocusSequence(RoomChatFixture fixture, IReadOnlyList<string> expected)
     {
         AssertThat(fixture.Overlay.TestState.FocusOwnerName).IsEqual(expected[0]);
@@ -363,5 +394,26 @@ public sealed class LanConnectRoomChatFocusTests
     {
         AssertThat(overlay.TestState.SelectedChannel).IsEqual(LanConnectChatChannel.Server);
         AssertThat(overlay.TestState.Draft).IsEqual(expectedDraft);
+    }
+
+    private sealed partial class EnterSwallowingInputNode : Node
+    {
+        internal int SwallowedCount { get; private set; }
+
+        public override void _Input(InputEvent inputEvent)
+        {
+            if (inputEvent is not InputEventKey
+                {
+                    Pressed: true,
+                    Echo: false,
+                    Keycode: Key.Enter or Key.KpEnter
+                })
+            {
+                return;
+            }
+
+            SwallowedCount++;
+            GetViewport().SetInputAsHandled();
+        }
     }
 }
