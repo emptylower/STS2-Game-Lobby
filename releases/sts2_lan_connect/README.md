@@ -14,14 +14,14 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.5.1` |
-| 默认大厅 | `47.111.146.69:8787`（兜底社区节点，可在 picker 内切换） |
+| 客户端版本 | `0.5.4` |
+| 默认大厅 | `sts2-test.43.133.192.249.nip.io`（可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `test_relaxed + relay-only` |
 
-`0.5.1` 主要改进：加入前只比较 gameplay MOD 与必要 dependency。Steam 桌面客户端可在确认后订阅缺失 Workshop 项；Android、非 Steam 或 SteamAPI 不可用时只显示手动项。多余 gameplay MOD 默认不选择禁用，必须由用户选择并二次确认。任何 MOD 改动后都必须重启；客户端只在 15 分钟内恢复服务器、房间和槽位，不保存密码或 token。游戏版本不同仍直接拦截，不能通过同步或 relaxed 继续绕过。同一个客户端包兼容游戏 `0.107.1`、`0.108.0` 与 `0.109.0`，并与 v0.5.0 对端安全降级。
+`0.5.4` 配合 lobby-service AI 语义审核：消息首次送审时在输入框上方显示“在审核中”，通过后静默进入频道，拒绝时显示游戏原生违禁词提示；服务端识别拆字规避后，客户端会按撤回帧删除相关公共频道或房间消息。房间名、用户名和续局角色名审核失败也统一使用游戏原生提示，不再显示原始 HTTP 错误。`0.5.3` 的 LAN/大厅续局通道拆分、续局身份码、存档保护和聊天 HUD 功能全部保留。
 
-正式版可从 [GitHub v0.5.1 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1) 下载，或在 Steam 创意工坊订阅 [游戏大厅](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。服务器列表会把 `101.35.217.99:8788` 标记为“置顶测试服”；声明兼容预检能力的服务器还会显示“支持 0.5.1+ MOD 同步”。
+`0.5.4` 当前为源码/候选构建，GitHub Release 与 Steam Workshop 更新尚未发布；最新公开稳定版仍为 [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)。新帧为向后兼容扩展，旧客户端仍可连接，但无法撤回已经显示的拆字上下文；建议与 lobby-service `0.5.4` 配套使用。同一客户端包以游戏 `0.107.1`、`0.109.0`、`0.109.1` 为加载目标。
 
 同一房间内的所有玩家必须使用完全相同的游戏版本。房主和客户端版本不同时，加入流程会直接提示双方版本并中止；普通非联机 MOD 不进入预检、不提示、不禁用，也不影响加入。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。
 
@@ -33,15 +33,18 @@
 - 用户可在 relaxed 配置允许时选择“仍然尝试加入”，但该入口只适用于 MOD 差异，不能跳过游戏版本不一致。
 - 安装或禁用完成后按提示重启游戏。公开房会恢复并重新预检；密码房会再次要求密码。
 
+`0.5.2` 主要改进（保留作历史参考）：聊天引用体验升级——Android 点击输入区旁的“引用”按钮，桌面按 `Alt+R`，即可进入一次性引用模式；消息改为单一行内富文本自然换行，引用使用游戏原生预览，动态 Power 说明按实际层数和玩家上下文生成。
+
 `0.5.0` 主要改进（保留作历史参考）：大厅新增节点级频道聊天；房间聊天升级为 Emoji、物品引用与 generation 校验的战斗状态引用，并完成 Android 输入、布局和图标修复。
 
 ### 富聊天引用怎么使用
 
 - 点击输入框右侧笑脸按钮可把 Emoji 插入草稿；`Enter` 发送，`Shift + Enter` 换行。
-- 插入卡牌、遗物或药水引用前，先点击游戏画面空白处让聊天输入框失去焦点，并关闭表情或物品预览。macOS 按住 `Option`、Windows/Linux 按住 `Alt`，再左键点击可见卡牌、遗物栏图标或药水栏图标。
-- 在战斗中用相同手势点击能力、增益/减益图标或玩家角色，可插入战斗状态引用。战斗引用只能发送到房间聊天；怪物目标引用当前未开放。
-- 引用可以与普通文字混排，并可用方向键、`Backspace` 和 `Delete` 编辑。桌面端将鼠标悬停在收到的物品引用上可查看本地化预览。
-- Android 纯触屏可以发送 Emoji 和查看引用；主动插入物品或战斗引用需要外接键盘、鼠标。
+- Android 点击输入区旁的“引用”按钮进入一次性引用模式；桌面按 `Alt+R` 进入或取消。成功点击一个支持对象后会自动退出，并把焦点交回文字输入位置。
+- 原有桌面 `Alt+左键` 直接引用继续保留。卡牌、遗物、药水可在服务器或房间频道引用；战斗状态和玩家只允许房间频道；怪物目标引用当前未开放。
+- 点击不支持区域不会吞掉正常游戏操作；再次点击引用按钮、`Esc`、切频道、关闭聊天或离开房间都会取消 armed 状态。
+- 引用可以和普通文字自然混排，并可用方向键、`Backspace`、`Delete`、选择和粘贴继续编辑。
+- 桌面悬停或点击消息引用可查看原生说明；Android 点击引用会打开固定预览，点击外部、`Esc` 或关闭按钮退出。
 
 `0.4.0` 主要改进（保留作历史参考）：大厅支持键盘 / 手柄式焦点导航，房间卡片可聚焦，`Enter` / `Space` / `ui_accept` 可加入当前聚焦房间；`Esc` 优先关闭最上层弹窗，再退出大厅；若安装 `say-the-spire2` 盲人辅助模组，客户端会软检测并把大厅焦点朗读桥接给该模组。新增 `F7` 邀请快捷键、`F8` 聊天快捷键，以及“剪贴板已有有效邀请码时跳过服务器选择器、直接弹出加入确认”的入口流程。发布包强制携带带 CF discovery 和内置 seed peers 的 `lobby-defaults.json`。
 
@@ -174,14 +177,14 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.5.1` |
-| Default lobby | `47.111.146.69:8787` fallback community node |
+| Client version | `0.5.4` |
+| Default lobby | `sts2-test.43.133.192.249.nip.io` |
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `test_relaxed + relay-only` |
 
-`0.5.1` preflights gameplay-affecting MODs and required dependencies before join. Steam desktop can subscribe to missing Workshop items only after consent; Android, non-Steam, and unavailable SteamAPI environments receive manual guidance. Extra gameplay MODs start unchecked and require selection plus a second confirmation before disablement. Any MOD change requires restart, and pending resume never stores passwords or tokens. Game-version mismatches remain hard-blocked. One client package supports game versions `0.107.1`, `0.108.0`, and `0.109.0`, with safe fallback for v0.5.0 peers.
+`0.5.4` integrates lobby-service semantic moderation. A message first shows a compact Reviewing state, appears silently after approval, and uses a native game popup when blocked. Redaction frames remove related public or room messages when split-message evasion is detected. Rejected room names, player names, and continue-run character names use the same native sensitive-content feedback instead of raw HTTP errors. The `0.5.3` LAN/lobby continue-channel split, resume codes, save protection, and chat HUD remain included.
 
-Get the official build from the [GitHub v0.5.1 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1) or subscribe to [游戏大厅](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) on Steam Workshop. The server picker pins `101.35.217.99:8788` as the featured test server and labels servers that advertise v0.5.1+ MOD synchronization support.
+`0.5.4` is currently a source/candidate build; its GitHub Release and Steam Workshop update have not been published. The latest public stable build remains [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3). New frames are backward-compatible, although old clients cannot remove split-message context that is already visible. Pairing the `0.5.4` client and lobby service is recommended. Supported game targets remain `0.107.1`, `0.109.0`, and `0.109.1`.
 
 ### MOD Preflight Before Join
 
@@ -196,10 +199,11 @@ Historical `0.5.0` changes: node-local server chat, rich room chat, generation-c
 ### Using Rich Chat References
 
 - Use the smile button to insert Emoji. Press `Enter` to send and `Shift + Enter` for a newline.
-- Before capturing an item, click an empty part of the game view so the composer loses focus and close any emoji or item preview. Hold `Option` on macOS or `Alt` on Windows/Linux, then left-click a visible card, relic icon, or potion icon.
-- In combat, use the same gesture on a power, buff/debuff icon, or player character. Combat references are room-chat only; monster-target references are not enabled.
-- References can be mixed with text and removed with caret selection plus `Backspace` / `Delete`. Desktop users can hover received item chips for localized previews.
-- Android touch-only users can send Emoji and view references; inserting item or combat references requires an external keyboard and mouse.
+- Tap the Reference button beside the composer on Android, or press `Alt+R` on desktop, to arm one-shot reference mode. One successful capture exits the mode and restores focus to the text insertion point.
+- The existing desktop `Alt+left-click` shortcut remains available. Cards, relics, and potions work in server or room chat; combat powers and players are room-chat only. Monster targets remain disabled.
+- Unsupported clicks keep reference mode armed without consuming the normal game action. The button, `Esc`, channel changes, closing chat, or leaving the room cancels the mode.
+- References flow inline with text and remain editable with selection, arrows, `Backspace`, `Delete`, and paste.
+- Desktop supports hover and pinned click previews. Android opens a pinned preview by tapping a reference; tap outside, press `Esc`, or use the close button to dismiss it.
 
 Historical `0.4.0` changes: keyboard/controller lobby navigation, focusable room cards, dialog-first `Esc`, optional `say-the-spire2` announcements, `F7` invite handling, `F8` room-chat toggling, clipboard invite routing, and mandatory CF discovery/seed defaults in the release package.
 

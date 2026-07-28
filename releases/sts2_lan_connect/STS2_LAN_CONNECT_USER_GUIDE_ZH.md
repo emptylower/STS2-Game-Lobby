@@ -10,7 +10,32 @@
 
 # STS2 LAN Connect 使用说明
 
-正式版下载：[`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1)；Steam 玩家也可直接订阅创意工坊条目 [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。通过创意工坊安装或更新后同样需要完整重启游戏。
+当前源码与候选构建版本为 `0.5.4`，GitHub Release 与 Steam Workshop 更新暂未发布；最新公开稳定版仍为 [`GitHub v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)。安装或更新客户端后必须完整重启游戏。
+
+## v0.5.4 AI 语义审核交互
+
+- 消息进入服务端语义审核时，输入框上方显示“在审核中”，消息不会提前进入公共聊天栏。
+- 审核通过后消息静默出现；审核拒绝时显示游戏原生“包含违禁词”提示。
+- 服务端识别同一用户拆分发送的违规短句后，会撤回相关公共频道或房间消息。
+- 房间名、用户名或续局角色名未通过审核时，创建/加入流程显示游戏原生敏感词提示，不展示网络错误细节。
+- 新审核帧向后兼容，但旧客户端无法删除已经显示的拆字上下文，建议客户端与 lobby-service 同时升级到 `0.5.4`。
+
+## v0.5.3 续局通道拆分与聊天 HUD
+
+- 多人存档现在记住创建入口：纯 LAN 创建的存档续局时不再被自动发布到公共大厅；大厅创建的存档续局行为不变，仍自动恢复房间。
+- 纯 LAN 存档续局时，房主在续局等待页点击「续局身份码」，把与角色/玩家名一一对应的单条 `STS2LANRESUME:` 码发给队友；队友在手动 LAN/IP 加入页粘贴该码即可回到自己的槽位。身份码不要互换，一次粘贴多条会被拒绝。
+- 「永久放弃多人存档」前会自动把存档备份到 `user://sts2_lan_connect/save-backups/`，备份失败则拒绝删除；并修复了与 BaseLib 共存时多人存档被误改名 `.corrupt` 的问题。
+- 修复安卓打开「加入好友」页自动发起调试直连、必须等满超时才能操作的问题。
+- 局内聊天改为扁平半透明 HUD：单行富文本消息、按玩家稳定配色、收到新消息自动浮现、打开时稳定停在最新消息。
+- v0.5.3 只更新客户端，与 lobby-service 0.5.1/0.5.2/0.5.3 及 v0.5.1+ 客户端均可互通；游戏加载目标为 `0.107.1`、`0.109.0` 与 `0.109.1`。
+
+## v0.5.2 一次性引用与原生预览
+
+- Android 点击聊天输入区旁的“引用”按钮，桌面按 `Alt+R`，可进入或取消一次性引用模式；成功引用一个支持对象后自动退出，并把焦点交回真实文本输入位置。
+- 原有桌面 `Alt+左键` 直接引用继续保留；点击不支持区域不会吞掉正常游戏操作，成功捕获会消费点击以避免同时出牌或触发物品。
+- 文字、Emoji 和引用使用单一行内富文本控件自然换行；卡牌、遗物、药水和 Power 使用游戏原生预览，动态 Power 说明按实际状态生成。
+- Android 点击消息引用打开固定预览，点击外部、`Esc` 或关闭按钮退出；不再依赖桌面悬停。
+- v0.5.2 只更新客户端，继续兼容 lobby-service 0.5.1 和 v0.5.1 聊天协议；游戏加载目标为 `0.107.1` 与 `0.109.0`。
 
 ## v0.5.1 加入前 MOD 预检
 
@@ -95,10 +120,10 @@
 ### 富聊天引用操作
 
 - **Emoji**：点击输入框右侧的笑脸按钮，在面板中选择表情。表情会先插入草稿，可继续输入文字，再按 `Enter` 或点击 `发送`；`Shift + Enter` 用于换行。
-- **卡牌 / 遗物 / 药水**：先点击游戏画面空白处，让聊天输入框失去焦点并关闭表情或物品预览；macOS 按住 `Option`、Windows/Linux 按住 `Alt`，再左键点击可见卡牌、遗物栏图标或药水栏图标。引用会插入当前选中频道的草稿，不会立即发送。
-- **战斗状态**：在战斗中使用同样的 `Option/Alt + 左键` 操作点击能力、增益/减益图标或玩家角色，可引用能力名称、层数、持有者、施加者或玩家。战斗状态只能分享到 `房间聊天`，不能分享到大厅 `频道聊天`；怪物目标引用当前版本尚未开放。
-- **编辑与查看**：引用可以与普通文字混排。用方向键移动光标，在引用旁按 `Backspace` / `Delete`，或选中引用后删除。收到卡牌、遗物或药水引用后，桌面端可将鼠标悬停在引用标签上查看本地化预览。
-- **Android 限制**：纯触屏目前可以发送文字和 Emoji，也可以接收并显示引用；主动插入物品或战斗引用仍依赖 `Alt + 左键`，需要外接键盘和鼠标。
+- **一次性入口**：Android 点击输入区旁的“引用”按钮；桌面按 `Alt+R`。成功点击一个卡牌、遗物、药水、状态或玩家后自动退出，并回到文字输入位置继续输入。
+- **桌面直达**：原有 `Alt+左键` 继续保留。卡牌、遗物、药水可发到服务器或房间频道；战斗状态和玩家只允许房间频道；怪物目标引用仍未开放。
+- **取消与失败**：再次点击引用按钮、`Esc`、切频道、关闭聊天或离开房间都会取消。点击不支持区域时保持 armed，且不吞掉原本的游戏操作。
+- **编辑与查看**：引用和普通文字自然混排，可用方向键、选择、粘贴、`Backspace` 和 `Delete` 编辑。桌面可悬停或点击查看原生预览；Android 点击打开固定预览，再点外部、`Esc` 或关闭按钮退出。
 
 ## 房间管理
 
@@ -113,10 +138,15 @@
 ## 多人续局
 
 - 房主重新进入已存在的多人续局存档时，续局会自动重新发布到大厅，沿用原有房间信息，无需重新手动建房
+- 纯 LAN 存档不会自动发布到公共大厅；房主在多人菜单载入该存档后，可在续局等待页点击 `续局身份码`
+- 房主应按角色/玩家名把对应的单条 `STS2LANRESUME:` 身份码发给每位队友。队友在手动 LAN/IP 加入页填写地址，并把该码粘贴到 `旧存档续局身份码` 输入框；不要互换身份码
+- 新游戏或同一台设备后续普通直连无需填写续局码：客户端会复用安装级 LAN 身份，网络超时只会用同一个身份再试一次
 - 房主点击 `重开一局` 后，会短暂断开并自动回到多人续局载入页面
 - 队友会自动回主菜单并按自己的 `desiredSavePlayerNetId` 轮询重连同一续局房间
 - 若自动重连超时，可在 `游戏大厅` 手动加入作为兜底
 - 如续局仍有空闲角色槽位，加入方会先看到角色选择，再进入联机
+- 安装 BaseLib 及依赖它的角色/观战 MOD 时，多人存档不会再被误判损坏改名为 `.corrupt`；若日志出现 `save_manager: blocked corrupt-save rename` 说明防护已生效
+- 安卓打开手动 LAN/IP 加入页不再自动发起本机调试直连，无需等待超时报错即可直接填写地址加入
 - 角色选择弹窗同时显示角色名和原玩家名（如"铁甲战士（小明）"），方便准确找回自己的槽位
 
 ## 加入等待提示
@@ -221,6 +251,8 @@
 ### 需要回退到手动 LAN/IP
 
 - 官方 Host / Join 页面的手动 LAN 调试入口仍然保留，可作为排障回退方案
+- 旧存档续局必须使用房主提供、与你的角色/玩家名对应的单条续局身份码；粘贴多条时客户端会拒绝连接，避免误占其他槽位
+- `永久放弃多人存档` 会先把原始 `current_run_mp.save` 备份到 `user://sts2_lan_connect/save-backups/`；读取或备份失败时不会删除存档
 
 ---
 
@@ -228,7 +260,32 @@
 
 # STS2 LAN Connect User Guide
 
-Official download: [`GitHub v0.5.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.1). Steam players can also subscribe to [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330). Fully restart the game after a Workshop install or update.
+The current source/candidate build is `0.5.4`; its GitHub Release and Steam Workshop update have not been published. The latest public stable download remains [`GitHub v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3). Fully restart the game after installing or updating the client.
+
+## v0.5.4 Semantic Moderation UX
+
+- A message under server-side semantic review shows a compact Reviewing indicator and is not displayed in public chat early.
+- Approved messages appear silently; rejected content uses a native game sensitive-content popup.
+- When the service detects a prohibited phrase split across short messages, related public or room context is removed through redaction frames.
+- Rejected room names, player names, and continue-run character names use native feedback instead of exposing transport errors.
+- New moderation frames are backward-compatible, but old clients cannot remove already-visible split-message context; pairing the `0.5.4` client and lobby service is recommended.
+
+## v0.5.3 Continue-Channel Split and Chat HUD
+
+- Multiplayer saves now remember their origin: saves created over plain LAN are no longer auto-published to the public lobby on resume; lobby-origin saves keep the existing auto-restore behavior.
+- When resuming a LAN-origin save, the host taps "Resume Code" on the waiting page and shares the per-character single `STS2LANRESUME:` code with each teammate; teammates paste it on the manual LAN/IP join page to reclaim their own slots. Do not swap codes, and pasting multiple codes at once is rejected.
+- Abandoning a multiplayer save now backs it up to `user://sts2_lan_connect/save-backups/` first, and the deletion is refused if the backup fails. Also fixed LAN saves being renamed `.corrupt` when BaseLib is installed.
+- Fixed Android's Join Friend screen auto-dialing a debug connection and blocking until the timeout.
+- In-run chat is now a flat translucent HUD: single-line rich-text messages, stable per-player name colors, auto-appear on new messages, and the view stays pinned to the latest message.
+- v0.5.3 is client-only and interoperates with lobby-service 0.5.1/0.5.2/0.5.3 and v0.5.1+ clients. Supported game loading targets are `0.107.1`, `0.109.0`, and `0.109.1`.
+
+## v0.5.2 One-Shot References and Native Previews
+
+- Tap the Reference button beside the composer on Android, or press `Alt+R` on desktop, to arm or cancel one-shot reference mode. One successful capture exits the mode and restores focus to the real text input.
+- The original desktop `Alt+left-click` path remains available. Unsupported clicks preserve the normal game action, while successful captures consume the click to prevent playing a card or triggering an item at the same time.
+- Text, Emoji, and references flow through one inline rich-text control. Cards, relics, potions, and Powers use native game previews with dynamic Power context.
+- Android opens a pinned preview by tapping a message reference and closes it by tapping outside, pressing `Esc`, or using the close button.
+- v0.5.2 is client-only and remains compatible with lobby-service 0.5.1 and the v0.5.1 chat protocol. Supported game loading targets are `0.107.1` and `0.109.0`.
 
 ## v0.5.1 MOD Preflight Before Join
 
@@ -313,10 +370,10 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 ### Rich Chat Reference Controls
 
 - **Emoji**: click the smile button beside the composer and choose an emoji. It is inserted into the draft, so you can add text before sending with `Enter` or `Send`; use `Shift + Enter` for a newline.
-- **Cards / relics / potions**: first click an empty part of the game view so the chat composer loses focus and close any emoji or item preview. Hold `Option` on macOS or `Alt` on Windows/Linux, then left-click a visible card, relic inventory icon, or potion-slot icon. The reference is inserted into the selected channel draft and is not sent immediately.
-- **Combat state**: use the same `Option/Alt + left-click` gesture on a power, buff/debuff icon, or player character to share the power name, amount, owner, applier, or player. Combat references are room-chat only; monster-target references are not enabled in this release.
-- **Editing and viewing**: references can be mixed with ordinary text. Move the caret with the arrow keys and remove a neighboring or selected reference with `Backspace` / `Delete`. On desktop, hover a received card, relic, or potion chip to open its localized preview.
-- **Android limitation**: touch-only users can send text and Emoji and can receive references. Inserting item or combat references still requires an external keyboard and mouse for the `Alt + left-click` gesture.
+- **One-shot entry**: tap the Reference button on Android or press `Alt+R` on desktop. Capturing one card, relic, potion, power, or player exits the mode and restores the text caret.
+- **Desktop direct path**: the existing `Alt+left-click` shortcut remains available. Items work in server or room chat; combat powers and players are room-chat only. Monster targets remain disabled.
+- **Cancel and failure**: the button, `Esc`, channel changes, closing chat, or leaving the room cancels the mode. Unsupported clicks keep it armed and do not consume the normal game action.
+- **Editing and viewing**: references flow inline with text and support arrows, selection, paste, `Backspace`, and `Delete`. Desktop supports hover and pinned click previews; Android taps open a pinned preview that closes via outside tap, `Esc`, or the close button.
 
 ## Room Management
 
@@ -331,6 +388,9 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 ## Save-Run Multiplayer
 
 - When a host re-enters an existing multiplayer save, the run is automatically re-published to the lobby using the original room info — no need to create a new room manually
+- Pure-LAN saves are not published to the public lobby. After the host loads that save from the multiplayer menu, the waiting screen provides `Resume Identity Codes`
+- The host should send each teammate exactly one `STS2LANRESUME:` line matching that player's character/name. The teammate enters the host address on manual LAN/IP Join and pastes that line into the old-save resume-code field
+- New runs and later ordinary joins on the same installation do not need a resume code: the client reuses one installation-level LAN identity and retries a transport timeout once with that same identity
 - After the host clicks `Restart Run`, the host briefly disconnects and is auto-routed back to multiplayer save-load
 - Teammates are auto-routed to main menu and rejoin by polling with their own `desiredSavePlayerNetId`
 - If auto-rejoin times out, manual join from `Game Lobby` remains the fallback path
@@ -436,3 +496,5 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 ### Need to fall back to manual LAN/IP
 
 - The manual LAN debug entry point in the official Host / Join pages is still available as a fallback for troubleshooting
+- Old-save resumes require exactly one code matching your character/player name; the client rejects multiple pasted slot codes instead of guessing
+- `Permanently Abandon Multiplayer Save` first backs up the original `current_run_mp.save` under `user://sts2_lan_connect/save-backups/`; a read or backup failure blocks deletion
