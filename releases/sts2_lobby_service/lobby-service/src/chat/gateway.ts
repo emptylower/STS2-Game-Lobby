@@ -8,8 +8,10 @@ import {
   canonicalizeChatContent,
   ChatProtocolError,
   deterministicContentJson,
+  maskCanonicalChatContent,
   renderPlainTextFallback,
   type CanonicalChatMessage,
+  type ChatContent,
   type ChatProtocolErrorCode,
 } from "./protocol.js";
 import {
@@ -20,6 +22,11 @@ import {
 import { RateLimitError, SlidingWindowLimiter, TokenBucketLimiter } from "./rate-limiter.js";
 import type { ReservedChatTicket } from "./ticket-store.js";
 import type { ModerationService } from "../moderation/moderation-service.js";
+import type { AiSemanticModerationService } from "../moderation/ai-service.js";
+import {
+  ModerationConversationWindow,
+  type ConversationModerationCandidate,
+} from "../moderation/conversation-window.js";
 
 export interface ServerChatGatewayOptions {
   peerRegistry?: ChatPeerRegistry;
@@ -42,6 +49,7 @@ export interface ServerChatGatewayOptions {
   configuredFeatures?: ChatFeatureVersions;
   adminFeatures?: Partial<ChatFeatureVersions>;
   moderation?: ModerationService;
+  aiModeration?: AiSemanticModerationService;
 }
 
 export interface ServerChatGovernanceState {
@@ -67,7 +75,17 @@ interface ConnectionState {
   protocolCloseStarted: boolean;
   protocolCloseTimer: NodeJS.Timeout | null;
   protocolCloseFinished: boolean;
+  pendingReview: PendingServerReview | null;
   cleanup(): void;
+}
+
+interface PendingServerReview {
+  clientMessageId: string;
+  dedupeKey: string;
+  reviewId: string;
+  startedAt: string;
+  timeoutMs: number;
+  conversation: ConversationModerationCandidate | null;
 }
 
 export class ServerChatGateway {
@@ -93,6 +111,8 @@ export class ServerChatGateway {
   private chatEnabled: boolean;
   private desiredChatEnabled: boolean;
   private readonly moderation: ModerationService | null;
+  private readonly aiModeration: AiSemanticModerationService | null;
+  private readonly conversationWindow: ModerationConversationWindow;
   private governanceRevision = 0;
   private events: Promise<void> = Promise.resolve();
   private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -104,8 +124,10 @@ export class ServerChatGateway {
     this.chatEnabled = options.chatEnabled ?? false;
     this.desiredChatEnabled = this.chatEnabled;
     this.moderation = options.moderation ?? null;
+    this.aiModeration = options.aiModeration ?? null;
     this.maxPayloadBytes = options.maxPayloadBytes ?? 8192;
     this.now = options.now ?? Date.now;
+    this.conversationWindow = new ModerationConversationWindow({ now: this.now });
     this.randomUuid = options.randomUuid ?? randomUUID;
     this.randomSenderId = options.randomSenderId ?? (() => randomBytes(16).toString("base64url"));
     this.protocolErrorCloseGraceMs = options.protocolErrorCloseGraceMs ?? 1_000;
@@ -210,6 +232,7 @@ export class ServerChatGateway {
         protocolCloseStarted: false,
         protocolCloseTimer: null,
         protocolCloseFinished: false,
+        pendingReview: null,
         cleanup,
       };
       this.peerRegistry.add({ sessionId, clientIp: ticket.clientIp, socket });
@@ -301,6 +324,7 @@ export class ServerChatGateway {
     const changedAtIso = (changedAt ?? new Date(this.now())).toISOString();
     return this.enqueueEvent(() => {
       const historyEpoch = this.history.clear();
+      this.conversationWindow.clear();
       this.peerRegistry.broadcast({
         type: "chat_history_cleared",
         protocolVersion: 1,
@@ -432,13 +456,12 @@ export class ServerChatGateway {
     let canonicalJson: string;
     try {
       const enabledFeatures = this.resolveFeatures(true);
-      const moderation = this.moderation;
       content = canonicalizeChatContent(envelope.content, {
         richContentVersion: enabledFeatures.richContentVersion,
         emojiSetVersion: enabledFeatures.emojiSetVersion,
         itemRefVersion: enabledFeatures.itemRefVersion,
         combatRefVersion: 0,
-      }, moderation === null ? undefined : (text) => moderation.maskChatText(text));
+      });
       canonicalJson = deterministicContentJson(content);
     } catch (error) {
       if (error instanceof ChatProtocolError) {
@@ -459,6 +482,19 @@ export class ServerChatGateway {
 
     const dedupeKey = `canonical:${createHash("sha256").update(canonicalJson).digest("hex")}`;
     if (this.replayOrRejectConflict(state, envelope.clientMessageId, dedupeKey)) {
+      return;
+    }
+
+    if (state.pendingReview) {
+      if (state.pendingReview.clientMessageId === envelope.clientMessageId) {
+        if (state.pendingReview.dedupeKey !== dedupeKey) {
+          this.sendError(state, "duplicate_message", envelope.clientMessageId);
+        } else {
+          this.sendPendingReview(state, state.pendingReview);
+        }
+      } else {
+        this.sendError(state, "moderation_busy", envelope.clientMessageId);
+      }
       return;
     }
 
@@ -510,6 +546,91 @@ export class ServerChatGateway {
       return;
     }
 
+    const plainText = renderPlainTextFallback(content);
+    const senderKey = state.ticket.playerNetId;
+    const conversation = this.moderation?.enabled
+      ? this.conversationWindow.buildCandidate(
+          senderKey,
+          plainText,
+          (text) => this.moderation!.findSensitiveMatches(text),
+        )
+      : null;
+    const plan = this.aiModeration?.prepare(conversation?.text ?? plainText);
+    if (conversation && (!plan || plan.kind === "mask" || plan.kind === "block")) {
+      this.blockConversation(state, senderKey, plainText, conversation);
+      this.cacheAndSendError(state, dedupeKey, "content_blocked", envelope.clientMessageId);
+      return;
+    }
+    if (plan?.kind === "block") {
+      this.conversationWindow.recordBlocked(senderKey, plainText);
+      this.cacheAndSendError(state, dedupeKey, "content_blocked", envelope.clientMessageId);
+      return;
+    }
+    if (plan?.kind === "review") {
+      const pending: PendingServerReview = {
+        clientMessageId: envelope.clientMessageId,
+        dedupeKey,
+        reviewId: plan.reviewId,
+        startedAt: new Date(this.now()).toISOString(),
+        timeoutMs: plan.timeoutMs,
+        conversation,
+      };
+      state.pendingReview = pending;
+      this.sendPendingReview(state, pending);
+      void this.aiModeration!.review(plan, state.ticket.clientIp).then((outcome) => {
+        return this.enqueueEvent(() => {
+          if (this.connections.get(state.sessionId) !== state || state.pendingReview !== pending) return;
+          state.pendingReview = null;
+          if (!this.chatEnabled) {
+            this.cacheAndSendError(state, dedupeKey, "chat_disabled", envelope.clientMessageId);
+            return;
+          }
+          if (outcome.kind === "block" || (conversation && outcome.kind === "degraded")) {
+            if (conversation) this.blockConversation(state, senderKey, plainText, conversation);
+            else this.conversationWindow.recordBlocked(senderKey, plainText);
+            this.cacheAndSendError(state, dedupeKey, "content_blocked", envelope.clientMessageId);
+            return;
+          }
+          const finalContent = outcome.kind === "degraded"
+            ? this.maskContent(content)
+            : content;
+          this.commitMessage(
+            state,
+            envelope.clientMessageId,
+            dedupeKey,
+            finalContent,
+            startedAt,
+            raw.byteLength,
+          );
+        });
+      }).catch(() => {
+        state.pendingReview = null;
+        this.sendError(state, "server_busy", envelope.clientMessageId);
+      });
+      return;
+    }
+
+    const finalContent = plan?.kind === "mask" || (plan === undefined && this.moderation !== null)
+      ? this.maskContent(content)
+      : content;
+    this.commitMessage(
+      state,
+      envelope.clientMessageId,
+      dedupeKey,
+      finalContent,
+      startedAt,
+      raw.byteLength,
+    );
+  }
+
+  private commitMessage(
+    state: ConnectionState,
+    clientMessageId: string,
+    dedupeKey: string,
+    content: ChatContent,
+    startedAt: number,
+    rawBytes: number,
+  ): void {
     const message: CanonicalChatMessage = {
       messageId: this.randomUuid(),
       senderId: state.senderId,
@@ -526,7 +647,7 @@ export class ServerChatGateway {
           state,
           dedupeKey,
           error.code,
-          envelope.clientMessageId,
+          clientMessageId,
         );
         return;
       }
@@ -536,19 +657,24 @@ export class ServerChatGateway {
     const ack = {
       type: "chat_ack" as const,
       protocolVersion: 1 as const,
-      clientMessageId: envelope.clientMessageId,
+      clientMessageId,
       message,
     };
     try {
-      this.dedupe.store(state.sessionId, envelope.clientMessageId, dedupeKey, ack);
+      this.dedupe.store(state.sessionId, clientMessageId, dedupeKey, ack);
     } catch (error) {
       if (error instanceof ChatDedupeError) {
-        this.sendError(state, "server_busy", envelope.clientMessageId);
+        this.sendError(state, "server_busy", clientMessageId);
         return;
       }
       throw error;
     }
     this.history.append(message);
+    this.conversationWindow.recordCommitted(
+      state.ticket.playerNetId,
+      message.messageId,
+      message.plainTextFallback,
+    );
     this.acceptedMessages += 1;
     this.peerRegistry.send(state.sessionId, ack);
     this.peerRegistry.broadcast({
@@ -558,11 +684,52 @@ export class ServerChatGateway {
     });
     console.log(
       `[chat] event=message_accepted sessionId=${state.sessionId}`
-      + ` messageId=${message.messageId} clientMessageId=${envelope.clientMessageId}`
-      + ` contentHash=${createHash("sha256").update(canonicalJson).digest("hex")}`
-      + ` segments=${content.segments.length} bytes=${raw.byteLength}`
+      + ` messageId=${message.messageId} clientMessageId=${clientMessageId}`
+      + ` contentHash=${dedupeKey.replace(/^canonical:/, "")}`
+      + ` segments=${content.segments.length} bytes=${rawBytes}`
       + ` durationMs=${Math.max(0, this.now() - startedAt)}`,
     );
+  }
+
+  private blockConversation(
+    state: ConnectionState,
+    senderKey: string,
+    currentText: string,
+    conversation: ConversationModerationCandidate,
+  ): void {
+    const removedIds = this.history.remove(conversation.relatedMessageIds);
+    this.conversationWindow.markRedacted(senderKey, removedIds);
+    this.conversationWindow.recordBlocked(senderKey, currentText);
+    if (removedIds.length === 0) return;
+    this.peerRegistry.broadcast({
+      type: "chat_messages_redacted",
+      protocolVersion: 1,
+      messageIds: removedIds,
+      reason: "content_blocked",
+      redactedAt: new Date(this.now()).toISOString(),
+    });
+    console.log(
+      `[chat] event=messages_redacted sessionId=${state.sessionId}`
+      + ` count=${removedIds.length} reason=cross_message_moderation`,
+    );
+  }
+
+  private maskContent(content: ChatContent): ChatContent {
+    const moderation = this.moderation;
+    return moderation === null
+      ? content
+      : maskCanonicalChatContent(content, (text) => moderation.maskChatText(text));
+  }
+
+  private sendPendingReview(state: ConnectionState, pending: PendingServerReview): void {
+    this.peerRegistry.send(state.sessionId, {
+      type: "chat_review_pending",
+      protocolVersion: 1,
+      clientMessageId: pending.clientMessageId,
+      reviewId: pending.reviewId,
+      startedAt: pending.startedAt,
+      timeoutMs: pending.timeoutMs,
+    });
   }
 
   private sendError(
@@ -798,6 +965,10 @@ function safeChatErrorMessage(code: ChatProtocolErrorCode): string {
       return "chat protocol mismatch";
     case "server_busy":
       return "chat service is busy";
+    case "content_blocked":
+      return "message contains prohibited content";
+    case "moderation_busy":
+      return "a previous message is still under review";
   }
 }
 

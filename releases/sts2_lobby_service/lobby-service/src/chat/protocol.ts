@@ -59,6 +59,24 @@ export interface CanonicalRoomChatMessage extends CanonicalChatMessage {
   roomSessionId: string;
 }
 
+export interface ChatMessagesRedactedEnvelope {
+  type: "chat_messages_redacted";
+  protocolVersion: 1;
+  messageIds: string[];
+  reason: "content_blocked";
+  redactedAt: string;
+}
+
+export interface RoomChatMessagesRedactedEnvelope {
+  type: "room_chat_messages_redacted";
+  protocolVersion: 1;
+  roomId: string;
+  roomSessionId: string;
+  messageIds: string[];
+  reason: "content_blocked";
+  redactedAt: string;
+}
+
 export type ChatProtocolErrorCode =
   | "invalid_content"
   | "feature_disabled"
@@ -67,7 +85,9 @@ export type ChatProtocolErrorCode =
   | "rate_limited"
   | "duplicate_message"
   | "protocol_mismatch"
-  | "server_busy";
+  | "server_busy"
+  | "content_blocked"
+  | "moderation_busy";
 
 export class ChatProtocolError extends Error {
   constructor(
@@ -258,6 +278,15 @@ function assertNoDisallowedChars(text: string): void {
 
 /** 打码函数：输入 text segment 原文，返回打码结果。由 ModerationService 注入。 */
 export type ChatTextMaskFn = (text: string) => { text: string; masked: boolean };
+
+export function maskCanonicalChatContent(content: ChatContent, maskText: ChatTextMaskFn): ChatContent {
+  return {
+    formatVersion: 1,
+    segments: content.segments.map((segment) => segment.kind === "text"
+      ? { kind: "text" as const, text: maskText(segment.text).text }
+      : { ...segment }),
+  };
+}
 
 export function canonicalizeChatContent(
   input: unknown,

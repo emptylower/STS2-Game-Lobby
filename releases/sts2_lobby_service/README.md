@@ -12,9 +12,9 @@
 
 # STS2 Lobby Service
 
-> 本文档对应 **v0.5.2**。本版在保留既有节点网络、聊天与 MOD 预检协议的基础上，新增服务端自动更新与响应式运维 Dashboard。
+> 本文档对应源码与构建版本 **v0.5.4**。本版在保留既有节点网络、聊天与 MOD 预检协议的基础上，新增大厅敏感词过滤与可选 AI 语义审核（词库随包分发，覆盖聊天、跨消息短句、房间名与用户名，管理面板可控）。GitHub Release 暂未发布。
 
-正式服务端源码包见 [GitHub v0.5.2 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2) 中的 `sts2_lobby_service.zip`。
+最新已公开的正式服务端源码包仍见 [GitHub v0.5.3 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3) 中的 `sts2_lobby_service.zip`；`0.5.4` 当前仅提供源码构建。
 
 ## 文档定位
 
@@ -23,7 +23,7 @@
 它主要回答：
 
 - 该服务负责什么、**不**负责什么
-- 当前 v0.5.2 推荐的部署路径是什么
+- 当前 v0.5.4 推荐的部署路径是什么
 - 首次部署完成后先检查哪些项目
 - 如何配置节点网络、私有访问、管理面板与客户端默认大厅
 - 需要深入查阅时，环境变量和 API 在哪里看
@@ -475,6 +475,24 @@ MOD 同步只允许客户端在明确确认后调用 Steam Workshop 订阅，以
 - `current` 是活动更新槽位，`rollback` 保留上一槽位。Docker 使用 `/app/data/service-update`；systemd 默认使用服务目录下的 `data/service-update`。
 - 更新完成后进程以专用退出码结束，由 Docker `restart: unless-stopped` 或 systemd `Restart=always` 自动拉起。重启会清空内存中的管理会话和当前房间连接，需要重新登录面板。
 
+### 敏感词过滤与 AI 语义审核 —— v0.5.3 / v0.5.4
+
+| 变量 | 说明 |
+|------|------|
+| `SENSITIVE_FILTER_ENABLED` | 仅首次启动种子值（默认 `true`）；之后以管理面板「敏感词过滤」开关为准，保存即时生效并持久化 |
+| `SENSITIVE_LEXICON_DIR` | 词库目录，默认包根 `lexicon/`（49,172 词随包分发，含 `SOURCES.md` 来源说明） |
+| `AI_MODERATION_CREDENTIAL_KEY` | 可选的 32 字节 hex/base64 主密钥；用于 AES-256-GCM 加密模型 API Key 和人工复审证据 |
+| `AI_MODERATION_STATE_FILE` | AI 配置、加密凭据、复审候选、永久白名单和永久黑名单；默认 `./data/ai-moderation-state.json` |
+| `AI_MODERATION_CACHE_FILE` | 只保存 HMAC 的 30 天精确消息缓存和 7 天语境缓存 |
+| `AI_MODERATION_TIMEOUT_MS` | 单次审核总截止时间，默认 `30000`，范围 1000–30000 |
+| `AI_MODERATION_MAX_CONCURRENCY` | 全局并发模型请求数，默认 `4` |
+| `AI_MODERATION_MAX_QUEUE` | 全局等待队列上限，默认 `64` |
+| `AI_MODERATION_REVIEWS_PER_IP_MINUTE` | 每 IP 每分钟最多触发的模型复核数，默认 `10` |
+
+说明：未启用 AI 时，普通单条聊天命中后维持等量 `*` 打码。启用后，公共服务器频道、`room_chat_v2`、房间名、用户名和续局角色名都会进行语义审核；聊天 AI 放行后发送原文并立即写入短期安全缓存，AI 阻止时不广播。旧版 `room_chat` 不调用 AI。服务端还会对同一认证身份 30 秒内最多 10 条连续短消息进行跨消息拼接审核；拒绝后撤回相关已发送消息。每次 AI 放行会进入人工复审候选：批准形成永久白名单，拒绝形成永久黑名单；词级规则跨聊天与名称全局生效，语境规则按信息类型隔离。完整 REST/WS 契约见 `../docs/AI_MODERATION_BACKEND_API_ZH.md`，前端实现与交接见 `../docs/AI_MODERATION_FRONTEND_HANDOFF_ZH.md`。
+
+API Key 明文不会写盘或通过 GET 返回。请求端点默认必须使用 HTTPS，并拒绝解析到私网/保留地址；自托管内网模型需要显式设置 `allowPrivateNetwork=true`，此时才允许 HTTP。主密钥不支持在线轮换：更换后需重新提交 API Key，并清理旧的加密证据和缓存文件。
+
 ### 节点网络（PEER_*）—— v0.4.0 新增
 
 | 变量 | 说明 |
@@ -562,9 +580,9 @@ MOD 同步只允许客户端在明确确认后调用 Steam Workshop 订阅，以
 
 # STS2 Lobby Service
 
-> Targets **v0.5.2**. It retains the existing peer, chat, and MOD-preflight protocols while adding service self-update and a responsive operations dashboard.
+> Targets source/build version **v0.5.4**. It retains the peer, chat, and MOD-preflight protocols while adding optional AI semantic moderation across chat, short-message sequences, room names, and player names. The GitHub Release is not published yet.
 
-The official service source package is `sts2_lobby_service.zip` in the [GitHub v0.5.2 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.2).
+The latest published service package remains `sts2_lobby_service.zip` in the [GitHub v0.5.3 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3); `0.5.4` is currently available as a source build only.
 
 This README is the **operator/admin guide** for `lobby-service`.
 
@@ -642,4 +660,4 @@ When `LOBBY_ACCESS_TOKEN` is unset, `CREATE_ROOM_TOKEN` also authorizes protecte
 
 - Environment variables: see [`../deploy/lobby-service.env.example`](../deploy/lobby-service.env.example)
 - Current deployment guide (Chinese): [`../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](../docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md)
-- Historical compatibility notes are intentionally demoted and not part of the v0.5.2 path
+- Historical compatibility notes are intentionally demoted and not part of the v0.5.4 path

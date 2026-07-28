@@ -1,4 +1,5 @@
 import { findMatches, type MatchSpan, type TrieNode } from "./dfa.js";
+import type { LexiconEntry } from "./lexicon-loader.js";
 import { normalizeForMatch, type NormalizedText } from "./normalize.js";
 
 const ASCII_ALNUM_PATTERN = /^[a-z0-9]$/;
@@ -41,10 +42,17 @@ export interface MaskResult {
   masked: boolean;
 }
 
+export interface SensitiveMatch extends LexiconEntry {
+  start: number;
+  end: number;
+}
+
 export interface SensitiveWordFilter {
   contains(text: string): boolean;
+  find(text: string): SensitiveMatch[];
   mask(text: string): MaskResult;
   readonly wordCount: number;
+  readonly fingerprint: string;
 }
 
 /**
@@ -60,12 +68,42 @@ export class LexiconSensitiveWordFilter implements SensitiveWordFilter {
   constructor(
     private readonly root: TrieNode,
     readonly wordCount: number,
+    private readonly entries: ReadonlyMap<string, LexiconEntry> = new Map(),
+    readonly fingerprint = "",
   ) {}
 
   contains(text: string): boolean {
-    const normalized = normalizeForMatch(text);
-    return findMatches(this.root, normalized.chars)
-      .some((span) => spanRespectsAsciiBoundaries(normalized, span));
+    return this.find(text).length > 0;
+  }
+
+  find(text: string): SensitiveMatch[] {
+    const nfc = text.normalize("NFC");
+    const normalized = normalizeForMatch(nfc);
+    const candidates = findMatches(this.root, normalized.chars)
+      .filter((span) => spanRespectsAsciiBoundaries(normalized, span))
+      .sort((left, right) => left.startChar - right.startChar
+        || (right.endChar - right.startChar) - (left.endChar - left.startChar));
+    const selected: MatchSpan[] = [];
+    let coveredUntil = -1;
+    for (const span of candidates) {
+      if (span.startChar < coveredUntil) continue;
+      selected.push(span);
+      coveredUntil = span.endChar;
+    }
+    return selected.flatMap((span) => {
+      const start = normalized.originalStart[span.startChar];
+      const end = normalized.originalEnd[span.endChar - 1];
+      if (start === undefined || end === undefined) return [];
+      const normalizedTerm = normalized.chars.slice(span.startChar, span.endChar).join("");
+      const entry = this.entries.get(normalizedTerm) ?? {
+        termId: `term_${normalizedTerm}`,
+        normalizedTerm,
+        displayTerm: nfc.slice(start, end),
+        category: "unknown",
+        source: "unknown",
+      };
+      return [{ ...entry, start, end }];
+    });
   }
 
   mask(text: string): MaskResult {
@@ -98,6 +136,8 @@ export class LexiconSensitiveWordFilter implements SensitiveWordFilter {
 /** 开关关闭或词库不可用时的 no-op 实现。 */
 export const nullSensitiveWordFilter: SensitiveWordFilter = {
   wordCount: 0,
+  fingerprint: "",
   contains: () => false,
+  find: () => [],
   mask: (text: string) => ({ text, masked: false }),
 };

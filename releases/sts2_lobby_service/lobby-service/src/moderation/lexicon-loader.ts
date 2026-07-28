@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildTrie, type TrieNode } from "./dfa.js";
@@ -6,6 +7,16 @@ import { normalizeForMatch } from "./normalize.js";
 export interface LoadedLexicon {
   root: TrieNode;
   wordCount: number;
+  entries: ReadonlyMap<string, LexiconEntry>;
+  fingerprint: string;
+}
+
+export interface LexiconEntry {
+  termId: string;
+  normalizedTerm: string;
+  displayTerm: string;
+  category: string;
+  source: string;
 }
 
 /**
@@ -15,6 +26,7 @@ export interface LoadedLexicon {
  */
 export function loadLexicon(dir: string): LoadedLexicon {
   const words = new Map<string, string[]>();
+  const entries = new Map<string, LexiconEntry>();
   const fileNames = readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".txt"))
     .map((entry) => entry.name)
@@ -27,14 +39,27 @@ export function loadLexicon(dir: string): LoadedLexicon {
         continue;
       }
       const chars = normalizeForMatch(trimmed).chars;
-      if (chars.length === 0) {
+      // 丢弃归一化后不足 2 字符的词：上游词表混入了大量单字符条目
+      // （如 "1"、"日"、"妈"、"法"），单字符子串匹配在大厅场景几乎
+      // 必然误报正常文本，全部按垃圾词处理。
+      if (chars.length < 2) {
         continue;
       }
       const key = chars.join("");
       if (!words.has(key)) {
         words.set(key, chars);
+        entries.set(key, {
+          termId: `term_${createHash("sha256").update(key).digest("hex").slice(0, 24)}`,
+          normalizedTerm: key,
+          displayTerm: trimmed,
+          category: fileName.slice(0, -4),
+          source: fileName,
+        });
       }
     }
   }
-  return { root: buildTrie(words.values()), wordCount: words.size };
+  const fingerprint = createHash("sha256")
+    .update([...words.keys()].sort().join("\n"))
+    .digest("hex");
+  return { root: buildTrie(words.values()), wordCount: words.size, entries, fingerprint };
 }

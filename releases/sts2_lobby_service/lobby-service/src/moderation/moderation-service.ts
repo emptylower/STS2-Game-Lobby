@@ -1,4 +1,10 @@
-import { LexiconSensitiveWordFilter, nullSensitiveWordFilter, type MaskResult, type SensitiveWordFilter } from "./filter.js";
+import {
+  LexiconSensitiveWordFilter,
+  nullSensitiveWordFilter,
+  type MaskResult,
+  type SensitiveMatch,
+  type SensitiveWordFilter,
+} from "./filter.js";
 import { loadLexicon } from "./lexicon-loader.js";
 
 export interface ModerationStats {
@@ -7,6 +13,7 @@ export interface ModerationStats {
   maskedMessages: number;
   rejectedNames: number;
   loadError: string | null;
+  lexiconFingerprint: string;
 }
 
 export interface ModerationServiceOptions {
@@ -45,7 +52,12 @@ export class ModerationService {
         options.log?.(`[moderation] lexicon at ${options.lexiconDir} is empty; sensitive filter unavailable`);
         return new ModerationService(nullSensitiveWordFilter, "词库为空", options.enabled);
       }
-      const filter = new LexiconSensitiveWordFilter(lexicon.root, lexicon.wordCount);
+      const filter = new LexiconSensitiveWordFilter(
+        lexicon.root,
+        lexicon.wordCount,
+        lexicon.entries,
+        lexicon.fingerprint,
+      );
       options.log?.(`[moderation] loaded ${lexicon.wordCount} sensitive words from ${options.lexiconDir}`);
       return new ModerationService(filter, null, options.enabled);
     } catch (error) {
@@ -74,6 +86,10 @@ export class ModerationService {
     return result;
   }
 
+  findSensitiveMatches(text: string): SensitiveMatch[] {
+    return this.active.find(text);
+  }
+
   containsSensitiveName(text: string): boolean {
     return this.active.contains(text);
   }
@@ -89,6 +105,7 @@ export class ModerationService {
       maskedMessages: this.maskedMessages,
       rejectedNames: this.rejectedNames,
       loadError: this.lexiconLoadError,
+      lexiconFingerprint: this.lexiconFilter.fingerprint,
     };
   }
 }

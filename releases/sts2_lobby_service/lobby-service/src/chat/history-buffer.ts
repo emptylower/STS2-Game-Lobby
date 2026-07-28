@@ -85,6 +85,21 @@ export class ChatHistoryBuffer {
     }
   }
 
+  remove(messageIds: readonly string[]): string[] {
+    this.cleanup();
+    if (messageIds.length === 0) return [];
+    const requested = new Set(messageIds);
+    const removed: string[] = [];
+    for (let index = this.entries.length - 1; index >= 0; index -= 1) {
+      const entry = this.entries[index];
+      if (entry !== undefined && requested.has(entry.message.messageId)) {
+        removed.unshift(entry.message.messageId);
+        this.entries.splice(index, 1);
+      }
+    }
+    return removed;
+  }
+
   snapshot(): CanonicalChatMessage[] {
     this.cleanup();
     if (this.snapshotLimit <= 0 || this.entries.length === 0) {

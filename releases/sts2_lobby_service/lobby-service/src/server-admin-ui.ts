@@ -48,6 +48,79 @@ export function releaseServerAdminSingleFlight(ref: { current: boolean }): void 
   ref.current = false;
 }
 
+export function buildServerAdminAiConfigPatch(
+  values: Record<string, unknown>,
+  apiKeyDraft: string,
+): Record<string, unknown> {
+  const patch: Record<string, unknown> = {
+    enabled: values.enabled === true,
+    protocol: typeof values.protocol === "string" && values.protocol
+      ? values.protocol
+      : "openai_responses",
+    endpoint: typeof values.endpoint === "string" ? values.endpoint.trim() : "",
+    model: typeof values.model === "string" ? values.model.trim() : "",
+    allowPrivateNetwork: values.allowPrivateNetwork === true,
+    jsonFallbackEnabled: values.jsonFallbackEnabled === true,
+    apiKeyAction: "keep",
+  };
+  const draft = typeof apiKeyDraft === "string" ? apiKeyDraft.trim() : "";
+  if (draft) {
+    patch.apiKeyAction = "replace";
+    patch.apiKey = draft;
+  }
+  return patch;
+}
+
+export function buildServerAdminAiTestRequest(
+  values: Record<string, unknown>,
+  apiKeyDraft: string,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    protocol: typeof values.protocol === "string" && values.protocol
+      ? values.protocol
+      : "openai_responses",
+    endpoint: typeof values.endpoint === "string" ? values.endpoint.trim() : "",
+    model: typeof values.model === "string" ? values.model.trim() : "",
+    allowPrivateNetwork: values.allowPrivateNetwork === true,
+    jsonFallbackEnabled: values.jsonFallbackEnabled === true,
+  };
+  const draft = typeof apiKeyDraft === "string" ? apiKeyDraft.trim() : "";
+  if (draft) {
+    body.apiKey = draft;
+  }
+  return body;
+}
+
+export function resolveServerAdminAiCredentialAlert(
+  config: Record<string, unknown> | null,
+): { type: string; message: string; description: string } | null {
+  const status = config && typeof config.credentialStatus === "string"
+    ? config.credentialStatus
+    : "missing_api_key";
+  switch (status) {
+    case "ready":
+      return null;
+    case "missing_master_key":
+      return {
+        type: "warning",
+        message: "未配置 AI 审核主密钥",
+        description: "运维需要先在环境变量中配置有效的 AI_MODERATION_CREDENTIAL_KEY，否则无法保存 API Key 或启用 AI 审核。",
+      };
+    case "decrypt_error":
+      return {
+        type: "error",
+        message: "已保存的 API Key 无法解密",
+        description: "主密钥可能已更换。请重新填写 API Key 并保存；旧的加密证据与缓存需要运维手动清理。",
+      };
+    default:
+      return {
+        type: "info",
+        message: "尚未保存 API Key",
+        description: "填写 API Key 并保存后才能启用 AI 语义审核。",
+      };
+  }
+}
+
 export function isCurrentServerAdminRequest(
   generation: number,
   currentGeneration: number,
@@ -793,6 +866,106 @@ export function renderServerAdminPage(serviceVersion: string) {
         max-height: 280px;
         overflow-y: auto;
       }
+      .mod-list {
+        display: grid;
+        gap: 10px;
+      }
+      .mod-item {
+        border: 1px solid #1c2a22;
+        border-radius: 10px;
+        padding: 12px 14px;
+        background: #131e19;
+        display: grid;
+        gap: 8px;
+        min-width: 0;
+      }
+      .mod-item-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .mod-item-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        min-width: 0;
+        font-weight: 600;
+        color: #e8f0ea;
+        overflow-wrap: anywhere;
+      }
+      .mod-item-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        flex: 0 0 auto;
+      }
+      .mod-item-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 14px;
+        font-size: 12px;
+        color: #8ea398;
+        overflow-wrap: anywhere;
+      }
+      .mod-error-list {
+        display: grid;
+        gap: 6px;
+      }
+      .mod-error-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        border: 1px solid #1c2a22;
+        border-radius: 8px;
+        padding: 8px 12px;
+        background: #0d1512;
+        font-size: 12px;
+      }
+      .mod-error-code {
+        color: #e8f0ea;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      .mod-error-time {
+        color: #64766d;
+        font-variant-numeric: tabular-nums;
+        flex: 0 0 auto;
+      }
+      .mod-pager {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .mod-evidence-label {
+        font-size: 12px;
+        color: #64766d;
+        margin-bottom: 4px;
+      }
+      .mod-detail-grid {
+        display: grid;
+        gap: 2px;
+      }
+      @media (max-width: 640px) {
+        .mod-item-head {
+          align-items: flex-start;
+        }
+        .mod-item-actions {
+          width: 100%;
+        }
+        .mod-pager {
+          justify-content: stretch;
+        }
+        .mod-pager .ant-btn {
+          flex: 1 1 auto;
+        }
+      }
       @media (prefers-reduced-motion: reduce) {
         .tab-panel,
         .dashboard-stack {
@@ -955,6 +1128,7 @@ export function renderServerAdminPage(serviceVersion: string) {
           InputNumber,
           Layout,
           Modal,
+          Radio,
           Row,
           Select,
           Space,
@@ -975,6 +1149,9 @@ export function renderServerAdminPage(serviceVersion: string) {
         const releaseSingleFlight = ${releaseServerAdminSingleFlight.toString()};
         const isCurrentRequest = ${isCurrentServerAdminRequest.toString()};
         const buildRequestInit = ${buildServerAdminRequestInit.toString()};
+        const buildAiConfigPatch = ${buildServerAdminAiConfigPatch.toString()};
+        const buildAiTestRequest = ${buildServerAdminAiTestRequest.toString()};
+        const resolveAiCredentialAlert = ${resolveServerAdminAiCredentialAlert.toString()};
 
         const ANNOUNCEMENT_TYPES = [
           { value: "update", label: "更新" },
@@ -1010,6 +1187,8 @@ export function renderServerAdminPage(serviceVersion: string) {
           sliders: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
           megaphone: '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
           download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+          shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
+          ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
         };
 
         function svgIcon(inner) {
@@ -1501,6 +1680,1333 @@ export function renderServerAdminPage(serviceVersion: string) {
           return "未识别";
         }
 
+        const AI_PROTOCOL_OPTIONS = [
+          { value: "openai_responses", label: "OpenAI Responses" },
+          { value: "openai_chat_completions", label: "OpenAI Chat Completions" },
+          { value: "anthropic_messages", label: "Anthropic Messages" },
+        ];
+
+        const REVIEW_STATUS_META = {
+          pending: ["warning", "待复审"],
+          approved: ["success", "已批准"],
+          rejected: ["default", "已拒绝"],
+        };
+
+        const ALLOW_SCOPE_META = {
+          term: ["processing", "整个词"],
+          context: ["blue", "仅此语境"],
+        };
+
+        function reviewStatusTag(status) {
+          const meta = REVIEW_STATUS_META[status] || ["default", status || "未知"];
+          return h(Tag, { color: meta[0] }, meta[1]);
+        }
+
+        function allowScopeTag(scope) {
+          const meta = ALLOW_SCOPE_META[scope] || ["default", scope || "未知"];
+          return h(Tag, { color: meta[0] }, meta[1]);
+        }
+
+        function moderationSurfaceLabel(surface) {
+          if (surface === "room_name") return "房间名";
+          if (surface === "player_name") return "玩家名";
+          if (surface === "character_name") return "角色名";
+          return "聊天消息";
+        }
+
+        function circuitStateTag(health) {
+          if (health.circuitState === "open") {
+            return h(Tag, { color: "error" }, "熔断中" + (health.circuitOpenUntil ? " · 至 " + formatDateTime(health.circuitOpenUntil) : ""));
+          }
+          return h(Tag, { color: "success" }, "熔断关闭");
+        }
+
+        function structuredModeLabel(mode) {
+          if (mode === "strict") return "strict（结构化）";
+          if (mode === "prompted_json") return "prompted_json（提示词回退）";
+          return mode || "未知";
+        }
+
+        function PermanentBlocklistPanel(props) {
+          const request = props.request;
+          const beginAdminMutation = props.beginAdminMutation;
+          const endAdminMutation = props.endAdminMutation;
+          const adminMutationInFlight = props.adminMutationInFlight;
+          const refreshStatus = props.refreshStatus;
+
+          const [scopeFilter, setScopeFilter] = React.useState("");
+          const [items, setItems] = React.useState([]);
+          const [cursor, setCursor] = React.useState(null);
+          const [nextCursor, setNextCursor] = React.useState(null);
+          const [cursorStack, setCursorStack] = React.useState([]);
+          const [loading, setLoading] = React.useState(false);
+          const [revokeLoadingId, setRevokeLoadingId] = React.useState(null);
+
+          const loadBlocklist = React.useCallback(async function (nextPageCursor, stack, scope) {
+            setLoading(true);
+            try {
+              const params = new URLSearchParams();
+              const activeScope = scope === undefined ? scopeFilter : scope;
+              if (activeScope) params.set("scope", activeScope);
+              params.set("limit", "50");
+              if (nextPageCursor) params.set("cursor", nextPageCursor);
+              const data = await request("/server-admin/moderation/blocklist?" + params.toString());
+              setItems(data && Array.isArray(data.items) ? data.items : []);
+              setCursor(nextPageCursor || null);
+              setNextCursor(data && data.nextCursor ? data.nextCursor : null);
+              setCursorStack(stack || []);
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "加载永久黑名单失败");
+              }
+            } finally {
+              setLoading(false);
+            }
+          }, [request, scopeFilter]);
+
+          React.useEffect(function () {
+            void loadBlocklist(null, [], scopeFilter);
+          }, [scopeFilter]);
+
+          function confirmRevoke(item) {
+            Modal.confirm({
+              title: "撤销这条永久黑名单规则？",
+              content: "撤销后立即失效，相同内容将重新按永久白名单、安全缓存或 AI 审核策略处理。",
+              okText: "确认撤销",
+              okButtonProps: { danger: true },
+              cancelText: "取消",
+              onOk: function () { return executeRevoke(item); },
+            });
+          }
+
+          async function executeRevoke(item) {
+            if (!item || !beginAdminMutation()) return;
+            setRevokeLoadingId(item.id);
+            try {
+              await request("/server-admin/moderation/blocklist/" + encodeURIComponent(item.id), {
+                method: "DELETE",
+              });
+              message.success("永久黑名单规则已撤销");
+              await loadBlocklist(null, [], scopeFilter);
+              if (refreshStatus) await refreshStatus({ source: "save" });
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "撤销永久黑名单规则失败");
+              }
+            } finally {
+              endAdminMutation();
+              setRevokeLoadingId(null);
+            }
+          }
+
+          return h(
+            "div",
+            { className: "tab-panel", "data-admin-panel": "permanent-blocklist" },
+            h(
+              Space,
+              { direction: "vertical", size: 16, style: { width: "100%" } },
+              h(Alert, {
+                type: "info",
+                showIcon: true,
+                message: "永久黑名单立即生效",
+                description: "在 AI 审核页拒绝复审候选时会自动生成规则。整个词规则作用于聊天、房间名、玩家名和角色名；仅此语境规则只拦截相同信息类型、命中词和语境签名。",
+              }),
+              h(
+                Card,
+                {
+                  className: "console-card",
+                  title: h(
+                    "div",
+                    { className: "section-title" },
+                    h("span", null, "永久黑名单"),
+                    h(Tag, { color: "error" }, "当前页 " + items.length + " 条")
+                  ),
+                  extra: h(
+                    Space,
+                    { size: 8, wrap: true },
+                    h(Select, {
+                      value: scopeFilter,
+                      style: { minWidth: 120 },
+                      options: [
+                        { value: "", label: "全部范围" },
+                        { value: "term", label: "整个词" },
+                        { value: "context", label: "仅此语境" },
+                      ],
+                      onChange: function (value) { setScopeFilter(value); },
+                    }),
+                    h(Button, {
+                      onClick: function () { void loadBlocklist(null, [], scopeFilter); },
+                      loading: loading,
+                      disabled: adminMutationInFlight,
+                    }, "刷新")
+                  ),
+                },
+                loading && items.length === 0
+                  ? h(Spin, { tip: "正在加载永久黑名单..." })
+                  : items.length === 0
+                    ? h(
+                        "div",
+                        { className: "announcement-empty" },
+                        h(Text, { type: "secondary" }, "当前没有永久黑名单规则。请在 AI 审核页拒绝候选后再查看。")
+                      )
+                    : h(
+                        "div",
+                        { className: "mod-list" },
+                        items.map(function (item) {
+                          return h(
+                            "div",
+                            { key: item.id, className: "mod-item" },
+                            h(
+                              "div",
+                              { className: "mod-item-head" },
+                              h(
+                                "div",
+                                { className: "mod-item-title" },
+                                h("span", null, item.normalizedTerm || "(未知词)"),
+                                allowScopeTag(item.scope),
+                                h(Tag, { color: "purple" }, moderationSurfaceLabel(item.surface))
+                              ),
+                              h(
+                                "div",
+                                { className: "mod-item-actions" },
+                                h(Button, {
+                                  size: "small",
+                                  danger: true,
+                                  loading: revokeLoadingId === item.id,
+                                  disabled: adminMutationInFlight,
+                                  onClick: function () { confirmRevoke(item); },
+                                }, "撤销")
+                              )
+                            ),
+                            h(
+                              "div",
+                              { className: "mod-item-meta" },
+                              h("span", null, "规则 ID " + (item.id || "-")),
+                              h("span", null, "创建时间 " + formatDateTime(item.createdAt)),
+                              item.scope === "context"
+                                ? h("span", null, "语境签名 " + (item.contextSignature || "-"))
+                                : h("span", null, "作用范围 全部信息流"),
+                              item.reviewId ? h("span", null, "来源复审 " + item.reviewId) : null,
+                              item.note ? h("span", null, "备注 " + item.note) : null
+                            )
+                          );
+                        })
+                      ),
+                h(
+                  "div",
+                  { className: "mod-pager", style: { marginTop: 12 } },
+                  h(Button, {
+                    size: "small",
+                    disabled: cursorStack.length === 0 || loading,
+                    onClick: function () {
+                      const stack = cursorStack.slice();
+                      const previous = stack.pop();
+                      void loadBlocklist(previous || null, stack, scopeFilter);
+                    },
+                  }, "上一页"),
+                  h(Button, {
+                    size: "small",
+                    disabled: !nextCursor || loading,
+                    onClick: function () {
+                      void loadBlocklist(nextCursor, cursorStack.concat([cursor || ""]), scopeFilter);
+                    },
+                  }, "下一页")
+                )
+              )
+            )
+          );
+        }
+
+        function ModerationPanel(props) {
+          const request = props.request;
+          const status = props.status;
+          const refreshStatus = props.refreshStatus;
+          const beginAdminMutation = props.beginAdminMutation;
+          const endAdminMutation = props.endAdminMutation;
+          const adminMutationInFlight = props.adminMutationInFlight;
+
+          const config = (status && status.config) || {};
+          const health = (status && status.health) || {};
+          const cache = (status && status.cache) || {};
+          const reviewStats = (status && status.reviews) || {};
+          const credentialAlert = resolveAiCredentialAlert(config);
+          const credentialReady = config.credentialStatus !== "missing_master_key";
+
+          const [aiForm] = Form.useForm();
+          const [apiKeyDraft, setApiKeyDraft] = React.useState("");
+          const [aiDirty, setAiDirty] = React.useState(false);
+          const [saveLoading, setSaveLoading] = React.useState(false);
+          const [testLoading, setTestLoading] = React.useState(false);
+          const [clearKeyLoading, setClearKeyLoading] = React.useState(false);
+          const [testResult, setTestResult] = React.useState(null);
+          const aiDirtyRef = React.useRef(false);
+
+          const [reviewFilter, setReviewFilter] = React.useState("pending");
+          const [reviewItems, setReviewItems] = React.useState([]);
+          const [reviewCursor, setReviewCursor] = React.useState(null);
+          const [reviewNextCursor, setReviewNextCursor] = React.useState(null);
+          const [reviewCursorStack, setReviewCursorStack] = React.useState([]);
+          const [reviewsLoading, setReviewsLoading] = React.useState(false);
+          const [reviewDetail, setReviewDetail] = React.useState(null);
+          const [approveTarget, setApproveTarget] = React.useState(null);
+          const [approveScope, setApproveScope] = React.useState("context");
+          const [approveNote, setApproveNote] = React.useState("");
+          const [approveLoading, setApproveLoading] = React.useState(false);
+          const [rejectTarget, setRejectTarget] = React.useState(null);
+          const [rejectScope, setRejectScope] = React.useState("context");
+          const [rejectNote, setRejectNote] = React.useState("");
+          const [rejectLoading, setRejectLoading] = React.useState(false);
+
+          const [allowScopeFilter, setAllowScopeFilter] = React.useState("");
+          const [allowItems, setAllowItems] = React.useState([]);
+          const [allowCursor, setAllowCursor] = React.useState(null);
+          const [allowNextCursor, setAllowNextCursor] = React.useState(null);
+          const [allowCursorStack, setAllowCursorStack] = React.useState([]);
+          const [allowLoading, setAllowLoading] = React.useState(false);
+          const [revokeLoadingId, setRevokeLoadingId] = React.useState(null);
+
+          const [blockScopeFilter, setBlockScopeFilter] = React.useState("");
+          const [blockItems, setBlockItems] = React.useState([]);
+          const [blockCursor, setBlockCursor] = React.useState(null);
+          const [blockNextCursor, setBlockNextCursor] = React.useState(null);
+          const [blockCursorStack, setBlockCursorStack] = React.useState([]);
+          const [blockLoading, setBlockLoading] = React.useState(false);
+          const [revokeBlockLoadingId, setRevokeBlockLoadingId] = React.useState(null);
+
+          React.useEffect(function () {
+            if (!status || aiDirtyRef.current) return;
+            aiForm.setFieldsValue({
+              enabled: config.enabled === true,
+              protocol: config.protocol || "openai_responses",
+              endpoint: config.endpoint || "",
+              model: config.model || "",
+              allowPrivateNetwork: config.allowPrivateNetwork === true,
+              jsonFallbackEnabled: config.jsonFallbackEnabled === true,
+            });
+          }, [status, aiForm]);
+
+          const loadReviews = React.useCallback(async function (cursor, stack, filter) {
+            setReviewsLoading(true);
+            try {
+              const params = new URLSearchParams();
+              const activeFilter = filter === undefined ? reviewFilter : filter;
+              if (activeFilter) params.set("status", activeFilter);
+              params.set("limit", "50");
+              if (cursor) params.set("cursor", cursor);
+              const data = await request("/server-admin/moderation/reviews?" + params.toString());
+              setReviewItems(data && Array.isArray(data.items) ? data.items : []);
+              setReviewCursor(cursor || null);
+              setReviewNextCursor(data && data.nextCursor ? data.nextCursor : null);
+              setReviewCursorStack(stack || []);
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "加载复审候选失败");
+              }
+            } finally {
+              setReviewsLoading(false);
+            }
+          }, [request, reviewFilter]);
+
+          const loadAllowlist = React.useCallback(async function (cursor, stack, scope) {
+            setAllowLoading(true);
+            try {
+              const params = new URLSearchParams();
+              const activeScope = scope === undefined ? allowScopeFilter : scope;
+              if (activeScope) params.set("scope", activeScope);
+              params.set("limit", "50");
+              if (cursor) params.set("cursor", cursor);
+              const data = await request("/server-admin/moderation/allowlist?" + params.toString());
+              setAllowItems(data && Array.isArray(data.items) ? data.items : []);
+              setAllowCursor(cursor || null);
+              setAllowNextCursor(data && data.nextCursor ? data.nextCursor : null);
+              setAllowCursorStack(stack || []);
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "加载永久白名单失败");
+              }
+            } finally {
+              setAllowLoading(false);
+            }
+          }, [request, allowScopeFilter]);
+
+          const loadBlocklist = React.useCallback(async function (cursor, stack, scope) {
+            setBlockLoading(true);
+            try {
+              const params = new URLSearchParams();
+              const activeScope = scope === undefined ? blockScopeFilter : scope;
+              if (activeScope) params.set("scope", activeScope);
+              params.set("limit", "50");
+              if (cursor) params.set("cursor", cursor);
+              const data = await request("/server-admin/moderation/blocklist?" + params.toString());
+              setBlockItems(data && Array.isArray(data.items) ? data.items : []);
+              setBlockCursor(cursor || null);
+              setBlockNextCursor(data && data.nextCursor ? data.nextCursor : null);
+              setBlockCursorStack(stack || []);
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "加载永久黑名单失败");
+              }
+            } finally {
+              setBlockLoading(false);
+            }
+          }, [request, blockScopeFilter]);
+
+          React.useEffect(function () {
+            void loadReviews(null, [], reviewFilter);
+          }, [reviewFilter]);
+
+          React.useEffect(function () {
+            void loadAllowlist(null, [], allowScopeFilter);
+          }, [allowScopeFilter]);
+
+          React.useEffect(function () {
+            void loadBlocklist(null, [], blockScopeFilter);
+          }, [blockScopeFilter]);
+
+          function markAiDirty() {
+            if (aiDirtyRef.current) return;
+            aiDirtyRef.current = true;
+            setAiDirty(true);
+          }
+
+          function clearAiDirty() {
+            aiDirtyRef.current = false;
+            setAiDirty(false);
+          }
+
+          async function handleAiSave(values) {
+            if (!beginAdminMutation()) return;
+            setSaveLoading(true);
+            try {
+              const patch = buildAiConfigPatch(values || aiForm.getFieldsValue(), apiKeyDraft);
+              await request("/server-admin/moderation/ai", {
+                method: "PATCH",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(patch),
+              });
+              message.success("AI 审核配置已保存");
+              setApiKeyDraft("");
+              setTestResult(null);
+              clearAiDirty();
+              await refreshStatus({ source: "save" });
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "保存 AI 审核配置失败");
+              }
+            } finally {
+              endAdminMutation();
+              setSaveLoading(false);
+            }
+          }
+
+          async function handleAiTest() {
+            if (!beginAdminMutation()) return;
+            setTestLoading(true);
+            setTestResult(null);
+            try {
+              const body = buildAiTestRequest(aiForm.getFieldsValue(), apiKeyDraft);
+              const result = await request("/server-admin/moderation/ai/test", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(body),
+              });
+              setTestResult({
+                ok: true,
+                structuredMode: result && result.structuredMode,
+                latencyMs: result && result.latencyMs,
+                decision: result && result.decision,
+              });
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                setTestResult({
+                  ok: false,
+                  message: (error && error.message) || "测试连接失败",
+                });
+              }
+            } finally {
+              endAdminMutation();
+              setTestLoading(false);
+            }
+          }
+
+          function confirmClearApiKey() {
+            Modal.confirm({
+              title: "清除已保存的 API Key？",
+              content: "清除后会自动停用 AI 审核；重新填写并保存新的 Key 后才能再次启用。其他配置保持不变。",
+              okText: "确认清除",
+              okButtonProps: { danger: true },
+              cancelText: "取消",
+              onOk: executeClearApiKey,
+            });
+          }
+
+          async function executeClearApiKey() {
+            if (!beginAdminMutation()) return;
+            setClearKeyLoading(true);
+            try {
+              await request("/server-admin/moderation/ai", {
+                method: "PATCH",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ enabled: false, apiKeyAction: "clear" }),
+              });
+              message.success("API Key 已清除");
+              setApiKeyDraft("");
+              setTestResult(null);
+              await refreshStatus({ source: "save" });
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "清除 API Key 失败");
+              }
+            } finally {
+              endAdminMutation();
+              setClearKeyLoading(false);
+            }
+          }
+
+          async function openReviewDetail(id) {
+            setReviewDetail({ loading: true, data: null, error: null });
+            try {
+              const data = await request("/server-admin/moderation/reviews/" + encodeURIComponent(id));
+              setReviewDetail({ loading: false, data: data, error: null });
+            } catch (error) {
+              if (error && (error.status === 401 || error.status === 403)) {
+                setReviewDetail(null);
+                return;
+              }
+              setReviewDetail({
+                loading: false,
+                data: null,
+                error: (error && error.message) || "加载候选详情失败",
+              });
+            }
+          }
+
+          function openApproveModal(item) {
+            setApproveScope("context");
+            setApproveNote("");
+            setApproveTarget(item);
+          }
+
+          async function executeApprove() {
+            if (!approveTarget || !beginAdminMutation()) return;
+            setApproveLoading(true);
+            try {
+              const note = approveNote.trim();
+              await request(
+                "/server-admin/moderation/reviews/" + encodeURIComponent(approveTarget.id) + "/approve",
+                {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({
+                    scope: approveScope,
+                    ...(note ? { note: note } : {}),
+                  }),
+                });
+              message.success(approveScope === "term" ? "已按整个词批准并永久放行" : "已按当前语境批准");
+              setApproveTarget(null);
+              setApproveNote("");
+              setReviewDetail(null);
+              await Promise.all([
+                loadReviews(null, [], reviewFilter),
+                loadAllowlist(null, [], allowScopeFilter),
+                refreshStatus({ source: "save" }),
+              ]);
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "批准候选失败");
+              }
+            } finally {
+              endAdminMutation();
+              setApproveLoading(false);
+            }
+          }
+
+          function openRejectModal(item) {
+            setRejectScope("context");
+            setRejectNote("");
+            setRejectTarget(item);
+          }
+
+          async function executeReject() {
+            if (!rejectTarget || !beginAdminMutation()) return;
+            setRejectLoading(true);
+            try {
+              const note = rejectNote.trim();
+              await request(
+                "/server-admin/moderation/reviews/" + encodeURIComponent(rejectTarget.id) + "/reject",
+                {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({
+                    scope: rejectScope,
+                    ...(note ? { note: note } : {}),
+                  }),
+                });
+              message.success(rejectScope === "term" ? "已拒绝并将整个词加入永久黑名单" : "已拒绝并将当前语境加入永久黑名单");
+              setRejectTarget(null);
+              setRejectNote("");
+              setReviewDetail(null);
+              await Promise.all([
+                loadReviews(null, [], reviewFilter),
+                loadBlocklist(null, [], blockScopeFilter),
+                refreshStatus({ source: "save" }),
+              ]);
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "拒绝候选失败");
+              }
+            } finally {
+              endAdminMutation();
+              setRejectLoading(false);
+            }
+          }
+
+          function confirmRevokeAllowRule(item) {
+            Modal.confirm({
+              title: "撤销这条白名单规则？",
+              content: "撤销后立即恢复对该词" + (item && item.scope === "term" ? "（含名称检查）" : "（该语境）") + "的审核/拒绝策略。",
+              okText: "确认撤销",
+              okButtonProps: { danger: true },
+              cancelText: "取消",
+              onOk: function () { return executeRevokeAllowRule(item); },
+            });
+          }
+
+          async function executeRevokeAllowRule(item) {
+            if (!item || !beginAdminMutation()) return;
+            setRevokeLoadingId(item.id);
+            try {
+              await request("/server-admin/moderation/allowlist/" + encodeURIComponent(item.id), {
+                method: "DELETE",
+              });
+              message.success("白名单规则已撤销");
+              await Promise.all([
+                loadAllowlist(null, [], allowScopeFilter),
+                loadReviews(null, [], reviewFilter),
+                refreshStatus({ source: "save" }),
+              ]);
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "撤销白名单规则失败");
+              }
+            } finally {
+              endAdminMutation();
+              setRevokeLoadingId(null);
+            }
+          }
+
+          function confirmRevokeBlockRule(item) {
+            Modal.confirm({
+              title: "撤销这条黑名单规则？",
+              content: "撤销后，相同内容将重新按永久白名单、安全缓存或 AI 审核策略处理。",
+              okText: "确认撤销",
+              okButtonProps: { danger: true },
+              cancelText: "取消",
+              onOk: function () { return executeRevokeBlockRule(item); },
+            });
+          }
+
+          async function executeRevokeBlockRule(item) {
+            if (!item || !beginAdminMutation()) return;
+            setRevokeBlockLoadingId(item.id);
+            try {
+              await request("/server-admin/moderation/blocklist/" + encodeURIComponent(item.id), {
+                method: "DELETE",
+              });
+              message.success("黑名单规则已撤销");
+              await Promise.all([
+                loadBlocklist(null, [], blockScopeFilter),
+                loadReviews(null, [], reviewFilter),
+                refreshStatus({ source: "save" }),
+              ]);
+            } catch (error) {
+              if (!error || (error.status !== 401 && error.status !== 403)) {
+                message.error((error && error.message) || "撤销黑名单规则失败");
+              }
+            } finally {
+              endAdminMutation();
+              setRevokeBlockLoadingId(null);
+            }
+          }
+
+          const recentErrors = Array.isArray(health.recentErrors) ? health.recentErrors : [];
+
+          if (!status) {
+            return h(
+              "div",
+              { className: "tab-panel tab-narrow" },
+              h(
+                Card,
+                { className: "console-card", title: "AI 语义审核" },
+                h(Spin, { tip: props.loading ? "正在加载 AI 审核状态..." : "等待 AI 审核状态..." })
+              )
+            );
+          }
+
+          return h(
+            "div",
+            { className: "tab-panel" },
+            h(
+              Space,
+              { direction: "vertical", size: 16, style: { width: "100%" } },
+              h(
+                Card,
+                { className: "console-card", title: "AI 语义审核" },
+                h(
+                  Space,
+                  { direction: "vertical", size: 16, style: { width: "100%" } },
+                  credentialAlert
+                    ? h(Alert, {
+                        type: credentialAlert.type,
+                        showIcon: true,
+                        message: credentialAlert.message,
+                        description: credentialAlert.description,
+                      })
+                    : h(Alert, {
+                        type: config.enabled === true ? "success" : "info",
+                        showIcon: true,
+                        message: config.enabled === true ? "AI 审核已启用" : "AI 审核未启用",
+                        description: config.enabled === true
+                          ? "命中敏感词的消息会先进入 AI 复核；未覆盖的命中按配置放行、打码或阻止。"
+                          : "当前只使用确定性敏感词规则；配置完整后可在此启用语义复核。",
+                      }),
+                  aiDirty
+                    ? h(Alert, {
+                        type: "info",
+                        showIcon: true,
+                        message: "有未保存修改",
+                        description: "自动刷新不会覆盖当前表单内容，保存或手动放弃后才会同步最新配置。",
+                      })
+                    : null,
+                  h(
+                    Form,
+                    {
+                      form: aiForm,
+                      layout: "vertical",
+                      disabled: adminMutationInFlight,
+                      onFinish: handleAiSave,
+                      onValuesChange: function () { markAiDirty(); },
+                      initialValues: {
+                        enabled: config.enabled === true,
+                        protocol: config.protocol || "openai_responses",
+                        endpoint: config.endpoint || "",
+                        model: config.model || "",
+                        allowPrivateNetwork: config.allowPrivateNetwork === true,
+                        jsonFallbackEnabled: config.jsonFallbackEnabled === true,
+                      },
+                    },
+                    h(
+                      Form.Item,
+                      {
+                        name: "enabled",
+                        label: "启用 AI 语义审核",
+                        extra: credentialReady
+                          ? "启用前必须已保存 API Key、完整请求地址和模型。仅公共服务器频道与房间富聊天 v2 会进入 AI 复核。"
+                          : "缺少 AI_MODERATION_CREDENTIAL_KEY，无法启用。请先由运维配置主密钥。",
+                      },
+                      h(ToggleButton, {
+                        activeLabel: "已启用",
+                        inactiveLabel: "已停用",
+                        disabled: !credentialReady,
+                      })
+                    ),
+                    h(
+                      Form.Item,
+                      { name: "protocol", label: "协议" },
+                      h(Select, { options: AI_PROTOCOL_OPTIONS })
+                    ),
+                    h(
+                      Form.Item,
+                      { name: "endpoint", label: "完整请求地址", extra: "服务端不会追加路径，请填写完整的请求 URL。默认只允许 HTTPS 公网地址。" },
+                      h(Input, { placeholder: "https://api.openai.com/v1/responses", maxLength: 512 })
+                    ),
+                    h(
+                      Form.Item,
+                      { name: "model", label: "模型" },
+                      h(Input, { placeholder: "模型 ID", maxLength: 160 })
+                    ),
+                    h(
+                      Form.Item,
+                      { label: "API Key", extra: config.apiKeyConfigured
+                          ? "已保存 API Key。页面无法读取旧 Key；留空保存将保持现有 Key。"
+                          : "Key 只会在保存时提交，任何读取接口都不会返回明文。" },
+                      h(Input.Password, {
+                        value: apiKeyDraft,
+                        placeholder: config.apiKeyConfigured ? "留空保持不变，输入新 Key 则替换" : "请输入 API Key",
+                        autoComplete: "new-password",
+                        maxLength: 256,
+                        onChange: function (event) {
+                          setApiKeyDraft(event.target.value);
+                          markAiDirty();
+                        },
+                      })
+                    ),
+                    h(
+                      Form.Item,
+                      {
+                        name: "allowPrivateNetwork",
+                        label: "允许访问私网模型",
+                        extra: "仅在自托管内网端点时开启。开启后允许私网 IP 与 HTTP 地址。",
+                      },
+                      h(ToggleButton, null)
+                    ),
+                    h(
+                      Form.Item,
+                      {
+                        name: "jsonFallbackEnabled",
+                        label: "兼容提示词 JSON 回退",
+                        extra: "模型不支持结构化输出时，退化为提示词 JSON 模式；关闭后此类提供商故障按打码降级处理。",
+                      },
+                      h(ToggleButton, null)
+                    ),
+                    h(
+                      Form.Item,
+                      { style: { marginBottom: 0 } },
+                      h(
+                        Space,
+                        { size: 12, wrap: true, className: "settings-actions" },
+                        h(Button, {
+                          type: "primary",
+                          htmlType: "submit",
+                          loading: saveLoading,
+                          disabled: adminMutationInFlight,
+                        }, "保存配置"),
+                        h(Button, {
+                          onClick: function () { void handleAiTest(); },
+                          loading: testLoading,
+                          disabled: adminMutationInFlight,
+                        }, "测试连接"),
+                        h(Button, {
+                          danger: true,
+                          onClick: confirmClearApiKey,
+                          loading: clearKeyLoading,
+                          disabled: adminMutationInFlight || (!config.apiKeyConfigured && !apiKeyDraft),
+                        }, "清除 API Key")
+                      )
+                    )
+                  ),
+                  testResult
+                    ? testResult.ok
+                      ? h(Alert, {
+                          type: "success",
+                          showIcon: true,
+                          message: "测试连接成功",
+                          description: "结构化模式 " + structuredModeLabel(testResult.structuredMode) + " · 延迟 " + (typeof testResult.latencyMs === "number" ? testResult.latencyMs + " ms" : "未记录") + "。测试不会保存配置或临时 Key。",
+                        })
+                      : h(Alert, {
+                          type: "error",
+                          showIcon: true,
+                          message: "测试连接失败",
+                          description: testResult.message,
+                        })
+                    : null
+                )
+              ),
+              h(
+                Card,
+                {
+                  className: "console-card",
+                  title: h("div", { className: "section-title" }, h("span", null, "运行状态")),
+                  extra: h(
+                    Space,
+                    { size: 8, wrap: true },
+                    health.ready === true
+                      ? h(Tag, { color: "success" }, "就绪")
+                      : h(Tag, null, "未就绪"),
+                    circuitStateTag(health)
+                  ),
+                },
+                h(
+                  Space,
+                  { direction: "vertical", size: 16, style: { width: "100%" } },
+                  h(
+                    "div",
+                    { className: "metric-grid" },
+                    metricTile("活动请求", String(health.active || 0), "等待队列 " + (health.queued || 0), "info", ICONS.activity),
+                    metricTile("平均延迟", (health.averageLatencyMs || 0) + " ms", "已开始 " + (health.started || 0) + " 次审核", "info", ICONS.gauge),
+                    metricTile("放行 / 阻止", (health.allowed || 0) + " / " + (health.blocked || 0), "降级打码 " + (health.degraded || 0) + " 条", "good", ICONS.shield),
+                    metricTile("待复审", String(reviewStats.pendingReviews || 0), "白名单 " + (reviewStats.allowRules || 0) + " · 黑名单 " + (reviewStats.blockRules || 0), (reviewStats.pendingReviews || 0) > 0 ? "warn" : "good", ICONS.target)
+                  ),
+                  h(
+                    "div",
+                    { className: "fact-chips" },
+                    factChip("精确消息缓存命中", String(health.exactCacheHits || 0)),
+                    factChip("语境缓存命中", String(health.contextCacheHits || 0)),
+                    factChip("永久规则命中", String(health.permanentAllowHits || 0)),
+                    factChip("永久黑名单命中", String(health.permanentBlockHits || 0)),
+                    factChip("缓存条目（精确 / 语境）", (cache.exactEntries || 0) + " / " + (cache.contextEntries || 0)),
+                    factChip("复审（批准 / 拒绝）", (reviewStats.approvedReviews || 0) + " / " + (reviewStats.rejectedReviews || 0))
+                  ),
+                  h(
+                    "div",
+                    null,
+                    h("h3", { className: "detail-panel-title" }, svgIcon(ICONS.activity), h("span", null, "最近错误（不含聊天原文与密钥）")),
+                    recentErrors.length === 0
+                      ? h(Text, { type: "secondary" }, "暂无最近错误。")
+                      : h(
+                          "div",
+                          { className: "mod-error-list" },
+                          recentErrors.map(function (item, index) {
+                            return h(
+                              "div",
+                              { key: index, className: "mod-error-row" },
+                              h(
+                                "span",
+                                { className: "mod-error-code" },
+                                item.code || "unknown",
+                                typeof item.statusCode === "number" ? " · HTTP " + item.statusCode : ""
+                              ),
+                              h("span", { className: "mod-error-time" }, formatDateTime(item.at))
+                            );
+                          })
+                        )
+                  )
+                )
+              ),
+              h(
+                Card,
+                {
+                  className: "console-card",
+                  title: h("div", { className: "section-title" }, h("span", null, "人工复审候选")),
+                  extra: h(
+                    Space,
+                    { size: 8, wrap: true },
+                    h(Select, {
+                      value: reviewFilter,
+                      style: { minWidth: 120 },
+                      options: [
+                        { value: "", label: "全部状态" },
+                        { value: "pending", label: "待复审" },
+                        { value: "approved", label: "已批准" },
+                        { value: "rejected", label: "已拒绝" },
+                      ],
+                      onChange: function (value) { setReviewFilter(value); },
+                    }),
+                    h(Button, {
+                      onClick: function () { void loadReviews(null, [], reviewFilter); },
+                      loading: reviewsLoading,
+                      disabled: adminMutationInFlight,
+                    }, "刷新")
+                  ),
+                },
+                reviewsLoading && reviewItems.length === 0
+                  ? h(Spin, { tip: "正在加载复审候选..." })
+                  : reviewItems.length === 0
+                    ? h("div", { className: "announcement-empty" }, h(Text, { type: "secondary" }, "当前没有符合条件的复审候选。"))
+                    : h(
+                        "div",
+                        { className: "mod-list" },
+                        reviewItems.map(function (item) {
+                          return h(
+                            "div",
+                            { key: item.id, className: "mod-item" },
+                            h(
+                              "div",
+                              { className: "mod-item-head" },
+                              h(
+                                "div",
+                                { className: "mod-item-title" },
+                                h("span", null, item.displayTerm || item.normalizedTerm || "(未知词)"),
+                                reviewStatusTag(item.status),
+                                h(Tag, null, item.category || "未分类"),
+                                h(Tag, { color: "purple" }, moderationSurfaceLabel(item.surface))
+                              ),
+                              h(
+                                "div",
+                                { className: "mod-item-actions" },
+                                h(Button, {
+                                  size: "small",
+                                  onClick: function () { void openReviewDetail(item.id); },
+                                }, "详情"),
+                                item.status === "pending"
+                                  ? h(Button, {
+                                      size: "small",
+                                      type: "primary",
+                                      disabled: adminMutationInFlight,
+                                      onClick: function () { openApproveModal(item); },
+                                    }, "批准")
+                                  : null,
+                                item.status === "pending"
+                                  ? h(Button, {
+                                      size: "small",
+                                      danger: true,
+                                      disabled: adminMutationInFlight,
+                                      onClick: function () { openRejectModal(item); },
+                                    }, "拒绝")
+                                  : null
+                              )
+                            ),
+                            h(
+                              "div",
+                              { className: "mod-item-meta" },
+                              h("span", null, "来源 " + (item.source || "未知")),
+                              h("span", null, "观察 " + (item.observations || 0) + " 次"),
+                              h("span", null, "AI 判定 " + (item.aiVerdict || "-") + " / " + (item.aiUsage || "-")),
+                              h("span", null, "原因 " + (item.reasonCode || "-")),
+                              h("span", null, "最近出现 " + formatDateTime(item.lastObservedAt))
+                            )
+                          );
+                        })
+                      ),
+                h(
+                  "div",
+                  { className: "mod-pager", style: { marginTop: 12 } },
+                  h(Button, {
+                    size: "small",
+                    disabled: reviewCursorStack.length === 0 || reviewsLoading,
+                    onClick: function () {
+                      const stack = reviewCursorStack.slice();
+                      const previous = stack.pop();
+                      void loadReviews(previous || null, stack, reviewFilter);
+                    },
+                  }, "上一页"),
+                  h(Button, {
+                    size: "small",
+                    disabled: !reviewNextCursor || reviewsLoading,
+                    onClick: function () {
+                      void loadReviews(reviewNextCursor, reviewCursorStack.concat([reviewCursor || ""]), reviewFilter);
+                    },
+                  }, "下一页")
+                )
+              ),
+              h(
+                Card,
+                {
+                  className: "console-card",
+                  title: h("div", { className: "section-title" }, h("span", null, "永久白名单")),
+                  extra: h(
+                    Space,
+                    { size: 8, wrap: true },
+                    h(Select, {
+                      value: allowScopeFilter,
+                      style: { minWidth: 120 },
+                      options: [
+                        { value: "", label: "全部范围" },
+                        { value: "term", label: "整个词" },
+                        { value: "context", label: "仅此语境" },
+                      ],
+                      onChange: function (value) { setAllowScopeFilter(value); },
+                    }),
+                    h(Button, {
+                      onClick: function () { void loadAllowlist(null, [], allowScopeFilter); },
+                      loading: allowLoading,
+                      disabled: adminMutationInFlight,
+                    }, "刷新")
+                  ),
+                },
+                allowLoading && allowItems.length === 0
+                  ? h(Spin, { tip: "正在加载永久白名单..." })
+                  : allowItems.length === 0
+                    ? h("div", { className: "announcement-empty" }, h(Text, { type: "secondary" }, "当前没有永久白名单规则。"))
+                    : h(
+                        "div",
+                        { className: "mod-list" },
+                        allowItems.map(function (item) {
+                          return h(
+                            "div",
+                            { key: item.id, className: "mod-item" },
+                            h(
+                              "div",
+                              { className: "mod-item-head" },
+                              h(
+                                "div",
+                                { className: "mod-item-title" },
+                                h("span", null, item.normalizedTerm || "(未知词)"),
+                                allowScopeTag(item.scope),
+                                h(Tag, { color: "purple" }, moderationSurfaceLabel(item.surface))
+                              ),
+                              h(
+                                "div",
+                                { className: "mod-item-actions" },
+                                h(Button, {
+                                  size: "small",
+                                  danger: true,
+                                  loading: revokeLoadingId === item.id,
+                                  disabled: adminMutationInFlight,
+                                  onClick: function () { confirmRevokeAllowRule(item); },
+                                }, "撤销")
+                              )
+                            ),
+                            h(
+                              "div",
+                              { className: "mod-item-meta" },
+                              h("span", null, "创建时间 " + formatDateTime(item.createdAt)),
+                              item.reviewId ? h("span", null, "来源复审 " + item.reviewId) : null,
+                              item.note ? h("span", null, "备注 " + item.note) : null
+                            )
+                          );
+                        })
+                      ),
+                h(
+                  "div",
+                  { className: "mod-pager", style: { marginTop: 12 } },
+                  h(Button, {
+                    size: "small",
+                    disabled: allowCursorStack.length === 0 || allowLoading,
+                    onClick: function () {
+                      const stack = allowCursorStack.slice();
+                      const previous = stack.pop();
+                      void loadAllowlist(previous || null, stack, allowScopeFilter);
+                    },
+                  }, "上一页"),
+                  h(Button, {
+                    size: "small",
+                    disabled: !allowNextCursor || allowLoading,
+                    onClick: function () {
+                      void loadAllowlist(allowNextCursor, allowCursorStack.concat([allowCursor || ""]), allowScopeFilter);
+                    },
+                  }, "下一页")
+                )
+              ),
+              h(
+                Card,
+                {
+                  className: "console-card",
+                  title: h("div", { className: "section-title" }, h("span", null, "永久黑名单")),
+                  extra: h(
+                    Space,
+                    { size: 8, wrap: true },
+                    h(Select, {
+                      value: blockScopeFilter,
+                      style: { minWidth: 120 },
+                      options: [
+                        { value: "", label: "全部范围" },
+                        { value: "term", label: "整个词" },
+                        { value: "context", label: "仅此语境" },
+                      ],
+                      onChange: function (value) { setBlockScopeFilter(value); },
+                    }),
+                    h(Button, {
+                      onClick: function () { void loadBlocklist(null, [], blockScopeFilter); },
+                      loading: blockLoading,
+                      disabled: adminMutationInFlight,
+                    }, "刷新")
+                  ),
+                },
+                blockLoading && blockItems.length === 0
+                  ? h(Spin, { tip: "正在加载永久黑名单..." })
+                  : blockItems.length === 0
+                    ? h("div", { className: "announcement-empty" }, h(Text, { type: "secondary" }, "当前没有永久黑名单规则。"))
+                    : h(
+                        "div",
+                        { className: "mod-list" },
+                        blockItems.map(function (item) {
+                          return h(
+                            "div",
+                            { key: item.id, className: "mod-item" },
+                            h(
+                              "div",
+                              { className: "mod-item-head" },
+                              h(
+                                "div",
+                                { className: "mod-item-title" },
+                                h("span", null, item.normalizedTerm || "(未知词)"),
+                                allowScopeTag(item.scope),
+                                h(Tag, { color: "purple" }, moderationSurfaceLabel(item.surface))
+                              ),
+                              h(
+                                "div",
+                                { className: "mod-item-actions" },
+                                h(Button, {
+                                  size: "small",
+                                  danger: true,
+                                  loading: revokeBlockLoadingId === item.id,
+                                  disabled: adminMutationInFlight,
+                                  onClick: function () { confirmRevokeBlockRule(item); },
+                                }, "撤销")
+                              )
+                            ),
+                            h(
+                              "div",
+                              { className: "mod-item-meta" },
+                              h("span", null, "创建时间 " + formatDateTime(item.createdAt)),
+                              item.reviewId ? h("span", null, "来源复审 " + item.reviewId) : null,
+                              item.note ? h("span", null, "备注 " + item.note) : null
+                            )
+                          );
+                        })
+                      ),
+                h(
+                  "div",
+                  { className: "mod-pager", style: { marginTop: 12 } },
+                  h(Button, {
+                    size: "small",
+                    disabled: blockCursorStack.length === 0 || blockLoading,
+                    onClick: function () {
+                      const stack = blockCursorStack.slice();
+                      const previous = stack.pop();
+                      void loadBlocklist(previous || null, stack, blockScopeFilter);
+                    },
+                  }, "上一页"),
+                  h(Button, {
+                    size: "small",
+                    disabled: !blockNextCursor || blockLoading,
+                    onClick: function () {
+                      void loadBlocklist(blockNextCursor, blockCursorStack.concat([blockCursor || ""]), blockScopeFilter);
+                    },
+                  }, "下一页")
+                )
+              )
+            ),
+            h(
+              Modal,
+              {
+                open: reviewDetail !== null,
+                title: "复审候选详情",
+                footer: null,
+                onCancel: function () { setReviewDetail(null); },
+              },
+              !reviewDetail
+                ? null
+                : reviewDetail.loading
+                  ? h(Spin, { tip: "正在加载详情..." })
+                  : reviewDetail.error
+                    ? h(Alert, { type: "error", showIcon: true, message: reviewDetail.error })
+                    : reviewDetail.data
+                      ? h(
+                          "div",
+                          { className: "mod-detail-grid" },
+                          h(
+                            "div",
+                            { className: "mod-item-meta", style: { marginBottom: 8 } },
+                            reviewStatusTag(reviewDetail.data.status),
+                            h(Tag, null, reviewDetail.data.category || "未分类"),
+                            h(Tag, null, structuredModeLabel(reviewDetail.data.structuredMode))
+                          ),
+                          detailRow("命中词", reviewDetail.data.displayTerm || "-"),
+                          detailRow("规范化词", reviewDetail.data.normalizedTerm || "-"),
+                          detailRow("信息类型", moderationSurfaceLabel(reviewDetail.data.surface)),
+                          detailRow("来源", reviewDetail.data.source || "-"),
+                          detailRow("语境签名", reviewDetail.data.contextSignature || "-"),
+                          detailRow("观察次数", String(reviewDetail.data.observations || 0)),
+                          detailRow("首次出现", formatDateTime(reviewDetail.data.firstObservedAt)),
+                          detailRow("最近出现", formatDateTime(reviewDetail.data.lastObservedAt)),
+                          detailRow("提供商 / 模型", (reviewDetail.data.provider || "-") + " / " + (reviewDetail.data.model || "-")),
+                          detailRow("AI 结论", (reviewDetail.data.aiDecision || "-") + " / " + (reviewDetail.data.aiVerdict || "-") + " / " + (reviewDetail.data.aiUsage || "-")),
+                          detailRow("原因码", reviewDetail.data.reasonCode || "-"),
+                          detailRow("语境候选 ID", reviewDetail.data.aiContextCandidateId || "-"),
+                          reviewDetail.data.note
+                            ? detailRow("管理员备注", reviewDetail.data.note)
+                            : null,
+                          h("div", { className: "mod-evidence-label", style: { marginTop: 10 } }, "加密证据（仅本次详情请求解密）"),
+                          reviewDetail.data.evidence
+                            ? h(
+                                Space,
+                                { direction: "vertical", size: 8, style: { width: "100%" } },
+                                h("div", { className: "mod-evidence-label" }, "原始消息"),
+                                h("div", { className: "release-notes" }, reviewDetail.data.evidence.message || ""),
+                                h("div", { className: "mod-evidence-label" }, "命中语境"),
+                                h("div", { className: "release-notes" }, reviewDetail.data.evidence.context || "")
+                              )
+                            : h(Text, { type: "secondary" }, "证据已处理或已过期，无法再查看。"),
+                          reviewDetail.data.status === "pending"
+                            ? h(
+                                Space,
+                                { size: 8, style: { marginTop: 14 } },
+                                h(Button, {
+                                  type: "primary",
+                                  disabled: adminMutationInFlight,
+                                  onClick: function () { openApproveModal(reviewDetail.data); },
+                                }, "批准"),
+                                h(Button, {
+                                  danger: true,
+                                  disabled: adminMutationInFlight,
+                                  onClick: function () { openRejectModal(reviewDetail.data); },
+                                }, "拒绝")
+                              )
+                            : null
+                        )
+                      : null
+            ),
+            h(
+              Modal,
+              {
+                open: approveTarget !== null,
+                title: "批准复审候选",
+                okText: "确认批准",
+                cancelText: "取消",
+                confirmLoading: approveLoading,
+                okButtonProps: { disabled: adminMutationInFlight },
+                onOk: function () { return executeApprove(); },
+                onCancel: function () { if (!approveLoading) setApproveTarget(null); },
+              },
+              !approveTarget
+                ? null
+                : h(
+                    Space,
+                    { direction: "vertical", size: 12, style: { width: "100%" } },
+                    h(Alert, {
+                      type: approveScope === "term" ? "warning" : "info",
+                      showIcon: true,
+                      message: approveScope === "term" ? "整个词：全局永久放行" : "仅此语境：限定放行",
+                      description: approveScope === "term"
+                        ? "该规范化词将在聊天、房间名、用户名和角色名中全局永久放行。"
+                        : "只放行相同信息类型中，相同规范化词与相同规范化语境的内容。",
+                    }),
+                    h(
+                      Radio.Group,
+                      {
+                        value: approveScope,
+                        onChange: function (event) { setApproveScope(event.target.value); },
+                      },
+                      h(Radio, { value: "context" }, "仅此语境（推荐）"),
+                      h(Radio, { value: "term" }, "整个词")
+                    ),
+                    h(TextArea, {
+                      rows: 3,
+                      maxLength: 280,
+                      placeholder: "管理员备注（可选）",
+                      value: approveNote,
+                      onChange: function (event) { setApproveNote(event.target.value); },
+                    })
+                  )
+            ),
+            h(
+              Modal,
+              {
+                open: rejectTarget !== null,
+                title: "拒绝复审候选",
+                okText: "确认拒绝",
+                cancelText: "取消",
+                confirmLoading: rejectLoading,
+                okButtonProps: { danger: true, disabled: adminMutationInFlight },
+                onOk: function () { return executeReject(); },
+                onCancel: function () { if (!rejectLoading) setRejectTarget(null); },
+              },
+              !rejectTarget
+                ? null
+                : h(
+                    Space,
+                    { direction: "vertical", size: 12, style: { width: "100%" } },
+                    h(Alert, {
+                      type: rejectScope === "term" ? "error" : "warning",
+                      showIcon: true,
+                      message: rejectScope === "term" ? "整个词：全局永久拦截" : "仅此语境：限定永久拦截",
+                      description: rejectScope === "term"
+                        ? "该规范化词将在聊天、房间名、用户名和角色名中永久拦截；撤销黑名单规则前不会再次调用 AI。"
+                        : "只拦截相同信息类型中，相同规范化词与相同规范化语境的内容；撤销规则前不会再次调用 AI。",
+                    }),
+                    h(
+                      Radio.Group,
+                      {
+                        value: rejectScope,
+                        onChange: function (event) { setRejectScope(event.target.value); },
+                      },
+                      h(Radio, { value: "context" }, "仅此语境（推荐）"),
+                      h(Radio, { value: "term" }, "整个词")
+                    ),
+                    h(TextArea, {
+                      rows: 3,
+                      maxLength: 280,
+                      placeholder: "管理员备注（可选）",
+                      value: rejectNote,
+                      onChange: function (event) { setRejectNote(event.target.value); },
+                    })
+                  )
+            )
+          );
+        }
+
         function App() {
           const [booting, setBooting] = React.useState(true);
           const [session, setSession] = React.useState(null);
@@ -1517,6 +3023,8 @@ export function renderServerAdminPage(serviceVersion: string) {
           const [updateInstallLoading, setUpdateInstallLoading] = React.useState(false);
           const [adminMutationInFlight, setAdminMutationInFlight] = React.useState(false);
           const [activeTab, setActiveTab] = React.useState("overview");
+          const [moderationStatus, setModerationStatus] = React.useState(null);
+          const [moderationLoading, setModerationLoading] = React.useState(false);
           const [lastSyncedAt, setLastSyncedAt] = React.useState(0);
           const [loginForm] = Form.useForm();
           const [settingsForm] = Form.useForm();
@@ -1567,6 +3075,7 @@ export function renderServerAdminPage(serviceVersion: string) {
             setSession(null);
             setSettings(null);
             setAnnouncements([]);
+            setModerationStatus(null);
             settingsRef.current = null;
             loginForm.resetFields();
             settingsForm.resetFields();
@@ -1716,6 +3225,58 @@ export function renderServerAdminPage(serviceVersion: string) {
               clearInterval(timer);
             };
           }, [session, refreshSettings]);
+
+          const refreshModeration = React.useCallback(async function (options) {
+            const source = options && options.source ? options.source : "refresh";
+            if (source === "poll" && adminMutationInFlightRef.current) {
+              return;
+            }
+            const showLoading = source !== "poll";
+            const generation = sessionGenerationRef.current;
+            if (showLoading) {
+              setModerationLoading(true);
+            }
+            try {
+              const next = await request("/server-admin/moderation/ai", undefined, generation);
+              if (!isCurrentRequest(generation, sessionGenerationRef.current)) {
+                return;
+              }
+              setModerationStatus(next);
+            } catch (error) {
+              if (error && (error.status === 401 || error.status === 403)) {
+                return;
+              }
+              if (source === "poll") {
+                notification.warning({
+                  message: "AI 审核状态刷新失败",
+                  description: (error && error.message) ? error.message : "无法读取 AI 审核运行状态。",
+                  placement: "topRight",
+                  duration: 5,
+                });
+              } else {
+                message.error((error && error.message) ? error.message : "AI 审核状态加载失败");
+              }
+            } finally {
+              if (showLoading) {
+                setModerationLoading(false);
+              }
+            }
+          }, [request]);
+
+          React.useEffect(function () {
+            if (!session || (activeTab !== "moderation" && activeTab !== "blocklist")) {
+              return;
+            }
+
+            void refreshModeration({ source: "initial" });
+            const timer = setInterval(function () {
+              void refreshModeration({ source: "poll" });
+            }, 15000);
+
+            return function () {
+              clearInterval(timer);
+            };
+          }, [session, activeTab, refreshModeration]);
 
           async function handleLogin(values) {
             if (!beginSingleFlight(loginInFlightRef)) return;
@@ -2046,10 +3607,25 @@ export function renderServerAdminPage(serviceVersion: string) {
             );
           }
 
+          const moderationPendingReviews = moderationStatus &&
+              moderationStatus.reviews &&
+              typeof moderationStatus.reviews.pendingReviews === "number" &&
+              moderationStatus.reviews.pendingReviews > 0
+            ? moderationStatus.reviews.pendingReviews
+            : null;
+          const moderationBlockRules = moderationStatus &&
+              moderationStatus.reviews &&
+              typeof moderationStatus.reviews.blockRules === "number" &&
+              moderationStatus.reviews.blockRules > 0
+            ? moderationStatus.reviews.blockRules
+            : null;
+
           const navTabs = [
             { key: "overview", label: "概览", icon: ICONS.dashboard, dot: null, count: null },
             { key: "settings", label: "公开设置", icon: ICONS.sliders, dot: hasUnsavedDrafts ? "#f2b04d" : null, count: null },
             { key: "announcements", label: "大厅公告", icon: ICONS.megaphone, dot: null, count: announcements.length },
+            { key: "moderation", label: "AI 审核", icon: ICONS.shield, dot: moderationPendingReviews ? "#f2b04d" : null, count: moderationPendingReviews },
+            { key: "blocklist", label: "永久黑名单", icon: ICONS.ban, dot: moderationBlockRules ? "#e65c66" : null, count: moderationBlockRules },
             { key: "update", label: "服务更新", icon: ICONS.download, dot: updateStatus.updateAvailable ? "#f2b04d" : null, count: null },
           ];
 
@@ -2440,6 +4016,26 @@ export function renderServerAdminPage(serviceVersion: string) {
                       )
                   )
                   : null,
+                activeTab === "moderation"
+                ? h(ModerationPanel, {
+                    status: moderationStatus,
+                    loading: moderationLoading,
+                    refreshStatus: refreshModeration,
+                    request: request,
+                    beginAdminMutation: beginAdminMutation,
+                    endAdminMutation: endAdminMutation,
+                    adminMutationInFlight: adminMutationInFlight,
+                  })
+                : null,
+                activeTab === "blocklist"
+                ? h(PermanentBlocklistPanel, {
+                    refreshStatus: refreshModeration,
+                    request: request,
+                    beginAdminMutation: beginAdminMutation,
+                    endAdminMutation: endAdminMutation,
+                    adminMutationInFlight: adminMutationInFlight,
+                  })
+                : null,
                 activeTab === "overview"
                 ? h(
                   "section",
