@@ -105,7 +105,7 @@ public sealed class LanConnectRichMessageRenderingTests
     }
 
     [TestCase]
-    public async Task Renders_ordered_rich_runs_with_local_titles_unknown_placeholder_and_status()
+    public async Task Renders_ordered_rich_runs_and_keeps_pending_content_out_of_the_public_list()
     {
         LanConnectChatChannelState state = EnabledState();
         state.AppendConfirmedContentForTests(
@@ -149,7 +149,8 @@ public sealed class LanConnectRichMessageRenderingTests
         // by 2: the card at the old index 1 is now index 3, the potion at the old index 5
         // is now index 7.
         AssertThat(view.GetMeta("lan_connect_reference_keys").AsString()).IsEqual("ref-3,ref-7");
-        AssertThat(Labels(panel)).Contains("发送中");
+        AssertThat(Labels(panel).Contains("发送中")).IsFalse();
+        AssertThat(panel.FindChild("ChatMessageRow1", recursive: true, owned: false) == null).IsTrue();
     }
 
     [TestCase]

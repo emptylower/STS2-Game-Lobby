@@ -5,6 +5,7 @@ import {
   canonicalizeRoomContent,
   ChatProtocolError,
   deterministicContentJson,
+  maskCanonicalChatContent,
   renderLegacyRoomFallback,
   renderPlainTextFallback,
   type CanonicalChatMessage,
@@ -21,6 +22,11 @@ import {
 import { RateLimitError, SlidingWindowLimiter, TokenBucketLimiter } from "./rate-limiter.js";
 import type { RoomChatContext } from "../store.js";
 import type { ModerationService } from "../moderation/moderation-service.js";
+import type { AiSemanticModerationService } from "../moderation/ai-service.js";
+import {
+  ModerationConversationWindow,
+  type ConversationModerationCandidate,
+} from "../moderation/conversation-window.js";
 
 export interface RoomChatPeerRegistration {
   connectionSessionId: string;
@@ -50,6 +56,7 @@ export interface RoomChatGatewayOptions {
   connectionLimiterMaxKeys?: number;
   ipLimiterMaxKeys?: number;
   moderation?: ModerationService;
+  aiModeration?: AiSemanticModerationService;
 }
 
 export interface RoomChatGovernanceState {
@@ -99,6 +106,16 @@ interface PeerState extends RoomChatPeerRegistration {
   roomV2Capable: boolean;
   dedupe: Map<string, DedupeEntry>;
   dedupeLastSeenAt: number;
+  pendingReview: PendingRoomReview | null;
+}
+
+interface PendingRoomReview {
+  clientMessageId: string;
+  canonicalJson: string;
+  reviewId: string;
+  startedAt: string;
+  timeoutMs: number;
+  conversation: ConversationModerationCandidate | null;
 }
 
 type RoomRateLimitResult =
@@ -129,6 +146,8 @@ export class RoomChatGateway {
   private desiredRoomV2Enabled: boolean;
   private readonly getRoomChatContext: (roomId: string) => RoomChatContext | undefined;
   private readonly moderation: ModerationService | null;
+  private readonly aiModeration: AiSemanticModerationService | null;
+  private readonly conversationWindow: ModerationConversationWindow;
   private readonly now: () => number;
   private readonly randomUuid: () => string;
   private readonly maxPeersTotal: number;
@@ -155,7 +174,9 @@ export class RoomChatGateway {
     this.desiredRoomV2Enabled = this.roomV2Enabled;
     this.getRoomChatContext = options.getRoomChatContext;
     this.moderation = options.moderation ?? null;
+    this.aiModeration = options.aiModeration ?? null;
     this.now = options.now ?? Date.now;
+    this.conversationWindow = new ModerationConversationWindow({ now: this.now });
     this.randomUuid = options.randomUuid ?? randomUUID;
     this.maxPeersTotal = options.maxPeersTotal ?? DEFAULT_MAX_PEERS_TOTAL;
     this.maxPeersPerRoom = options.maxPeersPerRoom ?? DEFAULT_MAX_PEERS_PER_ROOM;
@@ -211,6 +232,7 @@ export class RoomChatGateway {
       roomV2Capable: false,
       dedupe: new Map(),
       dedupeLastSeenAt: this.now(),
+      pendingReview: null,
     });
     roomPeers.add(registration.connectionSessionId);
   }
@@ -230,6 +252,7 @@ export class RoomChatGateway {
       this.unregisterPeer(connectionSessionId);
     }
     this.peersByRoom.clear();
+    this.conversationWindow.clear();
     this.ipLimiter.cleanup(Number.MAX_SAFE_INTEGER);
   }
 
@@ -348,8 +371,8 @@ export class RoomChatGateway {
         playerName: normalizePlayerName(envelope.playerName),
         playerNetId: normalizePlayerNetId(envelope.playerNetId),
       };
-      const moderation = this.moderation;
-      if (moderation?.containsSensitiveName(identity.playerName) === true) {
+      if (this.isSensitiveNameBlocked(identity.playerName)) {
+        const moderation = this.moderation!;
         moderation.recordNameRejection();
         this.sendError(peer, "invalid_message", "");
         return;
@@ -424,8 +447,8 @@ export class RoomChatGateway {
         return;
       }
       const playerName = normalizePlayerName(envelope.playerName);
-      const moderation = this.moderation;
-      if (moderation?.containsSensitiveName(playerName) === true) {
+      if (this.isSensitiveNameBlocked(playerName)) {
+        const moderation = this.moderation!;
         moderation.recordNameRejection();
         this.sendError(peer, "invalid_message", "");
         return;
@@ -501,7 +524,6 @@ export class RoomChatGateway {
     let canonicalJson: string;
     try {
       const senderFeatures = this.resolveFeatures(peer, peer, true);
-      const moderation = this.moderation;
       content = canonicalizeRoomContent(envelope.content, {
         richContentVersion: senderFeatures.richContentVersion,
         emojiSetVersion: senderFeatures.emojiSetVersion,
@@ -511,7 +533,7 @@ export class RoomChatGateway {
         envelopeRoomSessionId: envelope.roomSessionId,
         activeRoomSessionId: receiveContext.roomSessionId,
         peerPlayerNetIds: receiveContext.peerPlayerNetIds,
-      }, moderation === null ? undefined : (text) => moderation.maskChatText(text));
+      });
       canonicalJson = deterministicContentJson(content);
     } catch (error) {
       if (!this.activeContext(peer, envelope.roomSessionId)) {
@@ -574,6 +596,18 @@ export class RoomChatGateway {
     if (this.replayOrRejectConflict(peer, envelope.clientMessageId, canonicalJson)) {
       return;
     }
+    if (peer.pendingReview) {
+      if (peer.pendingReview.clientMessageId === envelope.clientMessageId) {
+        if (peer.pendingReview.canonicalJson !== canonicalJson) {
+          this.sendError(peer, "duplicate_message", envelope.clientMessageId);
+        } else {
+          this.sendPendingReview(peer, peer.pendingReview);
+        }
+      } else {
+        this.sendError(peer, "moderation_busy", envelope.clientMessageId);
+      }
+      return;
+    }
     if (!commitContext.chatEnabled) {
       this.cacheAndSendError(
         peer,
@@ -596,12 +630,126 @@ export class RoomChatGateway {
       return;
     }
 
+    const plainText = renderPlainTextFallback(content);
+    const senderKey = `${peer.roomSessionId}\0${peer.identity.playerNetId}`;
+    const conversation = this.moderation?.enabled
+      ? this.conversationWindow.buildCandidate(
+          senderKey,
+          plainText,
+          (text) => this.moderation!.findSensitiveMatches(text),
+        )
+      : null;
+    const plan = this.aiModeration?.prepare(conversation?.text ?? plainText);
+    if (conversation && (!plan || plan.kind === "mask" || plan.kind === "block")) {
+      this.blockConversation(peer, senderKey, plainText, conversation);
+      this.cacheAndSendError(
+        peer,
+        envelope.clientMessageId,
+        canonicalJson,
+        "content_blocked",
+      );
+      return;
+    }
+    if (plan?.kind === "block") {
+      this.conversationWindow.recordBlocked(senderKey, plainText);
+      this.cacheAndSendError(
+        peer,
+        envelope.clientMessageId,
+        canonicalJson,
+        "content_blocked",
+      );
+      return;
+    }
+    if (plan?.kind === "review") {
+      const pending: PendingRoomReview = {
+        clientMessageId: envelope.clientMessageId,
+        canonicalJson,
+        reviewId: plan.reviewId,
+        startedAt: new Date(this.now()).toISOString(),
+        timeoutMs: plan.timeoutMs,
+        conversation,
+      };
+      peer.pendingReview = pending;
+      this.sendPendingReview(peer, pending);
+      void this.aiModeration!.review(plan, peer.clientIp).then((outcome) => {
+        return this.enqueueEvent(() => {
+          if (this.peers.get(peer.connectionSessionId) !== peer || peer.pendingReview !== pending) return;
+          peer.pendingReview = null;
+          if (outcome.kind === "block" || (conversation && outcome.kind === "degraded")) {
+            if (conversation) this.blockConversation(peer, senderKey, plainText, conversation);
+            else this.conversationWindow.recordBlocked(senderKey, plainText);
+            this.cacheAndSendError(
+              peer,
+              envelope.clientMessageId,
+              canonicalJson,
+              "content_blocked",
+            );
+            return;
+          }
+          const finalContent = outcome.kind === "degraded" ? this.maskContent(content) : content;
+          this.commitRoomMessage(peer, envelope, canonicalJson, finalContent);
+        });
+      }).catch(() => {
+        peer.pendingReview = null;
+        this.sendError(peer, "server_busy", envelope.clientMessageId);
+      });
+      return;
+    }
+
+    const finalContent = plan?.kind === "mask" || (plan === undefined && this.moderation !== null)
+      ? this.maskContent(content)
+      : content;
+    this.commitRoomMessage(peer, envelope, canonicalJson, finalContent, commitContext);
+  }
+
+  private commitRoomMessage(
+    peer: PeerState,
+    envelope: RoomChatV2Envelope,
+    canonicalJson: string,
+    content: ChatContent,
+    knownContext?: RoomChatContext,
+  ): void {
+    const identity = peer.identity;
+    if (!identity) {
+      this.sendError(peer, "protocol_mismatch", envelope.clientMessageId);
+      return;
+    }
+    const commitContext = knownContext ?? this.activeContext(peer, envelope.roomSessionId);
+    if (!commitContext) {
+      this.sendError(peer, "protocol_mismatch", envelope.clientMessageId);
+      return;
+    }
+    if (!commitContext.chatEnabled || !this.roomV2Enabled) {
+      this.cacheAndSendError(peer, envelope.clientMessageId, canonicalJson, "chat_disabled");
+      return;
+    }
+    try {
+      assertRoomContentContext(content, {
+        envelopeRoomSessionId: envelope.roomSessionId,
+        activeRoomSessionId: commitContext.roomSessionId,
+        peerPlayerNetIds: commitContext.peerPlayerNetIds,
+      });
+    } catch {
+      this.cacheAndSendError(peer, envelope.clientMessageId, canonicalJson, "invalid_content");
+      return;
+    }
     const now = this.now();
     const message: RoomChatMessage = {
-      ...projectedMessage,
+      roomId: peer.roomId,
+      roomSessionId: peer.roomSessionId,
       messageId: this.randomUuid(),
+      senderId: identity.playerNetId,
+      senderName: identity.playerName,
+      content,
+      plainTextFallback: renderPlainTextFallback(content),
       sentAt: new Date(now).toISOString(),
     };
+    try {
+      assertRoomChatWireBudget(message, envelope.clientMessageId);
+    } catch {
+      this.cacheAndSendError(peer, envelope.clientMessageId, canonicalJson, "invalid_content");
+      return;
+    }
     const ack = {
       type: "room_chat_ack",
       protocolVersion: 1,
@@ -609,6 +757,11 @@ export class RoomChatGateway {
       message,
     };
     this.storeDedupe(peer, envelope.clientMessageId, canonicalJson, ack);
+    this.conversationWindow.recordCommitted(
+      `${peer.roomSessionId}\0${identity.playerNetId}`,
+      message.messageId,
+      message.plainTextFallback,
+    );
     this.acceptedMessages += 1;
     peer.send(ack);
 
@@ -632,8 +785,8 @@ export class RoomChatGateway {
         : {
             type: "room_chat",
             roomId: peer.roomId,
-            playerName: peer.identity.playerName,
-            playerNetId: peer.identity.playerNetId,
+            playerName: identity.playerName,
+            playerNetId: identity.playerNetId,
             messageId: message.messageId,
             messageText: renderLegacyRoomFallback(content),
             sentAtUnixMs: now,
@@ -644,6 +797,59 @@ export class RoomChatGateway {
         // A failed socket adapter must not prevent delivery to the remaining room peers.
       }
     }
+  }
+
+  private blockConversation(
+    peer: PeerState,
+    senderKey: string,
+    currentText: string,
+    conversation: ConversationModerationCandidate,
+  ): void {
+    const removedIds = [...new Set(conversation.relatedMessageIds)];
+    this.conversationWindow.markRedacted(senderKey, removedIds);
+    this.conversationWindow.recordBlocked(senderKey, currentText);
+    if (removedIds.length === 0) return;
+    const frame = {
+      type: "room_chat_messages_redacted",
+      protocolVersion: 1,
+      roomId: peer.roomId,
+      roomSessionId: peer.roomSessionId,
+      messageIds: removedIds,
+      reason: "content_blocked",
+      redactedAt: new Date(this.now()).toISOString(),
+    };
+    for (const recipientId of this.peersByRoom.get(peer.roomId) ?? []) {
+      const recipient = this.peers.get(recipientId);
+      if (
+        recipient?.roomV2Capable
+        && recipient.helloComplete
+        && recipient.roomSessionId === peer.roomSessionId
+      ) {
+        try {
+          recipient.send(frame);
+        } catch {
+          // Continue redaction delivery for the remaining room peers.
+        }
+      }
+    }
+  }
+
+  private maskContent(content: ChatContent): ChatContent {
+    const moderation = this.moderation;
+    return moderation === null
+      ? content
+      : maskCanonicalChatContent(content, (text) => moderation.maskChatText(text));
+  }
+
+  private sendPendingReview(peer: PeerState, pending: PendingRoomReview): void {
+    peer.send({
+      type: "room_chat_review_pending",
+      protocolVersion: 1,
+      clientMessageId: pending.clientMessageId,
+      reviewId: pending.reviewId,
+      startedAt: pending.startedAt,
+      timeoutMs: pending.timeoutMs,
+    });
   }
 
   private resolveFeatures(
@@ -661,6 +867,15 @@ export class RoomChatGateway {
       sender: sender.declaredFeatures,
       receiver: receiver.declaredFeatures,
     });
+  }
+
+  private isSensitiveNameBlocked(value: string): boolean {
+    const moderation = this.moderation;
+    if (!moderation) return false;
+    const matches = moderation.findSensitiveMatches(value);
+    if (matches.length === 0) return false;
+    const plan = this.aiModeration?.prepare(value, "player_name");
+    return plan?.kind !== "allow";
   }
 
   private resolveDesiredFeatures(
@@ -1010,6 +1225,8 @@ function safeErrorMessage(code: ChatProtocolErrorCode): string {
     case "protocol_mismatch": return "The room chat protocol or context does not match.";
     case "rate_limited": return "Room chat is temporarily rate limited.";
     case "server_busy": return "Room chat is temporarily busy.";
+    case "content_blocked": return "The message contains prohibited content.";
+    case "moderation_busy": return "A previous message is still under review.";
     default: return "The room chat message was rejected.";
   }
 }

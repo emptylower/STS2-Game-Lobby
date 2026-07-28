@@ -14,14 +14,14 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.5.3` |
-| 默认大厅 | `47.111.146.69:8787`（兜底社区节点，可在 picker 内切换） |
+| 客户端版本 | `0.5.4` |
+| 默认大厅 | `sts2-test.43.133.192.249.nip.io`（可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `test_relaxed + relay-only` |
 
-`0.5.3` 拆分 LAN 与大厅续局通道：多人存档记住创建入口，纯 LAN 存档续局不再被误发布到公共大厅；房主可在续局等待页把按角色/玩家名对应的单条 `STS2LANRESUME:` 续局身份码发给队友，队友在手动 LAN/IP 加入页粘贴即可回到自己的槽位。同时修复了 BaseLib 共存导致的多人存档损坏（`.corrupt`）、安卓打开“加入好友”页强制等待调试直连超时的问题；“永久放弃多人存档”前会自动备份到 `user://sts2_lan_connect/save-backups/`。局内聊天改为扁平半透明 HUD：单行富文本消息、按玩家稳定配色、收到新消息自动浮现。
+`0.5.4` 配合 lobby-service AI 语义审核：消息首次送审时在输入框上方显示“在审核中”，通过后静默进入频道，拒绝时显示游戏原生违禁词提示；服务端识别拆字规避后，客户端会按撤回帧删除相关公共频道或房间消息。房间名、用户名和续局角色名审核失败也统一使用游戏原生提示，不再显示原始 HTTP 错误。`0.5.3` 的 LAN/大厅续局通道拆分、续局身份码、存档保护和聊天 HUD 功能全部保留。
 
-当前稳定版通过 GitHub Release [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3) 与 [Steam 创意工坊](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) 提供。v0.5.3 只更新客户端，与 lobby-service 0.5.1/0.5.2/0.5.3 及 v0.5.1+ 客户端均可互通，聊天与加入线协议不变；同一客户端包以游戏 `0.107.1`、`0.109.0`、`0.109.1` 为加载目标。
+`0.5.4` 当前为源码/候选构建，GitHub Release 与 Steam Workshop 更新尚未发布；最新公开稳定版仍为 [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)。新帧为向后兼容扩展，旧客户端仍可连接，但无法撤回已经显示的拆字上下文；建议与 lobby-service `0.5.4` 配套使用。同一客户端包以游戏 `0.107.1`、`0.109.0`、`0.109.1` 为加载目标。
 
 同一房间内的所有玩家必须使用完全相同的游戏版本。房主和客户端版本不同时，加入流程会直接提示双方版本并中止；普通非联机 MOD 不进入预检、不提示、不禁用，也不影响加入。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。
 
@@ -177,14 +177,14 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.5.3` |
-| Default lobby | `47.111.146.69:8787` fallback community node |
+| Client version | `0.5.4` |
+| Default lobby | `sts2-test.43.133.192.249.nip.io` |
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `test_relaxed + relay-only` |
 
-`0.5.3` splits the LAN and lobby continue-run channels: multiplayer saves remember their origin, and LAN-origin saves are no longer auto-published to the public lobby on resume. The host can share a per-character `STS2LANRESUME:` resume code from the continue-run waiting page; teammates paste it on the manual LAN/IP join page to reclaim their own slots. This release also fixes BaseLib coexistence corrupting multiplayer saves (`.corrupt` renames) and Android's Join Friend screen blocking on a debug-connection timeout, and abandoning a multiplayer save now backs it up to `user://sts2_lan_connect/save-backups/` first. In-run chat is now a flat translucent HUD with single-line rich-text messages, stable per-player name colors, and auto-appear on new messages.
+`0.5.4` integrates lobby-service semantic moderation. A message first shows a compact Reviewing state, appears silently after approval, and uses a native game popup when blocked. Redaction frames remove related public or room messages when split-message evasion is detected. Rejected room names, player names, and continue-run character names use the same native sensitive-content feedback instead of raw HTTP errors. The `0.5.3` LAN/lobby continue-channel split, resume codes, save protection, and chat HUD remain included.
 
-The stable build ships via GitHub Release [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3) and [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330). v0.5.3 is client-only and interoperates with lobby-service 0.5.1/0.5.2/0.5.3 and v0.5.1+ clients without changing the chat or join wire protocols. The supported game loading targets are `0.107.1`, `0.109.0`, and `0.109.1`.
+`0.5.4` is currently a source/candidate build; its GitHub Release and Steam Workshop update have not been published. The latest public stable build remains [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3). New frames are backward-compatible, although old clients cannot remove split-message context that is already visible. Pairing the `0.5.4` client and lobby service is recommended. Supported game targets remain `0.107.1`, `0.109.0`, and `0.109.1`.
 
 ### MOD Preflight Before Join
 

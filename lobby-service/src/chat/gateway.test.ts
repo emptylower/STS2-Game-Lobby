@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,6 +12,9 @@ import { ServerChatGateway } from "./gateway.js";
 import type { ChatFeatureVersions } from "./feature-resolver.js";
 import { ChatPeerRegistry, type ChatSocket } from "./peer-registry.js";
 import type { ReservedChatTicket } from "./ticket-store.js";
+import type { AiSemanticModerationService, ModerationPlan } from "../moderation/ai-service.js";
+import type { AiReviewOutcome } from "../moderation/ai-types.js";
+import { ModerationService } from "../moderation/moderation-service.js";
 
 class FakeSocket extends EventEmitter implements ChatSocket {
   readyState = 1;
@@ -121,6 +124,12 @@ function chatSendContent(clientMessageId: string, content: unknown): string {
     clientMessageId,
     content,
   });
+}
+
+function testModeration(words: string[]): ModerationService {
+  const dir = mkdtempSync(join(tmpdir(), "sts2-server-conversation-moderation-"));
+  writeFileSync(join(dir, "words.txt"), words.join("\n"), "utf8");
+  return ModerationService.create({ lexiconDir: dir, enabled: true });
 }
 
 test("accept sends ready before snapshot and rejects input until the snapshot barrier", async () => {
@@ -1071,6 +1080,129 @@ test("close releases a protocol-error barrier even when socket send stalls", asy
       setTimeout(() => reject(new Error("gateway close timeout")), 100);
     }),
   ]);
+});
+
+test("AI review stays outside the event queue and final block is deduplicated", async () => {
+  let resolveReview!: (outcome: AiReviewOutcome) => void;
+  const review = new Promise<AiReviewOutcome>((resolve) => { resolveReview = resolve; });
+  const ai = {
+    prepare(text: string): ModerationPlan {
+      if (text === "clean message") return { kind: "allow", source: "clean" };
+      return {
+        kind: "review",
+        reviewId: "review_request_test",
+        timeoutMs: 5_000,
+        text,
+        surface: "chat_message",
+        prepared: [],
+        exactKey: "exact",
+        contextKeys: [],
+      };
+    },
+    review: () => review,
+  } as unknown as AiSemanticModerationService;
+  const gateway = new ServerChatGateway({ chatEnabled: true, aiModeration: ai });
+  const alice = new FakeSocket();
+  const bob = new FakeSocket();
+  gateway.accept(alice as unknown as WebSocket, ticket);
+  gateway.accept(bob as unknown as WebSocket, { ...ticket, id: "reservation-ai-bob", playerName: "Bob" });
+  await settle(alice, bob);
+  const aliceStart = alice.sent.length;
+  const bobStart = bob.sent.length;
+  const pendingId = "91919191-9191-4919-8919-919191919191";
+  alice.emit("message", chatSend(pendingId, "needs review"), false);
+  await settle(alice, bob);
+  assert.equal(frames(alice).slice(aliceStart).at(-1)?.type, "chat_review_pending");
+
+  bob.emit("message", chatSend("92929292-9292-4929-8929-929292929292", "clean message"), false);
+  await settle(alice, bob);
+  assert.equal(frames(bob).slice(bobStart).some((frame) => frame.type === "chat_ack"), true);
+
+  alice.emit("message", chatSend("93939393-9393-4939-8939-939393939393", "another"), false);
+  await settle(alice);
+  assert.equal(frames(alice).at(-1)?.code, "moderation_busy");
+
+  resolveReview({
+    kind: "block",
+    structuredMode: "strict",
+    result: { schemaVersion: 1, decision: "block", reasonCode: "prohibited_use", matches: [] },
+  });
+  await settle(alice, bob);
+  assert.equal(frames(alice).some((frame) => frame.clientMessageId === pendingId && frame.code === "content_blocked"), true);
+  assert.equal(frames(bob).some((frame) => frame.type === "chat_message"
+    && (frame.message as Record<string, unknown>).plainTextFallback === "needs review"), false);
+
+  alice.emit("message", chatSend(pendingId, "needs review"), false);
+  await settle(alice);
+  assert.equal(frames(alice).at(-1)?.code, "content_blocked");
+  await gateway.close();
+});
+
+test("same authenticated sender short-message burst is jointly reviewed and prior messages are redacted", async () => {
+  const ai = {
+    prepare(text: string): ModerationPlan {
+      if (!text.includes("习近平")) return { kind: "allow", source: "clean" };
+      return {
+        kind: "review",
+        reviewId: "review_request_cross_message",
+        timeoutMs: 5_000,
+        text,
+        surface: "chat_message",
+        prepared: [],
+        exactKey: "cross-exact",
+        contextKeys: [],
+      };
+    },
+    review: async (): Promise<AiReviewOutcome> => ({
+      kind: "block",
+      structuredMode: "strict",
+      result: { schemaVersion: 1, decision: "block", reasonCode: "prohibited_use", matches: [] },
+    }),
+  } as unknown as AiSemanticModerationService;
+  const gateway = new ServerChatGateway({
+    chatEnabled: true,
+    moderation: testModeration(["习近平"]),
+    aiModeration: ai,
+  });
+  const alice = new FakeSocket();
+  const bob = new FakeSocket();
+  gateway.accept(alice as unknown as WebSocket, ticket);
+  gateway.accept(bob as unknown as WebSocket, {
+    ...ticket,
+    id: "reservation-cross-bob",
+    playerNetId: "steam:99",
+    playerName: "Bob",
+  });
+  await settle(alice, bob);
+
+  alice.emit("message", chatSend("11111111-1111-4111-8111-111111111101", "习"), false);
+  await settle(alice, bob);
+  alice.emit("message", chatSend("11111111-1111-4111-8111-111111111102", "近"), false);
+  await settle(alice, bob);
+  const priorIds = frames(bob)
+    .filter((frame) => frame.type === "chat_message")
+    .map((frame) => String((frame.message as Record<string, unknown>).messageId));
+
+  alice.emit("message", chatSend("11111111-1111-4111-8111-111111111103", "平"), false);
+  await settle(alice, bob);
+  const redaction = frames(bob).find((frame) => frame.type === "chat_messages_redacted");
+  assert.deepEqual(redaction?.messageIds, priorIds);
+  assert.equal(redaction?.reason, "content_blocked");
+  assert.equal(frames(alice).at(-1)?.code, "content_blocked");
+  assert.equal(gateway.getMetrics().retainedHistoryCount, 0);
+
+  alice.emit("message", chatSend("11111111-1111-4111-8111-111111111104", "下"), false);
+  await settle(alice, bob);
+  alice.emit("message", chatSend("11111111-1111-4111-8111-111111111105", "台"), false);
+  await settle(alice, bob);
+  assert.equal(frames(alice).at(-1)?.code, "content_blocked");
+  assert.equal(gateway.getMetrics().retainedHistoryCount, 0);
+  assert.equal(
+    frames(bob).filter((frame) => frame.type === "chat_message").length,
+    2,
+    "the blocked continuation must not be broadcast after the earlier fragments are redacted",
+  );
+  await gateway.close();
 });
 
 test("lobby service commits a chat ticket into a ready gateway connection", async () => {

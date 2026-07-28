@@ -66,6 +66,10 @@ internal sealed class LobbyControlClient : IAsyncDisposable
 
     internal event Action<LanConnectRoomChatErrorEnvelope>? RoomChatErrorReceived;
 
+    internal event Action<LanConnectRoomChatReviewPendingEnvelope>? RoomChatReviewPendingReceived;
+
+    internal event Action<LanConnectRoomChatMessagesRedactedEnvelope>? RoomChatMessagesRedactedReceived;
+
     internal event Action? Disconnected;
 
     internal LanConnectRoomChatReadyEnvelope? LatestRoomChatReady
@@ -487,6 +491,41 @@ internal sealed class LobbyControlClient : IAsyncDisposable
                         {
                             RoomChatErrorReceived?.Invoke(error);
                         }
+                    }
+                    return true;
+                case "room_chat_review_pending":
+                    LanConnectRoomChatReviewPendingEnvelope? reviewPending =
+                        JsonSerializer.Deserialize<LanConnectRoomChatReviewPendingEnvelope>(payload, LanConnectJson.Options);
+                    _beforeRoomChatCommit?.Invoke();
+                    lock (_lifecycleLock)
+                    {
+                        if (Volatile.Read(ref _lifecycleState) == Connected &&
+                            reviewPending?.ProtocolVersion == 1 &&
+                            _latestRoomChatReady != null)
+                        {
+                            RoomChatReviewPendingReceived?.Invoke(reviewPending);
+                        }
+                    }
+                    return true;
+                case "room_chat_messages_redacted":
+                    LanConnectRoomChatMessagesRedactedEnvelope? redacted =
+                        JsonSerializer.Deserialize<LanConnectRoomChatMessagesRedactedEnvelope>(payload, LanConnectJson.Options);
+                    _beforeRoomChatCommit?.Invoke();
+                    bool redactionAccepted;
+                    lock (_lifecycleLock)
+                    {
+                        redactionAccepted = Volatile.Read(ref _lifecycleState) == Connected &&
+                            redacted?.ProtocolVersion == 1 &&
+                            MatchesActiveRoom(redacted.RoomId, redacted.RoomSessionId) &&
+                            _latestRoomChatReady != null;
+                        if (redactionAccepted)
+                        {
+                            RoomChatMessagesRedactedReceived?.Invoke(redacted!);
+                        }
+                    }
+                    if (!redactionAccepted)
+                    {
+                        WarnStale("room_chat_messages_redacted");
                     }
                     return true;
                 default:

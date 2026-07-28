@@ -197,6 +197,21 @@ test("loadLobbyServiceConfig applies phase 1 chat defaults", () => {
   });
 });
 
+test("loadLobbyServiceConfig applies bounded AI moderation runtime defaults", () => {
+  assert.deepEqual(loadLobbyServiceConfig({}).aiModeration, {
+    stateFile: `${process.cwd()}/data/ai-moderation-state.json`,
+    cacheFile: `${process.cwd()}/data/ai-moderation-cache.json`,
+    timeoutMs: 5_000,
+    maxConcurrency: 4,
+    maxQueue: 64,
+    reviewsPerIpMinute: 10,
+  });
+  assert.throws(
+    () => loadLobbyServiceConfig({ AI_MODERATION_TIMEOUT_MS: "999" }),
+    /AI_MODERATION_TIMEOUT_MS must be between 1000 and 30000/,
+  );
+});
+
 test("snapshot limit cannot exceed history", () => {
   assert.throws(
     () => loadLobbyServiceConfig({ SERVER_CHAT_HISTORY_LIMIT: "20", SERVER_CHAT_SNAPSHOT_LIMIT: "50" }),

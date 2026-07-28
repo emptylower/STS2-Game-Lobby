@@ -47,11 +47,11 @@ public sealed class LanConnectPackageContentTests
 
         using JsonDocument manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
-        Assert.Equal("0.5.3", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("0.5.4", manifest.RootElement.GetProperty("version").GetString());
         FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
             Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
-        Assert.Equal("0.5.3.0", assemblyVersion.FileVersion);
-        Assert.StartsWith("0.5.3", assemblyVersion.ProductVersion, StringComparison.Ordinal);
+        Assert.Equal("0.5.4.0", assemblyVersion.FileVersion);
+        Assert.StartsWith("0.5.4", assemblyVersion.ProductVersion, StringComparison.Ordinal);
 
         foreach (string packagePath in ExpectedFiles)
         {
@@ -96,16 +96,43 @@ public sealed class LanConnectPackageContentTests
             "docs",
             "STEAM_WORKSHOP_DESCRIPTION_ZH.txt"));
 
-        foreach (string text in new[] { changelog, releaseNotes, clientReadme, userGuide, workshop })
+        foreach (string text in new[] { changelog, releaseNotes, clientReadme, userGuide })
         {
             Assert.Contains("0.5.3", text, StringComparison.Ordinal);
             Assert.Contains("续局", text, StringComparison.Ordinal);
         }
+        Assert.Contains("0.5.4", workshop, StringComparison.Ordinal);
+        Assert.Contains("候选", workshop, StringComparison.Ordinal);
         Assert.Contains("STS2LANRESUME:", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("HostChannel", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("Android", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("续局身份码", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("lobby-service", releaseNotes, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Client_v054_candidate_documents_semantic_review_and_unpublished_release_state()
+    {
+        using Fixture fixture = new();
+        string releaseNotes = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "RELEASE_NOTES_V0.5.4_CLIENT_ZH.md"));
+        string changelog = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "CHANGELOG.md"));
+        string clientReadme = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "CLIENT_RELEASE_README_ZH.md"));
+
+        foreach (string text in new[] { releaseNotes, changelog, clientReadme })
+        {
+            Assert.Contains("0.5.4", text, StringComparison.Ordinal);
+            Assert.Contains("审核", text, StringComparison.Ordinal);
+        }
+        Assert.Contains("暂未发布", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("chat_messages_redacted", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("room_chat_messages_redacted", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("在审核中", clientReadme, StringComparison.Ordinal);
     }
 
     [Fact]

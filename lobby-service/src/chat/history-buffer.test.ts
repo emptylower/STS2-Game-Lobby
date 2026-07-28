@@ -91,6 +91,20 @@ test("keeps 100 for 24 hours and snapshots newest 50", () => {
   assert.deepEqual(history.snapshot(), []);
 });
 
+test("remove deletes only requested retained messages without changing the history epoch", () => {
+  const { history } = makeHistory();
+  history.append(message(1));
+  history.append(message(2));
+  history.append(message(3));
+
+  assert.deepEqual(history.remove([message(1).messageId, message(3).messageId, "missing"]), [
+    message(1).messageId,
+    message(3).messageId,
+  ]);
+  assert.deepEqual(history.snapshot().map((entry) => entry.messageId), [message(2).messageId]);
+  assert.equal(history.historyEpoch, 0);
+});
+
 test("final snapshot envelopes fit 8192 bytes", () => {
   const { history } = makeHistory();
   for (let index = 0; index < 50; index += 1) {

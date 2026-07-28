@@ -766,6 +766,27 @@ internal sealed record LanConnectServerChatErrorEnvelope
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record LanConnectChatReviewPendingEnvelope
+{
+    public string Type { get; init; } = "chat_review_pending";
+    public int ProtocolVersion { get; init; } = 1;
+    public string ClientMessageId { get; init; } = string.Empty;
+    public string ReviewId { get; init; } = string.Empty;
+    public string StartedAt { get; init; } = string.Empty;
+    public int TimeoutMs { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record LanConnectChatMessagesRedactedEnvelope
+{
+    public string Type { get; init; } = "chat_messages_redacted";
+    public int ProtocolVersion { get; init; } = 1;
+    public List<string> MessageIds { get; init; } = new();
+    public string Reason { get; init; } = string.Empty;
+    public string RedactedAt { get; init; } = string.Empty;
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record LanConnectRoomChatMessagePayload
 {
     public string RoomId { get; init; } = string.Empty;
@@ -825,4 +846,27 @@ internal sealed record LanConnectRoomChatErrorEnvelope
     public string Code { get; init; } = string.Empty;
     public string Message { get; init; } = string.Empty;
     public int? RetryAfterMs { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record LanConnectRoomChatReviewPendingEnvelope
+{
+    public string Type { get; init; } = "room_chat_review_pending";
+    public int ProtocolVersion { get; init; } = 1;
+    public string ClientMessageId { get; init; } = string.Empty;
+    public string ReviewId { get; init; } = string.Empty;
+    public string StartedAt { get; init; } = string.Empty;
+    public int TimeoutMs { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record LanConnectRoomChatMessagesRedactedEnvelope
+{
+    public string Type { get; init; } = "room_chat_messages_redacted";
+    public int ProtocolVersion { get; init; } = 1;
+    public string RoomId { get; init; } = string.Empty;
+    public string RoomSessionId { get; init; } = string.Empty;
+    public List<string> MessageIds { get; init; } = new();
+    public string Reason { get; init; } = string.Empty;
+    public string RedactedAt { get; init; } = string.Empty;
 }

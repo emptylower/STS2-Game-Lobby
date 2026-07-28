@@ -144,7 +144,7 @@ public sealed class LanConnectBasicChatPanelTests
     }
 
     [TestCase]
-    public async Task Renders_pending_failed_unknown_and_confirmed_with_stable_nodes()
+    public async Task Renders_failed_unknown_and_confirmed_while_pending_stays_out_of_the_public_list()
     {
         LanConnectChatChannelState state = WithDeliveryStates();
         LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
@@ -164,7 +164,8 @@ public sealed class LanConnectBasicChatPanelTests
         AssertThat(panel.TestState.FailedCount).IsEqual(1);
         AssertThat(panel.TestState.DeliveryUnknownCount).IsEqual(1);
         AssertThat(panel.TestState.RetryButtonCount).IsEqual(2);
-        AssertThat(HasLabel(panel, "发送中")).IsTrue();
+        AssertThat(HasLabel(panel, "发送中")).IsFalse();
+        AssertThat(HasRenderedText(panel, "pending text")).IsFalse();
         // HUD style (the default here) collapses the failure/unknown delivery text from its
         // own always-visible full-sentence Label into the retry control's hover tooltip --
         // see BuildFlatMessageRow. The detail is still reachable, just moved, the same way
@@ -349,7 +350,7 @@ public sealed class LanConnectBasicChatPanelTests
     }
 
     [TestCase]
-    public async Task Synchronous_send_queue_is_rendered_on_the_next_idle_frame()
+    public async Task Synchronous_send_queue_stays_hidden_until_confirmation()
     {
         LanConnectChatChannelState state = EnabledState();
         LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel())!;
@@ -369,7 +370,14 @@ public sealed class LanConnectBasicChatPanelTests
         await runner.AwaitIdleFrame();
 
         AssertThat(panel.TestState.PendingCount).IsEqual(1);
-        AssertThat(HasLabel(panel, "发送中")).IsTrue();
+        AssertThat(HasLabel(panel, "发送中")).IsFalse();
+        AssertThat(HasRenderedText(panel, "queued immediately")).IsFalse();
+
+        state.MarkLegacySendConfirmed("sync-pending");
+        await runner.AwaitIdleFrame();
+
+        AssertThat(panel.TestState.PendingCount).IsEqual(0);
+        AssertThat(HasRenderedText(panel, "queued immediately")).IsTrue();
     }
 
     [TestCase]
@@ -1303,6 +1311,11 @@ public sealed class LanConnectBasicChatPanelTests
 
         return false;
     }
+
+    private static bool HasRenderedText(Node root, string text) =>
+        root.FindChildren("*", string.Empty, recursive: true, owned: false)
+            .OfType<RichTextLabel>()
+            .Any(label => label.GetParsedText().Contains(text, StringComparison.Ordinal));
 
     private static T FindNode<T>(Node root, string name) where T : Node =>
         (T)root.FindChild(name, recursive: true, owned: false);

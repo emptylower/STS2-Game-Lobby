@@ -9,6 +9,8 @@ import {
 } from "./feature-resolver.js";
 import type { RoomChatContext } from "../store.js";
 import { ModerationService } from "../moderation/moderation-service.js";
+import type { AiSemanticModerationService, ModerationPlan } from "../moderation/ai-service.js";
+import type { AiReviewOutcome } from "../moderation/ai-types.js";
 import {
   RoomChatGateway,
   type RoomChatGatewayOptions,
@@ -2036,6 +2038,118 @@ test("room metrics count accepted and conflict once without counting replay", ()
     acceptedMessages: 1,
     rejectedMessages: 1,
   });
+});
+
+test("room v2 emits pending and final allow while legacy room chat bypasses AI", async () => {
+  let prepareCalls = 0;
+  let resolveReview!: (outcome: AiReviewOutcome) => void;
+  const review = new Promise<AiReviewOutcome>((resolve) => { resolveReview = resolve; });
+  const ai = {
+    prepare(text: string): ModerationPlan {
+      prepareCalls += 1;
+      return {
+        kind: "review",
+        reviewId: "room_review_request_test",
+        timeoutMs: 5_000,
+        text,
+        surface: "chat_message",
+        prepared: [],
+        exactKey: "exact",
+        contextKeys: [],
+      };
+    },
+    review: () => review,
+  } as unknown as AiSemanticModerationService;
+  const gateway = createGateway({ aiModeration: ai });
+  const sender = peer("room-ai-sender");
+  gateway.registerPeer(sender.registration);
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, hello("Alice", "net:alice"));
+  sender.frames.length = 0;
+
+  assert.equal(gateway.handleControlEnvelope(sender.registration.connectionSessionId, {
+    type: "room_chat",
+    messageText: "legacy sensitive",
+  }), false);
+  assert.equal(prepareCalls, 0);
+
+  const id = "94949494-9494-4949-8949-949494949494";
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, roomSend(id, textContent("needs review")));
+  assert.equal(sender.frames.at(-1)?.type, "room_chat_review_pending");
+  gateway.handleControlEnvelope(
+    sender.registration.connectionSessionId,
+    roomSend("95959595-9595-4959-8959-959595959595", textContent("second")),
+  );
+  assert.equal(sender.frames.at(-1)?.code, "moderation_busy");
+
+  resolveReview({
+    kind: "allow",
+    structuredMode: "strict",
+    result: { schemaVersion: 1, decision: "allow", reasonCode: "benign_use", matches: [] },
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(sender.frames.some((frame) => frame.type === "room_chat_ack" && frame.clientMessageId === id), true);
+  assert.equal(sender.frames.some((frame) => frame.type === "room_chat_message"), true);
+});
+
+test("room v2 jointly reviews one identity's short-message burst and redacts prior context", async () => {
+  const ai = {
+    prepare(text: string): ModerationPlan {
+      if (text !== "习近平") return { kind: "allow", source: "clean" };
+      return {
+        kind: "review",
+        reviewId: "room_cross_message_review",
+        timeoutMs: 5_000,
+        text,
+        surface: "chat_message",
+        prepared: [],
+        exactKey: "room-cross-exact",
+        contextKeys: [],
+      };
+    },
+    review: async (): Promise<AiReviewOutcome> => ({
+      kind: "block",
+      structuredMode: "strict",
+      result: { schemaVersion: 1, decision: "block", reasonCode: "prohibited_use", matches: [] },
+    }),
+  } as unknown as AiSemanticModerationService;
+  const gateway = createGateway({
+    moderation: testModeration(["习近平"]),
+    aiModeration: ai,
+  });
+  const sender = peer("room-cross-sender");
+  const observer = peer("room-cross-observer");
+  gateway.registerPeer(sender.registration);
+  gateway.registerPeer(observer.registration);
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, hello("Alice", "net:alice"));
+  gateway.handleControlEnvelope(observer.registration.connectionSessionId, hello("Bob", "net:bob"));
+  sender.frames.length = 0;
+  observer.frames.length = 0;
+
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, roomSend(
+    "12121212-1212-4212-8212-121212121201",
+    textContent("习"),
+  ));
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, roomSend(
+    "12121212-1212-4212-8212-121212121202",
+    textContent("近"),
+  ));
+  const priorIds = observer.frames
+    .filter((frame) => frame.type === "room_chat_message")
+    .map((frame) => String((frame.message as Record<string, unknown>).messageId));
+
+  gateway.handleControlEnvelope(sender.registration.connectionSessionId, roomSend(
+    "12121212-1212-4212-8212-121212121203",
+    textContent("平"),
+  ));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  const redaction = observer.frames.find((frame) => frame.type === "room_chat_messages_redacted");
+  assert.deepEqual(redaction?.messageIds, priorIds);
+  assert.equal(redaction?.roomId, "room-1");
+  assert.equal(redaction?.roomSessionId, "session-1");
+  assert.equal(sender.frames.at(-1)?.code, "content_blocked");
 });
 
 function clientId(index: number): string {

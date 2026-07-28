@@ -137,6 +137,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private Label? _statusLabel;
     private LanConnectItemPreview? _itemPreview;
     private ConfirmationDialog? _unknownConfirmation;
+    private PanelContainer? _reviewIndicator;
+    private AcceptDialog? _blockedNotice;
+    private long _seenModerationNoticeSequence;
     private PendingUnknownConfirmation? _pendingUnknownConfirmation;
     private readonly HashSet<SendOperationKey> _sendInFlight = new();
     private readonly HashSet<RetryOperationKey> _retryInFlight = new();
@@ -293,7 +296,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         state?.Messages.Any(static message => message.Delivery is
             ServerChatDeliveryState.Pending or
             ServerChatDeliveryState.Failed or
-            ServerChatDeliveryState.DeliveryUnknown) == true;
+            ServerChatDeliveryState.DeliveryUnknown or
+            ServerChatDeliveryState.Reviewing) == true;
 
     internal bool EmojiPickerVisible =>
         _emojiPicker != null &&
@@ -387,6 +391,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             ResetForContextChange();
         }
+        UpdateReviewIndicator();
+        ConsumeModerationNotice();
         bool resolverContextChanged = UpdateResolverContext();
         bool combatContextChanged = UpdateCombatRenderContext();
         bool localeChanged = UpdateLocalizedLocale();
@@ -406,6 +412,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _messageFocusRestoreGeneration++;
         _sendInFlight.Clear();
         _retryInFlight.Clear();
+        if (_blockedNotice != null && GodotObject.IsInstanceValid(_blockedNotice))
+        {
+            _blockedNotice.Hide();
+        }
         _state?.SetVisible(false);
     }
 
@@ -443,9 +453,17 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _renderedMessageFingerprint = null;
         ClearOperationStatus();
         _pendingUnknownConfirmation = null;
+        // Only notices that arrive while this channel is bound may surface; anything recorded
+        // before the bind is treated as already seen so a stale popup never appears on the
+        // wrong channel.
+        _seenModerationNoticeSequence = state.ModerationNoticeSequence;
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
         {
             _unknownConfirmation.Hide();
+        }
+        if (_blockedNotice != null && GodotObject.IsInstanceValid(_blockedNotice))
+        {
+            _blockedNotice.Hide();
         }
         if (_draftEditor != null)
         {
@@ -905,6 +923,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _newMessagesButton.Connect(Button.SignalName.Pressed, Callable.From(ScrollToBottom));
         messagesContainer.AddChild(_newMessagesButton);
 
+        _reviewIndicator = BuildReviewIndicator();
+        inputContainer.AddChild(_reviewIndicator);
+
         HBoxContainer inputRow = new();
         inputRow.AddThemeConstantOverride("separation", UsesLobbyStyle ? 6 : 8);
         inputContainer.AddChild(inputRow);
@@ -998,6 +1019,15 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             }));
         AddChild(_unknownConfirmation);
 
+        _blockedNotice = new AcceptDialog
+        {
+            Name = "ContentBlockedNotice",
+            Title = Localize("chat.review.blocked_title"),
+            DialogText = Localize("chat.review.blocked"),
+            OkButtonText = Localize("chat.emoji.check")
+        };
+        AddChild(_blockedNotice);
+
         _emojiPicker = new LanConnectEmojiPicker
         {
             ChatVisualStyle = ChatVisualStyle
@@ -1030,6 +1060,105 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _itemPreview.ConfigureAccessibility(Localize("chat.preview.close"));
 
         Connect(CanvasItem.SignalName.VisibilityChanged, Callable.From(UpdateStateVisibility));
+    }
+
+    // Compact, low-noise floating bar pinned directly above the input row (spec: AI review
+    // UX). It is the only place an under-review message is visible: the optimistic local entry
+    // is hidden from the public message list while the server-side AI review runs, and this
+    // indicator carries no message content -- just the "under review" cue.
+    private PanelContainer BuildReviewIndicator()
+    {
+        PanelContainer indicator = new()
+        {
+            Name = "ChatReviewIndicator",
+            Visible = false,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+        indicator.AddThemeStyleboxOverride("panel", new StyleBoxFlat
+        {
+            BgColor = UsesLobbyStyle ? LobbySecondaryColor : new Color(0.10f, 0.10f, 0.17f, 0.9f),
+            BorderColor = new Color(WarningColor, 0.55f),
+            BorderWidthLeft = 1,
+            BorderWidthTop = 1,
+            BorderWidthRight = 1,
+            BorderWidthBottom = 1,
+            CornerRadiusTopLeft = 6,
+            CornerRadiusTopRight = 6,
+            CornerRadiusBottomLeft = 6,
+            CornerRadiusBottomRight = 6,
+            ContentMarginLeft = 10,
+            ContentMarginTop = 5,
+            ContentMarginRight = 10,
+            ContentMarginBottom = 5
+        });
+
+        HBoxContainer row = new()
+        {
+            MouseFilter = MouseFilterEnum.Ignore,
+            Alignment = BoxContainer.AlignmentMode.Center
+        };
+        row.AddThemeConstantOverride("separation", 6);
+        indicator.AddChild(row);
+
+        row.AddChild(new TextureRect
+        {
+            Name = "ChatReviewIndicatorIcon",
+            Texture = _icons.Get("shield", 14, WarningColor),
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+            CustomMinimumSize = new Vector2(14, 14),
+            MouseFilter = MouseFilterEnum.Ignore
+        });
+
+        Label label = CreateLabel(Localize("chat.review.pending"), 12, WarningColor);
+        label.Name = "ChatReviewIndicatorLabel";
+        label.MouseFilter = MouseFilterEnum.Ignore;
+        row.AddChild(label);
+        return indicator;
+    }
+
+    private void UpdateReviewIndicator()
+    {
+        if (_reviewIndicator == null || !GodotObject.IsInstanceValid(_reviewIndicator))
+        {
+            return;
+        }
+
+        bool reviewPending = _state?.HasReviewPending == true;
+        if (_reviewIndicator.Visible != reviewPending)
+        {
+            _reviewIndicator.Visible = reviewPending;
+        }
+    }
+
+    private void ConsumeModerationNotice()
+    {
+        if (_state == null)
+        {
+            return;
+        }
+
+        long noticeSequence = _state.ModerationNoticeSequence;
+        if (noticeSequence == _seenModerationNoticeSequence)
+        {
+            return;
+        }
+
+        _seenModerationNoticeSequence = noticeSequence;
+        switch (_state.ModerationNotice)
+        {
+            case LanConnectChatModerationNotice.ContentBlocked:
+                if (_blockedNotice != null && GodotObject.IsInstanceValid(_blockedNotice))
+                {
+                    _blockedNotice.PopupCentered(new Vector2I(420, 160));
+                }
+                break;
+            case LanConnectChatModerationNotice.ModerationBusy:
+                SetOperationStatus("chat.review.busy");
+                Refresh();
+                break;
+        }
     }
 
     private void ApplyBoundState()
@@ -1078,9 +1207,14 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         _renderedMessageFingerprint = null;
         ClearOperationStatus();
         _pendingUnknownConfirmation = null;
+        _seenModerationNoticeSequence = _state.ModerationNoticeSequence;
         if (_unknownConfirmation != null && GodotObject.IsInstanceValid(_unknownConfirmation))
         {
             _unknownConfirmation.Hide();
+        }
+        if (_blockedNotice != null && GodotObject.IsInstanceValid(_blockedNotice))
+        {
+            _blockedNotice.Hide();
         }
         ApplyBoundState();
         if (restoreDraftFocus)
@@ -1117,10 +1251,21 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         LanConnectChatChannelState state = binding.State;
         long renderedRevision = state.Revision;
         IReadOnlyList<ServerChatMessageState> messages = state.Messages;
+        // Local messages do not enter the public list before the final ACK. This prevents a
+        // sensitive message from flashing optimistically during the short interval between
+        // send and chat_review_pending. Reviewing is represented only by the compact indicator.
+        List<ServerChatMessageState> visibleMessages = new(messages.Count);
+        foreach (ServerChatMessageState message in messages)
+        {
+            if (IsVisibleInPublicMessageList(message))
+            {
+                visibleMessages.Add(message);
+            }
+        }
         bool atBottom = state.IsAtBottom;
         double scrollOffset = state.ScrollOffset;
         string focusedMessageControlName = FocusedDescendantName(_messagesList);
-        string messageFingerprint = BuildMessageFingerprint(state, messages);
+        string messageFingerprint = BuildMessageFingerprint(state, visibleMessages);
         bool rebuildMessages = !string.Equals(
             _renderedMessageFingerprint,
             messageFingerprint,
@@ -1135,7 +1280,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
                 child.Free();
             }
 
-            if (messages.Count == 0)
+            if (visibleMessages.Count == 0)
             {
                 Label empty = CreateLabel(Localize("chat.empty"), 13, TextMutedColor);
                 empty.HorizontalAlignment = HorizontalAlignment.Center;
@@ -1143,9 +1288,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             }
             else
             {
-                for (int index = 0; index < messages.Count; index++)
+                for (int index = 0; index < visibleMessages.Count; index++)
                 {
-                    _messagesList.AddChild(BuildMessageRow(state, messages[index], index));
+                    _messagesList.AddChild(BuildMessageRow(state, visibleMessages[index], index));
                 }
             }
             _renderedMessageFingerprint = messageFingerprint;
@@ -1760,6 +1905,15 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         if (!binding.State.ChatEnabled)
         {
             SetOperationStatus("chat.operation.unavailable");
+            UpdateAvailability();
+            return;
+        }
+        // One in-flight AI review per connection: a second send would be rejected with
+        // moderation_busy anyway, so keep the draft, keep the single review indicator, and
+        // just tell the user to wait instead of creating a second pending entry.
+        if (binding.State.HasReviewPending)
+        {
+            SetOperationStatus("chat.review.busy");
             UpdateAvailability();
             return;
         }
@@ -2522,6 +2676,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         message.Delivery switch
         {
             ServerChatDeliveryState.Pending => Localize("chat.delivery.pending"),
+            // Reviewing rows are filtered out of the public list; no inline delivery label.
+            ServerChatDeliveryState.Reviewing => string.Empty,
             ServerChatDeliveryState.Failed => _localizer.Format(
                 CurrentLocale,
                 "chat.delivery.failed",
@@ -2627,6 +2783,9 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         string.IsNullOrEmpty(message.ClientMessageId)
             ? $"index:{index}"
             : $"client:{message.ClientMessageId}";
+
+    internal static bool IsVisibleInPublicMessageList(ServerChatMessageState message) =>
+        message.Delivery is not (ServerChatDeliveryState.Pending or ServerChatDeliveryState.Reviewing);
 
     private Button? FindCurrentRetryButton(string buttonName)
     {

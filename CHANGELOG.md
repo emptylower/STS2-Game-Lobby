@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+### 0.5.4 candidate
+
+> 客户端与 lobby-service 源码版本已同步提升到 `0.5.4`；本节随源码提交，GitHub Release 暂未发布。
+
+#### Added
+
+- （服务端）新增三协议 AI 语义审核：OpenAI Responses、OpenAI Chat Completions 与 Anthropic Messages；支持严格 JSON Schema 和显式启用的提示词 JSON 回退。
+- （服务端）AI 放行后立即写入 30 天精确消息缓存和 7 天限定语境缓存；永久白名单必须人工批准，人工拒绝会生成立即生效的永久黑名单。
+- （服务端）房间名、玩家名、续局角色名与聊天消息统一进入语义审核；同一认证用户在同一频道 30 秒内拆分发送的最多 10 条短消息会组合分析，命中后撤回相关上下文。
+- （服务端）管理面板新增 AI 配置、健康状态、人工复审、永久白名单和独立的永久黑名单管理入口。
+- （客户端）新增“在审核中”投递状态、违禁词游戏原生弹窗，以及公共频道/房间频道跨消息撤回帧处理。
+
+#### Changed
+
+- AI 不可用时，普通单条聊天继续安全降级为确定性打码；主动拆字规避路径保守拒绝，避免利用模型故障绕过过滤。
+- 永久黑名单优先于永久白名单和安全缓存；撤销规则后立即恢复缓存/AI 审核决策链。
+- 客户端与 lobby-service 构建版本同步为 `0.5.4`，不改变旧版 `room_chat` 的兼容行为。
+
+#### Security and Compatibility
+
+- API Key 使用 `AI_MODERATION_CREDENTIAL_KEY` 提供的主密钥进行 AES-256-GCM 加密；管理 API 不返回明文 Key，日志不记录认证头或完整聊天原文。
+- 新增待审与撤回帧均为向后兼容扩展；旧客户端可忽略未知帧并继续接收最终 ACK/错误，但无法撤回已经显示的跨消息上下文，建议与 `0.5.4` 服务端配套升级。
+
 ## [0.5.3] - 2026-07-27
 
 服务端与客户端同步正式版，标签为 [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)：lobby-service 发布说明见 [`docs/RELEASE_NOTES_V0.5.3_ZH.md`](./docs/RELEASE_NOTES_V0.5.3_ZH.md)，客户端 `0.5.3` 发布说明见 [`docs/RELEASE_NOTES_V0.5.3_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.3_CLIENT_ZH.md)。聊天与加入线协议不变，客户端与服务端各历史版本可交叉互通。

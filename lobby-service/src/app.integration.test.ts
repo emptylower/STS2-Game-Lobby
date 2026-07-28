@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { connect as netConnect } from "node:net";
+import { connect as netConnect, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +12,7 @@ import { createLobbyService } from "./app.js";
 import { ChatPeerRegistry } from "./chat/peer-registry.js";
 import { loadLobbyServiceConfig, type LobbyServiceConfig } from "./config.js";
 import { hashServerAdminPassword } from "./server-admin-auth.js";
+import { AiModerationStateStore } from "./moderation/state-store.js";
 
 class FailOnceStateBroadcastRegistry extends ChatPeerRegistry {
   failNextStateBroadcast = true;
@@ -2725,9 +2727,9 @@ test("create room rejects sensitive roomName with 400 and reason detail", async 
     });
     assert.equal(response.status, 400);
     const body = await response.json() as { code: string; message: string; details?: unknown };
-    assert.equal(body.code, "invalid_request");
-    assert.equal(body.message, "包含敏感词内容，请修改后重试");
-    assert.deepEqual(body.details, { reason: "sensitive_content" });
+    assert.equal(body.code, "content_blocked");
+    assert.equal(body.message, "包含敏感词，请修改后重试。");
+    assert.deepEqual(body.details, { reason: "sensitive_content", surface: "room_name" });
   } finally {
     await service.close();
     cleanupTempDir(config);
@@ -2755,9 +2757,83 @@ test("create room rejects sensitive hostPlayerName", async () => {
     });
     assert.equal(response.status, 400);
     const body = await response.json() as { message: string };
-    assert.equal(body.message, "包含敏感词内容，请修改后重试");
+    assert.equal(body.message, "包含敏感词，请修改后重试。");
   } finally {
     await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("AI semantic review can allow sensitive room and player names before room creation", async () => {
+  const credentialKeyHex = "42".repeat(32);
+  const base = testConfig({ port: 0, sensitiveLexiconDir: writeTestLexicon(["敏感词"]) });
+  const dataDir = join(base.serverAdminStateFile, "..");
+  const stateFile = join(dataDir, "name-ai-state.json");
+  let providerCalls = 0;
+  const modelServer = createServer((request, response) => {
+    providerCalls += 1;
+    request.resume();
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({
+      status: "completed",
+      output: [{ content: [{ type: "output_text", text: JSON.stringify({
+        schemaVersion: 1,
+        decision: "allow",
+        reasonCode: "benign_use",
+        matches: [{
+          matchId: "match_1",
+          verdict: "allow",
+          usage: "proper_noun",
+          contextCandidateId: "context_1",
+        }],
+      }) }] }],
+    }));
+  });
+  await new Promise<void>((resolve) => modelServer.listen(0, "127.0.0.1", resolve));
+  const modelAddress = modelServer.address() as AddressInfo;
+  const state = new AiModerationStateStore(stateFile, Buffer.from(credentialKeyHex, "hex"));
+  state.updateConfig({
+    enabled: true,
+    protocol: "openai_responses",
+    endpoint: `http://127.0.0.1:${modelAddress.port}/v1/responses`,
+    model: "name-review-model",
+    allowPrivateNetwork: true,
+    jsonFallbackEnabled: false,
+  }, "replace", "name-review-key");
+  const config: LobbyServiceConfig = {
+    ...base,
+    aiModeration: {
+      ...base.aiModeration,
+      credentialKey: credentialKeyHex,
+      stateFile,
+      cacheFile: join(dataDir, "name-ai-cache.json"),
+    },
+  };
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "敏感词房间",
+        hostPlayerName: "敏感词玩家",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(response.status, 201);
+    assert.equal(providerCalls, 2, "room_name and player_name must be reviewed as isolated surfaces");
+    const reloadedState = new AiModerationStateStore(stateFile, Buffer.from(credentialKeyHex, "hex"));
+    assert.equal(reloadedState.listReviews("pending", undefined, 10).items.length, 2);
+  } finally {
+    await service.close();
+    modelServer.closeAllConnections();
+    await new Promise<void>((resolve, reject) => modelServer.close((error) => error ? reject(error) : resolve()));
     cleanupTempDir(config);
   }
 });
@@ -2772,8 +2848,8 @@ test("chat ticket rejects sensitive playerName", async () => {
     });
     assert.equal(response.status, 400);
     const body = await response.json() as { code: string; message: string };
-    assert.equal(body.code, "invalid_request");
-    assert.equal(body.message, "包含敏感词内容，请修改后重试");
+    assert.equal(body.code, "content_blocked");
+    assert.equal(body.message, "包含敏感词，请修改后重试。");
   } finally {
     await service.close();
     cleanupTempDir(config);
@@ -3006,9 +3082,9 @@ test("join room rejects sensitive playerName with 400", async () => {
     const rejected = await joinWith("白痴玩家");
     assert.equal(rejected.status, 400);
     const rejectedBody = await rejected.json() as { code: string; message: string; details?: unknown };
-    assert.equal(rejectedBody.code, "invalid_request");
-    assert.equal(rejectedBody.message, "包含敏感词内容，请修改后重试");
-    assert.deepEqual(rejectedBody.details, { reason: "sensitive_content" });
+    assert.equal(rejectedBody.code, "content_blocked");
+    assert.equal(rejectedBody.message, "包含敏感词，请修改后重试。");
+    assert.deepEqual(rejectedBody.details, { reason: "sensitive_content", surface: "player_name" });
 
     // 同样的 body 形状换干净名字即可加入，证明 400 来自敏感词过滤。
     const allowed = await joinWith("正常玩家");
@@ -3056,9 +3132,9 @@ test("create room rejects sensitive savedRun slot characterName", async () => {
     });
     assert.equal(response.status, 400);
     const body = await response.json() as { code: string; message: string; details?: unknown };
-    assert.equal(body.code, "invalid_request");
-    assert.equal(body.message, "包含敏感词内容，请修改后重试");
-    assert.deepEqual(body.details, { reason: "sensitive_content" });
+    assert.equal(body.code, "content_blocked");
+    assert.equal(body.message, "包含敏感词，请修改后重试。");
+    assert.deepEqual(body.details, { reason: "sensitive_content", surface: "character_name" });
   } finally {
     await service.close();
     cleanupTempDir(config);
@@ -3099,9 +3175,9 @@ test("mod preflight rejects sensitive playerName with 400", async () => {
     });
     assert.equal(response.status, 400);
     const body = await response.json() as { code: string; message: string; details?: unknown };
-    assert.equal(body.code, "invalid_request");
-    assert.equal(body.message, "包含敏感词内容，请修改后重试");
-    assert.deepEqual(body.details, { reason: "sensitive_content" });
+    assert.equal(body.code, "content_blocked");
+    assert.equal(body.message, "包含敏感词，请修改后重试。");
+    assert.deepEqual(body.details, { reason: "sensitive_content", surface: "player_name" });
   } finally {
     await service.close();
     cleanupTempDir(config);

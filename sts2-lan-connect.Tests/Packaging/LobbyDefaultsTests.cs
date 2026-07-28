@@ -15,7 +15,7 @@ public sealed class LobbyDefaultsTests
         using JsonDocument seeds = JsonDocument.Parse(seedsJson);
 
         JsonElement rootElement = defaults.RootElement;
-        Assert.Equal("http://47.111.146.69:8787", rootElement.GetProperty("baseUrl").GetString());
+        Assert.Equal("http://sts2-test.43.133.192.249.nip.io", rootElement.GetProperty("baseUrl").GetString());
         Assert.Equal("https://sts2-gamelobby-register.xyz", rootElement.GetProperty("cfDiscoveryBaseUrl").GetString());
 
         string[] packagedSeeds = rootElement.GetProperty("seedPeers")

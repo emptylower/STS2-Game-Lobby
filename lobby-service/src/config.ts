@@ -40,6 +40,16 @@ export interface ChatConfig {
 
 export type ChatFeatureSettings = ChatFeatureGovernance;
 
+export interface AiModerationRuntimeConfig {
+  credentialKey?: string;
+  stateFile: string;
+  cacheFile: string;
+  timeoutMs: number;
+  maxConcurrency: number;
+  maxQueue: number;
+  reviewsPerIpMinute: number;
+}
+
 export interface LobbyServiceConfig {
   host: string;
   port: number;
@@ -87,6 +97,7 @@ export interface LobbyServiceConfig {
   };
   sensitiveFilterEnabled: boolean;
   sensitiveLexiconDir: string;
+  aiModeration: AiModerationRuntimeConfig;
   chat: ChatConfig;
 }
 
@@ -98,6 +109,7 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
   const serverAdminPasswordHash = optionalEnv(source.SERVER_ADMIN_PASSWORD_HASH);
   const serverAdminSessionSecret = optionalEnv(source.SERVER_ADMIN_SESSION_SECRET);
   const serverUpdateReleaseApiUrl = optionalEnv(source.SERVER_UPDATE_RELEASES_API_URL);
+  const aiModerationCredentialKey = optionalEnv(source.AI_MODERATION_CREDENTIAL_KEY);
 
   return {
     host,
@@ -146,6 +158,15 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
     },
     sensitiveFilterEnabled: parseBoolean(source, "SENSITIVE_FILTER_ENABLED", true),
     sensitiveLexiconDir: source.SENSITIVE_LEXICON_DIR ?? defaultLexiconDir(),
+    aiModeration: {
+      ...(aiModerationCredentialKey === undefined ? {} : { credentialKey: aiModerationCredentialKey }),
+      stateFile: source.AI_MODERATION_STATE_FILE ?? `${process.cwd()}/data/ai-moderation-state.json`,
+      cacheFile: source.AI_MODERATION_CACHE_FILE ?? `${process.cwd()}/data/ai-moderation-cache.json`,
+      timeoutMs: parseInteger(source, "AI_MODERATION_TIMEOUT_MS", 5_000, 1_000, 30_000),
+      maxConcurrency: parseInteger(source, "AI_MODERATION_MAX_CONCURRENCY", 4, 1, 64),
+      maxQueue: parseInteger(source, "AI_MODERATION_MAX_QUEUE", 64, 0, 10_000),
+      reviewsPerIpMinute: parseInteger(source, "AI_MODERATION_REVIEWS_PER_IP_MINUTE", 10, 1, 1_000),
+    },
     chat: loadChatConfig(source),
   };
 }

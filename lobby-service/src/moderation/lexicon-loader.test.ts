@@ -49,3 +49,10 @@ test("empty directory loads zero words", () => {
   mkdirSync(dir, { recursive: true });
   assert.equal(loadLexicon(dir).wordCount, 0);
 });
+
+test("single-character words are dropped to avoid false positives", () => {
+  const dir = lexiconDir({ "a.txt": "1\n日\n屄\nav\n敏感词\n" });
+  const lexicon = loadLexicon(dir);
+  // "1"、"日"、"屄" 归一化长度为 1，全部丢弃；"av"（2）与"敏感词"（3）保留。
+  assert.equal(lexicon.wordCount, 2);
+});

@@ -16,6 +16,19 @@ test("mask replaces the sensitive span with equal-length asterisks", () => {
   assert.deepEqual(filter.mask("这是敏感词啊"), { text: "这是***啊", masked: true });
 });
 
+test("find returns longest non-overlapping original spans with stable fallback metadata", () => {
+  const filter = filterWith(["敏感", "敏感词"]);
+  assert.deepEqual(filter.find("说敏 感词吧"), [{
+    termId: "term_敏感词",
+    normalizedTerm: "敏感词",
+    displayTerm: "敏 感词",
+    category: "unknown",
+    source: "unknown",
+    start: 1,
+    end: 5,
+  }]);
+});
+
 test("mask covers stripped characters inside the matched span", () => {
   const filter = filterWith(["敏感"]);
   assert.deepEqual(filter.mask("敏 感 话题"), { text: "*** 话题", masked: true });

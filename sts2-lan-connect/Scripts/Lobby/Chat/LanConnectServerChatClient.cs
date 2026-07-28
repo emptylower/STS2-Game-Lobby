@@ -542,6 +542,16 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
                     RaiseStateChangedIfNeeded(snapshotRevision);
                     return;
                 }
+                // Review-pending frames are intercepted before the generic envelope version
+                // gate: they are sender-local hints, so even a future protocol version must be
+                // ignored leniently instead of tearing down the connection.
+                if (declaredType is "chat_review_pending" or "chat_messages_redacted")
+                {
+                    long pendingRevision = State.Revision;
+                    _ = TryApplyCanonicalEnvelope(payload, declaredType, out _, out _);
+                    RaiseStateChangedIfNeeded(pendingRevision);
+                    return;
+                }
             }
 
             ServerChatInboundEnvelope? envelope =
@@ -788,11 +798,44 @@ internal sealed class LanConnectServerChatClient : ILanConnectServerChatClient
                     }
                     State.Apply(message, _playerNetId);
                     return true;
+                case "chat_review_pending":
+                    LanConnectChatReviewPendingEnvelope? reviewPending =
+                        JsonSerializer.Deserialize<LanConnectChatReviewPendingEnvelope>(payload, LanConnectJson.Options);
+                    if (reviewPending == null || reviewPending.ProtocolVersion != ProtocolVersion)
+                    {
+                        return true;
+                    }
+                    State.MarkReviewPending(reviewPending.ClientMessageId);
+                    return true;
+                case "chat_messages_redacted":
+                    LanConnectChatMessagesRedactedEnvelope? redacted =
+                        JsonSerializer.Deserialize<LanConnectChatMessagesRedactedEnvelope>(payload, LanConnectJson.Options);
+                    if (redacted == null || redacted.ProtocolVersion != ProtocolVersion)
+                    {
+                        return true;
+                    }
+                    State.RemoveConfirmedMessages(redacted.MessageIds);
+                    return true;
                 case "chat_error":
                     LanConnectServerChatErrorEnvelope? error =
                         JsonSerializer.Deserialize<LanConnectServerChatErrorEnvelope>(payload, LanConnectJson.Options);
                     if (error == null || error.ProtocolVersion != ProtocolVersion)
                     {
+                        return true;
+                    }
+                    if (string.Equals(error.Code, "content_blocked", StringComparison.Ordinal))
+                    {
+                        // Terminal AI rejection: drop the local entry (it must not surface in
+                        // the public list) and end the delivery wait without a retry state.
+                        State.MarkContentBlocked(error.ClientMessageId);
+                        completedClientMessageId = error.ClientMessageId;
+                        return true;
+                    }
+                    if (string.Equals(error.Code, "moderation_busy", StringComparison.Ordinal))
+                    {
+                        // A previous message is still under review; drop only this newer send.
+                        State.MarkModerationBusy(error.ClientMessageId);
+                        completedClientMessageId = error.ClientMessageId;
                         return true;
                     }
                     State.Apply(error);

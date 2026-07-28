@@ -961,6 +961,29 @@ internal sealed partial class LanConnectLobbyRuntime :
                     session.RoomSessionId);
             }
         };
+        session.ControlClient.RoomChatReviewPendingReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeSession, session))
+            {
+                TryApplyRoomChatReviewPending(
+                    GetChatCoordinator(),
+                    envelope,
+                    session.ControlClient.LatestRoomChatReady,
+                    session.RoomId,
+                    session.RoomSessionId);
+            }
+        };
+        session.ControlClient.RoomChatMessagesRedactedReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeSession, session))
+            {
+                TryApplyRoomChatMessagesRedacted(
+                    GetChatCoordinator(),
+                    envelope,
+                    session.RoomId,
+                    session.RoomSessionId);
+            }
+        };
         BindRoomChatDisconnect(
             session.ControlClient,
             GetChatCoordinator(),
@@ -1080,6 +1103,29 @@ internal sealed partial class LanConnectLobbyRuntime :
                     GetChatCoordinator(),
                     envelope,
                     session.ControlClient.LatestRoomChatReady,
+                    session.RoomId,
+                    session.RoomSessionId);
+            }
+        };
+        session.ControlClient.RoomChatReviewPendingReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeClientSession, session))
+            {
+                TryApplyRoomChatReviewPending(
+                    GetChatCoordinator(),
+                    envelope,
+                    session.ControlClient.LatestRoomChatReady,
+                    session.RoomId,
+                    session.RoomSessionId);
+            }
+        };
+        session.ControlClient.RoomChatMessagesRedactedReceived += envelope =>
+        {
+            if (ReferenceEquals(_activeClientSession, session))
+            {
+                TryApplyRoomChatMessagesRedacted(
+                    GetChatCoordinator(),
+                    envelope,
                     session.RoomId,
                     session.RoomSessionId);
             }
@@ -2602,6 +2648,48 @@ internal sealed partial class LanConnectLobbyRuntime :
         }
 
         coordinator.ApplyRoomError(envelope);
+        return true;
+    }
+
+    internal static bool TryApplyRoomChatReviewPending(
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        LanConnectRoomChatReviewPendingEnvelope envelope,
+        LanConnectRoomChatReadyEnvelope? ready,
+        string roomId,
+        string roomSessionId,
+        Action<string>? warningSink = null)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(envelope);
+        // The review-pending frame carries no room identifiers of its own; like room_chat_error
+        // it is scoped by the active ready generation on this control connection.
+        if (ready == null ||
+            !MatchesRoomGeneration(ready.RoomId, ready.RoomSessionId, roomId, roomSessionId))
+        {
+            WarnIgnoredRoomChatEnvelope("room_chat_review_pending", warningSink);
+            return false;
+        }
+
+        coordinator.ApplyRoomReviewPending(envelope);
+        return true;
+    }
+
+    internal static bool TryApplyRoomChatMessagesRedacted(
+        LanConnectLobbyRuntimeChatCoordinator coordinator,
+        LanConnectRoomChatMessagesRedactedEnvelope envelope,
+        string roomId,
+        string roomSessionId,
+        Action<string>? warningSink = null)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (!MatchesRoomGeneration(envelope.RoomId, envelope.RoomSessionId, roomId, roomSessionId))
+        {
+            WarnIgnoredRoomChatEnvelope("room_chat_messages_redacted", warningSink);
+            return false;
+        }
+
+        coordinator.ApplyRoomMessagesRedacted(envelope);
         return true;
     }
 

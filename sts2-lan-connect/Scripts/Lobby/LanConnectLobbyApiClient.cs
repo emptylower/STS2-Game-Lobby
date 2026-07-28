@@ -316,3 +316,17 @@ internal sealed class LobbyServiceException : Exception
 
     public LobbyErrorDetails? Details { get; }
 }
+
+internal static class LanConnectModerationUiMessages
+{
+    internal const string PlayerNameBlocked = "包含敏感词，请修改用户名后重试。";
+    internal const string CreateRoomNameBlocked = "包含敏感词，请修改房间名或用户名后重试。";
+
+    internal static bool IsContentBlocked(LobbyServiceException exception) =>
+        string.Equals(exception.Code, "content_blocked", StringComparison.Ordinal);
+
+    internal static string DescribeCreateRoomFailure(LobbyServiceException exception) =>
+        IsContentBlocked(exception)
+            ? CreateRoomNameBlocked
+            : $"大厅服务创建房间失败：{exception.Message}";
+}

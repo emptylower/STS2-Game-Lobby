@@ -13,7 +13,21 @@ internal enum ServerChatDeliveryState
 
     Failed,
 
-    DeliveryUnknown
+    DeliveryUnknown,
+
+    Reviewing
+}
+
+// Transient, one-shot signal raised by terminal moderation outcomes. The panel consumes each
+// notice exactly once per binding via ModerationNoticeSequence; notices never carry message
+// content, only the kind of outcome, so no chat text is echoed into logs or popups.
+internal enum LanConnectChatModerationNotice
+{
+    None,
+
+    ContentBlocked,
+
+    ModerationBusy
 }
 
 internal sealed class ServerChatPendingMessage
@@ -161,6 +175,8 @@ internal sealed class LanConnectChatChannelState
     private bool _isVisible;
     private LanConnectServerChatPresentation _presentation = LanConnectServerChatPresentation.Connecting;
     private string _presentationDetail = string.Empty;
+    private long _moderationNoticeSequence;
+    private LanConnectChatModerationNotice _moderationNotice = LanConnectChatModerationNotice.None;
 
     internal LanConnectChatChannelState(LanConnectChatChannel channel)
         : this(channel, SharedArrivalClock)
@@ -517,6 +533,116 @@ internal sealed class LanConnectChatChannelState
         }
     }
 
+    internal bool HasReviewPending
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                foreach (ServerChatMessageState message in _messages)
+                {
+                    if (message.Delivery == ServerChatDeliveryState.Reviewing)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+    }
+
+    internal long ModerationNoticeSequence
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _moderationNoticeSequence;
+            }
+        }
+    }
+
+    internal LanConnectChatModerationNotice ModerationNotice
+    {
+        get
+        {
+            lock (_mutationLock)
+            {
+                return _moderationNotice;
+            }
+        }
+    }
+
+    // A server-side AI review started for this local message. The optimistic pending entry is
+    // retained (final ACK must still find it) but the panel hides it from the public list and
+    // shows the floating "under review" indicator instead. Idempotent: repeated review frames
+    // for the same id, or late frames racing an ACK/error, change nothing.
+    internal void MarkReviewPending(string clientMessageId)
+    {
+        if (string.IsNullOrEmpty(clientMessageId))
+        {
+            return;
+        }
+
+        lock (_mutationLock)
+        {
+            if (_clientPendingIndex.TryGetValue(clientMessageId, out int index) &&
+                index < _messages.Count &&
+                _messages[index].Delivery == ServerChatDeliveryState.Pending)
+            {
+                _messages[index] = WithDelivery(_messages[index], ServerChatDeliveryState.Reviewing);
+                Touch();
+            }
+        }
+    }
+
+    // Terminal AI rejection: the message must never reach the public list, so the local entry
+    // is removed outright instead of being marked failed (no retry affordance for prohibited
+    // content). The notice is only recorded when an entry actually transitioned, which keeps
+    // replays of the same terminal frame from raising duplicate popups.
+    internal bool MarkContentBlocked(string clientMessageId)
+    {
+        if (string.IsNullOrEmpty(clientMessageId))
+        {
+            return false;
+        }
+
+        lock (_mutationLock)
+        {
+            if (!RemoveLocalPendingEntry(clientMessageId))
+            {
+                return false;
+            }
+
+            RecordModerationNotice(LanConnectChatModerationNotice.ContentBlocked);
+            Touch();
+            return true;
+        }
+    }
+
+    // The server is still reviewing a previous message on this connection, so this newer send
+    // was rejected without review. The earlier reviewing entry is left untouched; only the
+    // duplicate send's entry is dropped and a hint notice is recorded.
+    internal bool MarkModerationBusy(string clientMessageId)
+    {
+        if (string.IsNullOrEmpty(clientMessageId))
+        {
+            return false;
+        }
+
+        lock (_mutationLock)
+        {
+            if (!RemoveLocalPendingEntry(clientMessageId))
+            {
+                return false;
+            }
+
+            RecordModerationNotice(LanConnectChatModerationNotice.ModerationBusy);
+            Touch();
+            return true;
+        }
+    }
+
     internal void SetVisible(bool value)
     {
         lock (_mutationLock)
@@ -860,6 +986,40 @@ internal sealed class LanConnectChatChannelState
         }
     }
 
+    internal void RemoveConfirmedMessages(IEnumerable<string> messageIds)
+    {
+        ArgumentNullException.ThrowIfNull(messageIds);
+        HashSet<string> ids = new(messageIds.Where(id => !string.IsNullOrEmpty(id)), StringComparer.Ordinal);
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        lock (_mutationLock)
+        {
+            bool removed = false;
+            for (int index = _messages.Count - 1; index >= 0; index--)
+            {
+                ServerChatMessageState message = _messages[index];
+                if (message.Delivery != ServerChatDeliveryState.Confirmed ||
+                    string.IsNullOrEmpty(message.MessageId) ||
+                    !ids.Contains(message.MessageId))
+                {
+                    continue;
+                }
+
+                RollBackIncoming(message.MessageId);
+                _messages.RemoveAt(index);
+                removed = true;
+            }
+            if (removed)
+            {
+                RebuildIndices();
+                Touch();
+            }
+        }
+    }
+
     internal void AppendConfirmedForTests(string messageId, string senderName, string text, long sequence, bool isLocal)
     {
         lock (_mutationLock)
@@ -990,7 +1150,7 @@ internal sealed class LanConnectChatChannelState
 
                 if (_clientPendingIndex.TryGetValue(pair.Key, out int index) &&
                     index < _messages.Count &&
-                    _messages[index].Delivery == ServerChatDeliveryState.Pending)
+                    _messages[index].Delivery is ServerChatDeliveryState.Pending or ServerChatDeliveryState.Reviewing)
                 {
                     _messages[index] = WithDelivery(_messages[index], ServerChatDeliveryState.DeliveryUnknown);
                     mutated = true;
@@ -1060,6 +1220,7 @@ internal sealed class LanConnectChatChannelState
             _scrollOffset = 0;
             _isAtBottom = true;
             _isVisible = false;
+            _moderationNotice = LanConnectChatModerationNotice.None;
             RebuildIndices();
             Touch();
         }
@@ -1740,11 +1901,41 @@ internal sealed class LanConnectChatChannelState
         _pendingQueueTimes.Clear();
         foreach (ServerChatMessageState entry in _messages)
         {
-            if (entry.Delivery == ServerChatDeliveryState.Pending && !string.IsNullOrEmpty(entry.ClientMessageId))
+            if (entry.Delivery is ServerChatDeliveryState.Pending or ServerChatDeliveryState.Reviewing &&
+                !string.IsNullOrEmpty(entry.ClientMessageId))
             {
                 _pendingQueueTimes[entry.ClientMessageId] = entry.SentAt;
             }
         }
+    }
+
+    private bool RemoveLocalPendingEntry(string clientMessageId)
+    {
+        if (!_clientPendingIndex.TryGetValue(clientMessageId, out int index) ||
+            index >= _messages.Count)
+        {
+            return false;
+        }
+
+        ServerChatMessageState existing = _messages[index];
+        if (!existing.IsLocal ||
+            existing.Delivery is not (ServerChatDeliveryState.Pending or
+                ServerChatDeliveryState.Reviewing or
+                ServerChatDeliveryState.DeliveryUnknown))
+        {
+            return false;
+        }
+
+        _messages.RemoveAt(index);
+        _pendingQueueTimes.Remove(clientMessageId);
+        RebuildIndices();
+        return true;
+    }
+
+    private void RecordModerationNotice(LanConnectChatModerationNotice notice)
+    {
+        _moderationNotice = notice;
+        _moderationNoticeSequence++;
     }
 
     private bool MarkReadCore()

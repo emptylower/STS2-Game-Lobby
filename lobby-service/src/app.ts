@@ -23,6 +23,16 @@ import {
 } from "./mod-sync/protocol.js";
 import { ModSyncValidationError, validateModInventory } from "./mod-sync/validator.js";
 import { ModerationService } from "./moderation/moderation-service.js";
+import { AiSemanticModerationService } from "./moderation/ai-service.js";
+import { ModerationCacheStore } from "./moderation/cache-store.js";
+import { deriveModerationHmacKey, parseModerationMasterKey } from "./moderation/crypto.js";
+import { AiProviderError } from "./moderation/provider.js";
+import { AiModerationStateStore, type AllowlistScope, type ReviewStatus } from "./moderation/state-store.js";
+import type {
+  AiModerationConfig,
+  AiModerationProtocol,
+  ModerationSurface,
+} from "./moderation/ai-types.js";
 import { RoomRelayManager } from "./relay.js";
 import { cleanupExpiredRooms } from "./room-cleanup.js";
 import {
@@ -128,6 +138,7 @@ class HttpError extends Error {
     readonly statusCode: number,
     readonly code: string,
     message: string,
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -247,6 +258,25 @@ export async function createLobbyService(
     enabled: serverAdminStateStore.getState().sensitiveFilterEnabled,
     log: (message) => console.error(message),
   });
+  const moderationMasterKey = parseModerationMasterKey(env.aiModeration.credentialKey);
+  if (env.aiModeration.credentialKey !== undefined && moderationMasterKey === null) {
+    console.error("[moderation-ai] AI_MODERATION_CREDENTIAL_KEY must be 32-byte hex or base64; AI review is disabled");
+  }
+  const aiModerationState = new AiModerationStateStore(
+    env.aiModeration.stateFile,
+    moderationMasterKey,
+  );
+  const aiModerationCache = new ModerationCacheStore(env.aiModeration.cacheFile);
+  const aiModeration = new AiSemanticModerationService({
+    moderation,
+    stateStore: aiModerationState,
+    cacheStore: aiModerationCache,
+    hmacKey: moderationMasterKey === null ? null : deriveModerationHmacKey(moderationMasterKey),
+    timeoutMs: env.aiModeration.timeoutMs,
+    maxConcurrency: env.aiModeration.maxConcurrency,
+    maxQueue: env.aiModeration.maxQueue,
+    maxReviewsPerIpMinute: env.aiModeration.reviewsPerIpMinute,
+  });
   const serviceUpdateManager = new ServiceUpdateManager({
     currentVersion: lobbyServiceVersion,
     enabled: env.serverUpdateEnabled,
@@ -285,6 +315,7 @@ export async function createLobbyService(
     connectionRefillMs: env.chat.connectionRefillMs,
     ipMessagesPerMinute: env.chat.ipMessagesPerMinute,
     moderation,
+    aiModeration,
     ...dependencies.chatGatewayOptions,
   });
   const currentRoomChatFeatures = resolveEnabledFeatures({
@@ -301,6 +332,7 @@ export async function createLobbyService(
     roomV2Enabled: initialChatGovernance.roomChatV2Enabled,
     getRoomChatContext: (roomId) => store.getRoomChatContext(roomId),
     moderation,
+    aiModeration,
   });
   const reservedChatTicketsByUpgrade = new WeakMap<IncomingMessage, ReservedChatTicket>();
   let peerStore: PeerStore | null = null;
@@ -319,11 +351,26 @@ export async function createLobbyService(
     return peerStore;
   }
 
-  function assertNameAllowedByModeration(value: string): void {
-    if (moderation.containsSensitiveName(value)) {
-      moderation.recordNameRejection();
-      throw new InputError("包含敏感词内容，请修改后重试", { reason: "sensitive_content" });
+  async function assertNameAllowedByModeration(
+    value: string,
+    surface: Exclude<ModerationSurface, "chat_message">,
+    clientIp: string,
+  ): Promise<void> {
+    const matches = moderation.findSensitiveMatches(value);
+    if (matches.length === 0) return;
+    const plan = aiModeration.prepare(value, surface);
+    if (plan.kind === "allow") return;
+    if (plan.kind === "review") {
+      const outcome = await aiModeration.review(plan, clientIp);
+      if (outcome.kind === "allow") return;
     }
+    moderation.recordNameRejection();
+    throw new HttpError(
+      400,
+      "content_blocked",
+      "包含敏感词，请修改后重试。",
+      { reason: "sensitive_content", surface },
+    );
   }
 
   const app = express();
@@ -400,7 +447,7 @@ export async function createLobbyService(
     });
   });
 
-  app.post("/chat/tickets", (req, res) => {
+  app.post("/chat/tickets", async (req, res) => {
     res.locals.omitClientIpFromLog = true;
 
     if (Object.keys(req.query).length > 0) {
@@ -449,7 +496,7 @@ export async function createLobbyService(
       throw new InputError("playerNetId 与 playerName 必须为字符串。");
     }
 
-    assertNameAllowedByModeration(body.playerName);
+    await assertNameAllowedByModeration(body.playerName, "player_name", clientIp);
 
     let issued: { ticket: string; expiresAt: string };
     try {
@@ -498,7 +545,7 @@ export async function createLobbyService(
     });
   });
 
-  app.post("/rooms", (req, res, next) => {
+  app.post("/rooms", async (req, res, next) => {
     let createdRoom:
       | {
           roomId: string;
@@ -581,14 +628,15 @@ export async function createLobbyService(
         };
       }
 
-      assertNameAllowedByModeration(roomInput.roomName);
-      assertNameAllowedByModeration(roomInput.hostPlayerName);
+      const moderationClientIp = requestIp(req);
+      await assertNameAllowedByModeration(roomInput.roomName, "room_name", moderationClientIp);
+      await assertNameAllowedByModeration(roomInput.hostPlayerName, "player_name", moderationClientIp);
       for (const slot of roomInput.savedRun?.slots ?? []) {
         if (slot.characterName !== undefined) {
-          assertNameAllowedByModeration(slot.characterName);
+          await assertNameAllowedByModeration(slot.characterName, "character_name", moderationClientIp);
         }
         if (slot.playerName !== undefined) {
-          assertNameAllowedByModeration(slot.playerName);
+          await assertNameAllowedByModeration(slot.playerName, "player_name", moderationClientIp);
         }
       }
 
@@ -621,13 +669,13 @@ export async function createLobbyService(
     }
   });
 
-  app.post("/rooms/:id/join", (req, res, next) => {
+  app.post("/rooms/:id/join", async (req, res, next) => {
     try {
       assertCreateJoinRateLimit(req, "join_room");
       cleanupExpiredRoomsNow();
       const body = req.body as Partial<JoinRoomInput> | undefined;
       if (typeof body?.playerName === "string") {
-        assertNameAllowedByModeration(body.playerName);
+        await assertNameAllowedByModeration(body.playerName, "player_name", requestIp(req));
       }
       const response = store.joinRoom(req.params.id, {
         playerName: boundedString(body?.playerName, "playerName", MaxPlayerNameLength),
@@ -654,7 +702,7 @@ export async function createLobbyService(
     }
   });
 
-  app.post("/rooms/:id/mod-preflight", (req, res, next) => {
+  app.post("/rooms/:id/mod-preflight", async (req, res, next) => {
     try {
       assertCreateJoinRateLimit(req, "join_room");
       const body = req.body as Record<string, unknown> | undefined;
@@ -670,7 +718,7 @@ export async function createLobbyService(
       }
 
       if (typeof body.playerName === "string") {
-        assertNameAllowedByModeration(body.playerName);
+        await assertNameAllowedByModeration(body.playerName, "player_name", requestIp(req));
       }
 
       const playerName = boundedString(body.playerName, "playerName", MaxPlayerNameLength);
@@ -940,6 +988,172 @@ export async function createLobbyService(
     })().catch(next);
   });
 
+  app.get("/server-admin/moderation/ai", (req, res, next) => {
+    try {
+      requireServerAdminSession(req);
+      res.json(aiModeration.getStatus());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/server-admin/moderation/ai", (req, res, next) => {
+    (async () => {
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
+      const update = parseAiModerationConfigPatch(req.body, aiModerationState.getConfig());
+      const currentView = aiModerationState.getConfigView();
+      const willHaveApiKey = update.apiKeyAction === "replace"
+        || (update.apiKeyAction === "keep" && currentView.apiKeyConfigured);
+      if (update.config.enabled) {
+        if (!moderationMasterKey) {
+          throw new InputError("启用 AI 审核前必须配置有效的 AI_MODERATION_CREDENTIAL_KEY。");
+        }
+        if (!willHaveApiKey) throw new InputError("启用 AI 审核前必须配置 API Key。");
+        if (!update.config.endpoint || !update.config.model) {
+          throw new InputError("启用 AI 审核前必须配置 endpoint 与 model。");
+        }
+      }
+      await enqueueServerAdminMutation(() => {
+        try {
+          aiModerationState.updateConfig(
+            update.config,
+            update.apiKeyAction,
+            update.apiKey,
+          );
+        } catch (error) {
+          throw new InputError(error instanceof Error ? error.message : "AI 审核配置保存失败。");
+        }
+      });
+      res.json(aiModeration.getStatus());
+    })().catch(next);
+  });
+
+  app.post("/server-admin/moderation/ai/test", (req, res, next) => {
+    (async () => {
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
+      const testConfig = parseAiModerationTestConfig(req.body, aiModerationState.getConfig());
+      let savedApiKey: string | null = null;
+      if (testConfig.apiKey === undefined) {
+        try {
+          savedApiKey = aiModerationState.getApiKey();
+        } catch {
+          throw new InputError("已保存的 API Key 无法解密，请重新填写。");
+        }
+      }
+      const apiKey = testConfig.apiKey ?? savedApiKey;
+      if (!apiKey) throw new InputError("测试 AI 审核前必须提供或保存 API Key。");
+      try {
+        res.json(await aiModeration.testConfiguration(testConfig.config, apiKey));
+      } catch (error) {
+        if (error instanceof AiProviderError) {
+          throw new HttpError(502, "ai_provider_test_failed", `AI 服务测试失败：${error.code}`);
+        }
+        throw error;
+      }
+    })().catch(next);
+  });
+
+  app.get("/server-admin/moderation/reviews", (req, res, next) => {
+    try {
+      requireServerAdminSession(req);
+      const status = parseReviewStatus(req.query.status);
+      const cursor = optionalQueryString(req.query.cursor, "cursor", 128);
+      const limit = parseQueryLimit(req.query.limit);
+      res.json(aiModerationState.listReviews(status, cursor, limit));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/server-admin/moderation/reviews/:id", (req, res, next) => {
+    try {
+      requireServerAdminSession(req);
+      const review = aiModerationState.getReview(requiredString(req.params.id, "id"));
+      if (!review) throw new HttpError(404, "moderation_review_not_found", "复审候选不存在。");
+      res.json(review);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/server-admin/moderation/reviews/:id/approve", (req, res, next) => {
+    (async () => {
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
+      const body = parseReviewActionBody(req.body, true);
+      const rule = await enqueueServerAdminMutation(() => aiModerationState.approveReview(
+        requiredString(req.params.id, "id"),
+        body.scope!,
+        body.note,
+      ));
+      if (!rule) throw new HttpError(404, "moderation_review_not_found", "复审候选不存在。");
+      res.json({ ok: true, rule });
+    })().catch(next);
+  });
+
+  app.post("/server-admin/moderation/reviews/:id/reject", (req, res, next) => {
+    (async () => {
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
+      const body = parseReviewActionBody(req.body, false);
+      const result = await enqueueServerAdminMutation(() => aiModeration.rejectReviewCandidate(
+        requiredString(req.params.id, "id"),
+        body.scope ?? "context",
+        body.note,
+      ));
+      if (!result) throw new HttpError(404, "moderation_review_not_found", "复审候选不存在。");
+      res.json({ ok: true, ...result });
+    })().catch(next);
+  });
+
+  app.get("/server-admin/moderation/allowlist", (req, res, next) => {
+    try {
+      requireServerAdminSession(req);
+      const scope = parseAllowlistScope(req.query.scope, false);
+      const cursor = optionalQueryString(req.query.cursor, "cursor", 128);
+      const limit = parseQueryLimit(req.query.limit);
+      res.json(aiModerationState.listAllowlist(cursor, limit, scope));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/server-admin/moderation/allowlist/:id", (req, res, next) => {
+    (async () => {
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
+      const revoked = await enqueueServerAdminMutation(() =>
+        aiModerationState.revokeAllowRule(requiredString(req.params.id, "id")));
+      if (!revoked) throw new HttpError(404, "moderation_allow_rule_not_found", "白名单规则不存在。");
+      res.json({ ok: true });
+    })().catch(next);
+  });
+
+  app.get("/server-admin/moderation/blocklist", (req, res, next) => {
+    try {
+      requireServerAdminSession(req);
+      const scope = parseAllowlistScope(req.query.scope, false);
+      const cursor = optionalQueryString(req.query.cursor, "cursor", 128);
+      const limit = parseQueryLimit(req.query.limit);
+      res.json(aiModerationState.listBlocklist(cursor, limit, scope));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/server-admin/moderation/blocklist/:id", (req, res, next) => {
+    (async () => {
+      const session = requireServerAdminSession(req);
+      requireServerAdminCsrf(req, session);
+      const revoked = await enqueueServerAdminMutation(() =>
+        aiModerationState.revokeBlockRule(requiredString(req.params.id, "id")));
+      if (!revoked) throw new HttpError(404, "moderation_block_rule_not_found", "黑名单规则不存在。");
+      res.json({ ok: true });
+    })().catch(next);
+  });
+
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (isJsonParseError(error)) {
       res.status(400).json({
@@ -979,6 +1193,7 @@ export async function createLobbyService(
       res.status(error.statusCode).json({
         code: error.code,
         message: error.message,
+        ...(error.details === undefined ? {} : { details: error.details }),
       });
       return;
     }
@@ -1435,6 +1650,8 @@ export async function createLobbyService(
 
     peerStore = null;
     serviceUpdateManager.stop();
+
+    await aiModeration.close();
 
     try {
       relayManager.close();
@@ -1943,6 +2160,190 @@ export async function createLobbyService(
     const result = serverAdminMutations.then(mutation);
     serverAdminMutations = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  function parseAiModerationConfigPatch(
+    value: unknown,
+    current: AiModerationConfig,
+  ): { config: AiModerationConfig; apiKeyAction: "keep" | "replace" | "clear"; apiKey?: string } {
+    const body = requireRecord(value, "AI 审核配置");
+    const allowed = new Set([
+      "enabled", "protocol", "endpoint", "model", "allowPrivateNetwork",
+      "jsonFallbackEnabled", "apiKeyAction", "apiKey",
+    ]);
+    assertNoUnknownFields(body, allowed, "AI 审核配置");
+    const config = parseAiConfigFields(body, current);
+    const action = Object.hasOwn(body, "apiKeyAction")
+      ? parseApiKeyAction(body.apiKeyAction)
+      : "keep";
+    const apiKey = Object.hasOwn(body, "apiKey")
+      ? boundedSecret(body.apiKey, "apiKey", 8_192)
+      : undefined;
+    if (action === "replace" && !apiKey) throw new InputError("apiKeyAction=replace 时必须提供 apiKey。");
+    if (action !== "replace" && Object.hasOwn(body, "apiKey")) {
+      throw new InputError("只有 apiKeyAction=replace 时才允许提供 apiKey。");
+    }
+    return { config, apiKeyAction: action, ...(apiKey === undefined ? {} : { apiKey }) };
+  }
+
+  function parseAiModerationTestConfig(
+    value: unknown,
+    current: AiModerationConfig,
+  ): { config: AiModerationConfig; apiKey?: string } {
+    const body = value === undefined ? {} : requireRecord(value, "AI 审核测试配置");
+    const allowed = new Set([
+      "protocol", "endpoint", "model", "allowPrivateNetwork", "jsonFallbackEnabled", "apiKey",
+    ]);
+    assertNoUnknownFields(body, allowed, "AI 审核测试配置");
+    const config = parseAiConfigFields(body, current);
+    if (!config.endpoint || !config.model) throw new InputError("测试配置必须包含 endpoint 与 model。");
+    const apiKey = Object.hasOwn(body, "apiKey")
+      ? boundedSecret(body.apiKey, "apiKey", 8_192)
+      : undefined;
+    return { config, ...(apiKey === undefined ? {} : { apiKey }) };
+  }
+
+  function parseAiConfigFields(
+    body: Record<string, unknown>,
+    current: AiModerationConfig,
+  ): AiModerationConfig {
+    const enabled = Object.hasOwn(body, "enabled")
+      ? requiredBoolean(body.enabled, "enabled")
+      : current.enabled;
+    const protocol = Object.hasOwn(body, "protocol")
+      ? parseAiProtocol(body.protocol)
+      : current.protocol;
+    const endpoint = Object.hasOwn(body, "endpoint")
+      ? boundedOptionalString(body.endpoint, "endpoint", 2_048)
+      : current.endpoint;
+    const model = Object.hasOwn(body, "model")
+      ? boundedOptionalString(body.model, "model", 200)
+      : current.model;
+    const allowPrivateNetwork = Object.hasOwn(body, "allowPrivateNetwork")
+      ? requiredBoolean(body.allowPrivateNetwork, "allowPrivateNetwork")
+      : current.allowPrivateNetwork;
+    if (endpoint) validateAiEndpoint(endpoint, allowPrivateNetwork);
+    return {
+      enabled,
+      protocol,
+      endpoint,
+      model,
+      allowPrivateNetwork,
+      jsonFallbackEnabled: Object.hasOwn(body, "jsonFallbackEnabled")
+        ? requiredBoolean(body.jsonFallbackEnabled, "jsonFallbackEnabled")
+        : current.jsonFallbackEnabled,
+    };
+  }
+
+  function parseAiProtocol(value: unknown): AiModerationProtocol {
+    if (
+      value === "openai_responses"
+      || value === "openai_chat_completions"
+      || value === "anthropic_messages"
+    ) return value;
+    throw new InputError("protocol 必须是 openai_responses、openai_chat_completions 或 anthropic_messages。");
+  }
+
+  function parseApiKeyAction(value: unknown): "keep" | "replace" | "clear" {
+    if (value === "keep" || value === "replace" || value === "clear") return value;
+    throw new InputError("apiKeyAction 必须是 keep、replace 或 clear。");
+  }
+
+  function validateAiEndpoint(value: string, allowPrivateNetwork: boolean): void {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new InputError("endpoint 必须是无内嵌凭据的完整 HTTP(S) URL。");
+    }
+    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
+      throw new InputError("endpoint 必须是无内嵌凭据的完整 HTTP(S) URL。");
+    }
+    if (url.protocol === "http:" && !allowPrivateNetwork) {
+      throw new InputError("HTTP endpoint 仅可在 allowPrivateNetwork=true 时使用。");
+    }
+  }
+
+  function parseReviewStatus(value: unknown): ReviewStatus | undefined {
+    if (value === undefined) return undefined;
+    if (value === "pending" || value === "approved" || value === "rejected") return value;
+    throw new InputError("status 必须是 pending、approved 或 rejected。");
+  }
+
+  function parseAllowlistScope(value: unknown, required: boolean): AllowlistScope | undefined {
+    if (value === undefined && !required) return undefined;
+    if (value === "term" || value === "context") return value;
+    throw new InputError("scope 必须是 term 或 context。");
+  }
+
+  function parseReviewActionBody(
+    value: unknown,
+    requireScope: boolean,
+  ): { scope?: AllowlistScope; note?: string } {
+    const body = value === undefined ? {} : requireRecord(value, "复审操作");
+    const allowed = new Set(["scope", "note"]);
+    assertNoUnknownFields(body, allowed, "复审操作");
+    const scope = parseAllowlistScope(body.scope, requireScope);
+    const note = Object.hasOwn(body, "note")
+      ? boundedOptionalString(body.note, "note", 500)
+      : undefined;
+    return {
+      ...(scope === undefined ? {} : { scope }),
+      ...(note === undefined ? {} : { note }),
+    };
+  }
+
+  function parseQueryLimit(value: unknown): number {
+    if (value === undefined) return 50;
+    if (typeof value !== "string" || !/^\d+$/.test(value)) throw new InputError("limit 必须是整数。");
+    const limit = Number(value);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new InputError("limit 必须是 1-100 之间的整数。");
+    }
+    return limit;
+  }
+
+  function optionalQueryString(value: unknown, name: string, maxLength: number): string | undefined {
+    if (value === undefined) return undefined;
+    if (typeof value !== "string" || value.length > maxLength || !value.trim()) {
+      throw new InputError(`${name} 必须是非空字符串，且长度不超过 ${maxLength}。`);
+    }
+    return value.trim();
+  }
+
+  function requireRecord(value: unknown, name: string): Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new InputError(`${name}必须是对象。`);
+    }
+    return value as Record<string, unknown>;
+  }
+
+  function assertNoUnknownFields(
+    value: Record<string, unknown>,
+    allowed: ReadonlySet<string>,
+    name: string,
+  ): void {
+    const unknown = Object.keys(value).find((key) => !allowed.has(key));
+    if (unknown) throw new InputError(`${name}包含未知字段：${unknown}。`);
+  }
+
+  function requiredBoolean(value: unknown, name: string): boolean {
+    if (typeof value !== "boolean") throw new InputError(`${name} 必须为布尔值。`);
+    return value;
+  }
+
+  function boundedOptionalString(value: unknown, name: string, maxLength: number): string {
+    if (typeof value !== "string") throw new InputError(`${name} 必须为字符串。`);
+    const normalized = value.trim();
+    if (normalized.length > maxLength) throw new InputError(`${name} 长度不能超过 ${maxLength}。`);
+    return normalized;
+  }
+
+  function boundedSecret(value: unknown, name: string, maxLength: number): string {
+    if (typeof value !== "string" || !value.trim()) throw new InputError(`${name} 不能为空。`);
+    const normalized = value.trim();
+    if (normalized.length > maxLength) throw new InputError(`${name} 长度不能超过 ${maxLength}。`);
+    return normalized;
   }
 
   function parseChatFeaturesPatch(value: unknown): Partial<ChatFeatureGovernance> {

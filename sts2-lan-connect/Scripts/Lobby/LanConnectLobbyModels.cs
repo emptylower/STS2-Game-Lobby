@@ -457,6 +457,10 @@ internal sealed class LobbyErrorResponse
 
 internal sealed class LobbyErrorDetails
 {
+    public string? Reason { get; set; }
+
+    public string? Surface { get; set; }
+
     public string? RoomModVersion { get; set; }
 
     public string? RequestedModVersion { get; set; }

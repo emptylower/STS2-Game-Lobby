@@ -10,7 +10,7 @@
 
 # STS2 游戏大厅部署指南
 
-> 本文档对应 **v0.5.1**。去中心化节点网络和 v0.5.0 聊天能力保持不变；v0.5.1 新增加入前 gameplay MOD 私有预检与 Steam Workshop 客户端同步。如果你从 v0.3.x 升级，请同时阅读文末的 v0.4.0 架构迁移要点。
+> 本文档对应源码与构建版本 **v0.5.4**。去中心化节点网络、富聊天和 gameplay MOD 私有预检保持不变；v0.5.4 新增可选 AI 语义审核、安全缓存、人工永久白/黑名单和跨消息规避检测。GitHub Release 暂未发布。如果你从 v0.3.x 升级，请同时阅读文末的 v0.4.0 架构迁移要点。
 
 ## 文档定位
 
@@ -25,16 +25,16 @@
 1. [`../README.md`](../README.md)
 2. [`../lobby-service/README.md`](../lobby-service/README.md)
 
-本文只讲 **v0.5.1 怎么部署与验证**。旧的 mother registry / SERVER_REGISTRY_* 流程已经在 v0.4.0 中删除，相关内容只在文末作为升级参考保留。
+本文只讲 **v0.5.4 怎么部署与验证**。旧的 mother registry / SERVER_REGISTRY_* 流程已经在 v0.4.0 中删除，相关内容只在文末作为升级参考保留。
 
-## v0.5.1 关键变更
+## v0.5.4 关键变更
 
 - v0.4.0 的去中心化架构保持不变：`lobby-service` 通过 `PEER_SELF_ADDRESS` 公开对外地址，由 Cloudflare discovery worker 聚合；`SERVER_REGISTRY_*` 仍完全无效。
-- v0.5.1 新增 `POST /rooms/:id/mod-preflight`，只在密码校验后返回 gameplay MOD 差异；请求不增加人数、不改变房间状态、不签发 join ticket。
-- 房主清单仅保存在房间私有对象，不进入 `/rooms`、health、metrics、peer gossip 或聊天。服务端不托管、下载或转发 DLL、PCK、ZIP。
-- `MOD_SYNC_ENABLED` 默认 `true`，只作为首次状态种子；管理面板中的 MOD 同步开关是运行时真理源，保存后立即生效并持久化。回滚时在面板关闭该开关，v0.5.0 与无 capability 客户端继续走原加入流程。
-- 游戏版本不同在预检中始终硬拦截，与 `STRICT_GAME_VERSION_CHECK` 无关；`STRICT_MOD_VERSION_CHECK=false` 只保留用户确认后的 MOD relaxed 继续。
-- v0.5.0 的服务器频道、富聊天与治理开关继续保留；客户端与 lobby-service 配套升级到 `0.5.1` 才能使用 MOD 预检。
+- 支持 OpenAI Responses、OpenAI Chat Completions 与 Anthropic Messages 三类 AI 审核协议；管理面板保存完整请求 URL、模型和加密 API Key。
+- AI 放行写入有期限安全缓存，永久白名单必须人工批准；拒绝复审会生成立即生效的永久黑名单，并可在独立管理页撤销。
+- 公共频道、`room_chat_v2`、房间名、玩家名和续局角色名统一审核；同一认证用户拆分发送的最多 10 条短消息会组合分析并撤回相关上下文。
+- 新增 `AI_MODERATION_CREDENTIAL_KEY`、`AI_MODERATION_STATE_FILE` 与 `AI_MODERATION_CACHE_FILE`；升级和回滚必须与 `.env`、管理状态及数据目录一起保留。
+- v0.5.1 的 MOD 预检与 v0.5.0 的服务器频道、富聊天及治理开关继续保留；未配置或未启用 AI 时维持原有确定性打码行为。
 
 ## 当前推荐部署路径（主路径）
 
@@ -201,6 +201,7 @@ PEER_STATE_DIR=/app/data/peer
 - 建房或 continue-run 重新发布会轮换权威 `roomSessionId` generation。战斗引用必须匹配当前 generation；旧 power/player/monster 引用在客户端降级，静态 item 引用和相邻文本保持正常。
 - legacy 客户端 fallback 先保留最多 60 UTF-16 unit 的全部用户文本，再在剩余预算内追加完整通用实体占位符，不拆 surrogate pair、不暴露 model ID。monster target 因没有双客户端稳定 ID 证明而在发布版保持关闭。
 - `/server-admin` 的六个开关持久化到同一个 `SERVER_ADMIN_STATE_FILE`，成功落盘后才广播；消息、metrics、history 不持久化。环境变量只补缺失键，已持久化值在重启后优先。
+- AI 语义审核为可选后端能力。配置稳定的 `AI_MODERATION_CREDENTIAL_KEY` 后，通过受保护的 `/server-admin/moderation/*` API 保存模型协议、完整 URL、模型和加密 API Key。状态、复审记录、永久白名单与永久黑名单默认写入 `data/ai-moderation-state.json`，HMAC 安全缓存写入 `data/ai-moderation-cache.json`；Docker 部署必须继续挂载 `/app/data`。审核覆盖聊天、同一认证身份的连续短消息、房间名、用户名和续局角色名。完整接口与密钥轮换限制见 `AI_MODERATION_BACKEND_API_ZH.md`。
 - rich 关闭会令 Emoji/item/combat 的有效版本归零，但保留子开关值；room-v2 关闭会关闭 combat-v2，legacy 房间文本仍可用；服务器频道独立。回滚顺序建议：combat refs → Emoji/item refs 与 rich → 必要时 room-v2，服务器频道单独处理。
 - 三个配置真理面为 `lobby-service/.env.example`、`deploy/lobby-service.env.example`、`lobby-service/deploy/sts2-lobby.service.example`。安装前用 `./scripts/build-sts2-lan-connect.sh --install --dry-run` 做零写路径检查。
 - 发布验证必须在临时输出目录完成，不读写 `releases/`。客户端包不得包含 `typing.dll`、游戏程序集、游戏图片/字体或除本 MOD PCK 外的游戏 PCK。

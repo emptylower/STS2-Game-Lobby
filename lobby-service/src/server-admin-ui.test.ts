@@ -3,12 +3,15 @@ import test from "node:test";
 import vm from "node:vm";
 import {
   beginServerAdminSingleFlight,
+  buildServerAdminAiConfigPatch,
+  buildServerAdminAiTestRequest,
   buildServerAdminRequestInit,
   calculateServerAdminRejectionRate,
   isCurrentServerAdminRequest,
   mergeServerAdminPollSnapshot,
   releaseServerAdminSingleFlight,
   renderServerAdminPage,
+  resolveServerAdminAiCredentialAlert,
   resolveServerAdminChatControlState,
 } from "./server-admin-ui.js";
 
@@ -297,7 +300,252 @@ test("server admin page mobile layout wraps actions and collapses dashboard grid
 });
 
 test("admin page renders the sensitive filter toggle", () => {
-  const html = renderServerAdminPage("0.5.3");
+  const html = renderServerAdminPage("0.5.4");
   assert.ok(html.includes("敏感词过滤"));
   assert.ok(html.includes("sensitiveFilterEnabled"));
+});
+
+test("ai config patch keeps the saved key unless a new draft is provided", () => {
+  const values = {
+    enabled: true,
+    protocol: "anthropic_messages",
+    endpoint: "  https://api.anthropic.com/v1/messages  ",
+    model: "  claude-example  ",
+    allowPrivateNetwork: true,
+    jsonFallbackEnabled: false,
+  };
+  assert.deepEqual(buildServerAdminAiConfigPatch(values, ""), {
+    enabled: true,
+    protocol: "anthropic_messages",
+    endpoint: "https://api.anthropic.com/v1/messages",
+    model: "claude-example",
+    allowPrivateNetwork: true,
+    jsonFallbackEnabled: false,
+    apiKeyAction: "keep",
+  });
+  assert.deepEqual(buildServerAdminAiConfigPatch(values, "   "), {
+    ...buildServerAdminAiConfigPatch(values, ""),
+    apiKeyAction: "keep",
+  });
+  assert.deepEqual(buildServerAdminAiConfigPatch(values, "  new-secret  "), {
+    ...buildServerAdminAiConfigPatch(values, ""),
+    apiKeyAction: "replace",
+    apiKey: "new-secret",
+  });
+  // The patch builder never emits a clear action or an empty-string key;
+  // clearing is only possible through the dedicated { apiKeyAction: "clear" } request.
+  const patch = buildServerAdminAiConfigPatch(values, "");
+  assert.notEqual(patch.apiKeyAction, "clear");
+  assert.equal(Object.hasOwn(patch, "apiKey"), false);
+});
+
+test("ai test request mirrors the form without persisting fields and omits a blank key", () => {
+  const values = {
+    enabled: true,
+    protocol: "openai_chat_completions",
+    endpoint: "https://api.openai.com/v1/chat/completions",
+    model: "gpt-example",
+    allowPrivateNetwork: false,
+    jsonFallbackEnabled: true,
+  };
+  const blank = buildServerAdminAiTestRequest(values, "");
+  assert.deepEqual(blank, {
+    protocol: "openai_chat_completions",
+    endpoint: "https://api.openai.com/v1/chat/completions",
+    model: "gpt-example",
+    allowPrivateNetwork: false,
+    jsonFallbackEnabled: true,
+  });
+  assert.equal(Object.hasOwn(blank, "apiKey"), false);
+  assert.equal(Object.hasOwn(blank, "enabled"), false);
+  assert.equal(Object.hasOwn(blank, "apiKeyAction"), false);
+
+  const withKey = buildServerAdminAiTestRequest(values, " temporary-key ");
+  assert.equal(withKey.apiKey, "temporary-key");
+});
+
+test("ai credential alert maps each non-ready credential status", () => {
+  assert.equal(resolveServerAdminAiCredentialAlert({ credentialStatus: "ready" }), null);
+  assert.equal(
+    resolveServerAdminAiCredentialAlert({ credentialStatus: "missing_master_key" })?.type,
+    "warning",
+  );
+  assert.match(
+    resolveServerAdminAiCredentialAlert({ credentialStatus: "missing_master_key" })?.description ?? "",
+    /AI_MODERATION_CREDENTIAL_KEY/,
+  );
+  assert.equal(
+    resolveServerAdminAiCredentialAlert({ credentialStatus: "decrypt_error" })?.type,
+    "error",
+  );
+  assert.match(
+    resolveServerAdminAiCredentialAlert({ credentialStatus: "decrypt_error" })?.description ?? "",
+    /重新填写 API Key/,
+  );
+  assert.equal(
+    resolveServerAdminAiCredentialAlert({ credentialStatus: "missing_api_key" })?.type,
+    "info",
+  );
+  assert.equal(resolveServerAdminAiCredentialAlert(null)?.type, "info");
+});
+
+test("server admin page renders the AI moderation console tab and config controls", () => {
+  const html = renderServerAdminPage("0.5.4");
+  assert.match(html, /\{ key: "moderation", label: "AI 审核", icon: ICONS\.shield/);
+  assert.match(html, /AI 语义审核/);
+  assert.match(html, /启用 AI 语义审核/);
+  assert.match(html, /name: "protocol"/);
+  assert.match(html, /name: "endpoint"/);
+  assert.match(html, /name: "model"/);
+  assert.match(html, /name: "allowPrivateNetwork"/);
+  assert.match(html, /name: "jsonFallbackEnabled"/);
+  assert.match(html, /openai_responses/);
+  assert.match(html, /openai_chat_completions/);
+  assert.match(html, /anthropic_messages/);
+  assert.match(html, /Input\.Password/);
+  assert.match(html, /保存配置/);
+  assert.match(html, /测试连接/);
+  assert.match(html, /清除 API Key/);
+  assert.match(html, /允许访问私网模型/);
+  assert.match(html, /兼容提示词 JSON 回退/);
+});
+
+test("server admin page exposes permanent blocklist as a top-level management tab", () => {
+  const html = renderServerAdminPage("0.5.4");
+  assert.match(html, /\{ key: "blocklist", label: "永久黑名单", icon: ICONS\.ban/);
+  assert.match(html, /activeTab === "blocklist"/);
+  assert.match(html, /h\(PermanentBlocklistPanel, \{/);
+  assert.match(html, /data-admin-panel": "permanent-blocklist"/);
+  assert.match(html, /永久黑名单立即生效/);
+  assert.match(html, /当前没有永久黑名单规则。请在 AI 审核页拒绝候选后再查看。/);
+  assert.match(html, /语境签名/);
+  assert.match(html, /作用范围 全部信息流/);
+  assert.match(html, /撤销这条永久黑名单规则？/);
+  assert.match(html, /moderationStatus\.reviews\.blockRules/);
+  assert.match(html, /activeTab !== "moderation" && activeTab !== "blocklist"/);
+});
+
+test("server admin page wires AI moderation endpoints through the CSRF request wrapper", () => {
+  const html = renderServerAdminPage("0.5.4");
+  assert.match(html, /request\("\/server-admin\/moderation\/ai", undefined, generation\)/);
+  assert.match(html, /request\("\/server-admin\/moderation\/ai", \{\s*method: "PATCH"/);
+  assert.match(html, /request\("\/server-admin\/moderation\/ai\/test", \{\s*method: "POST"/);
+  assert.match(html, /"\/server-admin\/moderation\/reviews\?" \+ params\.toString\(\)/);
+  assert.match(html, /"\/server-admin\/moderation\/reviews\/" \+ encodeURIComponent\(id\)/);
+  assert.match(html, /"\/server-admin\/moderation\/allowlist\?" \+ params\.toString\(\)/);
+  assert.match(html, /"\/server-admin\/moderation\/allowlist\/" \+ encodeURIComponent\(item\.id\), \{\s*method: "DELETE"/);
+  assert.match(html, /"\/server-admin\/moderation\/blocklist\?" \+ params\.toString\(\)/);
+  assert.match(html, /"\/server-admin\/moderation\/blocklist\/" \+ encodeURIComponent\(item\.id\), \{\s*method: "DELETE"/);
+  // All AI moderation mutations share the admin mutation gate.
+  assert.match(html, /async function handleAiSave\(values\) \{\s*if \(!beginAdminMutation\(\)\) return/);
+  assert.match(html, /async function handleAiTest\(\) \{\s*if \(!beginAdminMutation\(\)\) return/);
+  assert.match(html, /async function executeClearApiKey\(\) \{\s*if \(!beginAdminMutation\(\)\) return/);
+  assert.match(html, /async function executeApprove\(\) \{\s*if \(!approveTarget \|\| !beginAdminMutation\(\)\) return/);
+  assert.match(html, /async function executeReject\(\) \{\s*if \(!rejectTarget \|\| !beginAdminMutation\(\)\) return/);
+  assert.match(html, /async function executeRevokeAllowRule\(item\) \{\s*if \(!item \|\| !beginAdminMutation\(\)\) return/);
+  assert.match(html, /async function executeRevokeBlockRule\(item\) \{\s*if \(!item \|\| !beginAdminMutation\(\)\) return/);
+});
+
+test("server admin page never reads back a saved API key and keeps keep/replace/clear semantics", () => {
+  const html = renderServerAdminPage("0.5.4");
+  // The key field is fed only from the local draft state, never from GET data.
+  assert.match(html, /value: apiKeyDraft/);
+  assert.doesNotMatch(html, /config\.apiKey\b/);
+  assert.match(html, /apiKeyAction: "keep"/);
+  assert.match(html, /apiKeyAction = "replace"/);
+  assert.match(html, /body: JSON\.stringify\(\{ enabled: false, apiKeyAction: "clear" \}\)/);
+  assert.match(html, /留空保存将保持现有 Key/);
+  assert.match(html, /清除后会自动停用 AI 审核/);
+  // Blank drafts must not overwrite the saved key.
+  assert.match(html, /if \(draft\) \{\s*patch\.apiKeyAction = "replace";\s*patch\.apiKey = draft;\s*\}/);
+});
+
+test("server admin page keeps unsaved AI form drafts during polling", () => {
+  const html = renderServerAdminPage("0.5.4");
+  assert.match(html, /if \(!status \|\| aiDirtyRef\.current\) return/);
+  assert.match(html, /onValuesChange: function \(\) \{ markAiDirty\(\); \}/);
+  assert.match(html, /自动刷新不会覆盖当前表单内容/);
+  assert.match(html, /if \(source === "poll" && adminMutationInFlightRef\.current\)/);
+  assert.match(html, /request\("\/server-admin\/moderation\/ai", undefined, generation\)/);
+});
+
+test("server admin page renders AI runtime health, caches and sanitized recent errors", () => {
+  const html = renderServerAdminPage("0.5.4");
+  for (const marker of [
+    "health.active",
+    "health.queued",
+    "health.averageLatencyMs",
+    "health.started",
+    "health.allowed",
+    "health.blocked",
+    "health.degraded",
+    "health.exactCacheHits",
+    "health.contextCacheHits",
+    "health.permanentAllowHits",
+    "health.permanentBlockHits",
+    "health.circuitState",
+    "health.circuitOpenUntil",
+    "health.recentErrors",
+    "cache.exactEntries",
+    "cache.contextEntries",
+    "reviewStats.pendingReviews",
+    "reviewStats.allowRules",
+    "reviewStats.blockRules",
+  ]) {
+    assert.ok(html.includes(marker), `missing marker ${marker}`);
+  }
+  assert.match(html, /熔断中/);
+  assert.match(html, /最近错误（不含聊天原文与密钥）/);
+  // Recent errors render only time, code and optional HTTP status.
+  assert.match(html, /item\.code \|\| "unknown"/);
+  assert.match(html, /item\.statusCode/);
+  assert.match(html, /formatDateTime\(item\.at\)/);
+});
+
+test("server admin page renders review moderation flows with explicit scope confirmation", () => {
+  const html = renderServerAdminPage("0.5.4");
+  assert.match(html, /人工复审候选/);
+  assert.match(html, /永久白名单/);
+  assert.match(html, /永久黑名单/);
+  assert.match(html, /批准复审候选/);
+  assert.match(html, /该规范化词将在聊天、房间名、用户名和角色名中全局永久放行/);
+  assert.match(html, /只放行相同信息类型中，相同规范化词与相同规范化语境的内容/);
+  // Context scope is the default recommendation, term is never preselected.
+  assert.match(html, /setApproveScope\("context"\)/);
+  assert.match(html, /h\(Radio, \{ value: "context" \}, "仅此语境（推荐）"\)/);
+  assert.match(html, /h\(Radio, \{ value: "term" \}, "整个词"\)/);
+  assert.match(html, /body: JSON\.stringify\(\{\s*scope: approveScope/);
+  assert.match(html, /拒绝复审候选/);
+  assert.match(html, /整个词：全局永久拦截/);
+  assert.match(html, /仅此语境：限定永久拦截/);
+  assert.match(html, /scope: rejectScope/);
+  assert.match(html, /已拒绝并将当前语境加入永久黑名单/);
+  assert.match(html, /撤销这条白名单规则？/);
+  assert.match(html, /撤销这条黑名单规则？/);
+  assert.match(html, /证据已处理或已过期，无法再查看/);
+  assert.match(html, /reviewDetail\.data\.evidence\.message/);
+  assert.match(html, /reviewDetail\.data\.evidence\.context/);
+  // Cursor pagination is wired for both lists.
+  assert.match(html, /params\.set\("cursor", cursor\)/);
+  assert.match(html, /setReviewNextCursor\(data && data\.nextCursor/);
+  assert.match(html, /setAllowNextCursor\(data && data\.nextCursor/);
+  assert.match(html, /setBlockNextCursor\(data && data\.nextCursor/);
+  assert.match(html, /setReviewCursor\(cursor \|\| null\)/);
+  assert.match(html, /reviewCursorStack\.concat\(\[reviewCursor \|\| ""\]\)/);
+  assert.match(html, /setAllowCursor\(cursor \|\| null\)/);
+  assert.match(html, /allowCursorStack\.concat\(\[allowCursor \|\| ""\]\)/);
+  assert.match(html, /blockCursorStack\.concat\(\[blockCursor \|\| ""\]\)/);
+});
+
+test("server admin page distinguishes test success and provider failure without persisting", () => {
+  const html = renderServerAdminPage("0.5.4");
+  assert.match(html, /测试连接成功/);
+  assert.match(html, /测试连接失败/);
+  assert.match(html, /structuredModeLabel\(testResult\.structuredMode\)/);
+  assert.match(html, /testResult\.latencyMs/);
+  assert.match(html, /测试不会保存配置或临时 Key/);
+  // The test path never issues a PATCH.
+  const testFn = html.match(/async function handleAiTest\(\) \{[\s\S]*?\n          \}/);
+  assert.ok(testFn, "handleAiTest should be present");
+  assert.doesNotMatch(testFn[0], /method: "PATCH"/);
 });

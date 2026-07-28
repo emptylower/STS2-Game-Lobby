@@ -28,6 +28,8 @@ const expectedFiles = [
   "LICENSE",
   "README.md",
   "THIRD_PARTY_NOTICES",
+  "docs/AI_MODERATION_BACKEND_API_ZH.md",
+  "docs/AI_MODERATION_FRONTEND_HANDOFF_ZH.md",
   "install-lobby-service-linux.sh",
   "lobby-service/.dockerignore",
   "lobby-service/.env.example",
@@ -65,10 +67,18 @@ const expectedFiles = [
   "lobby-service/src/mod-sync/protocol.ts",
   "lobby-service/src/mod-sync/validator.ts",
   "lobby-service/src/moderation/dfa.ts",
+  "lobby-service/src/moderation/ai-service.ts",
+  "lobby-service/src/moderation/ai-types.ts",
+  "lobby-service/src/moderation/cache-store.ts",
+  "lobby-service/src/moderation/context.ts",
+  "lobby-service/src/moderation/conversation-window.ts",
+  "lobby-service/src/moderation/crypto.ts",
   "lobby-service/src/moderation/filter.ts",
   "lobby-service/src/moderation/lexicon-loader.ts",
   "lobby-service/src/moderation/moderation-service.ts",
   "lobby-service/src/moderation/normalize.ts",
+  "lobby-service/src/moderation/provider.ts",
+  "lobby-service/src/moderation/state-store.ts",
   "lobby-service/src/peer/auto-announce.ts",
   "lobby-service/src/peer/bootstrap.ts",
   "lobby-service/src/peer/gossip.ts",
@@ -157,6 +167,9 @@ function sourcePath(packagePath: string): string {
   if (packagePath === "install-lobby-service-linux.sh") {
     return join(repositoryRoot, "scripts", packagePath);
   }
+  if (packagePath.startsWith("docs/")) {
+    return join(repositoryRoot, ...packagePath.split("/"));
+  }
   assert.ok(packagePath.startsWith("lobby-service/"));
   return join(repositoryRoot, ...packagePath.split("/"));
 }
@@ -239,9 +252,9 @@ test("service package uses exact production allowlist and deterministic temporar
       version?: unknown;
       packages?: Record<string, { version?: unknown }>;
     };
-    assert.equal(packageJson.version, "0.5.3");
-    assert.equal(packageLock.version, "0.5.3");
-    assert.equal(packageLock.packages?.[""]?.version, "0.5.3");
+    assert.equal(packageJson.version, "0.5.4");
+    assert.equal(packageLock.version, "0.5.4");
+    assert.equal(packageLock.packages?.[""]?.version, "0.5.4");
 
     for (const packagePath of expectedFiles) {
       assert.deepEqual(
@@ -294,7 +307,7 @@ test("service package rejects malformed protected traversal and symlink outputs"
   }
 });
 
-test("release sources pin service v0.5.3 and client v0.5.3 while preserving older fixtures", () => {
+test("release sources pin service v0.5.4 and client v0.5.4 while preserving older fixtures", () => {
   const servicePackage = JSON.parse(readFileSync(join(repositoryRoot, "lobby-service/package.json"), "utf8")) as {
     version?: unknown;
   };
@@ -306,12 +319,12 @@ test("release sources pin service v0.5.3 and client v0.5.3 while preserving olde
     version?: unknown;
   };
   const clientProject = readFileSync(join(repositoryRoot, "sts2-lan-connect/sts2_lan_connect.csproj"), "utf8");
-  assert.equal(servicePackage.version, "0.5.3");
-  assert.equal(serviceLock.version, "0.5.3");
-  assert.equal(serviceLock.packages?.[""]?.version, "0.5.3");
-  assert.equal(clientManifest.version, "0.5.3");
-  assert.match(clientProject, /<Version>0\.5\.3<\/Version>/);
-  assert.match(clientProject, /<AssemblyVersion>0\.5\.3\.0<\/AssemblyVersion>/);
+  assert.equal(servicePackage.version, "0.5.4");
+  assert.equal(serviceLock.version, "0.5.4");
+  assert.equal(serviceLock.packages?.[""]?.version, "0.5.4");
+  assert.equal(clientManifest.version, "0.5.4");
+  assert.match(clientProject, /<Version>0\.5\.4<\/Version>/);
+  assert.match(clientProject, /<AssemblyVersion>0\.5\.4\.0<\/AssemblyVersion>/);
 
   const serviceFixture = readFileSync(
     join(repositoryRoot, "lobby-service/src/chat/compatibility.integration.test.ts"),
@@ -323,5 +336,19 @@ test("release sources pin service v0.5.3 and client v0.5.3 while preserving olde
   );
   for (const historicalVersion of ["0.5.0", "0.4.0", "0.2.2"]) {
     assert.match(`${serviceFixture}\n${clientFixture}`, new RegExp(`\\"${historicalVersion.replaceAll(".", "\\.")}\\"`));
+  }
+});
+
+test("v0.5.4 candidate docs cover AI moderation and remain explicitly unpublished", () => {
+  const releaseNotes = readFileSync(
+    join(repositoryRoot, "docs/RELEASE_NOTES_V0.5.4_ZH.md"),
+    "utf8",
+  );
+  const backendApi = readFileSync(
+    join(repositoryRoot, "docs/AI_MODERATION_BACKEND_API_ZH.md"),
+    "utf8",
+  );
+  for (const marker of ["0.5.4", "永久黑名单", "跨消息", "GitHub Release 暂未发布"]) {
+    assert.match(`${releaseNotes}\n${backendApi}`, new RegExp(marker));
   }
 });

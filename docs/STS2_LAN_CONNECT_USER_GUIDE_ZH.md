@@ -10,7 +10,15 @@
 
 # STS2 LAN Connect 使用说明
 
-当前稳定版为 [`GitHub v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)，Steam 用户也可订阅创意工坊条目 [`游戏大厅 v0.5.3`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)。安装或更新客户端后必须完整重启游戏。
+当前源码与候选构建版本为 `0.5.4`，GitHub Release 与 Steam Workshop 更新暂未发布；最新公开稳定版仍为 [`GitHub v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)。安装或更新客户端后必须完整重启游戏。
+
+## v0.5.4 AI 语义审核交互
+
+- 消息进入服务端语义审核时，输入框上方显示“在审核中”，消息不会提前进入公共聊天栏。
+- 审核通过后消息静默出现；审核拒绝时显示游戏原生“包含违禁词”提示。
+- 服务端识别同一用户拆分发送的违规短句后，会撤回相关公共频道或房间消息。
+- 房间名、用户名或续局角色名未通过审核时，创建/加入流程显示游戏原生敏感词提示，不展示网络错误细节。
+- 新审核帧向后兼容，但旧客户端无法删除已经显示的拆字上下文，建议客户端与 lobby-service 同时升级到 `0.5.4`。
 
 ## v0.5.3 续局通道拆分与聊天 HUD
 
@@ -252,7 +260,15 @@
 
 # STS2 LAN Connect User Guide
 
-The stable download is [`GitHub v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3). Steam users can also subscribe to the [`游戏大厅 v0.5.3`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) Workshop item. Fully restart the game after installing or updating the client.
+The current source/candidate build is `0.5.4`; its GitHub Release and Steam Workshop update have not been published. The latest public stable download remains [`GitHub v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3). Fully restart the game after installing or updating the client.
+
+## v0.5.4 Semantic Moderation UX
+
+- A message under server-side semantic review shows a compact Reviewing indicator and is not displayed in public chat early.
+- Approved messages appear silently; rejected content uses a native game sensitive-content popup.
+- When the service detects a prohibited phrase split across short messages, related public or room context is removed through redaction frames.
+- Rejected room names, player names, and continue-run character names use native feedback instead of exposing transport errors.
+- New moderation frames are backward-compatible, but old clients cannot remove already-visible split-message context; pairing the `0.5.4` client and lobby service is recommended.
 
 ## v0.5.3 Continue-Channel Split and Chat HUD
 

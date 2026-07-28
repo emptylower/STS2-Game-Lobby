@@ -161,7 +161,7 @@ internal static class LanConnectHostFlow
             {
                 throw;
             }
-            LanConnectPopupUtil.ShowInfo($"大厅服务创建房间失败：{ex.Message}");
+            LanConnectPopupUtil.ShowInfo(LanConnectModerationUiMessages.DescribeCreateRoomFailure(ex));
             return false;
         }
         catch (Exception ex)
@@ -278,7 +278,7 @@ internal static class LanConnectHostFlow
             }
             if (notifyOnFailure)
             {
-                LanConnectPopupUtil.ShowInfo($"大厅服务创建房间失败：{ex.Message}");
+                LanConnectPopupUtil.ShowInfo(LanConnectModerationUiMessages.DescribeCreateRoomFailure(ex));
             }
 
             return false;

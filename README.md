@@ -3,8 +3,8 @@
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-![Client](https://img.shields.io/badge/client-v0.5.3-green)
-![Service](https://img.shields.io/badge/service-v0.5.3-green)
+![Client](https://img.shields.io/badge/client-v0.5.4-green)
+![Service](https://img.shields.io/badge/service-v0.5.4-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
 **[中文](#中文) · [English](#english)**
@@ -17,7 +17,7 @@
 
 ## 中文
 
-**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前正式客户端为 **v0.5.3**、大厅服务为 **v0.5.3**，主要服务对象是：
+**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前源码与构建版本为客户端 **v0.5.4**、大厅服务 **v0.5.4**；最新公开 Release 仍为 **v0.5.3**，主要服务对象是：
 
 - 想自行部署大厅服务的服主 / 运维
 - 想构建或分发客户端 MOD 的维护者
@@ -31,7 +31,7 @@
 |------|------|------|
 | 客户端 MOD | `sts2-lan-connect/` | 游戏内大厅 UI、建房 / 加房、续局绑定、服务器频道与房间富聊天 |
 | 大厅服务 | `lobby-service/` | 房间目录、聊天网关、管理面板、公告、relay fallback、加入去中心化节点网络 |
-| (可选) 公共列表服务源码 | `server-registry/` | v0.3.x 时代的母面板源码；v0.5.3 不再需要，仅供想自托管列表服务的运维参考 |
+| (可选) 公共列表服务源码 | `server-registry/` | v0.3.x 时代的母面板源码；v0.5.4 不再需要，仅供想自托管列表服务的运维参考 |
 | 文档 | `docs/` | 玩家说明、部署指南、历史兼容文档 |
 | 脚本 | `scripts/` | 构建、打包、安装、同步发布产物 |
 
@@ -41,21 +41,20 @@
 - 客户端通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）拿到聚合节点列表
 - 不再有任何"母面板"或中心化审核后台；`SERVER_REGISTRY_*` 一组环境变量自 v0.4.0 起已从 lobby-service 中完全移除
 
-### v0.5.3 客户端要点
+### v0.5.4 双端要点
 
-- LAN 与大厅续局通道拆分：多人存档记住创建入口（`HostChannel`），纯 LAN 存档续局不再被误发布到公共大厅
-- LAN 续局身份码：房主把按角色/玩家名对应的单条 `STS2LANRESUME:` 码发给队友，队友粘贴即可回到自己的槽位
-- 修复 BaseLib 共存导致的多人存档必现损坏（`.corrupt`），放弃存档前自动备份到 `user://sts2_lan_connect/save-backups/`
-- 修复安卓打开「加入好友」页自动调试直连、必须等满超时才能操作的问题
-- 局内聊天 HUD 化：扁平半透明外壳、单行富文本消息、按玩家稳定配色、新消息自动浮现
-- v0.5.3 客户端与 lobby-service 0.5.1/0.5.2/0.5.3 及 v0.5.1+ 客户端均可互通，不改变加入流程
-- 同一个 v0.5.3 客户端包以游戏 `0.107.1`、`0.109.0`、`0.109.1` 为加载目标
+- lobby-service 支持 OpenAI Responses、Chat Completions 与 Anthropic Messages 三类 AI 语义审核协议
+- AI 放行进入短期安全缓存，永久白名单必须人工批准；人工拒绝会生成可管理、可撤销的永久黑名单
+- 聊天、房间名、玩家名和续局角色名统一审核，并能识别同一认证用户最近最多 10 条短消息的拆字规避
+- 客户端显示“在审核中”、游戏原生违禁词提示，并按服务端撤回帧删除相关跨消息上下文
+- 未配置 AI 时保持原有打码兼容；旧版 `room_chat`、加入协议、MOD 预检和续局通道行为不变
+- 同一个 v0.5.4 客户端构建以游戏 `0.107.1`、`0.109.0`、`0.109.1` 为加载目标
 
 ### 当前版本
 
-- 客户端 MOD：[`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)
-- 大厅服务：[`0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)
-- GitHub 稳定版：[`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)
+- 客户端源码 / 构建版本：`0.5.4`（Release 暂未发布）
+- 大厅服务源码 / 构建版本：`0.5.4`（Release 暂未发布）
+- 最新 GitHub 稳定版：[`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)
 - Steam 创意工坊：[`v0.5.3 游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 
 ### 推荐阅读顺序
@@ -64,7 +63,7 @@
 1. 本页（仓库总览）
 2. [`lobby-service/README.md`](./lobby-service/README.md) — 服主运维手册
 3. [`docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](./docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) — 当前部署主路径
-4. (可选) 想自托管完整公共列表服务时再看 [`server-registry/README.md`](./server-registry/README.md)（v0.5.3 不依赖它）
+4. (可选) 想自托管完整公共列表服务时再看 [`server-registry/README.md`](./server-registry/README.md)（v0.5.4 不依赖它）
 
 **如果你是客户端维护者：**
 1. 本页
@@ -175,13 +174,15 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 | 文档 | 说明 |
 |------|------|
 | [`CHANGELOG.md`](./CHANGELOG.md) | 客户端与服务端版本更新日志 |
+| [`docs/RELEASE_NOTES_V0.5.4_ZH.md`](./docs/RELEASE_NOTES_V0.5.4_ZH.md) | v0.5.4 lobby-service 候选说明：AI 审核、安全缓存、复审及永久规则 |
+| [`docs/RELEASE_NOTES_V0.5.4_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.4_CLIENT_ZH.md) | v0.5.4 客户端候选说明：待审状态、敏感词提示与跨消息撤回 |
 | [`docs/RELEASE_NOTES_V0.5.3_ZH.md`](./docs/RELEASE_NOTES_V0.5.3_ZH.md) | v0.5.3 服务端发布说明：敏感词过滤、升级与回滚步骤 |
 | [`docs/RELEASE_NOTES_V0.5.3_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.3_CLIENT_ZH.md) | v0.5.3 客户端发布说明：续局通道拆分、存档保护、聊天 HUD、兼容范围与回滚步骤 |
 | [`docs/RELEASE_NOTES_V0.5.2_ZH.md`](./docs/RELEASE_NOTES_V0.5.2_ZH.md) | v0.5.2 客户端发布说明、引用操作、兼容范围与回滚步骤 |
 | [`docs/RELEASE_NOTES_V0.5.1_ZH.md`](./docs/RELEASE_NOTES_V0.5.1_ZH.md) | v0.5.1 发布说明、升级与回滚步骤 |
 | [`lobby-service/README.md`](./lobby-service/README.md) | 服主 / 运维手册：推荐部署路径、运维入口、环境变量、API |
-| [`docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](./docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) | 当前中文部署主路径（v0.5.3） |
-| [`docs/STS2_SERVER_DOCKER_OPERATION_GUIDE_ZH.md`](./docs/STS2_SERVER_DOCKER_OPERATION_GUIDE_ZH.md) | Docker 部署与运维指南（v0.5.3 单容器 + v0.3.x 双服务栈兼容路径） |
+| [`docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](./docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) | 当前中文部署主路径（v0.5.4） |
+| [`docs/STS2_SERVER_DOCKER_OPERATION_GUIDE_ZH.md`](./docs/STS2_SERVER_DOCKER_OPERATION_GUIDE_ZH.md) | Docker 部署与运维指南（v0.5.4 单容器 + v0.3.x 双服务栈兼容路径） |
 | [`docs/CLIENT_RELEASE_README_ZH.md`](./docs/CLIENT_RELEASE_README_ZH.md) | 客户端安装 / 卸载说明 |
 | [`docs/STS2_LAN_CONNECT_USER_GUIDE_ZH.md`](./docs/STS2_LAN_CONNECT_USER_GUIDE_ZH.md) | 玩家侧大厅使用说明 |
 | [`server-registry/README.md`](./server-registry/README.md) | (可选) 自托管公共列表服务源码说明，v0.5.1 不再依赖 |
@@ -198,7 +199,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 ## English
 
-**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current stable client is **v0.5.3** and the lobby service is **v0.5.3**.
+**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current source and build versions are **v0.5.4** for both the client and lobby service; the latest published GitHub Release remains **v0.5.3**.
 
 ### What is in this repository
 
@@ -206,7 +207,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 |-----------|------|---------|
 | Client MOD | `sts2-lan-connect/` | In-game lobby UI, room create/join, save-run binding, server-channel and rich-room chat |
 | Lobby Service | `lobby-service/` | Room directory, chat gateways, admin panel, announcements, relay fallback, decentralized peer-network membership |
-| (Optional) Public listing service source | `server-registry/` | Source for v0.3.x-style self-hosted public listing service; not required in v0.5.3 |
+| (Optional) Public listing service source | `server-registry/` | Source for v0.3.x-style self-hosted public listing service; not required in v0.5.4 |
 | Docs | `docs/` | Player docs, deployment guide, historical compatibility notes |
 | Scripts | `scripts/` | Build, package, install, and release-sync helpers |
 
@@ -214,21 +215,20 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 Each `lobby-service` node advertises itself to peers via the built-in peer-announce protocol. Clients aggregate the public node list through a Cloudflare discovery worker (`https://sts2-gamelobby-register.xyz`). There is no master panel and no central review backend; the `SERVER_REGISTRY_*` env vars from v0.3.x have been removed from `lobby-service` and have been inert since v0.4.0.
 
-### v0.5.3 client highlights
+### v0.5.4 client and service highlights
 
-- LAN/lobby continue-channel split: multiplayer saves remember their origin (`HostChannel`); LAN-origin saves are no longer auto-published to the public lobby on resume.
-- LAN resume codes: the host shares per-character `STS2LANRESUME:` codes so teammates rejoin their own slots from the manual LAN/IP join page.
-- Fixed BaseLib coexistence corrupting multiplayer saves (`.corrupt` renames); abandoning a save now backs it up to `user://sts2_lan_connect/save-backups/` first.
-- Fixed Android's Join Friend screen auto-dialing a debug connection and blocking until the ENet timeout.
-- In-run chat is now a flat translucent HUD: single-line rich-text messages, stable per-player name colors, auto-appear on new messages.
-- The v0.5.3 client interoperates with lobby-service 0.5.1/0.5.2/0.5.3 and v0.5.1+ clients without changing the join flow.
-- One v0.5.3 client package targets game versions `0.107.1`, `0.109.0`, and `0.109.1`.
+- The lobby service supports OpenAI Responses, Chat Completions, and Anthropic Messages for semantic moderation.
+- AI-approved content enters a short-lived safety cache; permanent allow rules require approval, while rejected reviews create manageable permanent block rules.
+- Chat, room names, player names, and continue-run character names share the moderation pipeline, including same-user sequences of up to ten short messages.
+- The client shows a Reviewing state, native sensitive-content popups, and removes related context through server redaction frames.
+- AI-disabled deployments retain deterministic masking; legacy room chat, join flow, MOD preflight, and continue-channel behavior remain compatible.
+- One v0.5.4 client build targets game versions `0.107.1`, `0.109.0`, and `0.109.1`.
 
 ### Current versions
 
-- Client MOD: [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)
-- Lobby Service: [`0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)
-- Stable GitHub release: [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)
+- Client source/build version: `0.5.4` (Release not published yet)
+- Lobby service source/build version: `0.5.4` (Release not published yet)
+- Latest stable GitHub release: [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)
 - Steam Workshop: [`v0.5.3 游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 
 ### Recommended reading order
@@ -237,7 +237,7 @@ Each `lobby-service` node advertises itself to peers via the built-in peer-annou
 1. This README
 2. [`lobby-service/README.md`](./lobby-service/README.md)
 3. [`docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](./docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) *(current deployment guide, Chinese)*
-4. (Optional) [`server-registry/README.md`](./server-registry/README.md) only if you want to self-host the v0.3.x-style public listing service — v0.5.3 itself does not require it
+4. (Optional) [`server-registry/README.md`](./server-registry/README.md) only if you want to self-host the v0.3.x-style public listing service — v0.5.4 itself does not require it
 
 **For client maintainers:**
 1. This README

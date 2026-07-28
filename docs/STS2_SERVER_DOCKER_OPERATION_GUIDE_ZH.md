@@ -1,10 +1,10 @@
 # STS2 服务 Docker 化部署与运维指南
 
-> 本文档对应 **v0.5.1**。部署仍只需要 `lobby-service` 一个容器；v0.5.1 在既有去中心化与聊天能力上新增加入前 gameplay MOD 私有预检。以前的"双服务"栈（lobby-service + server-registry + postgres）仅作历史运维参考。
+> 本文档对应源码与构建版本 **v0.5.4**。部署仍只需要 `lobby-service` 一个容器；v0.5.4 在既有去中心化、聊天与 MOD 预检能力上新增可选 AI 语义审核、安全缓存和人工永久规则。GitHub Release 暂未发布。以前的“双服务”栈（lobby-service + server-registry + postgres）仅作历史运维参考。
 
 ## 一、当前推荐：lobby-service 单容器
 
-v0.5.1 沿用 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）聚合去中心化节点，本地不需要 PostgreSQL 或 `server-registry`。升级时应替换完整 lobby-service 包并重新构建容器，确保 MOD 预检、chat gateway、管理面板和 env 默认值来自同一版本。
+v0.5.4 沿用 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）聚合去中心化节点，本地不需要 PostgreSQL 或 `server-registry`。升级时应替换完整 lobby-service 包并重新构建容器，确保 MOD 预检、chat gateway、AI 审核模块、管理面板和 env 默认值来自同一版本；同时持久化 `AI_MODERATION_STATE_FILE` 与 `AI_MODERATION_CACHE_FILE` 所在数据目录。
 
 ### 1.1 准备 env 文件
 

@@ -127,8 +127,34 @@ internal sealed class LanConnectLobbyRuntimeChatCoordinator : IAsyncDisposable
 
     internal void ApplyRoomError(LanConnectRoomChatErrorEnvelope envelope)
     {
+        if (string.Equals(envelope.Code, "content_blocked", StringComparison.Ordinal))
+        {
+            // Terminal AI rejection: the message never enters the public list.
+            RunRoomMutation(() => State.Room.MarkContentBlocked(envelope.ClientMessageId));
+            CancelRoomDeliveryTimeout(envelope.ClientMessageId);
+            return;
+        }
+        if (string.Equals(envelope.Code, "moderation_busy", StringComparison.Ordinal))
+        {
+            // A previous message is still under review; drop only this newer send.
+            RunRoomMutation(() => State.Room.MarkModerationBusy(envelope.ClientMessageId));
+            CancelRoomDeliveryTimeout(envelope.ClientMessageId);
+            return;
+        }
         RunRoomMutation(() => State.Room.Apply(envelope));
         CancelRoomDeliveryTimeoutIfCompleted(envelope.ClientMessageId);
+    }
+
+    internal void ApplyRoomReviewPending(LanConnectRoomChatReviewPendingEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        RunRoomMutation(() => State.Room.MarkReviewPending(envelope.ClientMessageId));
+    }
+
+    internal void ApplyRoomMessagesRedacted(LanConnectRoomChatMessagesRedactedEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        RunRoomMutation(() => State.Room.RemoveConfirmedMessages(envelope.MessageIds));
     }
 
     internal async Task RetryRoomAsync(

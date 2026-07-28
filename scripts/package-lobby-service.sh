@@ -67,6 +67,8 @@ LICENSE
 THIRD_PARTY_NOTICES
 README.md
 install-lobby-service-linux.sh
+docs/AI_MODERATION_BACKEND_API_ZH.md
+docs/AI_MODERATION_FRONTEND_HANDOFF_ZH.md
 lobby-service/.dockerignore
 lobby-service/.env.example
 lobby-service/Dockerfile
@@ -94,10 +96,18 @@ lobby-service/src/mod-sync/diff.ts
 lobby-service/src/mod-sync/protocol.ts
 lobby-service/src/mod-sync/validator.ts
 lobby-service/src/moderation/dfa.ts
+lobby-service/src/moderation/ai-service.ts
+lobby-service/src/moderation/ai-types.ts
+lobby-service/src/moderation/cache-store.ts
+lobby-service/src/moderation/context.ts
+lobby-service/src/moderation/conversation-window.ts
+lobby-service/src/moderation/crypto.ts
 lobby-service/src/moderation/filter.ts
 lobby-service/src/moderation/lexicon-loader.ts
 lobby-service/src/moderation/moderation-service.ts
 lobby-service/src/moderation/normalize.ts
+lobby-service/src/moderation/provider.ts
+lobby-service/src/moderation/state-store.ts
 lobby-service/src/relay.ts
 lobby-service/src/rolling-bandwidth.ts
 lobby-service/src/room-cleanup.ts
@@ -142,6 +152,9 @@ while IFS= read -r package_path; do
       ;;
     install-lobby-service-linux.sh)
       source_path="$INSTALLER"
+      ;;
+    docs/*)
+      source_path="$ROOT_DIR/$package_path"
       ;;
     lobby-service/*)
       source_path="$ROOT_DIR/$package_path"

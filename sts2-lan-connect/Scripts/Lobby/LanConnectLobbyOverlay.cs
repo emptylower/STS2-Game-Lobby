@@ -3771,7 +3771,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _actionInFlight = true;
         UpdateActionButtons();
         ShowCreateDialogError(string.Empty, visible: false);
-        SetStatus($"正在创建{gameModeLabel}房间 {roomName}...");
+        SetStatus($"正在审核房间名与用户名，并创建{gameModeLabel}房间 {roomName}...");
 
         try
         {
@@ -3834,9 +3834,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             using LobbyApiClient apiClient = LobbyApiClient.CreateConfigured();
             UpdateProgressDialog(
-                "正在检查 MOD 兼容性",
-                $"正在检查 {FormatRoomName(room.RoomName, 24)} 的游戏版本与 gameplay MOD",
-                "旧版大厅服务会自动沿用原加入流程。",
+                "正在审核用户名并检查 MOD 兼容性",
+                $"正在审核用户名，并检查 {FormatRoomName(room.RoomName, 24)} 的游戏版本与 gameplay MOD",
+                "审核通过后会继续申请加入；旧版大厅服务会自动沿用原加入流程。",
                 allowCancel: true);
             LanConnectModPreflightCoordinator coordinator = new(
                 new LanConnectModPreflightApiPorts(
@@ -3946,6 +3946,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         catch (LobbyServiceException ex)
         {
             LanConnectProtocolProfiles.ResetActiveProfile("join_service_exception");
+            if (LanConnectModerationUiMessages.IsContentBlocked(ex))
+            {
+                const string moderationMessage = LanConnectModerationUiMessages.PlayerNameBlocked;
+                LanConnectPopupUtil.ShowInfo(moderationMessage);
+                SetStatus(moderationMessage);
+                return false;
+            }
             string message = DescribeJoinFailure(ex);
             if (_resumeSlotDialogContainer != null && _resumeSlotDialogContainer.Visible)
             {

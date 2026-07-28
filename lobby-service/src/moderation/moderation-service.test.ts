@@ -76,5 +76,7 @@ test("stats snapshot shape", () => {
     maskedMessages: 0,
     rejectedNames: 0,
     loadError: null,
+    lexiconFingerprint: service.stats().lexiconFingerprint,
   });
+  assert.match(service.stats().lexiconFingerprint, /^[0-9a-f]{64}$/);
 });
