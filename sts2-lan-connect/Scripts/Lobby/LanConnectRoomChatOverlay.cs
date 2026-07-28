@@ -60,6 +60,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private MarginContainer? _root;
     private Control? _toggleBadge;
     private Label? _toggleBadgeLabel;
+    private Control? _toggleServerDot;
     private Label? _fadeHint;
     private Button? _toggleButton;
     private VBoxContainer? _panelFadeContainer;
@@ -511,6 +512,19 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         _toggleBadge = CreateUnreadBadge("ChatToggleUnreadBadge", out _toggleBadgeLabel);
         toggleWrap.AddChild(_toggleBadge);
 
+        // Channel (server/频道) unread indicator on the toggle bubble. Server arrivals no
+        // longer reopen the panel (see MaybeSurfaceForRemoteArrival), so this plain dot is
+        // the only closed-panel signal for channel messages; the numeric badge stays
+        // room-only. CreateUnreadDot anchors top-right, which would collide with the
+        // numeric badge, so it is re-anchored to the bubble's top-left corner here.
+        _toggleServerDot = CreateUnreadDot("ChatToggleServerUnreadDot");
+        _toggleServerDot.SetAnchorsPreset(Control.LayoutPreset.TopLeft);
+        _toggleServerDot.OffsetLeft = 2f;
+        _toggleServerDot.OffsetTop = 2f;
+        _toggleServerDot.OffsetRight = 8f;
+        _toggleServerDot.OffsetBottom = 8f;
+        toggleWrap.AddChild(_toggleServerDot);
+
         // Wraps the panel frame, whose body contains the control strip that replaced the old
         // title/tab rows, so both fade together as one unit. The toggle bubble and the fade
         // hint stay outside this container: the bubble is the only way to reopen the overlay
@@ -535,9 +549,9 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         // HUD redesign spec §5.3). Channel switching now reads as highlighted-vs-dimmed text
         // rather than two fixed-width tabs, and the unread state that used to live on two
         // numeric badges collapses into a single dot on the 频道 control (§ design decision:
-        // the room channel's unread is already surfaced by the toggle bubble's badge, so this
-        // strip only needs to expose the channel that has no other indicator while the panel
-        // is open — the server/频道 channel).
+        // the room channel's unread is already surfaced by the toggle bubble's numeric badge,
+        // so this strip only needs to expose the channel whose bubble indicator is a plain
+        // dot without a count — the server/频道 channel).
         HBoxContainer strip = new() { Name = "RoomChatControlStrip" };
         strip.AddThemeConstantOverride("separation", 8);
         body.AddChild(strip);
@@ -758,23 +772,26 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     // Room chat HUD redesign regression fix: the reference mod's chat log is visible whenever
     // there are messages; ours has an explicit open/closed state that nothing used to reopen on
     // arrival (touch hides the bubble once it fades, desktop never had one at all -- see the bug
-    // report this fixes). LanConnectDualChatState.HasUnseenRemoteArrival is edge-triggered off
-    // LanConnectChatChannelState.RemoteArrivalRevision, which TrackIncoming only bumps for
-    // remote messages, so a player's own outgoing chat never lands here. The arriving channel
-    // is selected because this is a "show me what's new" event; preserving a hidden room tab
-    // made server messages look lost on touch devices. A drag or an active fade tween is left
-    // alone rather than interrupted -- the "seen" baseline only advances on close/leave, so the
-    // arrival stays pending and this runs again next frame once the gesture or tween finishes.
+    // report this fixes). LanConnectDualChatState.HasUnseenRoomRemoteArrival is edge-triggered
+    // off LanConnectChatChannelState.RemoteArrivalRevision, which TrackIncoming only bumps for
+    // remote messages, so a player's own outgoing chat never lands here.
+    //
+    // Room-channel only, by design: server/频道 arrivals used to reopen the overlay too, which
+    // made the panel pop back up on every channel message and effectively impossible to keep
+    // closed (player report). Channel unread is now signaled passively -- red dot on the toggle
+    // bubble plus the existing dot on the 频道 tab -- and never interrupts. A drag or an active
+    // fade tween is left alone rather than interrupted -- the "seen" baseline only advances on
+    // close/leave, so the arrival stays pending and this runs again next frame once the gesture
+    // or tween finishes.
     private void MaybeSurfaceForRemoteArrival(LanConnectDualChatState chat)
     {
-        LanConnectChatChannel? arrivalChannel = chat.UnseenRemoteArrivalChannel;
-        if (!arrivalChannel.HasValue || _dragPointerDown || _dragging || IsFadeTweenActive())
+        if (!chat.HasUnseenRoomRemoteArrival || _dragPointerDown || _dragging || IsFadeTweenActive())
         {
             return;
         }
 
         bool serverSelectable = chat.Server.Presentation != LanConnectServerChatPresentation.Unsupported;
-        chat.ShowRoomOverlayForRemoteArrival(arrivalChannel.Value, serverSelectable);
+        chat.ShowRoomOverlayForRemoteArrival(LanConnectChatChannel.Room, serverSelectable);
         _passivelySurfaced = true;
     }
 
@@ -1095,6 +1112,10 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         if (_toggleBadge != null)
         {
             _toggleBadge.Visible = touch && (chat?.Room.UnreadCount ?? 0) > 0;
+        }
+        if (_toggleServerDot != null)
+        {
+            _toggleServerDot.Visible = touch && (chat?.Server.UnreadCount ?? 0) > 0;
         }
         _chatPanel?.SetPointerMode(_pointerModeTracker.EffectiveMode);
     }

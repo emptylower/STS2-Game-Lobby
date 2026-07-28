@@ -33,39 +33,24 @@ internal sealed class LanConnectDualChatState
 
     /// <summary>
     /// True when a remote (never local -- see LanConnectChatChannelState.TrackIncoming) message
-    /// has landed on either channel since the overlay was last closed, or since construction if
+    /// has landed on the room channel since the overlay was last closed, or since construction if
     /// it has never been opened. Room chat HUD redesign regression fix: touch hides the reopen
     /// bubble on collapse and desktop never had one, so nothing used to bring the overlay back
     /// when a message arrived while it was closed. The "seen" baseline only advances here and in
     /// CloseRoomOverlay/LeaveRoom (not on every read), so a caller that finds this true and can't
     /// act on it yet (drag in progress, fade tween running) can just check again next frame --
     /// see LanConnectRoomChatOverlay.MaybeSurfaceForRemoteArrival, the only reader.
+    ///
+    /// This is deliberately room-only: server/频道 arrivals no longer reopen the overlay (players
+    /// reported the panel popping back up on every channel message, making it impossible to keep
+    /// closed). Channel unread is surfaced as a red dot on the toggle bubble and on the 频道 tab
+    /// instead. The server seen-baseline is still maintained in MarkRemoteArrivalsSeen so a later
+    /// close/leave keeps the bookkeeping symmetric.
     /// </summary>
-    internal bool HasUnseenRemoteArrival =>
-        UnseenRemoteArrivalChannel.HasValue;
-
-    internal LanConnectChatChannel? UnseenRemoteArrivalChannel
-    {
-        get
-        {
-            if (RoomOverlayOpen || ActiveRoomId == null)
-            {
-                return null;
-            }
-
-            bool roomUnseen = Room.RemoteArrivalRevision != _seenRoomRemoteArrivalRevision;
-            bool serverUnseen = Server.RemoteArrivalRevision != _seenServerRemoteArrivalRevision;
-            return (roomUnseen, serverUnseen) switch
-            {
-                (true, false) => LanConnectChatChannel.Room,
-                (false, true) => LanConnectChatChannel.Server,
-                (true, true) => Room.LatestRemoteArrivalOrder >= Server.LatestRemoteArrivalOrder
-                    ? LanConnectChatChannel.Room
-                    : LanConnectChatChannel.Server,
-                _ => null
-            };
-        }
-    }
+    internal bool HasUnseenRoomRemoteArrival =>
+        !RoomOverlayOpen &&
+        ActiveRoomId != null &&
+        Room.RemoteArrivalRevision != _seenRoomRemoteArrivalRevision;
 
     internal void EnterRoom(string roomId)
     {
