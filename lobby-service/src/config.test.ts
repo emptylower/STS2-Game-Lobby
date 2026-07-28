@@ -201,7 +201,7 @@ test("loadLobbyServiceConfig applies bounded AI moderation runtime defaults", ()
   assert.deepEqual(loadLobbyServiceConfig({}).aiModeration, {
     stateFile: `${process.cwd()}/data/ai-moderation-state.json`,
     cacheFile: `${process.cwd()}/data/ai-moderation-cache.json`,
-    timeoutMs: 5_000,
+    timeoutMs: 30_000,
     maxConcurrency: 4,
     maxQueue: 64,
     reviewsPerIpMinute: 10,

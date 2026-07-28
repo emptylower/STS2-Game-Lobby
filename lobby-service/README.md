@@ -484,7 +484,7 @@ MOD 同步只允许客户端在明确确认后调用 Steam Workshop 订阅，以
 | `AI_MODERATION_CREDENTIAL_KEY` | 可选的 32 字节 hex/base64 主密钥；用于 AES-256-GCM 加密模型 API Key 和人工复审证据 |
 | `AI_MODERATION_STATE_FILE` | AI 配置、加密凭据、复审候选、永久白名单和永久黑名单；默认 `./data/ai-moderation-state.json` |
 | `AI_MODERATION_CACHE_FILE` | 只保存 HMAC 的 30 天精确消息缓存和 7 天语境缓存 |
-| `AI_MODERATION_TIMEOUT_MS` | 单次审核总截止时间，默认 `5000`，范围 1000–30000 |
+| `AI_MODERATION_TIMEOUT_MS` | 单次审核总截止时间，默认 `30000`，范围 1000–30000 |
 | `AI_MODERATION_MAX_CONCURRENCY` | 全局并发模型请求数，默认 `4` |
 | `AI_MODERATION_MAX_QUEUE` | 全局等待队列上限，默认 `64` |
 | `AI_MODERATION_REVIEWS_PER_IP_MINUTE` | 每 IP 每分钟最多触发的模型复核数，默认 `10` |

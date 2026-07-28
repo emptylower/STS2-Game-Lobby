@@ -162,7 +162,7 @@ export function loadLobbyServiceConfig(source: NodeJS.ProcessEnv): LobbyServiceC
       ...(aiModerationCredentialKey === undefined ? {} : { credentialKey: aiModerationCredentialKey }),
       stateFile: source.AI_MODERATION_STATE_FILE ?? `${process.cwd()}/data/ai-moderation-state.json`,
       cacheFile: source.AI_MODERATION_CACHE_FILE ?? `${process.cwd()}/data/ai-moderation-cache.json`,
-      timeoutMs: parseInteger(source, "AI_MODERATION_TIMEOUT_MS", 5_000, 1_000, 30_000),
+      timeoutMs: parseInteger(source, "AI_MODERATION_TIMEOUT_MS", 30_000, 1_000, 30_000),
       maxConcurrency: parseInteger(source, "AI_MODERATION_MAX_CONCURRENCY", 4, 1, 64),
       maxQueue: parseInteger(source, "AI_MODERATION_MAX_QUEUE", 64, 0, 10_000),
       reviewsPerIpMinute: parseInteger(source, "AI_MODERATION_REVIEWS_PER_IP_MINUTE", 10, 1, 1_000),

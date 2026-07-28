@@ -113,7 +113,7 @@ export class AiSemanticModerationService {
     this.hmacKey = options.hmacKey;
     this.provider = options.provider ?? new AiModerationProvider();
     this.now = options.now ?? Date.now;
-    this.timeoutMs = options.timeoutMs ?? 5_000;
+    this.timeoutMs = options.timeoutMs ?? 30_000;
     this.maxConcurrency = options.maxConcurrency ?? 4;
     this.maxQueue = options.maxQueue ?? 64;
     this.maxReviewsPerIpMinute = options.maxReviewsPerIpMinute ?? 10;
