@@ -10,10 +10,10 @@ namespace Sts2LanConnect.GdUnitTests.Chat;
 /// the overlay an explicit open/closed state (unlike the reference mod, whose message log is
 /// simply visible whenever there are messages) but nothing ever reopened it when a message
 /// arrived while it was closed, and on desktop the touch-only toggle bubble is hidden too, so a
-/// closed overlay had no way back. <see cref="LanConnectDualChatState.HasUnseenRemoteArrival"/>
+/// closed overlay had no way back. <see cref="LanConnectDualChatState.HasUnseenRoomRemoteArrival"/>
 /// and <see cref="LanConnectRoomChatOverlay"/>'s private MaybeSurfaceForRemoteArrival reproduce
-/// the reference mod's behaviour (surface on arrival, let the existing idle fade take it away
-/// again) without restructuring the open/close model.
+/// the reference mod's behaviour for room messages (surface on arrival, let the existing idle fade
+/// take it away again) without letting server/channel traffic reopen a panel the player closed.
 /// </summary>
 [TestSuite]
 [RequireGodotRuntime]
@@ -45,7 +45,7 @@ public sealed class LanConnectRoomChatAutoSurfaceTests
     }
 
     [TestCase]
-    public async Task Surfacing_preserves_the_selected_server_channel_instead_of_switching_to_room()
+    public async Task Server_arrival_does_not_reopen_closed_overlay_or_change_selection()
     {
         using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
         fixture.Overlay.SelectChannelForTests(LanConnectChatChannel.Server);
@@ -55,14 +55,16 @@ public sealed class LanConnectRoomChatAutoSurfaceTests
         fixture.State.Server.AppendConfirmedForTests("server-arrival-1", "Ally", "频道消息", 1, isLocal: false);
         await fixture.Overlay.RefreshForTests();
 
-        AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsFalse();
         AssertThat(fixture.Overlay.TestState.SelectedChannel).IsEqual(LanConnectChatChannel.Server);
+        AssertThat(fixture.Overlay.TestState.ServerUnread).IsEqual(1);
     }
 
     [TestCase]
-    public async Task Server_arrival_while_room_is_selected_surfaces_the_server_channel()
+    public async Task Server_arrival_while_room_is_selected_stays_closed_and_shows_touch_dot()
     {
         using RoomChatFixture fixture = await RoomChatFixture.CreateNeverOpenedWithServerSupport();
+        fixture.Overlay.ConfigurePointerModeForTests(LanConnectPointerMode.Touch);
         AssertThat(fixture.Overlay.TestState.SelectedChannel).IsEqual(LanConnectChatChannel.Room);
 
         fixture.State.Server.AppendConfirmedForTests(
@@ -73,9 +75,10 @@ public sealed class LanConnectRoomChatAutoSurfaceTests
             isLocal: false);
         await fixture.Overlay.RefreshForTests();
 
-        AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
-        AssertThat(fixture.Overlay.TestState.SelectedChannel).IsEqual(LanConnectChatChannel.Server);
-        AssertThat(fixture.Overlay.ChatPanelForTests.TestState.MessageCount).IsEqual(1);
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsFalse();
+        AssertThat(fixture.Overlay.TestState.SelectedChannel).IsEqual(LanConnectChatChannel.Room);
+        AssertThat(fixture.Overlay.TestState.ServerUnread).IsEqual(1);
+        AssertThat(FindNode<Control>(fixture.Overlay, "ChatToggleServerUnreadDot").Visible).IsTrue();
     }
 
     [TestCase]

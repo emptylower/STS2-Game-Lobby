@@ -352,37 +352,30 @@ public sealed class LanConnectDualChatStateTests
     }
 
     [Fact]
-    public void Remote_arrival_surface_selects_the_latest_unseen_channel()
+    public void Remote_server_arrival_does_not_request_overlay_surface()
     {
         LanConnectDualChatState state = EnterAndCloseOnce();
         state.Server.AppendConfirmedForTests("server", "A", "server", 40, false);
 
-        Assert.Equal(LanConnectChatChannel.Server, state.UnseenRemoteArrivalChannel);
-
-        state.Room.AppendConfirmedForTests("room", "B", "room", 10, false);
-
-        Assert.Equal(LanConnectChatChannel.Room, state.UnseenRemoteArrivalChannel);
-        Assert.Equal(
-            LanConnectChatChannel.Room,
-            state.ShowRoomOverlayForRemoteArrival(state.UnseenRemoteArrivalChannel!.Value));
-        Assert.True(state.Room.IsVisible);
-        Assert.False(state.Server.IsVisible);
-        Assert.Null(state.UnseenRemoteArrivalChannel);
+        Assert.False(state.HasUnseenRoomRemoteArrival);
+        Assert.False(state.RoomOverlayOpen);
+        Assert.Equal(1, state.Server.UnreadCount);
     }
 
     [Fact]
-    public void Remote_server_arrival_falls_back_to_room_when_server_is_not_selectable()
+    public void Remote_room_arrival_requests_room_surface_even_after_server_arrival()
     {
         LanConnectDualChatState state = EnterAndCloseOnce();
         state.Server.AppendConfirmedForTests("server", "A", "server", 40, false);
+        state.Room.AppendConfirmedForTests("room", "B", "room", 10, false);
 
-        LanConnectChatChannel selected = state.ShowRoomOverlayForRemoteArrival(
-            state.UnseenRemoteArrivalChannel!.Value,
-            serverSelectable: false);
-
-        Assert.Equal(LanConnectChatChannel.Room, selected);
+        Assert.True(state.HasUnseenRoomRemoteArrival);
+        Assert.Equal(
+            LanConnectChatChannel.Room,
+            state.ShowRoomOverlayForRemoteArrival(LanConnectChatChannel.Room));
         Assert.True(state.Room.IsVisible);
         Assert.False(state.Server.IsVisible);
+        Assert.False(state.HasUnseenRoomRemoteArrival);
         Assert.Equal(1, state.Server.UnreadCount);
     }
 
