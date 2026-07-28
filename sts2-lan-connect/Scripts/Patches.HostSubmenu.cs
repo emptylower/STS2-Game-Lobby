@@ -21,6 +21,11 @@ internal static class HostSubmenuPatches
     {
         try
         {
+            EnsureLanHostModePicker(
+                submenu,
+                () => GetModeAvailability(submenu),
+                mode => StartSelectedLanHostAsync(submenu, mode));
+
             if (FindHostButton(submenu) != null)
             {
                 return;
@@ -45,6 +50,28 @@ internal static class HostSubmenuPatches
         {
             Log.Error($"sts2_lan_connect failed to inject LAN host button: {ex}");
         }
+    }
+
+    internal static LanConnectLanHostModePicker EnsureLanHostModePicker(
+        Node parent,
+        Func<LanConnectLanHostModeAvailability> availability,
+        Func<LanConnectLanHostMode, Task> onSelected)
+    {
+        LanConnectLanHostModePicker? picker = parent.FindChild(
+            LanConnectConstants.LanHostModePickerName,
+            recursive: true,
+            owned: false) as LanConnectLanHostModePicker;
+        if (picker == null)
+        {
+            picker = new LanConnectLanHostModePicker
+            {
+                Name = LanConnectConstants.LanHostModePickerName
+            };
+            parent.AddChild(picker);
+        }
+
+        picker.Initialize(availability, onSelected);
+        return picker;
     }
 
     internal static void ScheduleEnsureLanHostButton(NMultiplayerHostSubmenu submenu, string source)
@@ -89,6 +116,30 @@ internal static class HostSubmenuPatches
 
     private static void OnLanHostPressed(NMultiplayerHostSubmenu submenu)
     {
+        LanConnectLanHostModePicker? picker = submenu.FindChild(
+            LanConnectConstants.LanHostModePickerName,
+            recursive: true,
+            owned: false) as LanConnectLanHostModePicker;
+        if (picker == null)
+        {
+            Log.Error("sts2_lan_connect could not resolve LAN host mode picker.");
+            LanConnectPopupUtil.ShowInfo("未能打开 LAN 模式选择：页面上下文未就绪，请重新打开 Host 页面后再试。");
+            return;
+        }
+
+        picker.Open();
+    }
+
+    private static LanConnectLanHostModeAvailability GetModeAvailability(
+        NMultiplayerHostSubmenu submenu) => new(
+        submenu.GetNode<NSubmenuButton>("StandardButton").IsEnabled,
+        submenu.GetNode<NSubmenuButton>("DailyButton").IsEnabled,
+        submenu.GetNode<NSubmenuButton>("CustomRunButton").IsEnabled);
+
+    private static async Task StartSelectedLanHostAsync(
+        NMultiplayerHostSubmenu submenu,
+        LanConnectLanHostMode mode)
+    {
         Control? loadingOverlay = LoadingOverlayField?.GetValue(submenu) as Control;
         NSubmenuStack? stack = StackField?.GetValue(submenu) as NSubmenuStack;
         if (loadingOverlay == null || stack == null)
@@ -98,7 +149,14 @@ internal static class HostSubmenuPatches
             return;
         }
 
-        TaskHelper.RunSafely(LanConnectHostFlow.StartLanHostAsync(GameMode.Standard, loadingOverlay, stack));
+        GameMode gameMode = mode switch
+        {
+            LanConnectLanHostMode.Standard => GameMode.Standard,
+            LanConnectLanHostMode.Daily => GameMode.Daily,
+            LanConnectLanHostMode.Custom => GameMode.Custom,
+            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null)
+        };
+        await LanConnectHostFlow.StartLanHostAsync(gameMode, loadingOverlay, stack);
     }
 
     private static void ConfigureLanButton(NSubmenuButton button)
@@ -106,7 +164,7 @@ internal static class HostSubmenuPatches
         MegaLabel title = button.GetNode<MegaLabel>("%Title");
         MegaRichTextLabel description = button.GetNode<MegaRichTextLabel>("%Description");
         title.SetTextAutoSize("LAN 调试建房");
-        description.Text = "开发/故障回退入口：直接启动 ENet LAN Host，让好友手动输入 IP 加入。";
+        description.Text = "选择标准、每日挑战或自定义模式，直接启动 ENet LAN Host。";
     }
 
     private static Control? FindHostButton(NMultiplayerHostSubmenu submenu)

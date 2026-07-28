@@ -53,6 +53,8 @@ internal static class LanConnectConstants
 
     public const string HostButtonName = "LanConnectHostButton";
 
+    public const string LanHostModePickerName = "LanConnectLanHostModePicker";
+
     public const string LobbyEntryButtonName = "LanConnectLobbyEntryButton";
 
     public const string LobbyOverlayName = "LanConnectLobbyOverlay";

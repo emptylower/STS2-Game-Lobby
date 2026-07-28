@@ -41,6 +41,10 @@ internal static class LanConnectHostFlow
         NetHostGameService netService = new();
         int maxPlayers = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
         string protocolProfile = LanConnectProtocolProfiles.DetermineProfileForMaxPlayers(maxPlayers);
+        string lobbyGameMode = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode);
+
+        GD.Print(
+            $"sts2_lan_connect host_flow: start LAN host gameMode={lobbyGameMode}, port={LanConnectConstants.DefaultPort}, maxPlayers={maxPlayers}");
 
         try
         {
@@ -49,6 +53,8 @@ internal static class LanConnectHostFlow
             if (error.HasValue)
             {
                 LanConnectProtocolProfiles.ResetActiveProfile("start_lan_host_failed");
+                GD.Print(
+                    $"sts2_lan_connect host_flow: LAN host failed gameMode={lobbyGameMode}, port={LanConnectConstants.DefaultPort}, reason={error.Value}");
                 NErrorPopup? popup = NErrorPopup.Create(error.Value);
                 if (popup != null)
                 {
@@ -57,6 +63,9 @@ internal static class LanConnectHostFlow
 
                 return;
             }
+
+            GD.Print(
+                $"sts2_lan_connect host_flow: LAN ENet host started gameMode={lobbyGameMode}, port={LanConnectConstants.DefaultPort}");
 
             if (LanConnectLobbyRuntime.Instance != null)
             {
@@ -78,9 +87,11 @@ internal static class LanConnectHostFlow
             string ip = LanConnectNetUtil.GetPrimaryLanAddress();
             LanConnectPopupUtil.ShowInfo($"LAN 主机已启动。\n把这个地址发给好友：{ip}:{LanConnectConstants.DefaultPort}");
         }
-        catch
+        catch (Exception ex)
         {
             LanConnectProtocolProfiles.ResetActiveProfile("start_lan_host_exception");
+            GD.Print(
+                $"sts2_lan_connect host_flow: LAN host failed gameMode={lobbyGameMode}, port={LanConnectConstants.DefaultPort}, reason={ex}");
             NErrorPopup? popup = NErrorPopup.Create(new NetErrorInfo(NetError.InternalError, selfInitiated: false));
             if (popup != null)
             {
