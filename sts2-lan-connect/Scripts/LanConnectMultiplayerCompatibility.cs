@@ -27,6 +27,8 @@ internal static class LanConnectMultiplayerCompatibility
         catch (Exception ex)
         {
             Log.Error($"sts2_lan_connect failed to initialize multiplayer compatibility patches: {ex}");
+            _initialized = false;
+            throw;
         }
     }
 

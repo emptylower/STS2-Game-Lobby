@@ -4,11 +4,21 @@
 
 ## [Unreleased]
 
-### 0.5.4 candidate
+## [0.5.5] - 2026-07-31
 
-> 客户端与 lobby-service 源码版本已同步提升到 `0.5.4`；本节随源码提交，GitHub Release 暂未发布。
+客户端 `0.5.5` 正式版完成玩家验证并发布；lobby-service 协议没有变化，继续使用 `0.5.4`。
 
-#### Added
+### Client Compatibility
+
+- （客户端）同一 DLL 现在可在旧版平铺握手结构与 `v0.110.x` 的 `PeerVersionInfo` 握手结构间运行时选择，普通加入、读档加入和运行中重连都会按当前游戏 ABI 填充请求。
+- （客户端）扩容序列化补丁从实际 `playersInLobby` 元素类型解析旧 `LobbyPlayer` 或新 `StartRunLobbyPlayer`；六个线协议补丁必须完整生效，否则整组回滚并终止 MOD 初始化。
+- 游戏版本仍要求房主与加入方完全一致；多版本兼容表示同一 MOD 包可分别运行在各游戏版本上，不允许不同游戏协议版本互联。
+
+## [0.5.4] - 2026-07-28
+
+客户端与 lobby-service `0.5.4` 正式版同步发布，新增 AI 语义审核及对应客户端交互。
+
+### Added
 
 - （服务端）新增三协议 AI 语义审核：OpenAI Responses、OpenAI Chat Completions 与 Anthropic Messages；支持严格 JSON Schema 和显式启用的提示词 JSON 回退。
 - （服务端）AI 放行后立即写入 30 天精确消息缓存和 7 天限定语境缓存；永久白名单必须人工批准，人工拒绝会生成立即生效的永久黑名单。
@@ -16,13 +26,13 @@
 - （服务端）管理面板新增 AI 配置、健康状态、人工复审、永久白名单和独立的永久黑名单管理入口。
 - （客户端）新增“在审核中”投递状态、违禁词游戏原生弹窗，以及公共频道/房间频道跨消息撤回帧处理。
 
-#### Changed
+### Changed
 
 - AI 不可用时，普通单条聊天继续安全降级为确定性打码；主动拆字规避路径保守拒绝，避免利用模型故障绕过过滤。
 - 永久黑名单优先于永久白名单和安全缓存；撤销规则后立即恢复缓存/AI 审核决策链。
 - 客户端与 lobby-service 构建版本同步为 `0.5.4`，不改变旧版 `room_chat` 的兼容行为。
 
-#### Security and Compatibility
+### Security and Compatibility
 
 - API Key 使用 `AI_MODERATION_CREDENTIAL_KEY` 提供的主密钥进行 AES-256-GCM 加密；管理 API 不返回明文 Key，日志不记录认证头或完整聊天原文。
 - 新增待审与撤回帧均为向后兼容扩展；旧客户端可忽略未知帧并继续接收最终 ACK/错误，但无法撤回已经显示的跨消息上下文，建议与 `0.5.4` 服务端配套升级。

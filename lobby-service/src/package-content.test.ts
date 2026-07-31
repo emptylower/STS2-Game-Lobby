@@ -307,7 +307,7 @@ test("service package rejects malformed protected traversal and symlink outputs"
   }
 });
 
-test("release sources pin service v0.5.4 and client v0.5.4 while preserving older fixtures", () => {
+test("release sources pin service v0.5.4 and client v0.5.5 while preserving older fixtures", () => {
   const servicePackage = JSON.parse(readFileSync(join(repositoryRoot, "lobby-service/package.json"), "utf8")) as {
     version?: unknown;
   };
@@ -322,9 +322,9 @@ test("release sources pin service v0.5.4 and client v0.5.4 while preserving olde
   assert.equal(servicePackage.version, "0.5.4");
   assert.equal(serviceLock.version, "0.5.4");
   assert.equal(serviceLock.packages?.[""]?.version, "0.5.4");
-  assert.equal(clientManifest.version, "0.5.4");
-  assert.match(clientProject, /<Version>0\.5\.4<\/Version>/);
-  assert.match(clientProject, /<AssemblyVersion>0\.5\.4\.0<\/AssemblyVersion>/);
+  assert.equal(clientManifest.version, "0.5.5");
+  assert.match(clientProject, /<Version>0\.5\.5<\/Version>/);
+  assert.match(clientProject, /<AssemblyVersion>0\.5\.5\.0<\/AssemblyVersion>/);
 
   const serviceFixture = readFileSync(
     join(repositoryRoot, "lobby-service/src/chat/compatibility.integration.test.ts"),
@@ -339,7 +339,7 @@ test("release sources pin service v0.5.4 and client v0.5.4 while preserving olde
   }
 });
 
-test("v0.5.4 candidate docs cover AI moderation and remain explicitly unpublished", () => {
+test("v0.5.4 release docs cover AI moderation and point to the published release", () => {
   const releaseNotes = readFileSync(
     join(repositoryRoot, "docs/RELEASE_NOTES_V0.5.4_ZH.md"),
     "utf8",
@@ -348,7 +348,7 @@ test("v0.5.4 candidate docs cover AI moderation and remain explicitly unpublishe
     join(repositoryRoot, "docs/AI_MODERATION_BACKEND_API_ZH.md"),
     "utf8",
   );
-  for (const marker of ["0.5.4", "永久黑名单", "跨消息", "GitHub Release 暂未发布"]) {
+  for (const marker of ["0.5.4", "永久黑名单", "跨消息", "releases/tag/v0.5.4"]) {
     assert.match(`${releaseNotes}\n${backendApi}`, new RegExp(marker));
   }
 });

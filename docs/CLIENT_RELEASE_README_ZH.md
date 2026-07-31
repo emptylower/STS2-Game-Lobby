@@ -14,14 +14,14 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.5.4` |
+| 客户端版本 | `0.5.5` |
 | 默认大厅 | `sts2-test.43.133.192.249.nip.io`（可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `test_relaxed + relay-only` |
 
-`0.5.4` 配合 lobby-service AI 语义审核：消息首次送审时在输入框上方显示“在审核中”，通过后静默进入频道，拒绝时显示游戏原生违禁词提示；服务端识别拆字规避后，客户端会按撤回帧删除相关公共频道或房间消息。房间名、用户名和续局角色名审核失败也统一使用游戏原生提示，不再显示原始 HTTP 错误。`0.5.3` 的 LAN/大厅续局通道拆分、续局身份码、存档保护和聊天 HUD 功能全部保留。
+`0.5.5` 新增游戏 ABI 向下兼容：同一客户端 DLL 会在运行时识别旧版平铺握手结构和 `0.110.x` 的 `PeerVersionInfo` 结构，并为普通加入、读档加入和运行中重连发送当前游戏所需的请求。旧 `LobbyPlayer` 与新 `StartRunLobbyPlayer` 的扩容序列化补丁也会按运行时类型选择。
 
-`0.5.4` 当前为源码/候选构建，GitHub Release 与 Steam Workshop 更新尚未发布；最新公开稳定版仍为 [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)。新帧为向后兼容扩展，旧客户端仍可连接，但无法撤回已经显示的拆字上下文；建议与 lobby-service `0.5.4` 配套使用。同一客户端包以游戏 `0.107.1`、`0.109.0`、`0.109.1` 为加载目标。
+`0.5.5` 已作为客户端正式版发布；lobby-service 无需升级，继续使用 `0.5.4`。同一客户端包以游戏 `0.107.1`、`0.109.0`、`0.109.1` 与 `0.110.x` 为加载目标，并保留 `0.5.4` 的 AI 审核交互，以及 `0.5.3` 的 LAN/大厅续局通道拆分、续局身份码、存档保护和聊天 HUD。
 
 同一房间内的所有玩家必须使用完全相同的游戏版本。房主和客户端版本不同时，加入流程会直接提示双方版本并中止；普通非联机 MOD 不进入预检、不提示、不禁用，也不影响加入。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。
 
@@ -177,14 +177,14 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.5.4` |
+| Client version | `0.5.5` |
 | Default lobby | `sts2-test.43.133.192.249.nip.io` |
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `test_relaxed + relay-only` |
 
-`0.5.4` integrates lobby-service semantic moderation. A message first shows a compact Reviewing state, appears silently after approval, and uses a native game popup when blocked. Redaction frames remove related public or room messages when split-message evasion is detected. Rejected room names, player names, and continue-run character names use the same native sensitive-content feedback instead of raw HTTP errors. The `0.5.3` LAN/lobby continue-channel split, resume codes, save protection, and chat HUD remain included.
+Client `0.5.5` adds backward-compatible game ABI handling. One DLL detects the legacy flat handshake or the `0.110.x` `PeerVersionInfo` handshake at runtime, fills all join request variants accordingly, and selects the old `LobbyPlayer` or new `StartRunLobbyPlayer` serialization carrier.
 
-`0.5.4` is currently a source/candidate build; its GitHub Release and Steam Workshop update have not been published. The latest public stable build remains [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3). New frames are backward-compatible, although old clients cannot remove split-message context that is already visible. Pairing the `0.5.4` client and lobby service is recommended. Supported game targets remain `0.107.1`, `0.109.0`, and `0.109.1`.
+Client `0.5.5` is the current stable release. No lobby-service update is required: keep using service `0.5.4`. Supported game targets are `0.107.1`, `0.109.0`, `0.109.1`, and `0.110.x`; every player in a room must still use the exact same game version. The build retains all `0.5.4` moderation behavior plus the `0.5.3` LAN/lobby continue split, resume codes, save protection, and chat HUD.
 
 ### MOD Preflight Before Join
 

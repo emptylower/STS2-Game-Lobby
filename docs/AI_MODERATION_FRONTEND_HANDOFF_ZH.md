@@ -1,6 +1,6 @@
 # AI 语义审核前端交接文档
 
-> 适用版本：客户端与 lobby-service `0.5.4+`。当前实现已进入源码构建，GitHub Release 暂未发布。
+> 适用版本：客户端与 lobby-service `0.5.4+`。`0.5.4` 已正式发布，发布包见 [GitHub Release v0.5.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.4)。
 
 后端、内嵌管理面板和 Godot 聊天客户端已经完成接入。本文作为后续维护与专项验收交接，记录现有状态投影、接口和必须保持的交互约束。
 

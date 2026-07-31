@@ -10,7 +10,14 @@
 
 # STS2 LAN Connect 使用说明
 
-当前源码与候选构建版本为 `0.5.4`，GitHub Release 与 Steam Workshop 更新暂未发布；最新公开稳定版仍为 [`GitHub v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)。安装或更新客户端后必须完整重启游戏。
+当前客户端正式版为 [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)，lobby-service 继续使用 `0.5.4`。安装或更新客户端后必须完整重启游戏。
+
+## v0.5.5 游戏版本兼容
+
+- 同一客户端包面向游戏 `0.107.1`、`0.109.0`、`0.109.1` 与 `0.110.x`，不需要按游戏版本下载不同 DLL。
+- 同一房间内仍必须使用完全相同的游戏版本；这里的兼容表示客户端可分别加载在多个游戏版本上，不表示不同游戏版本可以互联。
+- 兼容范围覆盖普通大厅加入、读档大厅加入、运行中重连，以及 Android `0.110.0` 的启动与加入流程。
+- lobby-service 继续使用 `0.5.4`；同一房间的玩家应统一安装客户端 `0.5.5`。
 
 ## v0.5.4 AI 语义审核交互
 
@@ -260,7 +267,14 @@
 
 # STS2 LAN Connect User Guide
 
-The current source/candidate build is `0.5.4`; its GitHub Release and Steam Workshop update have not been published. The latest public stable download remains [`GitHub v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3). Fully restart the game after installing or updating the client.
+The current stable client is [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5), while lobby-service remains on `0.5.4`. Fully restart the game after installing or updating the client.
+
+## v0.5.5 Game Compatibility
+
+- One client package targets game versions `0.107.1`, `0.109.0`, `0.109.1`, and `0.110.x`; separate DLLs are not required.
+- Every player in a room must still use the exact same game version. Compatibility means the client can load on each supported version separately, not that different game versions can play together.
+- Compatibility covers normal lobby joins, loaded-run joins, in-run reconnects, and Android `0.110.0` startup/join flows.
+- Keep lobby-service on `0.5.4`, and use client `0.5.5` for every participant in the same room.
 
 ## v0.5.4 Semantic Moderation UX
 

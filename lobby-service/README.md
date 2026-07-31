@@ -12,7 +12,7 @@
 
 # STS2 Lobby Service
 
-> 本文档对应源码与构建版本 **v0.5.4**。本版在保留既有节点网络、聊天与 MOD 预检协议的基础上，新增大厅敏感词过滤与可选 AI 语义审核（词库随包分发，覆盖聊天、跨消息短句、房间名与用户名，管理面板可控）。GitHub Release 暂未发布。
+> 本文档对应正式版 **v0.5.4**。本版在保留既有节点网络、聊天与 MOD 预检协议的基础上，新增大厅敏感词过滤与可选 AI 语义审核（词库随包分发，覆盖聊天、跨消息短句、房间名与用户名，管理面板可控）。正式包见 [GitHub Release v0.5.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.4)。
 
 最新已公开的正式服务端源码包仍见 [GitHub v0.5.3 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3) 中的 `sts2_lobby_service.zip`；`0.5.4` 当前仅提供源码构建。
 

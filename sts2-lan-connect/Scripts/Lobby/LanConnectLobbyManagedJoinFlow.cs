@@ -21,10 +21,6 @@ namespace Sts2LanConnect.Scripts;
 
 internal sealed class LanConnectLobbyManagedJoinFlow
 {
-    private static readonly FieldInfo? InitialGameInfoGameplayModsField =
-        typeof(InitialGameInfoMessage).GetField("gameplayAffectingMods", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-        ?? typeof(InitialGameInfoMessage).GetField("mods", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
     private TaskCompletionSource<InitialGameInfoMessage>? _connectCompletion;
     private TaskCompletionSource<ClientRejoinResponseMessage>? _rejoinCompletion;
     private TaskCompletionSource<ClientLoadJoinResponseMessage>? _loadJoinCompletion;
@@ -84,11 +80,13 @@ internal sealed class LanConnectLobbyManagedJoinFlow
 
             _logger.Info("Initializer connection completed, awaiting initial game info message.");
             InitialGameInfoMessage initialMessage = await _connectCompletion.Task;
-            ValidateInitialMessage(initialMessage);
+            LanConnectLobbyHandshakeCompatibility.PeerVersionSnapshot hostInfo =
+                LanConnectLobbyHandshakeCompatibility.ReadInitialGameInfo(initialMessage);
+            ValidateInitialMessage(initialMessage, hostInfo);
 
             RunSessionState sessionState = initialMessage.sessionState;
             _logger.Info(
-                $"Got initial game info message. Version={initialMessage.version} Hash={initialMessage.idDatabaseHash} Mode={initialMessage.gameMode} State={sessionState}");
+                $"Got initial game info message. Version={hostInfo.Version} Hash={hostInfo.IdDatabaseHash} Mode={initialMessage.gameMode} State={sessionState}");
 
             return sessionState switch
             {
@@ -199,7 +197,9 @@ internal sealed class LanConnectLobbyManagedJoinFlow
                 $"Connect({netServiceType.FullName}, {typeof(CancellationToken).FullName})");
     }
 
-    private void ValidateInitialMessage(InitialGameInfoMessage initialMessage)
+    private void ValidateInitialMessage(
+        InitialGameInfoMessage initialMessage,
+        LanConnectLobbyHandshakeCompatibility.PeerVersionSnapshot hostInfo)
     {
         ConnectionFailureReason? declaredCompatibilityFailure = null;
         if (initialMessage.connectionFailureReason.HasValue)
@@ -225,17 +225,17 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         }
 
         string localVersion = LanConnectBuildInfo.GetGameVersion();
-        ValidateGameVersion(initialMessage.version, localVersion);
+        ValidateGameVersion(hostInfo.Version, localVersion);
 
         List<string> localMods = LanConnectBuildInfo.GetModList();
-        List<string> hostMods = GetGameplayAffectingMods(initialMessage);
+        List<string> hostMods = hostInfo.GameplayAffectingMods;
         List<string> missingModsOnLocal = hostMods.Except(localMods).ToList();
         List<string> missingModsOnHost = localMods.Except(hostMods).ToList();
-        ConnectionFailureExtraInfo extraInfo = new()
-        {
-            missingModsOnHost = missingModsOnHost,
-            missingModsOnLocal = missingModsOnLocal
-        };
+        ConnectionFailureExtraInfo extraInfo = LanConnectLobbyHandshakeCompatibility.PopulateFailureExtraInfo(
+            new ConnectionFailureExtraInfo(),
+            hostInfo,
+            missingModsOnLocal,
+            missingModsOnHost);
         if (missingModsOnLocal.Count > 0 || missingModsOnHost.Count > 0)
         {
             if (!_relaxedCompatibility)
@@ -257,19 +257,19 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             _detectedMissingModsOnHost = missingModsOnHost;
         }
 
-        if (initialMessage.idDatabaseHash != ModelIdSerializationCache.Hash)
+        if (hostInfo.IdDatabaseHash != ModelIdSerializationCache.Hash)
         {
             if (!_relaxedCompatibility)
             {
                 _logger.Warn(
-                    $"ModelDb hash mismatch. Host={initialMessage.idDatabaseHash} Local={ModelIdSerializationCache.Hash}");
+                    $"ModelDb hash mismatch. Host={hostInfo.IdDatabaseHash} Local={ModelIdSerializationCache.Hash}");
                 throw new ClientConnectionFailedException(
-                    $"ModelDb hash mismatch. Host: {initialMessage.idDatabaseHash} Ours: {ModelIdSerializationCache.Hash}",
+                    $"ModelDb hash mismatch. Host: {hostInfo.IdDatabaseHash} Ours: {ModelIdSerializationCache.Hash}",
                     new NetErrorInfo(ConnectionFailureReason.VersionMismatch, extraInfo));
             }
 
             _logger.Warn(
-                $"Ignoring ModelDb hash mismatch because relaxed profile is enabled. Host={initialMessage.idDatabaseHash} Local={ModelIdSerializationCache.Hash}");
+                $"Ignoring ModelDb hash mismatch because relaxed profile is enabled. Host={hostInfo.IdDatabaseHash} Local={ModelIdSerializationCache.Hash}");
         }
 
         if (declaredCompatibilityFailure.HasValue)
@@ -309,19 +309,6 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         return normalized.StartsWith('v') || normalized.StartsWith('V')
             ? normalized[1..]
             : normalized;
-    }
-
-    private static List<string> GetGameplayAffectingMods(InitialGameInfoMessage initialMessage)
-    {
-        object? rawMods = InitialGameInfoGameplayModsField?.GetValue(initialMessage);
-        return rawMods is IEnumerable<string> mods
-            ? mods
-                .Where(static value => !string.IsNullOrWhiteSpace(value))
-                .Select(static value => value.Trim())
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(static value => value, StringComparer.Ordinal)
-                .ToList()
-            : new List<string>();
     }
 
     private async Task NetServiceUpdateLoop(CancellationTokenSource tokenSource, SceneTree sceneTree)
@@ -369,6 +356,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             maxAscensionUnlocked = SaveManager.Instance.Progress.MaxMultiplayerAscension,
             unlockState = unlockState.ToSerializable()
         };
+        message = LanConnectLobbyHandshakeCompatibility.AttachLocalVersionInfo(message);
         gameService.SendMessage(message);
         ClientLobbyJoinResponseMessage response = await _joinCompletion.Task;
         _logger.Info($"Received ClientLobbyJoinResponseMessage: {response}");
@@ -379,7 +367,9 @@ internal sealed class LanConnectLobbyManagedJoinFlow
     {
         _loadJoinCompletion = new TaskCompletionSource<ClientLoadJoinResponseMessage>();
         _logger.Info("Sending ClientLoadJoinRequestMessage and waiting for response.");
-        gameService.SendMessage(default(ClientLoadJoinRequestMessage));
+        ClientLoadJoinRequestMessage message = LanConnectLobbyHandshakeCompatibility.AttachLocalVersionInfo(
+            default(ClientLoadJoinRequestMessage));
+        gameService.SendMessage(message);
         ClientLoadJoinResponseMessage response = await _loadJoinCompletion.Task;
         _logger.Info($"Received ClientLoadJoinResponseMessage: {response}");
         return response;
@@ -389,7 +379,9 @@ internal sealed class LanConnectLobbyManagedJoinFlow
     {
         _rejoinCompletion = new TaskCompletionSource<ClientRejoinResponseMessage>();
         _logger.Info("Sending ClientRejoinRequestMessage and waiting for response.");
-        gameService.SendMessage(default(ClientRejoinRequestMessage));
+        ClientRejoinRequestMessage message = LanConnectLobbyHandshakeCompatibility.AttachLocalVersionInfo(
+            default(ClientRejoinRequestMessage));
+        gameService.SendMessage(message);
         ClientRejoinResponseMessage response = await _rejoinCompletion.Task;
         _logger.Info($"Received ClientRejoinResponseMessage: {response}");
         return response;

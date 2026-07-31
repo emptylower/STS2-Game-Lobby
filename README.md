@@ -3,7 +3,7 @@
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-![Client](https://img.shields.io/badge/client-v0.5.4-green)
+![Client](https://img.shields.io/badge/client-v0.5.5-green)
 ![Service](https://img.shields.io/badge/service-v0.5.4-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
@@ -17,7 +17,7 @@
 
 ## 中文
 
-**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前源码与构建版本为客户端 **v0.5.4**、大厅服务 **v0.5.4**；最新公开 Release 仍为 **v0.5.3**，主要服务对象是：
+**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端正式版为 **v0.5.5**，大厅服务正式版为 **v0.5.4**，主要服务对象是：
 
 - 想自行部署大厅服务的服主 / 运维
 - 想构建或分发客户端 MOD 的维护者
@@ -41,21 +41,23 @@
 - 客户端通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）拿到聚合节点列表
 - 不再有任何"母面板"或中心化审核后台；`SERVER_REGISTRY_*` 一组环境变量自 v0.4.0 起已从 lobby-service 中完全移除
 
-### v0.5.4 双端要点
+### v0.5.5 客户端 / v0.5.4 服务端
 
+- 客户端在运行时兼容旧版平铺联机握手与 `0.110.x` 的 `PeerVersionInfo` 握手，普通加入、读档加入和运行中重连共用同一 DLL
+- 扩容序列化补丁按实际玩家类型选择旧 `LobbyPlayer` 或新 `StartRunLobbyPlayer`，六个补丁不完整时整组回滚并停止初始化
 - lobby-service 支持 OpenAI Responses、Chat Completions 与 Anthropic Messages 三类 AI 语义审核协议
 - AI 放行进入短期安全缓存，永久白名单必须人工批准；人工拒绝会生成可管理、可撤销的永久黑名单
 - 聊天、房间名、玩家名和续局角色名统一审核，并能识别同一认证用户最近最多 10 条短消息的拆字规避
 - 客户端显示“在审核中”、游戏原生违禁词提示，并按服务端撤回帧删除相关跨消息上下文
 - 未配置 AI 时保持原有打码兼容；旧版 `room_chat`、加入协议、MOD 预检和续局通道行为不变
-- 同一个 v0.5.4 客户端构建以游戏 `0.107.1`、`0.109.0`、`0.109.1` 为加载目标
+- 同一个 v0.5.5 客户端构建以游戏 `0.107.1`、`0.109.0`、`0.109.1` 与 `0.110.x` 为加载目标；同一房间内仍要求完全相同的游戏版本
 
 ### 当前版本
 
-- 客户端源码 / 构建版本：`0.5.4`（Release 暂未发布）
-- 大厅服务源码 / 构建版本：`0.5.4`（Release 暂未发布）
-- 最新 GitHub 稳定版：[`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)
-- Steam 创意工坊：[`v0.5.3 游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
+- 客户端源码 / 构建版本：`0.5.5`
+- 大厅服务源码 / 构建版本：`0.5.4`
+- 最新 GitHub 稳定版：[`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
+- Steam 创意工坊：[`v0.5.4 游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 
 ### 推荐阅读顺序
 
@@ -174,8 +176,9 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 | 文档 | 说明 |
 |------|------|
 | [`CHANGELOG.md`](./CHANGELOG.md) | 客户端与服务端版本更新日志 |
-| [`docs/RELEASE_NOTES_V0.5.4_ZH.md`](./docs/RELEASE_NOTES_V0.5.4_ZH.md) | v0.5.4 lobby-service 候选说明：AI 审核、安全缓存、复审及永久规则 |
-| [`docs/RELEASE_NOTES_V0.5.4_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.4_CLIENT_ZH.md) | v0.5.4 客户端候选说明：待审状态、敏感词提示与跨消息撤回 |
+| [`docs/RELEASE_NOTES_V0.5.5_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.5_CLIENT_ZH.md) | v0.5.5 客户端正式说明：游戏 0.110.x ABI 兼容、验证范围与回滚步骤 |
+| [`docs/RELEASE_NOTES_V0.5.4_ZH.md`](./docs/RELEASE_NOTES_V0.5.4_ZH.md) | v0.5.4 lobby-service 正式说明：AI 审核、安全缓存、复审及永久规则 |
+| [`docs/RELEASE_NOTES_V0.5.4_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.4_CLIENT_ZH.md) | v0.5.4 客户端正式说明：待审状态、敏感词提示与跨消息撤回 |
 | [`docs/RELEASE_NOTES_V0.5.3_ZH.md`](./docs/RELEASE_NOTES_V0.5.3_ZH.md) | v0.5.3 服务端发布说明：敏感词过滤、升级与回滚步骤 |
 | [`docs/RELEASE_NOTES_V0.5.3_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.3_CLIENT_ZH.md) | v0.5.3 客户端发布说明：续局通道拆分、存档保护、聊天 HUD、兼容范围与回滚步骤 |
 | [`docs/RELEASE_NOTES_V0.5.2_ZH.md`](./docs/RELEASE_NOTES_V0.5.2_ZH.md) | v0.5.2 客户端发布说明、引用操作、兼容范围与回滚步骤 |
@@ -199,7 +202,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 ## English
 
-**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current source and build versions are **v0.5.4** for both the client and lobby service; the latest published GitHub Release remains **v0.5.3**.
+**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current stable client is **v0.5.5**, while lobby-service remains **v0.5.4**.
 
 ### What is in this repository
 
@@ -215,21 +218,23 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 Each `lobby-service` node advertises itself to peers via the built-in peer-announce protocol. Clients aggregate the public node list through a Cloudflare discovery worker (`https://sts2-gamelobby-register.xyz`). There is no master panel and no central review backend; the `SERVER_REGISTRY_*` env vars from v0.3.x have been removed from `lobby-service` and have been inert since v0.4.0.
 
-### v0.5.4 client and service highlights
+### v0.5.5 client / v0.5.4 service highlights
 
+- The client detects the legacy flat multiplayer handshake or the `0.110.x` `PeerVersionInfo` handshake at runtime, covering normal joins, loaded-run joins, and in-run reconnects with one DLL.
+- Serialization expansion selects the old `LobbyPlayer` or new `StartRunLobbyPlayer` carrier; an incomplete six-patch set is rolled back and initialization stops.
 - The lobby service supports OpenAI Responses, Chat Completions, and Anthropic Messages for semantic moderation.
 - AI-approved content enters a short-lived safety cache; permanent allow rules require approval, while rejected reviews create manageable permanent block rules.
 - Chat, room names, player names, and continue-run character names share the moderation pipeline, including same-user sequences of up to ten short messages.
 - The client shows a Reviewing state, native sensitive-content popups, and removes related context through server redaction frames.
 - AI-disabled deployments retain deterministic masking; legacy room chat, join flow, MOD preflight, and continue-channel behavior remain compatible.
-- One v0.5.4 client build targets game versions `0.107.1`, `0.109.0`, and `0.109.1`.
+- One v0.5.5 client build targets game versions `0.107.1`, `0.109.0`, `0.109.1`, and `0.110.x`; every player in a room must still use the exact same game version.
 
 ### Current versions
 
-- Client source/build version: `0.5.4` (Release not published yet)
-- Lobby service source/build version: `0.5.4` (Release not published yet)
-- Latest stable GitHub release: [`v0.5.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3)
-- Steam Workshop: [`v0.5.3 游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
+- Client source/build version: `0.5.5`
+- Lobby service source/build version: `0.5.4`
+- Latest stable GitHub release: [`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
+- Steam Workshop: [`v0.5.4 游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 
 ### Recommended reading order
 

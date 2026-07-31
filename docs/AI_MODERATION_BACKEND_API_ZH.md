@@ -1,6 +1,6 @@
 # AI 语义审核后端接口文档
 
-> 适用版本：lobby-service `0.5.4+`。`0.5.4` 源码与构建已就绪，GitHub Release 暂未发布。
+> 适用版本：lobby-service `0.5.4+`。`0.5.4` 已正式发布，发布包见 [GitHub Release v0.5.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.4)。
 
 本文档描述 `lobby-service` 的 AI 敏感词语义复核、短期安全缓存、人工复审、永久白名单与永久黑名单接口。后端、内嵌管理面板和 Godot 客户端均已接入。
 
