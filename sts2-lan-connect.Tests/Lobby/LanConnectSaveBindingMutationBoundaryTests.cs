@@ -19,6 +19,19 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
         Assert.False(ContainsMetadataToken(safeLoad, persist.MetadataToken));
     }
 
+    [Fact]
+    public void Repair_does_not_remove_the_saved_room_binding()
+    {
+        MethodInfo repair = typeof(LanConnectMultiplayerSaveRepair).GetMethod(
+            "RepairCurrentProfile",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        MethodInfo remove = typeof(LanConnectConfig).GetMethod(
+            nameof(LanConnectConfig.RemoveSaveRoomBinding),
+            BindingFlags.Public | BindingFlags.Static)!;
+
+        Assert.False(ContainsMetadataToken(repair, remove.MetadataToken));
+    }
+
     private static bool ContainsMetadataToken(MethodInfo method, int metadataToken)
     {
         byte[] il = method.GetMethodBody()!.GetILAsByteArray()!;

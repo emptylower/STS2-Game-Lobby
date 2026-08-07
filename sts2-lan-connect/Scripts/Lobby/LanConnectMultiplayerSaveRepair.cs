@@ -75,14 +75,14 @@ internal static class LanConnectMultiplayerSaveRepair
         if (LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out var run, out string _failureReason) && run != null)
         {
             string saveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run);
-            bool removedBinding = LanConnectConfig.RemoveSaveRoomBinding(saveKey);
-            bindingSummary = removedBinding
-                ? $"已清理当前多人存档绑定 {saveKey}"
-                : $"当前多人存档未发现额外绑定 {saveKey}";
+            bool hasBinding = LanConnectConfig.TryGetSaveRoomBinding(saveKey) != null;
+            bindingSummary = hasBinding
+                ? $"已保留当前多人存档的房间绑定 {saveKey}"
+                : $"当前多人存档没有已保存的房间绑定 {saveKey}";
         }
         else
         {
-            bindingSummary = "当前多人存档无法立即解析，未清理绑定键。";
+            bindingSummary = "当前多人存档无法立即解析，未更改房间绑定。";
         }
 
         string validation;
