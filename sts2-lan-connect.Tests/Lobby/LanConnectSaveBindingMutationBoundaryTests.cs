@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using Sts2LanConnect.Scripts;
 using Xunit;
 
@@ -48,6 +49,23 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
         Assert.Equal(
             LanConnectContinueRunPublishDecisionKind.Publish,
             LanConnectContinueRunPublishDecision.Decide(preserved.HostChannel, preserved.SchemaVersion));
+    }
+
+    [Fact]
+    public void Hosted_restart_persists_binding_before_returning_to_main_menu()
+    {
+        MethodInfo restart = typeof(LanConnectLobbyRuntime).GetMethod(
+            "StartHostedRunRestartAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Type stateMachine = restart.GetCustomAttribute<AsyncStateMachineAttribute>()!.StateMachineType;
+        MethodInfo moveNext = stateMachine.GetMethod(
+            nameof(IAsyncStateMachine.MoveNext),
+            BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance)!;
+        MethodInfo persist = typeof(LanConnectMultiplayerSaveRoomBinding).GetMethod(
+            nameof(LanConnectMultiplayerSaveRoomBinding.PersistHostBinding),
+            BindingFlags.Public | BindingFlags.Static)!;
+
+        Assert.True(ContainsMetadataToken(moveNext, persist.MetadataToken));
     }
 
     private static bool ContainsMetadataToken(MethodInfo method, int metadataToken)

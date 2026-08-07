@@ -201,6 +201,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     private HostedRoomSession? _activeSession;
     private HostOriginState? _hostOrigin;
+    private readonly LanConnectPendingSaveBindingIntentState _pendingSaveBindingIntent = new();
     private JoinedClientSession? _activeClientSession;
     private bool _heartbeatInFlight;
     private double _timeUntilHeartbeat;
@@ -846,6 +847,11 @@ internal sealed partial class LanConnectLobbyRuntime :
             return;
         }
 
+        if (!string.Equals(hostChannel.Trim(), LanConnectHostChannels.Lobby, StringComparison.OrdinalIgnoreCase))
+        {
+            _pendingSaveBindingIntent.Discard();
+        }
+
         ClearHostOrigin();
         _hostOrigin = new HostOriginState(
             netService,
@@ -912,6 +918,9 @@ internal sealed partial class LanConnectLobbyRuntime :
         string? previousChatRoomId = null;
         string? previousChatRoomSessionId = null;
 
+        // Hardening only: this late-save ordering has not been demonstrated as a field cause.
+        // Keep lobby metadata alive if disconnect teardown wins the race with SaveManager.Saved.
+        _pendingSaveBindingIntent.Capture(metadata.RoomName, metadata.Password, metadata.GameMode, metadata.SaveKey);
         HostedRoomSession session = new(netService, apiClient, registration, metadata);
         session.SetEnvelopeHandler(envelope => OnHostedControlEnvelope(session, envelope));
         session.ControlClient.RoomChatReadyReceived += envelope =>
@@ -1040,6 +1049,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     public void AttachJoinedClient(NetClientGameService netService, LobbyJoinRoomResponse joinResponse)
     {
+        _pendingSaveBindingIntent.Discard();
         string? controlChannelId = joinResponse.ConnectionPlan.ControlChannelId;
         if (string.IsNullOrWhiteSpace(controlChannelId))
         {
@@ -1350,6 +1360,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 });
             if (cleared)
             {
+                _pendingSaveBindingIntent.PreserveAcrossHostedSessionTeardown();
                 GD.Print($"sts2_lan_connect lobby runtime: hosted room cleared roomId={session.RoomId}");
             }
         }
@@ -1841,6 +1852,18 @@ internal sealed partial class LanConnectLobbyRuntime :
             return false;
         }
 
+        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+            run,
+            session.Metadata.RoomName,
+            session.Metadata.Password,
+            session.Metadata.GameMode,
+            LanConnectHostChannels.Lobby,
+            "host_restart_before_main_menu");
+        if (_pendingSaveBindingIntent.TryGet(out LanConnectPendingSaveBindingIntentState.BindingIntent restartIntent))
+        {
+            _pendingSaveBindingIntent.Complete(restartIntent);
+        }
+
         string restartToken = Guid.NewGuid().ToString("N");
         PendingHostRestart pending = new(
             restartToken,
@@ -1974,6 +1997,39 @@ internal sealed partial class LanConnectLobbyRuntime :
                 session.Metadata.GameMode,
                 LanConnectHostChannels.Lobby,
                 source);
+            if (_pendingSaveBindingIntent.TryGet(out LanConnectPendingSaveBindingIntentState.BindingIntent activeIntent))
+            {
+                _pendingSaveBindingIntent.Complete(activeIntent);
+            }
+            return;
+        }
+
+        if (_pendingSaveBindingIntent.TryGet(out LanConnectPendingSaveBindingIntentState.BindingIntent pendingIntent))
+        {
+            if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out SerializableRun? pendingRun, out string pendingFailure) || pendingRun == null)
+            {
+                GD.Print($"sts2_lan_connect lobby runtime: skip pending lobby binding persist source={source}, reason={pendingFailure}");
+                return;
+            }
+
+            string pendingSaveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(pendingRun);
+            if (!string.IsNullOrWhiteSpace(pendingIntent.SaveKey)
+                && !string.Equals(pendingIntent.SaveKey, pendingSaveKey, StringComparison.Ordinal))
+            {
+                GD.Print(
+                    $"sts2_lan_connect lobby runtime: discard pending lobby binding because saveKey changed source={source}, expected={pendingIntent.SaveKey}, actual={pendingSaveKey}");
+                _pendingSaveBindingIntent.Discard();
+                return;
+            }
+
+            LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+                pendingRun,
+                pendingIntent.RoomName,
+                pendingIntent.Password,
+                pendingIntent.GameMode,
+                LanConnectHostChannels.Lobby,
+                $"{source}:pending_lobby_intent");
+            _pendingSaveBindingIntent.Complete(pendingIntent);
             return;
         }
 
