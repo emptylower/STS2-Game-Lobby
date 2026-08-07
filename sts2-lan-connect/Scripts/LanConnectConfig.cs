@@ -424,7 +424,7 @@ internal static class LanConnectConfig
         {
             LanConnectSavedRoomBinding? binding = _data.SaveRoomBindings.FirstOrDefault(existing =>
                 string.Equals(existing.SaveKey, saveKey, StringComparison.Ordinal));
-            return binding == null ? null : CloneBinding(binding);
+            return binding == null ? null : CloneBindingForPersistence(binding);
         }
     }
 
@@ -436,7 +436,7 @@ internal static class LanConnectConfig
                 string.IsNullOrWhiteSpace(existing.SaveKey)
                 || string.Equals(existing.SaveKey, binding.SaveKey, StringComparison.Ordinal));
 
-            _data.SaveRoomBindings.Insert(0, CloneBinding(binding));
+            _data.SaveRoomBindings.Insert(0, CloneBindingForPersistence(binding));
             if (_data.SaveRoomBindings.Count > 16)
             {
                 _data.SaveRoomBindings.RemoveRange(16, _data.SaveRoomBindings.Count - 16);
@@ -570,7 +570,7 @@ internal static class LanConnectConfig
 
         _data.SaveRoomBindings = _data.SaveRoomBindings
             .Where(binding => !string.IsNullOrWhiteSpace(binding.SaveKey) && !string.IsNullOrWhiteSpace(binding.RoomName))
-            .Select(CloneBinding)
+            .Select(CloneBindingForPersistence)
             .Take(16)
             .ToList();
     }
@@ -589,10 +589,11 @@ internal static class LanConnectConfig
             : value.Trim();
     }
 
-    private static LanConnectSavedRoomBinding CloneBinding(LanConnectSavedRoomBinding binding)
+    internal static LanConnectSavedRoomBinding CloneBindingForPersistence(LanConnectSavedRoomBinding binding)
     {
         return new LanConnectSavedRoomBinding
         {
+            SchemaVersion = binding.SchemaVersion,
             SaveKey = binding.SaveKey,
             RoomName = SanitizeRoomName(binding.RoomName),
             Password = binding.Password,

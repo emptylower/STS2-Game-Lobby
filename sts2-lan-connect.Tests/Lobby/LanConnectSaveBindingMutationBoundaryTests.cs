@@ -32,6 +32,24 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
         Assert.False(ContainsMetadataToken(repair, remove.MetadataToken));
     }
 
+    [Fact]
+    public void Preserved_lobby_binding_still_publishes_after_repair()
+    {
+        LanConnectSavedRoomBinding existing = new()
+        {
+            SchemaVersion = LanConnectSavedRoomBinding.CurrentSchemaVersion,
+            SaveKey = "save-1",
+            RoomName = "续局房间",
+            HostChannel = LanConnectHostChannels.Lobby
+        };
+
+        LanConnectSavedRoomBinding preserved = LanConnectConfig.CloneBindingForPersistence(existing);
+
+        Assert.Equal(
+            LanConnectContinueRunPublishDecisionKind.Publish,
+            LanConnectContinueRunPublishDecision.Decide(preserved.HostChannel, preserved.SchemaVersion));
+    }
+
     private static bool ContainsMetadataToken(MethodInfo method, int metadataToken)
     {
         byte[] il = method.GetMethodBody()!.GetILAsByteArray()!;

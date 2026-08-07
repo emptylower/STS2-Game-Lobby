@@ -17,6 +17,10 @@ namespace Sts2LanConnect.Scripts;
 
 internal sealed class LanConnectSavedRoomBinding
 {
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; set; }
+
     public string SaveKey { get; set; } = string.Empty;
 
     public string RoomName { get; set; } = string.Empty;
@@ -43,6 +47,8 @@ internal sealed class LanConnectSavedRoomBinding
 
 internal sealed class LanConnectResolvedRoomBinding
 {
+    public int SchemaVersion { get; init; }
+
     public string SaveKey { get; init; } = string.Empty;
 
     public string RoomName { get; init; } = string.Empty;
@@ -110,7 +116,8 @@ internal static class LanConnectMultiplayerSaveRoomBinding
                 Password = string.IsNullOrWhiteSpace(storedBinding.Password) ? null : storedBinding.Password,
                 GameMode = string.IsNullOrWhiteSpace(storedBinding.GameMode) ? GetLobbyGameMode(run) : storedBinding.GameMode,
                 HasStoredBinding = true,
-                HostChannel = storedBinding.HostChannel ?? string.Empty
+                HostChannel = storedBinding.HostChannel ?? string.Empty,
+                SchemaVersion = storedBinding.SchemaVersion
             };
         }
 
@@ -121,7 +128,8 @@ internal static class LanConnectMultiplayerSaveRoomBinding
             Password = null,
             GameMode = GetLobbyGameMode(run),
             HasStoredBinding = false,
-            HostChannel = string.Empty
+            HostChannel = string.Empty,
+            SchemaVersion = 0
         };
     }
 
@@ -154,6 +162,7 @@ internal static class LanConnectMultiplayerSaveRoomBinding
 
         LanConnectSavedRoomBinding binding = new()
         {
+            SchemaVersion = LanConnectSavedRoomBinding.CurrentSchemaVersion,
             SaveKey = BuildSaveKey(run),
             RoomName = trimmedRoomName,
             Password = string.IsNullOrWhiteSpace(password) ? string.Empty : LanConnectConfig.SanitizeRoomPassword(password),
