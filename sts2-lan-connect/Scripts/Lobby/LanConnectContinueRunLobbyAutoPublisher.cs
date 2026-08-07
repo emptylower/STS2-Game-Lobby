@@ -18,7 +18,7 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
 
     private static readonly HashSet<ulong> InFlightScreens = new();
     private static readonly HashSet<ulong> CompletedScreens = new();
-    private static readonly HashSet<string> PromptingSaveKeys = new(StringComparer.Ordinal);
+    private static readonly LanConnectContinueRunPromptCoordinator PromptCoordinator = new();
     private static readonly Dictionary<ulong, DateTimeOffset> LastAttemptAt = new();
 
     internal static void ScheduleEnsureAutoPublish(Control screen, string source)
@@ -107,14 +107,17 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
 
         if (earlyDecision == LanConnectContinueRunPublishDecisionKind.Prompt)
         {
-            if (!PromptingSaveKeys.Add(earlyBinding.SaveKey))
+            if (!PromptCoordinator.TryBegin(
+                    instanceId,
+                    earlyBinding.SaveKey,
+                    out LanConnectContinueRunPromptCoordinator.PromptLease promptLease))
             {
                 return;
             }
 
             LastAttemptAt[instanceId] = DateTimeOffset.UtcNow;
             InFlightScreens.Add(instanceId);
-            TaskHelper.RunSafely(PromptThenPublishAsync(screen, context, earlyBinding, source));
+            TaskHelper.RunSafely(PromptThenPublishAsync(screen, context, earlyBinding, promptLease, source));
             return;
         }
 
@@ -142,19 +145,36 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
         Control screen,
         ContinuedRunHostContext context,
         LanConnectResolvedRoomBinding binding,
+        LanConnectContinueRunPromptCoordinator.PromptLease promptLease,
         string source)
     {
         ulong instanceId = screen.GetInstanceId();
         try
         {
-            string selectedHostChannel = await LanConnectContinueRunHostChannelPrompt.PromptAsync(screen, binding.RoomName);
-            LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
-                context.Run,
-                binding.RoomName,
-                binding.Password,
-                binding.GameMode,
-                selectedHostChannel,
-                "continue_save_channel_prompt");
+            string? selectedHostChannel = await PromptCoordinator.ResolveAsync(
+                promptLease,
+                cancellationToken => LanConnectContinueRunHostChannelPrompt.PromptAsync(
+                    screen,
+                    binding.RoomName,
+                    cancellationToken),
+                choice => LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+                    context.Run,
+                    binding.RoomName,
+                    binding.Password,
+                    binding.GameMode,
+                    choice,
+                    "continue_save_channel_prompt"));
+            if (selectedHostChannel == null)
+            {
+                if (GodotObject.IsInstanceValid(screen) && screen.IsInsideTree())
+                {
+                    CompletedScreens.Add(instanceId);
+                }
+                GD.Print(
+                    $"sts2_lan_connect continue_run_publish: channel prompt canceled saveKey={binding.SaveKey}, source={source}");
+                return;
+            }
+
             GD.Print(
                 $"sts2_lan_connect continue_run_publish: saved prompted host channel saveKey={binding.SaveKey}, hostChannel={selectedHostChannel}, schemaVersion={LanConnectSavedRoomBinding.CurrentSchemaVersion}, source={source}");
 
@@ -194,7 +214,7 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
         }
         finally
         {
-            PromptingSaveKeys.Remove(binding.SaveKey);
+            PromptCoordinator.ClearScreen(instanceId);
             InFlightScreens.Remove(instanceId);
         }
     }
@@ -298,6 +318,7 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
         InFlightScreens.Remove(instanceId);
         CompletedScreens.Remove(instanceId);
         LastAttemptAt.Remove(instanceId);
+        PromptCoordinator.ClearScreen(instanceId);
     }
 
     private sealed record ContinuedRunHostContext(NetHostGameService NetService, SerializableRun Run, GameMode GameMode, string ScreenType);

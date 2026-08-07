@@ -51,23 +51,44 @@ public sealed class LanConnectHostChannelBindingTests
     }
 
     [Fact]
-    public void Persistence_clone_and_json_round_trip_schema_version()
+    public void Config_load_and_save_cycle_preserves_schema_version_and_host_channel()
     {
-        LanConnectSavedRoomBinding original = new()
+        string directory = Path.Combine(Path.GetTempPath(), $"lan-connect-config-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        string inputPath = Path.Combine(directory, "input.json");
+        string outputPath = Path.Combine(directory, "output.json");
+        LanConnectConfigData input = new()
         {
-            SchemaVersion = LanConnectSavedRoomBinding.CurrentSchemaVersion,
-            SaveKey = "save-1",
-            RoomName = " 房间 ",
-            HostChannel = LanConnectHostChannels.Lan
+            SaveRoomBindings =
+            [
+                new LanConnectSavedRoomBinding
+                {
+                    SchemaVersion = LanConnectSavedRoomBinding.CurrentSchemaVersion,
+                    SaveKey = "save-1",
+                    RoomName = "房间",
+                    HostChannel = LanConnectHostChannels.Lan
+                }
+            ]
         };
+        File.WriteAllText(inputPath, JsonSerializer.Serialize(input));
+        try
+        {
+            LanConnectConfigData loadedConfig = LanConnectConfigPersistence.Load(inputPath);
+            LanConnectConfigPersistence.Save(outputPath, loadedConfig);
+            LanConnectConfigData saved = JsonSerializer.Deserialize<LanConnectConfigData>(
+                File.ReadAllText(outputPath))!;
 
-        LanConnectSavedRoomBinding clone = LanConnectConfig.CloneBindingForPersistence(original);
-        string json = JsonSerializer.Serialize(clone);
-        LanConnectSavedRoomBinding roundTripped = JsonSerializer.Deserialize<LanConnectSavedRoomBinding>(json)!;
-
-        Assert.Equal(LanConnectSavedRoomBinding.CurrentSchemaVersion, clone.SchemaVersion);
-        Assert.Equal(LanConnectSavedRoomBinding.CurrentSchemaVersion, roundTripped.SchemaVersion);
-        Assert.Equal("房间", roundTripped.RoomName);
-        Assert.Equal(LanConnectHostChannels.Lan, roundTripped.HostChannel);
+            LanConnectSavedRoomBinding loaded = Assert.Single(loadedConfig.SaveRoomBindings);
+            Assert.Equal(LanConnectSavedRoomBinding.CurrentSchemaVersion, loaded.SchemaVersion);
+            Assert.Equal(LanConnectHostChannels.Lan, loaded.HostChannel);
+            LanConnectSavedRoomBinding roundTripped = Assert.Single(saved.SaveRoomBindings);
+            Assert.Equal(LanConnectSavedRoomBinding.CurrentSchemaVersion, roundTripped.SchemaVersion);
+            Assert.Equal("房间", roundTripped.RoomName);
+            Assert.Equal(LanConnectHostChannels.Lan, roundTripped.HostChannel);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 }

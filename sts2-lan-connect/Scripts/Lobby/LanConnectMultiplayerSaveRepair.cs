@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Platform;
 using MegaCrit.Sts2.Core.Saves;
+using MegaCrit.Sts2.Core.Saves.Runs;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -17,6 +18,20 @@ internal sealed class LanConnectSaveRepairResult
 
 internal static class LanConnectMultiplayerSaveRepair
 {
+    private static class BindingCoordinatorHolder
+    {
+        // The explicit cctor prevents beforefieldinit from resolving sts2 types until first use.
+        static BindingCoordinatorHolder()
+        {
+        }
+
+        internal static readonly LanConnectRunBindingCoordinator<SerializableRun> Instance = new(
+            LoadRunForCoordinator,
+            LanConnectMultiplayerSaveRoomBinding.BuildSaveKey,
+            LanConnectConfig.TryGetSaveRoomBinding,
+            PersistBindingFromCoordinator);
+    }
+
     public static Task<LanConnectSaveRepairResult> RepairCurrentProfileAsync()
     {
         return Task.FromResult(RepairCurrentProfile());
@@ -72,13 +87,13 @@ internal static class LanConnectMultiplayerSaveRepair
         }
 
         string bindingSummary;
-        if (LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out var run, out string _failureReason) && run != null)
+        LanConnectRunBindingCoordinator<SerializableRun>.RepairBindingInspection bindingInspection =
+            BindingCoordinatorHolder.Instance.InspectRepairBinding();
+        if (bindingInspection.RunLoaded)
         {
-            string saveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run);
-            bool hasBinding = LanConnectConfig.TryGetSaveRoomBinding(saveKey) != null;
-            bindingSummary = hasBinding
-                ? $"已保留当前多人存档的房间绑定 {saveKey}"
-                : $"当前多人存档没有已保存的房间绑定 {saveKey}";
+            bindingSummary = bindingInspection.HasBinding
+                ? $"已保留当前多人存档的房间绑定 {bindingInspection.SaveKey}"
+                : $"当前多人存档没有已保存的房间绑定 {bindingInspection.SaveKey}";
         }
         else
         {
@@ -112,6 +127,30 @@ internal static class LanConnectMultiplayerSaveRepair
             Success = validationSucceeded,
             Message = $"{validation}\n备份：{(backupCreated ? backupDir : "当前 modded profile 无旧文件，无需备份")}\n同步文件数：{filesCopied}\n{bindingSummary}"
         };
+    }
+
+    private static LanConnectRunBindingCoordinator<SerializableRun>.LoadResult LoadRunForCoordinator()
+    {
+        bool success = LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(
+            out SerializableRun? run,
+            out string failureReason);
+        return new LanConnectRunBindingCoordinator<SerializableRun>.LoadResult(
+            success,
+            run,
+            failureReason);
+    }
+
+    private static void PersistBindingFromCoordinator(
+        SerializableRun run,
+        LanConnectRunBindingCoordinator<SerializableRun>.BindingWrite write)
+    {
+        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+            run,
+            write.RoomName,
+            write.Password,
+            write.GameMode,
+            write.HostChannel,
+            write.Source);
     }
 
     private static bool BackupProfileIfNeeded(string sourceProfileDir, string backupProfileDir)

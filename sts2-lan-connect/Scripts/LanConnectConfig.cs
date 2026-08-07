@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using Godot;
 using MegaCrit.Sts2.Core.Logging;
 
@@ -477,39 +476,48 @@ internal static class LanConnectConfig
     {
         lock (Sync)
         {
-            string path = GetConfigPath();
-            if (!File.Exists(path))
-            {
-                NormalizeDefaultsUnsafe();
-                SaveUnsafe();
-                return;
-            }
-
-            try
-            {
-                string json = File.ReadAllText(path);
-                _data = JsonSerializer.Deserialize<LanConnectConfigData>(json) ?? new LanConnectConfigData();
-                NormalizeDefaultsUnsafe();
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"sts2_lan_connect failed to read config: {ex.Message}");
-                _data = new LanConnectConfigData();
-                NormalizeDefaultsUnsafe();
-                SaveUnsafe();
-            }
+            LoadUnsafe(GetConfigPath(), createIfMissing: true);
         }
     }
 
     private static void SaveUnsafe()
     {
-        string path = GetConfigPath();
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        string json = JsonSerializer.Serialize(_data, new JsonSerializerOptions
+        SaveUnsafe(GetConfigPath());
+    }
+
+    private static void SaveUnsafe(string path)
+    {
+        LanConnectConfigPersistence.Save(path, _data);
+    }
+
+    private static void LoadUnsafe(string path, bool createIfMissing)
+    {
+        if (!File.Exists(path))
         {
-            WriteIndented = true
-        });
-        File.WriteAllText(path, json);
+            _data = new LanConnectConfigData();
+            NormalizeDefaultsUnsafe();
+            if (createIfMissing)
+            {
+                SaveUnsafe(path);
+            }
+            return;
+        }
+
+        try
+        {
+            _data = LanConnectConfigPersistence.Load(path);
+            NormalizeDefaultsUnsafe();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"sts2_lan_connect failed to read config: {ex.Message}");
+            _data = new LanConnectConfigData();
+            NormalizeDefaultsUnsafe();
+            if (createIfMissing)
+            {
+                SaveUnsafe(path);
+            }
+        }
     }
 
     private static string GetConfigPath()

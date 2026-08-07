@@ -199,9 +199,25 @@ internal sealed partial class LanConnectLobbyRuntime :
     private static readonly LanConnectChatFeatureVersions CurrentRoomChatVersions =
         new(1, 1, 1, 1);
 
+    private static class RunBindingCoordinatorHolder
+    {
+        // The explicit cctor prevents beforefieldinit from resolving sts2 types until first use.
+        static RunBindingCoordinatorHolder()
+        {
+        }
+
+        internal static readonly LanConnectRunBindingCoordinator<SerializableRun> Instance = new(
+            LoadRunForBindingCoordinator,
+            LanConnectMultiplayerSaveRoomBinding.BuildSaveKey,
+            LanConnectConfig.TryGetSaveRoomBinding,
+            PersistRunBindingFromCoordinator);
+    }
+
     private HostedRoomSession? _activeSession;
     private HostOriginState? _hostOrigin;
-    private readonly LanConnectPendingSaveBindingIntentState _pendingSaveBindingIntent = new();
+    private readonly LanConnectPendingSaveBindingCoordinator _pendingSaveBindingCoordinator = new(
+        LoadPendingSaveBindingTarget,
+        PersistPendingSaveBinding);
     private JoinedClientSession? _activeClientSession;
     private bool _heartbeatInFlight;
     private double _timeUntilHeartbeat;
@@ -807,6 +823,7 @@ internal sealed partial class LanConnectLobbyRuntime :
     public override void _ExitTree()
     {
         ClearHostOrigin();
+        _pendingSaveBindingCoordinator.HostedFlowEnded("runtime_exit");
         if (_itemLinkCaptureRouteOnlyForTests || _referenceModeRouteOnlyForTests)
         {
             if (ReferenceEquals(Instance, this))
@@ -849,7 +866,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         if (!string.Equals(hostChannel.Trim(), LanConnectHostChannels.Lobby, StringComparison.OrdinalIgnoreCase))
         {
-            _pendingSaveBindingIntent.Discard();
+            _pendingSaveBindingCoordinator.AttachJoinedClient();
         }
 
         ClearHostOrigin();
@@ -879,6 +896,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         GD.Print($"sts2_lan_connect lobby runtime: cleared host origin channel={_hostOrigin.HostChannel}");
         _hostOrigin.Detach();
         _hostOrigin = null;
+        _pendingSaveBindingCoordinator.HostedFlowEnded("host_origin_cleared");
     }
 
     private async Task ShutdownAsync(
@@ -913,14 +931,12 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     public void AttachHostedRoom(NetHostGameService netService, LobbyApiClient apiClient, LobbyCreateRoomResponse registration, LanConnectHostedRoomMetadata metadata)
     {
+        _pendingSaveBindingCoordinator.DifferentHostedRoomWillAttach();
         HostedRoomSession? previousHostedSession = null;
         JoinedClientSession? previousClientSession = null;
         string? previousChatRoomId = null;
         string? previousChatRoomSessionId = null;
 
-        // Hardening only: this late-save ordering has not been demonstrated as a field cause.
-        // Keep lobby metadata alive if disconnect teardown wins the race with SaveManager.Saved.
-        _pendingSaveBindingIntent.Capture(metadata.RoomName, metadata.Password, metadata.GameMode, metadata.SaveKey);
         HostedRoomSession session = new(netService, apiClient, registration, metadata);
         session.SetEnvelopeHandler(envelope => OnHostedControlEnvelope(session, envelope));
         session.ControlClient.RoomChatReadyReceived += envelope =>
@@ -1042,6 +1058,13 @@ internal sealed partial class LanConnectLobbyRuntime :
             metadata.RoomName,
             metadata.Password,
             metadata.GameMode);
+        // B4 hardening only: this late-save ordering has not been demonstrated as a field cause.
+        // A freshly created room has no key and therefore cannot create a pending intent.
+        _pendingSaveBindingCoordinator.AttachHostedRoom(
+            metadata.RoomName,
+            metadata.Password,
+            metadata.GameMode,
+            metadata.SaveKey);
         TaskHelper.RunSafely(ConnectHostedControlAsync(session));
         PersistBindingForCurrentSave("attach");
         _pendingHostRestart = null;
@@ -1049,7 +1072,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     public void AttachJoinedClient(NetClientGameService netService, LobbyJoinRoomResponse joinResponse)
     {
-        _pendingSaveBindingIntent.Discard();
+        _pendingSaveBindingCoordinator.AttachJoinedClient();
         string? controlChannelId = joinResponse.ConnectionPlan.ControlChannelId;
         if (string.IsNullOrWhiteSpace(controlChannelId))
         {
@@ -1360,7 +1383,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 });
             if (cleared)
             {
-                _pendingSaveBindingIntent.PreserveAcrossHostedSessionTeardown();
+                _pendingSaveBindingCoordinator.HostedSessionTornDown();
                 GD.Print($"sts2_lan_connect lobby runtime: hosted room cleared roomId={session.RoomId}");
             }
         }
@@ -1852,18 +1875,6 @@ internal sealed partial class LanConnectLobbyRuntime :
             return false;
         }
 
-        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
-            run,
-            session.Metadata.RoomName,
-            session.Metadata.Password,
-            session.Metadata.GameMode,
-            LanConnectHostChannels.Lobby,
-            "host_restart_before_main_menu");
-        if (_pendingSaveBindingIntent.TryGet(out LanConnectPendingSaveBindingIntentState.BindingIntent restartIntent))
-        {
-            _pendingSaveBindingIntent.Complete(restartIntent);
-        }
-
         string restartToken = Guid.NewGuid().ToString("N");
         PendingHostRestart pending = new(
             restartToken,
@@ -1877,29 +1888,34 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         try
         {
-            await session.ControlClient.SendAsync(new LobbyControlEnvelope
-            {
-                Type = "restart_prepare",
-                RoomId = session.RoomId,
-                ControlChannelId = session.ControlChannelId,
-                Role = "host",
-                SaveKey = pending.SaveKey,
-                RestartToken = pending.RestartToken,
-                ExpiresAtUnixMs = pending.ExpiresAtUnixMs,
-                HostPlayerName = pending.HostPlayerName,
-                RoomName = pending.RoomName,
-                RoomPassword = pending.RoomPassword
-            }, CancellationToken.None);
+            await RunBindingCoordinatorHolder.Instance.ExecuteHostedRestartAsync(
+                run,
+                session.Metadata.RoomName,
+                session.Metadata.Password,
+                session.Metadata.GameMode,
+                () => _pendingSaveBindingCoordinator.CompleteActivePersist(pending.SaveKey),
+                async () =>
+                {
+                    await session.ControlClient.SendAsync(new LobbyControlEnvelope
+                    {
+                        Type = "restart_prepare",
+                        RoomId = session.RoomId,
+                        ControlChannelId = session.ControlChannelId,
+                        Role = "host",
+                        SaveKey = pending.SaveKey,
+                        RestartToken = pending.RestartToken,
+                        ExpiresAtUnixMs = pending.ExpiresAtUnixMs,
+                        HostPlayerName = pending.HostPlayerName,
+                        RoomName = pending.RoomName,
+                        RoomPassword = pending.RoomPassword
+                    }, CancellationToken.None);
 
-            LanConnectPopupUtil.ShowInfo("已通知队友准备自动重连。\n正在返回主菜单并重开当前多人续局...");
-            _timeUntilRestartSubmenuAttempt = 0d;
-            await Task.Delay(200);
-            if (NGame.Instance == null)
-            {
-                throw new InvalidOperationException("NGame instance is unavailable.");
-            }
-
-            await NGame.Instance.ReturnToMainMenu();
+                    LanConnectPopupUtil.ShowInfo("已通知队友准备自动重连。\n正在返回主菜单并重开当前多人续局...");
+                    _timeUntilRestartSubmenuAttempt = 0d;
+                    await Task.Delay(200);
+                },
+                () => NGame.Instance?.ReturnToMainMenu()
+                    ?? Task.FromException(new InvalidOperationException("NGame instance is unavailable.")));
             return true;
         }
         catch (Exception ex)
@@ -1997,39 +2013,29 @@ internal sealed partial class LanConnectLobbyRuntime :
                 session.Metadata.GameMode,
                 LanConnectHostChannels.Lobby,
                 source);
-            if (_pendingSaveBindingIntent.TryGet(out LanConnectPendingSaveBindingIntentState.BindingIntent activeIntent))
-            {
-                _pendingSaveBindingIntent.Complete(activeIntent);
-            }
+            _pendingSaveBindingCoordinator.CompleteActivePersist(
+                LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run));
             return;
         }
 
-        if (_pendingSaveBindingIntent.TryGet(out LanConnectPendingSaveBindingIntentState.BindingIntent pendingIntent))
+        LanConnectPendingSaveBindingCoordinator.PendingPersistResult pendingResult =
+            _pendingSaveBindingCoordinator.PersistForCurrentSave(source);
+        if (pendingResult != LanConnectPendingSaveBindingCoordinator.PendingPersistResult.NoIntent)
         {
-            if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out SerializableRun? pendingRun, out string pendingFailure) || pendingRun == null)
+            if (pendingResult == LanConnectPendingSaveBindingCoordinator.PendingPersistResult.SaveUnavailable)
             {
-                GD.Print($"sts2_lan_connect lobby runtime: skip pending lobby binding persist source={source}, reason={pendingFailure}");
-                return;
+                GD.Print($"sts2_lan_connect lobby runtime: skip pending lobby binding persist source={source}, reason=current_save_unavailable");
             }
-
-            string pendingSaveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(pendingRun);
-            if (!string.IsNullOrWhiteSpace(pendingIntent.SaveKey)
-                && !string.Equals(pendingIntent.SaveKey, pendingSaveKey, StringComparison.Ordinal))
+            else if (pendingResult == LanConnectPendingSaveBindingCoordinator.PendingPersistResult.RefusedDifferentSave)
             {
                 GD.Print(
-                    $"sts2_lan_connect lobby runtime: discard pending lobby binding because saveKey changed source={source}, expected={pendingIntent.SaveKey}, actual={pendingSaveKey}");
-                _pendingSaveBindingIntent.Discard();
-                return;
+                    $"sts2_lan_connect lobby runtime: discard pending lobby binding because saveKey changed source={source}");
             }
-
-            LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
-                pendingRun,
-                pendingIntent.RoomName,
-                pendingIntent.Password,
-                pendingIntent.GameMode,
-                LanConnectHostChannels.Lobby,
-                $"{source}:pending_lobby_intent");
-            _pendingSaveBindingIntent.Complete(pendingIntent);
+            else if (pendingResult == LanConnectPendingSaveBindingCoordinator.PendingPersistResult.RefusedMissingKey)
+            {
+                GD.Print(
+                    $"sts2_lan_connect lobby runtime: refuse pending lobby binding without an exact saveKey source={source}");
+            }
             return;
         }
 
@@ -2062,6 +2068,68 @@ internal sealed partial class LanConnectLobbyRuntime :
             origin.HostChannel,
             source);
         origin.HasPersisted = true;
+    }
+
+    private static LanConnectPendingSaveBindingCoordinator.LoadedSave? LoadPendingSaveBindingTarget()
+    {
+        if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(
+                out SerializableRun? run,
+                out string failureReason)
+            || run == null)
+        {
+            GD.Print($"sts2_lan_connect lobby runtime: pending save load failed reason={failureReason}");
+            return null;
+        }
+
+        return new LanConnectPendingSaveBindingCoordinator.LoadedSave(
+            LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run),
+            run);
+    }
+
+    private static LanConnectRunBindingCoordinator<SerializableRun>.LoadResult LoadRunForBindingCoordinator()
+    {
+        bool success = LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(
+            out SerializableRun? run,
+            out string failureReason);
+        return new LanConnectRunBindingCoordinator<SerializableRun>.LoadResult(success, run, failureReason);
+    }
+
+    private static void PersistRunBindingFromCoordinator(
+        SerializableRun run,
+        LanConnectRunBindingCoordinator<SerializableRun>.BindingWrite write)
+    {
+        string actualSaveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run);
+        if (!string.Equals(actualSaveKey, write.SaveKey, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Hosted restart binding saveKey changed: expected={write.SaveKey}, actual={actualSaveKey}.");
+        }
+
+        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+            run,
+            write.RoomName,
+            write.Password,
+            write.GameMode,
+            write.HostChannel,
+            write.Source);
+    }
+
+    private static void PersistPendingSaveBinding(
+        LanConnectPendingSaveBindingCoordinator.LoadedSave loadedSave,
+        LanConnectPendingSaveBindingCoordinator.PersistenceRequest request)
+    {
+        if (loadedSave.Value is not SerializableRun run)
+        {
+            throw new InvalidOperationException("Pending save binding target is not a SerializableRun.");
+        }
+
+        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+            run,
+            request.RoomName,
+            request.Password,
+            request.GameMode,
+            request.HostChannel,
+            request.Source);
     }
 
     private async void OnHostedControlEnvelope(HostedRoomSession session, LobbyControlEnvelope envelope)

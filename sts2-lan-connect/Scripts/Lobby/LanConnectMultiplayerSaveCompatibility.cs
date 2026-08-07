@@ -33,6 +33,20 @@ internal static class LanConnectMultiplayerSaveCompatibility
     private static readonly FieldInfo? MultiplayerSubmenuLoadingOverlayField = typeof(NMultiplayerSubmenu).GetField("_loadingOverlay", BindingFlags.Instance | BindingFlags.NonPublic);
     private static readonly FieldInfo? MultiplayerSubmenuStackField = typeof(NSubmenu).GetField("_stack", BindingFlags.Instance | BindingFlags.NonPublic);
 
+    private static class BindingCoordinatorHolder
+    {
+        // The explicit cctor prevents beforefieldinit from resolving sts2 types until first use.
+        static BindingCoordinatorHolder()
+        {
+        }
+
+        internal static readonly LanConnectRunBindingCoordinator<SerializableRun> Instance = new(
+            LoadSafeRunForCoordinator,
+            LanConnectMultiplayerSaveRoomBinding.BuildSaveKey,
+            LanConnectConfig.TryGetSaveRoomBinding,
+            PersistBindingFromCoordinator);
+    }
+
     public static bool ShouldInterceptOfficialLoadButtons()
     {
         if (PlatformUtil.PrimaryPlatform == PlatformType.None)
@@ -79,7 +93,9 @@ internal static class LanConnectMultiplayerSaveCompatibility
 
     public static Task StartLoadedRunAsLanHostAsync(Control loadingOverlay, NSubmenuStack stack)
     {
-        if (!TryLoadSafeCurrentRun(out SerializableRun? run, out string failureReason) || run == null)
+        if (!BindingCoordinatorHolder.Instance.TryLoadForSafeLoad(
+                out SerializableRun? run,
+                out string failureReason) || run == null)
         {
             Log.Warn($"sts2_lan_connect save_compat: safe load failed before host start. reason={failureReason}");
             ShowInvalidSavePopup();
@@ -253,6 +269,25 @@ internal static class LanConnectMultiplayerSaveCompatibility
 
         run = null;
         return false;
+    }
+
+    private static LanConnectRunBindingCoordinator<SerializableRun>.LoadResult LoadSafeRunForCoordinator()
+    {
+        bool success = TryLoadSafeCurrentRun(out SerializableRun? run, out string failureReason);
+        return new LanConnectRunBindingCoordinator<SerializableRun>.LoadResult(success, run, failureReason);
+    }
+
+    private static void PersistBindingFromCoordinator(
+        SerializableRun run,
+        LanConnectRunBindingCoordinator<SerializableRun>.BindingWrite write)
+    {
+        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+            run,
+            write.RoomName,
+            write.Password,
+            write.GameMode,
+            write.HostChannel,
+            write.Source);
     }
 
     private static void PushLoadedRunScreen(NSubmenuStack stack, NetHostGameService netService, SerializableRun run)
