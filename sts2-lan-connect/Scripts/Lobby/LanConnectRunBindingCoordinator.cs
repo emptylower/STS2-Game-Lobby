@@ -49,6 +49,7 @@ internal sealed class LanConnectRunBindingCoordinator<TRun>
 
     public async Task ExecuteHostedRestartAsync(
         TRun run,
+        string? expectedSaveKey,
         string roomName,
         string? password,
         string gameMode,
@@ -56,8 +57,21 @@ internal sealed class LanConnectRunBindingCoordinator<TRun>
         Func<Task> prepareReturn,
         Func<Task> returnToMainMenu)
     {
+        string loadedSaveKey = _buildSaveKey(run);
+        if (string.IsNullOrWhiteSpace(expectedSaveKey))
+        {
+            throw new InvalidOperationException(
+                "当前房间尚未绑定多人存档，已拒绝重开。请确认正在游玩本房间的存档后再试。");
+        }
+
+        if (!string.Equals(expectedSaveKey, loadedSaveKey, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"当前多人存档不是此房间正在托管的存档，已拒绝重开。房间存档={expectedSaveKey}，当前存档={loadedSaveKey}。");
+        }
+
         BindingWrite write = new(
-            _buildSaveKey(run),
+            loadedSaveKey,
             roomName,
             password,
             gameMode,

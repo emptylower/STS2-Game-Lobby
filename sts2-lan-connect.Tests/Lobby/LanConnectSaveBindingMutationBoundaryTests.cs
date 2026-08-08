@@ -139,6 +139,7 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
 
         await coordinator.ExecuteHostedRestartAsync(
             "save-3",
+            "save-3",
             "大厅续局",
             "secret",
             "custom",
@@ -180,6 +181,7 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
         InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             coordinator.ExecuteHostedRestartAsync(
                 "save-4",
+                "save-4",
                 "大厅续局",
                 null,
                 "standard",
@@ -197,6 +199,47 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
 
         Assert.Contains("saveKey=save-4", error.Message);
         Assert.Equal(["persist_skipped"], events);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("save-other")]
+    public async Task Hosted_restart_refuses_unbound_or_different_current_save_before_any_effect(
+        string? expectedSaveKey)
+    {
+        List<string> events = new();
+        LanConnectRunBindingCoordinator<string> coordinator = new(
+            () => new(true, "save-current", string.Empty),
+            run => run,
+            _ => null,
+            (_, _) =>
+            {
+                events.Add("persist");
+                return true;
+            });
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ExecuteHostedRestartAsync(
+                "save-current",
+                expectedSaveKey,
+                "大厅续局",
+                null,
+                "standard",
+                () => events.Add("after_persist"),
+                () =>
+                {
+                    events.Add("restart_prepare");
+                    return Task.CompletedTask;
+                },
+                () =>
+                {
+                    events.Add("return_to_main_menu");
+                    return Task.CompletedTask;
+                }));
+
+        Assert.Contains("已拒绝重开", error.Message);
+        Assert.Empty(events);
     }
 
     private static void AssertRepairEntryDoesNotRemoveBindings()

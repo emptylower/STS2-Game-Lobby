@@ -1896,6 +1896,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         {
             await RunBindingCoordinatorHolder.Instance.ExecuteHostedRestartAsync(
                 run,
+                session.BoundSaveKey,
                 session.Metadata.RoomName,
                 session.Metadata.Password,
                 session.Metadata.GameMode,
