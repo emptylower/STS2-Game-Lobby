@@ -27,6 +27,7 @@ function createBasicRoom(store: LobbyStore): CreateRoomResult {
     {
       roomName: "基础房间",
       hostPlayerName: "Host",
+      clientInstallationId: "install-host",
       gameMode: "standard",
       version: "1.2.3",
       modVersion: "0.1.0",
@@ -43,6 +44,8 @@ function createBasicRoom(store: LobbyStore): CreateRoomResult {
 function basicJoinInput(): JoinRoomInput {
   return {
     playerName: "Guest",
+    playerNetId: "slot-guest",
+    clientInstallationId: "install-guest",
     version: "1.2.3",
     modVersion: "0.1.0",
   };
@@ -59,6 +62,7 @@ function createWireCacheRoom(
     {
       roomName: "网络编码测试房间",
       hostPlayerName: "Host",
+      clientInstallationId: "install-host",
       gameMode: "standard",
       version: "1.2.3",
       modVersion: "0.1.0",
@@ -893,12 +897,13 @@ test("joinRoom treats trailing .0 mod version suffix as equivalent", () => {
   assert.equal(joined.room.modVersion, "0.1.2");
 });
 
-test("kickPlayer blocks kicked player from re-joining", () => {
+test("kickPlayer bans only the current occupant installation and never the shared save slot", () => {
   const store = new LobbyStore(baseConfig);
   const created = store.createRoom(
     {
       roomName: "踢人测试房间",
       hostPlayerName: "Host",
+      clientInstallationId: "install-host",
       gameMode: "standard",
       version: "1.2.3",
       modVersion: "0.1.0",
@@ -910,17 +915,44 @@ test("kickPlayer blocks kicked player from re-joining", () => {
     "203.0.113.10",
   );
 
-  store.kickPlayer(created.roomId, created.hostToken, "12345");
-  assert.equal(store.isPlayerKicked(created.roomId, "12345"), true);
-  assert.equal(store.isPlayerKicked(created.roomId, "99999"), false);
+  const originalOwner = store.joinRoom(created.roomId, {
+    playerName: "Original Owner",
+    version: "1.2.3",
+    modVersion: "0.1.0",
+    playerNetId: "save-slot-12345",
+    clientInstallationId: "install-original",
+  });
+  const currentOccupant = store.joinRoom(created.roomId, {
+    playerName: "Current Occupant",
+    version: "1.2.3",
+    modVersion: "0.1.0",
+    playerNetId: "save-slot-12345",
+    clientInstallationId: "install-takeover",
+  });
+  assert.equal(
+    store.validateClientControl(created.roomId, created.controlChannelId, originalOwner.ticketId)
+      .clientInstallationId,
+    "install-original",
+  );
+  assert.equal(
+    store.validateClientControl(created.roomId, created.controlChannelId, currentOccupant.ticketId)
+      .playerNetId,
+    "save-slot-12345",
+  );
+
+  store.kickPlayer(created.roomId, created.hostToken, "install-takeover");
+  store.kickPlayer(created.roomId, created.hostToken, "install-takeover");
+  assert.equal(store.isClientInstallationKicked(created.roomId, "install-takeover"), true);
+  assert.equal(store.isClientInstallationKicked(created.roomId, "install-original"), false);
 
   assert.throws(
     () =>
       store.joinRoom(created.roomId, {
-        playerName: "Kicked Guest",
+        playerName: "Kicked Occupant",
         version: "1.2.3",
         modVersion: "0.1.0",
-        playerNetId: "12345",
+        playerNetId: "save-slot-12345",
+        clientInstallationId: "install-takeover",
       }),
     (error: unknown) =>
       error instanceof LobbyStoreError &&
@@ -928,14 +960,14 @@ test("kickPlayer blocks kicked player from re-joining", () => {
       error.statusCode === 403,
   );
 
-  // A different player can still join
-  const joined = store.joinRoom(created.roomId, {
-    playerName: "Other Guest",
+  const rejoined = store.joinRoom(created.roomId, {
+    playerName: "Original Owner",
     version: "1.2.3",
     modVersion: "0.1.0",
-    playerNetId: "99999",
+    playerNetId: "save-slot-12345",
+    clientInstallationId: "install-original",
   });
-  assert.equal(joined.room.roomId, created.roomId);
+  assert.equal(rejoined.room.roomId, created.roomId);
 });
 
 test("kickPlayer rejects invalid host token", () => {
@@ -1004,12 +1036,14 @@ test("getRoomSettings returns default for non-existent room", () => {
   assert.equal(settings.chatEnabled, true);
 });
 
-test("joinRoom without playerNetId does not check kicked list", () => {
-  const store = new LobbyStore(baseConfig);
+test("legacy join without clientInstallationId falls back to playerNetId and logs once", () => {
+  const warnings: string[] = [];
+  const store = new LobbyStore(baseConfig, { warn: (message) => warnings.push(message) });
   const created = store.createRoom(
     {
       roomName: "不传 netId 房间",
       hostPlayerName: "Host",
+      clientInstallationId: "install-host",
       gameMode: "standard",
       version: "1.2.3",
       modVersion: "0.1.0",
@@ -1021,15 +1055,44 @@ test("joinRoom without playerNetId does not check kicked list", () => {
     "203.0.113.10",
   );
 
-  store.kickPlayer(created.roomId, created.hostToken, "12345");
-
-  // Without playerNetId, the kicked check is skipped (backward compat)
-  const joined = store.joinRoom(created.roomId, {
+  const legacyTicket = store.joinRoom(created.roomId, {
     playerName: "Legacy Client",
     version: "1.2.3",
     modVersion: "0.1.0",
+    playerNetId: "12345",
   });
-  assert.equal(joined.room.roomId, created.roomId);
+  assert.equal(
+    store.validateClientControl(created.roomId, created.controlChannelId, legacyTicket.ticketId)
+      .clientInstallationId,
+    "12345",
+  );
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /identity mode=legacy/);
+
+  store.kickPlayer(created.roomId, created.hostToken, "12345");
+
+  assert.throws(() => store.joinRoom(created.roomId, {
+    playerName: "Legacy Client",
+    version: "1.2.3",
+    modVersion: "0.1.0",
+    playerNetId: "12345",
+  }), (error: unknown) => error instanceof LobbyStoreError && error.code === "kicked");
+  assert.equal(warnings.length, 1);
+});
+
+test("installation kick does not outlive the room session", () => {
+  const store = new LobbyStore(baseConfig, { warn: () => undefined });
+  const first = createBasicRoom(store);
+  store.kickPlayer(first.roomId, first.hostToken, "install-guest");
+  store.deleteRoom(first.roomId, first.hostToken);
+
+  const second = createBasicRoom(store);
+  const joined = store.joinRoom(second.roomId, {
+    ...basicJoinInput(),
+    playerNetId: "same-slot",
+    clientInstallationId: "install-guest",
+  });
+  assert.equal(joined.room.roomId, second.roomId);
 });
 
 test("relay-only strategy omits direct candidates", () => {

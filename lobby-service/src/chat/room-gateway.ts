@@ -36,6 +36,7 @@ export interface RoomChatPeerRegistration {
   controlChannelId: string;
   role: "host" | "client";
   authenticatedTicketId?: string;
+  authenticatedIdentity?: AuthenticatedRoomChatIdentity;
   send(frame: Record<string, unknown>): void;
   close(code: number, reason: string): void;
 }
@@ -83,7 +84,16 @@ export class RoomChatGatewayError extends Error {
 
 export interface LockedRoomChatIdentity {
   playerName: string;
+  // Game peer key used by combat references and peerPlayerNetIds.
   playerNetId: string;
+  // Human/install key used by chat attribution and moderation continuity.
+  clientInstallationId?: string;
+}
+
+export interface AuthenticatedRoomChatIdentity {
+  playerName: string;
+  playerNetId?: string;
+  clientInstallationId?: string;
 }
 
 interface RoomChatMessage extends CanonicalChatMessage {
@@ -223,6 +233,9 @@ export class RoomChatGateway {
       ...(registration.authenticatedTicketId === undefined
         ? {}
         : { authenticatedTicketId: registration.authenticatedTicketId }),
+      ...(registration.authenticatedIdentity === undefined
+        ? {}
+        : { authenticatedIdentity: { ...registration.authenticatedIdentity } }),
       send: registration.send,
       close: registration.close,
       terminal: false,
@@ -367,10 +380,11 @@ export class RoomChatGateway {
       if (envelope.role !== peer.role) {
         throw new RoomEnvelopeError("protocol_mismatch", "hello role does not match connection");
       }
-      identity = {
+      const declaredIdentity = {
         playerName: normalizePlayerName(envelope.playerName),
         playerNetId: normalizePlayerNetId(envelope.playerNetId),
       };
+      identity = lockRoomChatIdentity(declaredIdentity, peer.authenticatedIdentity);
       if (this.isSensitiveNameBlocked(identity.playerName)) {
         const moderation = this.moderation!;
         moderation.recordNameRejection();
@@ -391,6 +405,7 @@ export class RoomChatGateway {
       if (
         peer.identity.playerName !== identity.playerName
         || peer.identity.playerNetId !== identity.playerNetId
+        || peer.identity.clientInstallationId !== identity.clientInstallationId
         || !sameFeatures(peer.declaredFeatures, declaredFeatures)
       ) {
         this.rejectHello(peer, true);
@@ -455,10 +470,14 @@ export class RoomChatGateway {
       }
       if (peer.role === "client") {
         if (!Object.hasOwn(envelope, "playerNetId")) return;
-        legacyClientIdentity = {
+        const declaredIdentity = {
           playerName,
           playerNetId: normalizePlayerNetId(envelope.playerNetId),
         };
+        legacyClientIdentity = lockRoomChatIdentity(
+          declaredIdentity,
+          peer.authenticatedIdentity,
+        );
       } else if (Object.hasOwn(envelope, "playerNetId")) {
         normalizePlayerNetId(envelope.playerNetId);
       }
@@ -572,7 +591,7 @@ export class RoomChatGateway {
       roomId: peer.roomId,
       roomSessionId: peer.roomSessionId,
       messageId: "00000000-0000-0000-0000-000000000000",
-      senderId: peer.identity.playerNetId,
+      senderId: roomChatAttributionId(peer.identity),
       senderName: peer.identity.playerName,
       content,
       plainTextFallback: renderPlainTextFallback(content),
@@ -631,7 +650,7 @@ export class RoomChatGateway {
     }
 
     const plainText = renderPlainTextFallback(content);
-    const senderKey = `${peer.roomSessionId}\0${peer.identity.playerNetId}`;
+    const senderKey = `${peer.roomSessionId}\0${roomChatAttributionId(peer.identity)}`;
     const conversation = this.moderation?.enabled
       ? this.conversationWindow.buildCandidate(
           senderKey,
@@ -738,7 +757,7 @@ export class RoomChatGateway {
       roomId: peer.roomId,
       roomSessionId: peer.roomSessionId,
       messageId: this.randomUuid(),
-      senderId: identity.playerNetId,
+      senderId: roomChatAttributionId(identity),
       senderName: identity.playerName,
       content,
       plainTextFallback: renderPlainTextFallback(content),
@@ -758,7 +777,7 @@ export class RoomChatGateway {
     };
     this.storeDedupe(peer, envelope.clientMessageId, canonicalJson, ack);
     this.conversationWindow.recordCommitted(
-      `${peer.roomSessionId}\0${identity.playerNetId}`,
+      `${peer.roomSessionId}\0${roomChatAttributionId(identity)}`,
       message.messageId,
       message.plainTextFallback,
     );
@@ -786,7 +805,7 @@ export class RoomChatGateway {
             type: "room_chat",
             roomId: peer.roomId,
             playerName: identity.playerName,
-            playerNetId: identity.playerNetId,
+            playerNetId: roomChatAttributionId(identity),
             messageId: message.messageId,
             messageText: renderLegacyRoomFallback(content),
             sentAtUnixMs: now,
@@ -1156,6 +1175,27 @@ function normalizePlayerNetId(input: unknown): string {
     if (code < 0x20 || code > 0x7e) throw new Error("playerNetId must be printable ASCII");
   }
   return value;
+}
+
+function lockRoomChatIdentity(
+  declared: LockedRoomChatIdentity,
+  authenticated: AuthenticatedRoomChatIdentity | undefined,
+): LockedRoomChatIdentity {
+  if (!authenticated) {
+    return declared;
+  }
+
+  return {
+    playerName: authenticated.playerName,
+    playerNetId: authenticated.playerNetId ?? declared.playerNetId,
+    ...(authenticated.clientInstallationId === undefined
+      ? {}
+      : { clientInstallationId: authenticated.clientInstallationId }),
+  };
+}
+
+function roomChatAttributionId(identity: LockedRoomChatIdentity): string {
+  return identity.clientInstallationId ?? identity.playerNetId;
 }
 
 function isDisallowedNameChar(code: number): boolean {

@@ -165,8 +165,11 @@ interface ControlPeer {
   controlChannelId: string;
   role: "host" | "client";
   lastSeenAt: number;
+  detached: boolean;
+  superseded: boolean;
   ticketId?: string;
   playerNetId?: string;
+  clientInstallationId?: string;
   playerName?: string;
 }
 
@@ -220,6 +223,7 @@ export async function createLobbyService(
       for (const peer of roomPeers.get(roomId) ?? []) {
         if (
           peer.roomSessionId === roomSessionId
+          && !peer.detached
           && peer.socket.readyState === peer.socket.OPEN
           && peer.playerNetId
         ) {
@@ -580,6 +584,10 @@ export async function createLobbyService(
         roomName: boundedString(body?.roomName, "roomName", MaxRoomNameLength),
         password: optionalBoundedString(body?.password, "password", MaxPasswordLength),
         hostPlayerName: boundedString(body?.hostPlayerName, "hostPlayerName", MaxPlayerNameLength),
+        clientInstallationId: optionalBoundedString(
+          body?.clientInstallationId,
+          "clientInstallationId",
+          MaxNetIdLength),
         gameMode: boundedString(body?.gameMode, "gameMode", MaxGameModeLength),
         version: boundedString(body?.version, "version", MaxVersionLength),
         modVersion: boundedString(body?.modVersion, "modVersion", MaxModVersionLength),
@@ -691,6 +699,10 @@ export async function createLobbyService(
           MaxWireCacheSignatureLength),
         desiredSavePlayerNetId: optionalBoundedString(body?.desiredSavePlayerNetId, "desiredSavePlayerNetId", MaxNetIdLength),
         playerNetId: optionalBoundedString(body?.playerNetId, "playerNetId", MaxNetIdLength),
+        clientInstallationId: optionalBoundedString(
+          body?.clientInstallationId,
+          "clientInstallationId",
+          MaxNetIdLength),
       };
       const wireCacheMismatch = store.findWireCacheMismatchForJoin(req.params.id, joinInput);
       if (wireCacheMismatch) {
@@ -1261,15 +1273,16 @@ export async function createLobbyService(
         throw new InputError("role 必须为 host 或 client。");
       }
 
-      if (role === "host") {
-        store.validateHostControl(
+      const hostSession = role === "host"
+        ? store.validateHostControl(
           roomId,
           controlChannelId,
           requiredQuery(requestUrl, "token"),
-        );
-      } else {
-        store.validateClientControl(roomId, controlChannelId, requiredQuery(requestUrl, "ticketId"));
-      }
+        )
+        : undefined;
+      const joinTicket = role === "client"
+        ? store.validateClientControl(roomId, controlChannelId, requiredQuery(requestUrl, "ticketId"))
+        : undefined;
       const roomContext = store.getRoomChatContext(roomId);
       if (!roomContext) {
         throw new InputError("房间会话不存在或已过期。");
@@ -1283,9 +1296,23 @@ export async function createLobbyService(
         controlChannelId,
         role,
         lastSeenAt: Date.now(),
+        detached: false,
+        superseded: false,
         ...(role === "client" ? { ticketId: requiredQuery(requestUrl, "ticketId") } : {}),
+        ...(joinTicket?.playerNetId === undefined ? {} : { playerNetId: joinTicket.playerNetId }),
+        ...(joinTicket?.clientInstallationId === undefined
+          ? hostSession?.clientInstallationId === undefined
+            ? {}
+            : { clientInstallationId: hostSession.clientInstallationId }
+          : { clientInstallationId: joinTicket.clientInstallationId }),
+        ...(joinTicket?.playerName === undefined
+          ? hostSession?.hostPlayerName === undefined
+            ? {}
+            : { playerName: hostSession.hostPlayerName }
+          : { playerName: joinTicket.playerName }),
       };
 
+      supersedeExistingSlotPeer(peer);
       roomChatGateway.registerPeer({
         connectionSessionId: peer.connectionSessionId,
         clientIp: resolveChatClientIp(req),
@@ -1296,6 +1323,19 @@ export async function createLobbyService(
         ...(peer.ticketId === undefined
           ? {}
           : { authenticatedTicketId: peer.ticketId }),
+        ...(peer.playerName === undefined
+          ? {}
+          : {
+              authenticatedIdentity: {
+                playerName: peer.playerName,
+                ...(peer.playerNetId === undefined
+                  ? {}
+                  : { playerNetId: peer.playerNetId }),
+                ...(peer.clientInstallationId === undefined
+                  ? {}
+                  : { clientInstallationId: peer.clientInstallationId }),
+              },
+            }),
         send: (frame) => sendJson(peer.socket, frame),
         close: (code, reason) => peer.socket.close(code, reason),
       });
@@ -1314,6 +1354,9 @@ export async function createLobbyService(
 
       socket.on("message", (payload) => {
         try {
+          if (peer.detached) {
+            return;
+          }
           peer.lastSeenAt = Date.now();
           if (peer.role === "host") {
             store.touchHostSession(peer.roomId);
@@ -1358,9 +1401,12 @@ export async function createLobbyService(
             const targetNetId = String(parsed.targetPlayerNetId ?? "");
             if (!targetNetId) return;
             const hostToken = requiredQuery(requestUrl, "token");
-            store.kickPlayer(peer.roomId, hostToken, targetNetId);
-            const targetPeer = findPeerByNetId(peer.roomId, targetNetId);
+            const targetPeer = findCurrentPeerByNetId(peer.roomId, targetNetId);
             if (targetPeer) {
+              if (targetPeer.clientInstallationId) {
+                store.kickPlayer(peer.roomId, hostToken, targetPeer.clientInstallationId);
+              }
+              removePeer(targetPeer);
               sendJson(targetPeer.socket, {
                 type: "kicked",
                 roomId: peer.roomId,
@@ -1375,7 +1421,11 @@ export async function createLobbyService(
               playerNetId: targetNetId,
               playerName: String(parsed.targetPlayerName ?? ""),
             });
-            console.log(`[control] kick_player roomId=${peer.roomId} targetNetId=${targetNetId} found=${!!targetPeer}`);
+            console.log(
+              `[control] kick_player roomId=${peer.roomId} targetNetId=${targetNetId} `
+              + `session=${targetPeer?.connectionSessionId ?? "<none>"} `
+              + `installation=${targetPeer?.clientInstallationId ?? "<none>"}`,
+            );
             return;
           }
 
@@ -1400,8 +1450,16 @@ export async function createLobbyService(
             return;
           }
 
+          const identity = roomChatGateway.getLockedIdentity(peer.connectionSessionId);
+          const authenticatedEnvelope = parsed.type === "room_chat" && identity
+            ? {
+                ...parsed,
+                playerName: identity.playerName,
+                playerNetId: identity.clientInstallationId ?? identity.playerNetId,
+              }
+            : parsed;
           broadcastToRoom(peer, {
-            ...parsed,
+            ...authenticatedEnvelope,
             roomId: peer.roomId,
             controlChannelId: peer.controlChannelId,
             role: peer.role,
@@ -1787,6 +1845,10 @@ export async function createLobbyService(
   }
 
   function removePeer(peer: ControlPeer) {
+    if (peer.detached) {
+      return;
+    }
+    peer.detached = true;
     roomChatGateway.unregisterPeer(peer.connectionSessionId);
     const peers = roomPeers.get(peer.roomId);
     if (!peers) {
@@ -1806,6 +1868,7 @@ export async function createLobbyService(
     }
 
     for (const peer of peers) {
+      peer.detached = true;
       roomChatGateway.unregisterPeer(peer.connectionSessionId);
       peer.socket.close(code, reason);
     }
@@ -1813,11 +1876,39 @@ export async function createLobbyService(
     roomPeers.delete(roomId);
   }
 
-  function findPeerByNetId(roomId: string, playerNetId: string): ControlPeer | undefined {
+  function supersedeExistingSlotPeer(replacement: ControlPeer) {
+    if (replacement.role !== "client" || !replacement.playerNetId) {
+      return;
+    }
+
+    for (const existing of [...(roomPeers.get(replacement.roomId) ?? [])]) {
+      if (
+        existing.role === "client"
+        && !existing.detached
+        && existing.playerNetId === replacement.playerNetId
+      ) {
+        existing.superseded = true;
+        removePeer(existing);
+        existing.socket.close(4002, "superseded");
+        console.log(
+          `[control] superseded roomId=${replacement.roomId} playerNetId=${replacement.playerNetId} `
+          + `oldSession=${existing.connectionSessionId} newSession=${replacement.connectionSessionId}`,
+        );
+      }
+    }
+  }
+
+  function findCurrentPeerByNetId(roomId: string, playerNetId: string): ControlPeer | undefined {
     const peers = roomPeers.get(roomId);
     if (!peers) return undefined;
     for (const peer of peers) {
-      if (peer.playerNetId === playerNetId) return peer;
+      if (
+        peer.role === "client"
+        && !peer.detached
+        && !peer.superseded
+        && peer.socket.readyState === peer.socket.OPEN
+        && peer.playerNetId === playerNetId
+      ) return peer;
     }
     return undefined;
   }
@@ -1839,7 +1930,7 @@ export async function createLobbyService(
     }
 
     for (const peer of peers) {
-      if (peer === sender || peer.socket.readyState !== peer.socket.OPEN) {
+      if (peer === sender || peer.detached || peer.socket.readyState !== peer.socket.OPEN) {
         continue;
       }
 

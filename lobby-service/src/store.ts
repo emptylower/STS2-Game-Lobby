@@ -91,6 +91,9 @@ export interface Room extends RoomSummary {
 export interface JoinTicket {
   ticketId: string;
   roomId: string;
+  playerName: string;
+  playerNetId?: string | undefined;
+  clientInstallationId?: string | undefined;
   issuedAt: Date;
   expiresAt: Date;
   connectionPlan: ConnectionPlan;
@@ -112,9 +115,15 @@ export interface HostSession {
   roomSessionId: string;
   controlChannelId: string;
   hostToken: string;
+  hostPlayerName: string;
+  clientInstallationId?: string | undefined;
   relayState: RelayState;
   lastSeenAt: Date;
-  kickedPlayerNetIds: Set<string>;
+  // This client-owned ID can be reset to evade a kick. Unevadable bans require a
+  // server-issued credential, which is deliberately outside this room-lifetime fix.
+  kickedClientInstallationIds: Set<string>;
+  legacyIdentityMode: boolean;
+  legacyIdentityModeLogged: boolean;
   roomSettings: RoomSettings;
 }
 
@@ -122,6 +131,7 @@ export interface CreateRoomInput {
   roomName: string;
   password?: string | undefined;
   hostPlayerName: string;
+  clientInstallationId?: string | undefined;
   gameMode: string;
   version: string;
   modVersion: string;
@@ -143,6 +153,7 @@ export interface CreateRoomInput {
 
 export interface JoinRoomInput {
   playerName: string;
+  clientInstallationId?: string | undefined;
   password?: string | undefined;
   version: string;
   modVersion: string;
@@ -338,9 +349,13 @@ export class LobbyStore {
       roomSessionId,
       controlChannelId,
       hostToken,
+      hostPlayerName: input.hostPlayerName.trim(),
+      clientInstallationId: normalizeOptionalIdentity(input.clientInstallationId),
       relayState: "disabled",
       lastSeenAt: now,
-      kickedPlayerNetIds: new Set(),
+      kickedClientInstallationIds: new Set(),
+      legacyIdentityMode: input.clientInstallationId === undefined,
+      legacyIdentityModeLogged: false,
       roomSettings: { chatEnabled: true },
     };
 
@@ -404,9 +419,19 @@ export class LobbyStore {
     }
 
     const connectionPlan = buildConnectionPlan(room, hostSession, this.config.connectionStrategy);
+    const playerNetId = normalizeOptionalIdentity(input.playerNetId);
+    const requestedClientInstallationId = normalizeOptionalIdentity(input.clientInstallationId);
+    const clientInstallationId = requestedClientInstallationId ?? playerNetId;
+    if (requestedClientInstallationId === undefined) {
+      hostSession.legacyIdentityMode = true;
+      this.logLegacyIdentityMode(hostSession, "join request omitted clientInstallationId");
+    }
     const ticket: JoinTicket = {
       ticketId: this.id(),
       roomId,
+      playerName: input.playerName.trim(),
+      playerNetId,
+      clientInstallationId,
       issuedAt: now,
       expiresAt: new Date(now.getTime() + this.config.ticketTtlMs),
       connectionPlan,
@@ -438,8 +463,9 @@ export class LobbyStore {
     const availableSavedRunSlots = getAvailableSavedRunSlots(room);
     const canResumeSavedRun = room.savedRun !== undefined && availableSavedRunSlots.length > 0;
 
-    const playerNetId = input.playerNetId?.trim();
-    if (playerNetId && hostSession.kickedPlayerNetIds.has(playerNetId)) {
+    const clientInstallationId = normalizeOptionalIdentity(input.clientInstallationId)
+      ?? normalizeOptionalIdentity(input.playerNetId);
+    if (clientInstallationId && hostSession.kickedClientInstallationIds.has(clientInstallationId)) {
       throw new LobbyStoreError(403, "kicked", "你已被房主移出该房间，无法重新加入。");
     }
 
@@ -604,6 +630,9 @@ export class LobbyStore {
     }
 
     this.assertHostToken(hostSession, token);
+    if (hostSession.legacyIdentityMode) {
+      this.logLegacyIdentityMode(hostSession, "create request omitted clientInstallationId");
+    }
     return hostSession;
   }
 
@@ -621,6 +650,14 @@ export class LobbyStore {
     if (ticket.expiresAt.getTime() <= Date.now()) {
       this.tickets.delete(ticket.ticketId);
       throw new LobbyStoreError(401, "expired_ticket", "加入票据已过期。");
+    }
+
+    if (
+      ticket.clientInstallationId
+      && hostSession.kickedClientInstallationIds.has(ticket.clientInstallationId)
+    ) {
+      this.tickets.delete(ticket.ticketId);
+      throw new LobbyStoreError(403, "kicked", "你已被房主移出该房间，无法重新加入。");
     }
 
     return ticket;
@@ -644,19 +681,24 @@ export class LobbyStore {
     return true;
   }
 
-  kickPlayer(roomId: string, hostToken: string, playerNetId: string) {
+  kickPlayer(roomId: string, hostToken: string, clientInstallationId: string) {
     const hostSession = this.requireHostSession(roomId);
     this.assertHostToken(hostSession, hostToken);
-    hostSession.kickedPlayerNetIds.add(playerNetId);
+    hostSession.kickedClientInstallationIds.add(clientInstallationId);
+    for (const ticket of this.tickets.values()) {
+      if (ticket.roomId === roomId && ticket.clientInstallationId === clientInstallationId) {
+        this.tickets.delete(ticket.ticketId);
+      }
+    }
   }
 
-  isPlayerKicked(roomId: string, playerNetId: string) {
+  isClientInstallationKicked(roomId: string, clientInstallationId: string) {
     const hostSession = this.hostSessions.get(roomId);
     if (!hostSession) {
       return false;
     }
 
-    return hostSession.kickedPlayerNetIds.has(playerNetId);
+    return hostSession.kickedClientInstallationIds.has(clientInstallationId);
   }
 
   updateRoomSettings(roomId: string, hostToken: string, settings: Partial<RoomSettings>): RoomSettings {
@@ -717,6 +759,18 @@ export class LobbyStore {
     if (hostSession.hostToken !== hostToken) {
       throw new LobbyStoreError(401, "invalid_host_token", "房主令牌无效。");
     }
+  }
+
+  private logLegacyIdentityMode(hostSession: HostSession, reason: string) {
+    if (hostSession.legacyIdentityModeLogged) {
+      return;
+    }
+
+    hostSession.legacyIdentityModeLogged = true;
+    this.warn(
+      `[lobby] room identity mode=legacy roomId=${hostSession.roomId} reason=${reason}; `
+      + "kick and chat identity fall back to playerNetId",
+    );
   }
 
   private removeRoom(roomId: string) {
@@ -1017,6 +1071,11 @@ function normalizeModList(mods: string[]) {
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function normalizeOptionalIdentity(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
 }

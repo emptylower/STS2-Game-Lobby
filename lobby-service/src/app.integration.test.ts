@@ -827,6 +827,148 @@ function openControlWebSocket(url: string): Promise<WebSocket> {
   });
 }
 
+test("slot takeover supersedes stale control peer and kick bans only current installation", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const sockets: WebSocket[] = [];
+  try {
+    const address = await service.start();
+    const httpBase = `http://127.0.0.1:${address.port}`;
+    const createResponse = await fetch(`${httpBase}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "takeover-control",
+        hostPlayerName: "Host",
+        clientInstallationId: "install-host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as {
+      roomId: string;
+      roomSessionId: string;
+      controlChannelId: string;
+      hostToken: string;
+    };
+    const issueJoin = async (playerName: string, clientInstallationId?: string) => {
+      const response = await fetch(`${httpBase}/rooms/${created.roomId}/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          playerName,
+          playerNetId: "save-slot-owner",
+          ...(clientInstallationId === undefined ? {} : { clientInstallationId }),
+          version: "1.0.0",
+          modVersion: "1.0.0",
+          modList: [],
+        }),
+      });
+      return {
+        response,
+        body: await response.json() as { ticketId?: string; code?: string },
+      };
+    };
+    const wsBase = `ws://127.0.0.1:${address.port}${config.wsPath}`;
+    const clientUrl = (ticketId: string) =>
+      `${wsBase}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=client&ticketId=${ticketId}`;
+
+    const originalJoin = await issueJoin("Original", "install-original");
+    assert.equal(originalJoin.response.status, 200);
+    const original = await openControlWebSocket(clientUrl(originalJoin.body.ticketId!));
+    sockets.push(original);
+    await waitForChatFrame(original, (frame) => frame.type === "connected");
+    const supersededClose = waitForChatClose(original);
+
+    const takeoverJoin = await issueJoin("Takeover", "install-takeover");
+    assert.equal(takeoverJoin.response.status, 200);
+    const takeover = await openControlWebSocket(clientUrl(takeoverJoin.body.ticketId!));
+    sockets.push(takeover);
+    await waitForChatFrame(takeover, (frame) => frame.type === "connected");
+    assert.deepEqual(await supersededClose, { code: 4002, reason: "superseded" });
+
+    const originalCanStillRequestTicket = await issueJoin("Original", "install-original");
+    assert.equal(originalCanStillRequestTicket.response.status, 200);
+
+    takeover.send(JSON.stringify({
+      type: "client_hello",
+      roomId: created.roomId,
+      controlChannelId: created.controlChannelId,
+      role: "client",
+      playerName: "message-spoof",
+      playerNetId: "save-slot-owner",
+      roomChatVersions: {
+        richContentVersion: 1,
+        emojiSetVersion: 1,
+        itemRefVersion: 1,
+        combatRefVersion: 1,
+      },
+    }));
+    await waitForChatFrame(takeover, (frame) => frame.type === "room_chat_ready");
+    const messageId = "45454545-4545-4545-8545-454545454545";
+    takeover.send(JSON.stringify({
+      type: "room_chat_v2",
+      protocolVersion: 1,
+      clientMessageId: messageId,
+      roomId: created.roomId,
+      roomSessionId: created.roomSessionId,
+      content: { formatVersion: 1, segments: [{ kind: "text", text: "identity" }] },
+    }));
+    const ack = await waitForChatFrame(
+      takeover,
+      (frame) => frame.type === "room_chat_ack" && frame.clientMessageId === messageId,
+    );
+    assert.equal((ack.message as Record<string, unknown>).senderId, "install-takeover");
+    assert.equal((ack.message as Record<string, unknown>).senderName, "Takeover");
+
+    const host = await openControlWebSocket(
+      `${wsBase}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=host&token=${created.hostToken}`,
+    );
+    sockets.push(host);
+    await waitForChatFrame(host, (frame) => frame.type === "connected");
+    const kickedFrame = waitForChatFrame(takeover, (frame) => frame.type === "kicked");
+    const kickedClose = waitForChatClose(takeover);
+    host.send(JSON.stringify({
+      type: "kick_player",
+      targetPlayerNetId: "save-slot-owner",
+      targetPlayerName: "Takeover",
+    }));
+    assert.equal((await kickedFrame).reason, "host_kick");
+    assert.deepEqual(await kickedClose, { code: 4001, reason: "kicked" });
+    assert.equal(
+      chatSocketState(original).frames.some((frame) => frame.type === "kicked"),
+      false,
+    );
+
+    const kickedRetry = await issueJoin("Takeover", "install-takeover");
+    assert.equal(kickedRetry.response.status, 403);
+    assert.equal(kickedRetry.body.code, "kicked");
+    const ownerRetry = await issueJoin("Original", "install-original");
+    assert.equal(ownerRetry.response.status, 200);
+
+    const legacyJoin = await issueJoin("Legacy");
+    assert.equal(legacyJoin.response.status, 200);
+    assert.ok(legacyJoin.body.ticketId);
+  } finally {
+    for (const socket of sockets) {
+      try {
+        socket.terminate();
+      } catch {
+        // ignore test cleanup races
+      }
+    }
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
 test("control host and client room_chat_ready uses Phase 1 generation for rich and legacy routing", async () => {
   const config = testConfig({ port: 0 });
   const service = await createLobbyService(config);
