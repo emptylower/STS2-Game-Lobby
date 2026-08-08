@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using System.Text.Json;
 using Sts2LanConnect.Scripts;
 
@@ -22,82 +24,94 @@ public sealed class LanConnectLobbyInstallationIdentityTests
     }
 
     [Fact]
-    public void Every_production_create_and_join_request_populates_the_installation_id()
+    public void Missing_installation_ids_are_omitted_for_legacy_service_compatibility()
     {
-        string scriptsRoot = Path.Combine(FindRepositoryRoot(), "sts2-lan-connect", "Scripts");
-        string[] sources = Directory.GetFiles(scriptsRoot, "*.cs", SearchOption.AllDirectories);
-        string combined = string.Join("\n", sources.Select(File.ReadAllText));
+        using JsonDocument create = JsonDocument.Parse(JsonSerializer.Serialize(
+            new LobbyCreateRoomRequest { ClientInstallationId = null! },
+            LanConnectJson.Options));
+        using JsonDocument join = JsonDocument.Parse(JsonSerializer.Serialize(
+            new LobbyJoinRoomRequest { ClientInstallationId = null! },
+            LanConnectJson.Options));
 
-        Assert.Equal(1, CountOccurrences(combined, "new LobbyCreateRoomRequest"));
-        Assert.Equal(1, CountOccurrences(combined, "new LobbyJoinRoomRequest"));
-
-        string hostFlow = File.ReadAllText(Path.Combine(scriptsRoot, "LanConnectHostFlow.cs"));
-        Assert.Contains(
-            "ClientInstallationId = LanConnectConfig.GetOrCreateClientNetId().ToString(CultureInfo.InvariantCulture)",
-            hostFlow,
-            StringComparison.Ordinal);
-
-        string preflight = File.ReadAllText(Path.Combine(
-            scriptsRoot,
-            "Lobby",
-            "ModSync",
-            "LanConnectModPreflightCoordinator.cs"));
-        Assert.Contains(
-            "ClientInstallationId = LanConnectConfig.GetOrCreateClientNetId().ToString(CultureInfo.InvariantCulture)",
-            preflight,
-            StringComparison.Ordinal);
-        Assert.Contains("ClientInstallationId = request.ClientInstallationId", preflight, StringComparison.Ordinal);
+        Assert.False(create.RootElement.TryGetProperty("clientInstallationId", out _));
+        Assert.False(join.RootElement.TryGetProperty("clientInstallationId", out _));
     }
 
     [Fact]
-    public void Runtime_separates_control_routing_identity_from_chat_attribution()
+    public async Task Create_api_sends_the_installation_id_in_the_http_request()
     {
-        string runtime = File.ReadAllText(Path.Combine(
-            FindRepositoryRoot(),
-            "sts2-lan-connect",
-            "Scripts",
-            "Lobby",
-            "LanConnectLobbyRuntime.cs"));
+        RecordingHandler handler = new("""{"roomId":"room-1","room":{}}""");
+        using LobbyApiClient client = new(
+            "https://lobby.example",
+            httpMessageHandler: handler,
+            diagnosticSink: _ => { });
 
-        Assert.Contains(
-            "_serverChatClientInstallationId = LanConnectConfig.GetOrCreateClientNetId()",
-            runtime,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            ".ToString(CultureInfo.InvariantCulture)",
-            runtime,
-            StringComparison.Ordinal);
-        Assert.True(
-            CountOccurrences(runtime, "ResolveCurrentChatInstallationId()") >= 11,
-            "Expected legacy chat, rich chat, and server-chat attribution to use the installation ID.");
-        Assert.Contains(
-            "session.NetService.NetId.ToString(),\n                session.RoomSessionId",
-            runtime,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "session.PlayerNetId,\n                session.RoomSessionId",
-            runtime,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("_serverChatPlayerNetId", runtime, StringComparison.Ordinal);
+        await client.CreateRoomAsync(new LobbyCreateRoomRequest
+        {
+            RoomName = "Room",
+            HostPlayerName = "Host",
+            ClientInstallationId = "install-host",
+            Version = "1.0.0",
+            ModVersion = "1.0.0",
+            MaxPlayers = 4,
+            HostConnectionInfo = new LobbyHostConnectionInfo { EnetPort = 33771 }
+        });
+
+        Assert.Equal(HttpMethod.Post, handler.Method);
+        Assert.Equal("https://lobby.example/rooms", handler.Uri);
+        using JsonDocument body = JsonDocument.Parse(handler.Body!);
+        Assert.Equal("install-host", body.RootElement.GetProperty("clientInstallationId").GetString());
     }
 
-    private static int CountOccurrences(string source, string value) =>
-        source.Split(value, StringSplitOptions.None).Length - 1;
-
-    private static string FindRepositoryRoot()
+    [Fact]
+    public async Task Join_api_sends_slot_and_installation_ids_as_distinct_fields()
     {
-        DirectoryInfo? current = new(AppContext.BaseDirectory);
-        while (current != null)
+        RecordingHandler handler = new("""{"ticketId":"ticket-1"}""");
+        using LobbyApiClient client = new(
+            "https://lobby.example",
+            httpMessageHandler: handler,
+            diagnosticSink: _ => { });
+
+        LobbyJoinRoomResponse response = await client.JoinRoomAsync("room /1", new LobbyJoinRoomRequest
         {
-            if (Directory.Exists(Path.Combine(current.FullName, "sts2-lan-connect")) &&
-                Directory.Exists(Path.Combine(current.FullName, "sts2-lan-connect.Tests")))
+            PlayerName = "Joiner",
+            PlayerNetId = "save-slot-owner",
+            ClientInstallationId = "install-current-occupant",
+            Version = "1.0.0",
+            ModVersion = "1.0.0"
+        });
+
+        Assert.Equal("ticket-1", response.TicketId);
+        Assert.Equal(HttpMethod.Post, handler.Method);
+        Assert.Equal("https://lobby.example/rooms/room%20%2F1/join", handler.Uri);
+        using JsonDocument body = JsonDocument.Parse(handler.Body!);
+        Assert.Equal("save-slot-owner", body.RootElement.GetProperty("playerNetId").GetString());
+        Assert.Equal(
+            "install-current-occupant",
+            body.RootElement.GetProperty("clientInstallationId").GetString());
+    }
+
+    private sealed class RecordingHandler(string responseBody) : HttpMessageHandler
+    {
+        public HttpMethod? Method { get; private set; }
+
+        public string? Uri { get; private set; }
+
+        public string? Body { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Method = request.Method;
+            Uri = request.RequestUri!.AbsoluteUri;
+            Body = request.Content == null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                return current.FullName;
-            }
-
-            current = current.Parent;
+                Content = new StringContent(responseBody, Encoding.UTF8, "application/json")
+            };
         }
-
-        throw new DirectoryNotFoundException("Could not locate the STS2-Game-Lobby repository root.");
     }
 }

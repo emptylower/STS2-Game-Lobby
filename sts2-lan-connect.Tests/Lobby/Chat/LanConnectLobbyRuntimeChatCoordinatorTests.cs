@@ -264,7 +264,7 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         DateTimeOffset sentAt = DateTimeOffset.FromUnixTimeMilliseconds(1234);
 
         LobbyControlEnvelope envelope = LanConnectLobbyRuntime.CreateHostedRoomChatEnvelope(
-            "room-a", "control-a", "Host", "install-host", "message-a", "hello", sentAt);
+            "room-a", "control-a", "Host", "net-host", "message-a", "hello", sentAt);
 
         Assert.Equal("room_chat", envelope.Type);
         Assert.Equal("room-a", envelope.RoomId);
@@ -272,7 +272,7 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         Assert.Equal("host", envelope.Role);
         Assert.Null(envelope.TicketId);
         Assert.Equal("Host", envelope.PlayerName);
-        Assert.Equal("install-host", envelope.PlayerNetId);
+        Assert.Equal("net-host", envelope.PlayerNetId);
         Assert.Equal("message-a", envelope.MessageId);
         Assert.Equal("hello", envelope.MessageText);
         Assert.Equal(1234, envelope.SentAtUnixMs);
@@ -284,7 +284,7 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         DateTimeOffset sentAt = DateTimeOffset.FromUnixTimeMilliseconds(5678);
 
         LobbyControlEnvelope envelope = LanConnectLobbyRuntime.CreateJoinedRoomChatEnvelope(
-            "room-a", "control-a", "ticket-a", "Client", "install-client", "message-a", "hello", sentAt);
+            "room-a", "control-a", "ticket-a", "Client", "net-client", "message-a", "hello", sentAt);
 
         Assert.Equal("room_chat", envelope.Type);
         Assert.Equal("room-a", envelope.RoomId);
@@ -292,7 +292,7 @@ public sealed class LanConnectLobbyRuntimeChatCoordinatorTests
         Assert.Equal("client", envelope.Role);
         Assert.Equal("ticket-a", envelope.TicketId);
         Assert.Equal("Client", envelope.PlayerName);
-        Assert.Equal("install-client", envelope.PlayerNetId);
+        Assert.Equal("net-client", envelope.PlayerNetId);
         Assert.Equal("message-a", envelope.MessageId);
         Assert.Equal("hello", envelope.MessageText);
         Assert.Equal(5678, envelope.SentAtUnixMs);
