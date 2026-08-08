@@ -4,8 +4,12 @@ namespace Sts2LanConnect.Tests.Lobby;
 
 public sealed class LanConnectWireCacheSignatureV1Tests
 {
+    // Pins the canonical byte encoding against a known digest. This runs in a single
+    // process on one runtime, so it does NOT by itself prove cross-process or
+    // cross-runtime stability; it catches any change to the framing, encoding or
+    // digest algorithm, which is what would break that stability in practice.
     [Fact]
-    public void Known_vector_is_stable_across_processes_and_runtimes()
+    public void Known_vector_matches_canonical_encoding()
     {
         string signature = Compute();
 
