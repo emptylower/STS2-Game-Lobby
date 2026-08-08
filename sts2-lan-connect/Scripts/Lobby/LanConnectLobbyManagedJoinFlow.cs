@@ -312,16 +312,12 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             $"remoteWidths={decision.RemoteToken?.FormatWidths() ?? "unavailable"}, " +
             $"remoteSentinelStatus={hostInfo.WireCacheToken.Status}, detail={decision.Detail}";
 
-        if (decision.Kind == LanConnectWireCacheHandshakeDecisionKind.Match)
-        {
-            _logger.Info(diagnostic);
-        }
-        else
-        {
-            _logger.Warn(diagnostic);
-        }
-
-        if (!decision.IsAllowed)
+        bool isAllowed = LanConnectWireCacheHandshakeGate.ShouldAllowJoin(
+            decision,
+            diagnostic,
+            message => _logger.Info(message),
+            message => _logger.Warn(message));
+        if (!isAllowed)
         {
             throw new ClientConnectionFailedException(
                 decision.Detail,

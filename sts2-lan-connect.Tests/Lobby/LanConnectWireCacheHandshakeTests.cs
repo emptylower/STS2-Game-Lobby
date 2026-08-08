@@ -62,6 +62,22 @@ public sealed class LanConnectWireCacheHandshakeTests
     }
 
     [Fact]
+    public void Allowed_join_survives_warning_logger_failure()
+    {
+        LanConnectWireCacheHandshakeDecision decision = Decide(
+            Available(SignatureA),
+            LanConnectWireCacheHandshakeToken.Parse(["ordinary-mod"]));
+
+        bool isAllowed = LanConnectWireCacheHandshakeGate.ShouldAllowJoin(
+            decision,
+            "remote sentinel absent",
+            _ => { },
+            _ => throw new InvalidOperationException("logger failed"));
+
+        Assert.True(isAllowed);
+    }
+
+    [Fact]
     public void Both_missing_are_allowed()
     {
         LanConnectWireCacheHandshakeDecision decision = Decide(
