@@ -120,6 +120,31 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
         Assert.Single(harness.Writes);
     }
 
+    [Fact]
+    public void Keyless_hosted_session_pins_first_save_and_refuses_second_save_on_same_net_service()
+    {
+        object netService = new();
+        WriterHarness harness = new("save-a", netService);
+        string? boundSaveKey = null;
+
+        LanConnectCurrentSaveBindingWriter.PersistOutcome first = harness.Writer.Persist(
+            Target(netService, boundSaveKey),
+            "first_save_event");
+        Assert.Equal(LanConnectCurrentSaveBindingWriter.PersistResult.Persisted, first.Result);
+        boundSaveKey = first.SaveKey;
+
+        harness.CurrentSaveKey = "save-b";
+        LanConnectCurrentSaveBindingWriter.PersistOutcome second = harness.Writer.Persist(
+            Target(netService, boundSaveKey),
+            "second_save_event");
+
+        Assert.Equal("save-a", boundSaveKey);
+        Assert.Equal(
+            LanConnectCurrentSaveBindingWriter.PersistResult.RefusedDifferentSave,
+            second.Result);
+        Assert.Single(harness.Writes);
+    }
+
     private static LanConnectCurrentSaveBindingWriter.BindingTarget Target(
         object netService,
         string? expectedSaveKey,
@@ -137,11 +162,12 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
     {
         public WriterHarness(string saveKey, object currentNetService)
         {
+            CurrentSaveKey = saveKey;
             Writer = new LanConnectCurrentSaveBindingWriter(
                 () => new LanConnectCurrentSaveBindingWriter.LoadResult(
                     true,
-                    saveKey,
-                    saveKey,
+                    CurrentSaveKey,
+                    CurrentSaveKey,
                     string.Empty),
                 () => currentNetService,
                 (save, request) =>
@@ -152,6 +178,8 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
         }
 
         public LanConnectCurrentSaveBindingWriter Writer { get; }
+
+        public string CurrentSaveKey { get; set; }
 
         public bool PersistResult { get; set; } = true;
 

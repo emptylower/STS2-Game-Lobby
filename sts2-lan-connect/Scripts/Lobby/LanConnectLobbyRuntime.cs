@@ -2010,15 +2010,16 @@ internal sealed partial class LanConnectLobbyRuntime :
                 new LanConnectCurrentSaveBindingWriter.BindingTarget(
                     session.NetService,
                     session.IsClosing,
-                    session.Metadata.SaveKey,
+                    session.BoundSaveKey,
                     session.Metadata.RoomName,
                     session.Metadata.Password,
                     session.Metadata.GameMode,
                     LanConnectHostChannels.Lobby),
                 source);
-            LogCurrentSaveBindingOutcome(outcome, session.Metadata.SaveKey, source, "hosted_room");
+            LogCurrentSaveBindingOutcome(outcome, session.BoundSaveKey, source, "hosted_room");
             if (outcome.Result == LanConnectCurrentSaveBindingWriter.PersistResult.Persisted && outcome.SaveKey != null)
             {
+                session.BoundSaveKey = outcome.SaveKey;
                 _pendingSaveBindingCoordinator.CompleteActivePersist(outcome.SaveKey);
             }
             return;
@@ -3239,6 +3240,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             ApiClient = apiClient;
             Registration = registration;
             Metadata = metadata;
+            BoundSaveKey = metadata.SaveKey;
             ControlClient = new LobbyControlClient();
             RelayTunnel = registration.RelayEndpoint != null
                 ? new LanConnectLobbyRelayHostTunnel(registration.RoomId, registration.RelayEndpoint, registration.HostToken)
@@ -3255,6 +3257,8 @@ internal sealed partial class LanConnectLobbyRuntime :
         public LobbyCreateRoomResponse Registration { get; }
 
         public LanConnectHostedRoomMetadata Metadata { get; }
+
+        public string? BoundSaveKey { get; set; }
 
         public LobbyControlClient ControlClient { get; }
 
