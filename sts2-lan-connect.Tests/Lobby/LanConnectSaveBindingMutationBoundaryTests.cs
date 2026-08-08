@@ -25,18 +25,14 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
     [Fact]
     public void Safe_load_execution_observes_no_persisted_write()
     {
-        List<LanConnectRunBindingCoordinator<string>.BindingWrite> writes = new();
         List<bool> loadingStates = new();
         List<string> startedRuns = new();
         LanConnectRunBindingCoordinator<string> coordinator = new(
             () => new(true, "save-1", string.Empty),
             run => run,
             _ => null,
-            (_, write) =>
-            {
-                writes.Add(write);
-                return true;
-            });
+            (_, write) => throw new Xunit.Sdk.XunitException(
+                $"Safe load must not persist a binding for {write.SaveKey}."));
 
         bool loaded = LanConnectMultiplayerSaveCompatibility.ExecuteSafeLoad(
             coordinator,
@@ -49,7 +45,6 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
         Assert.True(loaded);
         Assert.Equal([true, false], loadingStates);
         Assert.Equal(["save-1"], startedRuns);
-        Assert.Empty(writes);
     }
 
     [Fact]
@@ -73,23 +68,18 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
         {
             [existing.SaveKey] = existing
         };
-        List<string> removals = new();
         LanConnectSaveRepairResult result = LanConnectMultiplayerSaveRepair.RepairCurrentProfile(
             profile.CreateContext(() => new LanConnectSaveRepairBindingInspection(
                 true,
                 existing.SaveKey,
                 bindings.ContainsKey(existing.SaveKey)),
-                saveKey =>
-                {
-                    removals.Add(saveKey);
-                    return bindings.Remove(saveKey);
-                }));
+                saveKey => throw new Xunit.Sdk.XunitException(
+                    $"Repair must not remove binding {saveKey}.")));
 
         AssertRepairEntryDoesNotRemoveBindings();
 
         Assert.True(result.Success);
         Assert.Contains($"已保留当前多人存档的房间绑定 {existing.SaveKey}", result.Message);
-        Assert.Empty(removals);
         Assert.Same(existing, bindings["save-1"]);
         Assert.Equal(
             LanConnectContinueRunPublishDecisionKind.Publish,
@@ -101,23 +91,18 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
     {
         using RepairProfileHarness profile = new();
         Dictionary<string, LanConnectSavedRoomBinding> bindings = new();
-        List<string> removals = new();
         LanConnectSaveRepairResult result = LanConnectMultiplayerSaveRepair.RepairCurrentProfile(
             profile.CreateContext(() => new LanConnectSaveRepairBindingInspection(
                 true,
                 "save-2",
                 bindings.ContainsKey("save-2")),
-                saveKey =>
-                {
-                    removals.Add(saveKey);
-                    return bindings.Remove(saveKey);
-                }));
+                saveKey => throw new Xunit.Sdk.XunitException(
+                    $"Repair must not remove binding {saveKey}.")));
 
         AssertRepairEntryDoesNotRemoveBindings();
 
         Assert.True(result.Success);
         Assert.Contains("当前多人存档没有已保存的房间绑定 save-2", result.Message);
-        Assert.Empty(removals);
         Assert.Empty(bindings);
     }
 
