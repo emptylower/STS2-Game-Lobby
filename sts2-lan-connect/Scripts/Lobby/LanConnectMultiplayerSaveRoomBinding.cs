@@ -133,9 +133,6 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         };
     }
 
-    public static void PersistBinding(SerializableRun run, string roomName, string? password, string gameMode, string source)
-        => PersistHostBinding(run, roomName, password, gameMode, LanConnectHostChannels.Lobby, source);
-
     public static void PersistHostBinding(
         SerializableRun run,
         string roomName,
