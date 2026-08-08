@@ -6,7 +6,8 @@ internal sealed class LanConnectWireCacheCaptureCache
     private readonly Func<LanConnectWireCacheSnapshot> _capture;
     private readonly Action<LanConnectWireCacheSnapshot> _logSuccess;
     private readonly Action<Exception> _logFailure;
-    private LanConnectWireCacheCaptureResult? _cached;
+    private LanConnectWireCacheCaptureResult? _cachedUnavailable;
+    private bool _successLogged;
     private bool _startupOutcomeLogged;
 
     internal LanConnectWireCacheCaptureCache(
@@ -23,25 +24,28 @@ internal sealed class LanConnectWireCacheCaptureCache
     {
         lock (_sync)
         {
-            if (_cached != null)
+            if (_cachedUnavailable != null)
             {
-                return _cached;
+                return _cachedUnavailable;
             }
 
             try
             {
                 LanConnectWireCacheSnapshot snapshot = _capture()
                     ?? throw new InvalidOperationException("Wire cache capture returned no snapshot.");
-                _cached = LanConnectWireCacheCaptureResult.Available(snapshot);
-                TryLog(() => _logSuccess(snapshot));
+                if (!_successLogged)
+                {
+                    _successLogged = true;
+                    TryLog(() => _logSuccess(snapshot));
+                }
+                return LanConnectWireCacheCaptureResult.Available(snapshot);
             }
             catch (Exception ex)
             {
-                _cached = LanConnectWireCacheCaptureResult.Unavailable(ex);
+                _cachedUnavailable = LanConnectWireCacheCaptureResult.Unavailable(ex);
                 TryLog(() => _logFailure(ex));
+                return _cachedUnavailable;
             }
-
-            return _cached;
         }
     }
 

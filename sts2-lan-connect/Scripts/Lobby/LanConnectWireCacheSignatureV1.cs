@@ -8,6 +8,7 @@ internal static class LanConnectWireCacheSignatureV1
 {
     private const string Domain = "sts2_lan_connect_wire:v1";
     private const string TokenPrefix = "wcv1:";
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
     public static string Compute(
         IReadOnlyList<string> categoryTable,
@@ -60,7 +61,7 @@ internal static class LanConnectWireCacheSignatureV1
 
     private static void AppendStringFrame(IncrementalHash hash, string value)
     {
-        byte[] bytes = Encoding.UTF8.GetBytes(value);
+        byte[] bytes = StrictUtf8.GetBytes(value);
         AppendFrameLength(hash, bytes.Length);
         hash.AppendData(bytes);
     }

@@ -24,8 +24,15 @@ internal static class LanConnectDebugReport
     private const int LogTailWindow = 2500;
     private const int MaxLineLength = 600;
 
-    public static string Build(LanConnectDebugOverlayState overlayState)
+    public static string Build(LanConnectDebugOverlayState overlayState) =>
+        Build(overlayState, LanConnectWireCacheDiagnostics.GetCurrentResult);
+
+    internal static string Build(
+        LanConnectDebugOverlayState overlayState,
+        Func<LanConnectWireCacheCaptureResult> wireCacheCaptureProvider)
     {
+        ArgumentNullException.ThrowIfNull(wireCacheCaptureProvider);
+
         StringBuilder builder = new();
         string writableDataDirectory = LanConnectPaths.ResolveWritableDataDirectory();
         string configPath = Path.Combine(writableDataDirectory, "config.json");
@@ -35,7 +42,7 @@ internal static class LanConnectDebugReport
         string effectiveRegistryBaseUrl = LanConnectConfig.LobbyRegistryBaseUrl;
         IReadOnlyList<string> logLines = ReadRelevantLogLines(logPath);
         Dictionary<string, List<string>> identifiers = ExtractIdentifiers(logLines);
-        LanConnectWireCacheCaptureResult wireCache = LanConnectWireCacheDiagnostics.GetCurrentResult();
+        LanConnectWireCacheCaptureResult wireCache = CaptureWireCacheSafely(wireCacheCaptureProvider);
         IReadOnlyList<LanConnectRuntimeMod> loadedMods =
             LanConnectModInventoryBuilder.BuildLoadedCurrentForDiagnostics();
 
@@ -116,6 +123,21 @@ internal static class LanConnectDebugReport
         }
 
         return builder.ToString();
+    }
+
+    private static LanConnectWireCacheCaptureResult CaptureWireCacheSafely(
+        Func<LanConnectWireCacheCaptureResult> captureProvider)
+    {
+        try
+        {
+            return captureProvider()
+                ?? LanConnectWireCacheCaptureResult.Unavailable(
+                    new InvalidOperationException("Wire cache capture provider returned no result."));
+        }
+        catch (Exception ex)
+        {
+            return LanConnectWireCacheCaptureResult.Unavailable(ex);
+        }
     }
 
     private static IReadOnlyList<string> ReadRelevantLogLines(string? logPath)

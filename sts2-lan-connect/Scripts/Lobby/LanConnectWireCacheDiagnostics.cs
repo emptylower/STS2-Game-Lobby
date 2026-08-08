@@ -77,48 +77,31 @@ internal static class LanConnectWireCacheDiagnostics
             FieldInfo entryTableField = RequireField("_netIdToEntryNameMap", typeof(List<string>));
             FieldInfo epochTableField = RequireField("_netIdToEpochNameMap", typeof(List<string>));
             FieldInfo propertyTableField = RequireField("_netIdToPropertyNameMap", typeof(List<string>));
+            FieldInfo categoryForwardMapField = RequireField("_categoryNameToNetIdMap", typeof(Dictionary<string, int>));
+            FieldInfo entryForwardMapField = RequireField("_entryNameToNetIdMap", typeof(Dictionary<string, int>));
+            FieldInfo epochForwardMapField = RequireField("_epochNameToNetIdMap", typeof(Dictionary<string, int>));
+            FieldInfo propertyForwardMapField = RequireField("_propertyNameToNetIdMap", typeof(Dictionary<string, int>));
             PropertyInfo categoryBitSizeProperty = RequireProperty("CategoryIdBitSize", typeof(int));
             PropertyInfo entryBitSizeProperty = RequireProperty("EntryIdBitSize", typeof(int));
             PropertyInfo epochBitSizeProperty = RequireProperty("EpochIdBitSize", typeof(int));
             PropertyInfo propertyBitSizeProperty = RequireProperty("PropertyIdBitSize", typeof(int));
             PropertyInfo hashProperty = RequireProperty("Hash", typeof(uint));
 
-            if (!ReadValue<bool>(initializedField))
-            {
-                throw new InvalidOperationException(
-                    "ModelIdSerializationCache is not initialized; refusing to compute a premature wire signature.");
-            }
-
-            string[] categoryTable = ReadTable(categoryTableField);
-            string[] entryTable = ReadTable(entryTableField);
-            string[] epochTable = ReadTable(epochTableField);
-            string[] propertyTable = ReadTable(propertyTableField);
-            int categoryBitSize = ReadValue<int>(categoryBitSizeProperty);
-            int entryBitSize = ReadValue<int>(entryBitSizeProperty);
-            int epochBitSize = ReadValue<int>(epochBitSizeProperty);
-            int propertyBitSize = ReadValue<int>(propertyBitSizeProperty);
-            uint vanillaHash = ReadValue<uint>(hashProperty);
-            string signature = LanConnectWireCacheSignatureV1.Compute(
-                categoryTable,
-                entryTable,
-                epochTable,
-                propertyTable,
-                categoryBitSize,
-                entryBitSize,
-                epochBitSize,
-                propertyBitSize);
-
-            return new LanConnectWireCacheSnapshot(
-                signature,
-                categoryBitSize,
-                entryBitSize,
-                epochBitSize,
-                propertyBitSize,
-                categoryTable.Length,
-                entryTable.Length,
-                epochTable.Length,
-                propertyTable.Length,
-                vanillaHash);
+            return LanConnectWireCacheSnapshotCapture.Capture(() => new LanConnectWireCacheState(
+                ReadValue<bool>(initializedField),
+                ReadTable(categoryTableField),
+                ReadTable(entryTableField),
+                ReadTable(epochTableField),
+                ReadTable(propertyTableField),
+                ReadForwardMap(categoryForwardMapField),
+                ReadForwardMap(entryForwardMapField),
+                ReadForwardMap(epochForwardMapField),
+                ReadForwardMap(propertyForwardMapField),
+                ReadValue<int>(categoryBitSizeProperty),
+                ReadValue<int>(entryBitSizeProperty),
+                ReadValue<int>(epochBitSizeProperty),
+                ReadValue<int>(propertyBitSizeProperty),
+                ReadValue<uint>(hashProperty)));
         }
 
         internal static void LogComputed(LanConnectWireCacheSnapshot snapshot)
@@ -195,6 +178,16 @@ internal static class LanConnectWireCacheDiagnostics
                     $"{CacheType.FullName}.{field.Name} returned null or a non-List<string> value.");
             }
             return table.ToArray();
+        }
+
+        private static KeyValuePair<string, int>[] ReadForwardMap(FieldInfo field)
+        {
+            if (field.GetValue(null) is not Dictionary<string, int> map)
+            {
+                throw new InvalidOperationException(
+                    $"{CacheType.FullName}.{field.Name} returned null or a non-Dictionary<string, int> value.");
+            }
+            return map.ToArray();
         }
 
         private static T ReadValue<T>(MemberInfo member)
