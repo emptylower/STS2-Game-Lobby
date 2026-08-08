@@ -1824,21 +1824,91 @@ internal sealed partial class LanConnectLobbyRuntime :
         throw new InvalidOperationException("No active lobby room session for chat.");
     }
 
-    internal async Task SendKickPlayerAsync(string targetPlayerNetId, string targetPlayerName)
+    internal LanConnectLobbyKickTarget CaptureKickTarget(
+        string targetPlayerNetId,
+        string targetPlayerName)
+    {
+        HostedRoomSession? session = _activeSession;
+        return session?.CaptureKickTarget(targetPlayerNetId, targetPlayerName)
+            ?? new LanConnectLobbyKickTarget(
+                targetPlayerNetId.Trim(),
+                null,
+                targetPlayerName,
+                0);
+    }
+
+    internal Func<Action, bool> CreateKickDisconnectAction(LanConnectLobbyKickTarget target)
+    {
+        HostedRoomSession? capturedSession = _activeSession;
+        return disconnect =>
+        {
+            bool disconnected = false;
+            return capturedSession != null
+                && _roomSessionAuthority.TryMutate(
+                    () => _activeSession,
+                    capturedSession,
+                    () => capturedSession.IsClosing,
+                    () => disconnected = capturedSession.TryRunKickDisconnectIfCurrent(
+                        target,
+                        disconnect))
+                && disconnected;
+        };
+    }
+
+    internal async Task<LanConnectLobbyKickResult> SendKickPlayerAsync(
+        LanConnectLobbyKickTarget target)
     {
         HostedRoomSession? session = _activeSession;
         if (session == null)
         {
-            return;
+            return new(false, "no_hosted_room", "当前没有可管理的托管房间。");
         }
 
-        await session.ControlClient.SendAsync(
-            BuildKickPlayerEnvelope(
-                session.RoomId,
-                targetPlayerNetId,
-                targetPlayerName,
-                session.GetKickBindingId(targetPlayerNetId)),
-            CancellationToken.None);
+        string requestId = Guid.NewGuid().ToString("N");
+        TaskCompletionSource<LobbyControlEnvelope>? completion =
+            session.KickPlayerResultSupported
+                ? session.BeginKickRequest(requestId)
+                : null;
+        try
+        {
+            await session.ControlClient.SendAsync(
+                BuildKickPlayerEnvelope(session.RoomId, target, requestId),
+                CancellationToken.None);
+            if (completion == null)
+            {
+                return LanConnectLobbyKickResult.AcceptedByLegacyService();
+            }
+
+            LobbyControlEnvelope response = await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            return LanConnectLobbyKickResult.FromResponse(
+                target,
+                response.Accepted == true,
+                response.PlayerNetId,
+                response.BindingId,
+                response.Reason,
+                response.Message);
+        }
+        catch (TimeoutException)
+        {
+            Log.Warn(
+                $"sts2_lan_connect kick rejected locally: confirmation timed out "
+                + $"playerNetId={target.PlayerNetId} bindingId={target.BindingId ?? "<legacy>"}");
+            return new(false, "confirmation_timeout", "大厅服务未确认移出请求，请刷新列表后重试。");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(
+                $"sts2_lan_connect kick rejected locally: send failed "
+                + $"playerNetId={target.PlayerNetId} error={ex.Message}");
+            return new(false, "send_failed", "移出请求发送失败，请稍后重试。");
+        }
+        finally
+        {
+            if (completion != null)
+            {
+                session.ForgetKickRequest(requestId);
+            }
+        }
     }
 
     internal async Task SendRoomSettingsAsync(bool chatEnabled)
@@ -2238,13 +2308,27 @@ internal sealed partial class LanConnectLobbyRuntime :
     {
         switch (envelope.Type)
         {
+            case "connected":
+                session.KickPlayerResultSupported = envelope.KickPlayerResultSupported == true;
+                break;
             case "player_control_binding":
                 if (!string.IsNullOrWhiteSpace(envelope.PlayerNetId) &&
                     !string.IsNullOrWhiteSpace(envelope.BindingId))
                 {
-                    session.RememberKickBinding(envelope.PlayerNetId, envelope.BindingId);
+                    if (!session.RememberKickBinding(envelope.PlayerNetId, envelope.BindingId))
+                    {
+                        Log.Warn(
+                            $"sts2_lan_connect kick binding cache full; ignored playerNetId={envelope.PlayerNetId}");
+                    }
+                    LanConnectRemoteLobbyPlayerPatches.QueueRefreshAll();
                 }
 
+                break;
+            case "kick_player_result":
+                if (!string.IsNullOrWhiteSpace(envelope.KickRequestId))
+                {
+                    session.CompleteKickRequest(envelope.KickRequestId, envelope);
+                }
                 break;
             case "player_name_sync":
                 if (!ulong.TryParse(envelope.PlayerNetId, out ulong playerNetId) || string.IsNullOrWhiteSpace(envelope.PlayerName))
@@ -3039,6 +3123,20 @@ internal sealed partial class LanConnectLobbyRuntime :
         };
     }
 
+    internal static LobbyControlEnvelope BuildKickPlayerEnvelope(
+        string roomId,
+        LanConnectLobbyKickTarget target,
+        string requestId)
+    {
+        LobbyControlEnvelope envelope = BuildKickPlayerEnvelope(
+            roomId,
+            target.PlayerNetId,
+            target.OccupantName,
+            target.BindingId);
+        envelope.KickRequestId = requestId;
+        return envelope;
+    }
+
     internal static LobbyControlEnvelope CreateJoinedRoomChatEnvelope(
         string roomId,
         string controlChannelId,
@@ -3263,7 +3361,10 @@ internal sealed partial class LanConnectLobbyRuntime :
         private readonly Action<ulong, NetErrorInfo> _clientDisconnectedHandler;
         private Action<LobbyControlEnvelope>? _controlEnvelopeHandler;
         internal readonly HashSet<ulong> _connectedPeerIds = new();
-        private readonly Dictionary<string, string> _kickBindingIds = new(StringComparer.Ordinal);
+        private readonly LanConnectLobbyKickTargetDirectory _kickTargets = new();
+        private readonly object _pendingKickSync = new();
+        private readonly Dictionary<string, TaskCompletionSource<LobbyControlEnvelope>> _pendingKicks =
+            new(StringComparer.Ordinal);
 
         public IReadOnlyCollection<ulong> ConnectedPeerIds => _connectedPeerIds;
 
@@ -3311,6 +3412,8 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         public bool IsClosing { get; set; }
 
+        public bool KickPlayerResultSupported { get; set; }
+
         public int HeartbeatIntervalSeconds => Registration.HeartbeatIntervalSeconds > 0
             ? Registration.HeartbeatIntervalSeconds
             : (int)LanConnectConstants.LobbyHeartbeatIntervalSeconds;
@@ -3343,15 +3446,47 @@ internal sealed partial class LanConnectLobbyRuntime :
             return current;
         }
 
-        public void RememberKickBinding(string playerNetId, string bindingId)
+        public bool RememberKickBinding(string playerNetId, string bindingId)
         {
-            _kickBindingIds[playerNetId.Trim()] = bindingId.Trim();
+            return _kickTargets.RememberBinding(playerNetId, bindingId);
         }
 
-        public string? GetKickBindingId(string playerNetId) =>
-            _kickBindingIds.TryGetValue(playerNetId.Trim(), out string? bindingId)
-                ? bindingId
-                : null;
+        public LanConnectLobbyKickTarget CaptureKickTarget(string playerNetId, string playerName) =>
+            _kickTargets.Capture(playerNetId, playerName);
+
+        public bool TryRunKickDisconnectIfCurrent(
+            LanConnectLobbyKickTarget target,
+            Action disconnect) =>
+            _kickTargets.TryRunIfCurrent(target, disconnect);
+
+        public TaskCompletionSource<LobbyControlEnvelope> BeginKickRequest(string requestId)
+        {
+            TaskCompletionSource<LobbyControlEnvelope> completion =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_pendingKickSync)
+            {
+                _pendingKicks.Add(requestId, completion);
+            }
+            return completion;
+        }
+
+        public void CompleteKickRequest(string requestId, LobbyControlEnvelope envelope)
+        {
+            TaskCompletionSource<LobbyControlEnvelope>? completion;
+            lock (_pendingKickSync)
+            {
+                _pendingKicks.TryGetValue(requestId.Trim(), out completion);
+            }
+            completion?.TrySetResult(envelope);
+        }
+
+        public void ForgetKickRequest(string requestId)
+        {
+            lock (_pendingKickSync)
+            {
+                _pendingKicks.Remove(requestId);
+            }
+        }
 
         public void OnDisconnected(NetErrorInfo _)
         {
@@ -3370,6 +3505,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         public void OnClientCountChanged(ulong _)
         {
             _connectedPeerIds.Add(_);
+            _kickTargets.ObserveConnected(_.ToString());
             if (LanConnectLobbyRuntime.Instance != null)
             {
                 LanConnectLobbyRuntime.Instance._timeUntilHeartbeat = 0d;
@@ -3380,6 +3516,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         public void OnClientDisconnected(ulong _, NetErrorInfo __)
         {
             _connectedPeerIds.Remove(_);
+            _kickTargets.ObserveDisconnected(_.ToString());
             if (LanConnectLobbyRuntime.Instance != null)
             {
                 LanConnectLobbyRuntime.Instance._timeUntilHeartbeat = 0d;
@@ -3401,6 +3538,14 @@ internal sealed partial class LanConnectLobbyRuntime :
             if (_controlEnvelopeHandler != null)
             {
                 ControlClient.EnvelopeReceived -= _controlEnvelopeHandler;
+            }
+            lock (_pendingKickSync)
+            {
+                foreach (TaskCompletionSource<LobbyControlEnvelope> completion in _pendingKicks.Values)
+                {
+                    completion.TrySetCanceled();
+                }
+                _pendingKicks.Clear();
             }
             Task.Run(async () =>
             {

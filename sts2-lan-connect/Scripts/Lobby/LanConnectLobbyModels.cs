@@ -399,6 +399,12 @@ internal sealed class LobbyControlEnvelope
 
     public string? BindingId { get; set; }
 
+    public string? KickRequestId { get; set; }
+
+    public bool? KickPlayerResultSupported { get; set; }
+
+    public bool? Accepted { get; set; }
+
     public string? PlayerName { get; set; }
 
     public LanConnectChatFeatureVersions? RoomChatVersions { get; set; }
