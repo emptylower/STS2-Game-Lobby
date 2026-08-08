@@ -508,6 +508,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         LanConnectProtocolProfiles.ResetActiveProfile("runtime_ready");
         SaveManager.Instance.Saved += OnRunSaved;
         LanConnectSaveDiagnostics.LogNow("runtime_ready");
+        LanConnectWireCacheDiagnostics.LogStartupSnapshot();
         Log.Info("sts2_lan_connect lobby runtime ready.");
         // The picker is no longer triggered at runtime startup. It opens only
         // when the user clicks the "游戏大厅" entry on the multiplayer submenu —
