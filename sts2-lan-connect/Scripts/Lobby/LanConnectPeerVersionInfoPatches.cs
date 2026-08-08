@@ -1,9 +1,7 @@
 using System.Reflection;
 using HarmonyLib;
-using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer;
-using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
 using MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby;
 
@@ -41,7 +39,7 @@ internal static class LanConnectPeerVersionInfoPatches
         catch (Exception ex)
         {
             SafeLog(() => Log.Warn(
-                $"sts2_lan_connect wire_handshake host gating unavailable: " +
+                $"sts2_lan_connect wire_handshake host diagnostics unavailable: " +
                 $"{ex.GetType().Name}: {ex.Message}"));
         }
     }
@@ -116,104 +114,48 @@ internal static class LanConnectPeerVersionInfoPatches
             typeof(RunLobby),
             "HandleClientRejoinRequestMessage");
 
-        internal static bool StartRunJoinPrefix(
-            StartRunLobby __instance,
-            ClientLobbyJoinRequestMessage message,
-            ulong senderId) =>
-            ShouldRunOriginalHandler(
-                message.versionInfo,
-                senderId,
-                "lobby-join",
-                __instance.NetService);
+        // Deliberate trade-off: these prefixes only detect and log. Skipping the load
+        // handler can leak _connectingPlayers, while a swallowed disconnect failure can
+        // strand a connected peer with no response; enforcement remains client-side.
+        internal static void StartRunJoinPrefix(ClientLobbyJoinRequestMessage message, ulong senderId) =>
+            LogRemoteHandshake(message.versionInfo, senderId, "lobby-join");
 
-        internal static bool LoadRunJoinPrefix(
-            LoadRunLobby __instance,
-            ClientLoadJoinRequestMessage message,
-            ulong senderId) =>
-            ShouldRunOriginalHandler(
-                message.versionInfo,
-                senderId,
-                "load-join",
-                __instance.NetService);
+        internal static void LoadRunJoinPrefix(ClientLoadJoinRequestMessage message, ulong senderId) =>
+            LogRemoteHandshake(message.versionInfo, senderId, "load-join");
 
-        internal static bool RunRejoinPrefix(
-            ClientRejoinRequestMessage message,
-            ulong senderId,
-            INetGameService ____netService) =>
-            ShouldRunOriginalHandler(
-                message.versionInfo,
-                senderId,
-                "rejoin",
-                ____netService);
+        internal static void RunRejoinPrefix(ClientRejoinRequestMessage message, ulong senderId) =>
+            LogRemoteHandshake(message.versionInfo, senderId, "rejoin");
 
-        private static bool ShouldRunOriginalHandler(
+        private static void LogRemoteHandshake(
             PeerVersionInfo remoteInfo,
-            ulong senderId,
-            string path,
-            INetGameService netService)
-        {
-            LanConnectWireCacheHandshakeTokenParseResult? remoteParse = null;
-            return LanConnectWireCacheHandshakeGate.ShouldRunHostHandler(
-                () =>
-                {
-                    LanConnectWireCacheCaptureResult localCapture =
-                        LanConnectWireCacheDiagnostics.GetCurrentResult();
-                    remoteParse = LanConnectWireCacheHandshakeToken.Parse(remoteInfo.otherMods);
-                    return LanConnectWireCacheHandshakeDecision.Evaluate(
-                        localCapture,
-                        remoteParse,
-                        relaxedCompatibility: false);
-                },
-                decision => LogRemoteHandshakeDecision(
-                    decision,
-                    remoteParse!,
-                    senderId,
-                    path),
-                decision =>
-                {
-                    ((INetHostGameService)netService).DisconnectClient(
-                        senderId,
-                        NetError.ModMismatch,
-                        now: true);
-                    SafeLog(() => Log.Warn(
-                        $"sts2_lan_connect wire_handshake host rejected: path={path}, " +
-                        $"senderId={senderId}, reason={decision.Detail}"));
-                },
-                ex => Log.Warn(
-                    $"sts2_lan_connect wire_handshake host: path={path}, senderId={senderId}, " +
-                    $"localSignature=unavailable, remoteSignature=unavailable, " +
-                    $"decision=local-unavailable, reason={ex.GetType().Name}: {ex.Message}"));
-        }
-
-        private static void LogRemoteHandshakeDecision(
-            LanConnectWireCacheHandshakeDecision decision,
-            LanConnectWireCacheHandshakeTokenParseResult remoteParse,
             ulong senderId,
             string path)
         {
-            string decisionName = decision.Kind switch
+            try
             {
-                LanConnectWireCacheHandshakeDecisionKind.Match => "match",
-                LanConnectWireCacheHandshakeDecisionKind.Mismatch => "mismatch",
-                LanConnectWireCacheHandshakeDecisionKind.LocalUnavailable => "local-unavailable",
-                LanConnectWireCacheHandshakeDecisionKind.RemoteAbsent => "remote-absent",
-                _ => decision.Kind.ToString()
-            };
-            string diagnostic =
-                $"sts2_lan_connect wire_handshake host: path={path}, senderId={senderId}, " +
-                $"localSignature={decision.LocalToken?.Signature ?? "unavailable"}, " +
-                $"remoteSignature={decision.RemoteToken?.Signature ?? "absent"}, " +
-                $"decision={decisionName}, " +
-                $"localWidths={decision.LocalToken?.FormatWidths() ?? "unavailable"}, " +
-                $"remoteWidths={decision.RemoteToken?.FormatWidths() ?? "unavailable"}, " +
-                $"remoteSentinelStatus={remoteParse.Status}";
-            if (decision.Kind == LanConnectWireCacheHandshakeDecisionKind.Match)
-            {
-                Log.Info(diagnostic);
+                LanConnectWireCacheCaptureResult localCapture =
+                    LanConnectWireCacheDiagnostics.GetCurrentResult();
+                LanConnectWireCacheHandshakeTokenParseResult remoteParse =
+                    LanConnectWireCacheHandshakeToken.Parse(remoteInfo.otherMods);
+                LanConnectWireCacheHandshakeDecision decision =
+                    LanConnectWireCacheHandshakeDecision.Evaluate(
+                        localCapture,
+                        remoteParse,
+                        relaxedCompatibility: false);
+                LanConnectWireCacheHandshakeGate.ObserveHostDecision(
+                    decision,
+                    remoteParse.Status,
+                    senderId,
+                    path,
+                    diagnostic => Log.Info(diagnostic),
+                    diagnostic => Log.Warn(diagnostic));
             }
-            else
+            catch (Exception ex)
             {
-                Log.Warn(diagnostic);
+                SafeLog(() => Log.Warn(
+                    $"sts2_lan_connect wire_handshake host: path={path}, senderId={senderId}, " +
+                    $"localSignature=unavailable, remoteSignature=unavailable, " +
+                    $"decision=local-unavailable, reason={ex.GetType().Name}: {ex.Message}"));
             }
         }
 

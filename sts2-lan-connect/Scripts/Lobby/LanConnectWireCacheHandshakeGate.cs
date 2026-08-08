@@ -31,48 +31,49 @@ internal static class LanConnectWireCacheHandshakeGate
         return decision.IsAllowed;
     }
 
-    internal static bool ShouldRunHostHandler(
-        Func<LanConnectWireCacheHandshakeDecision> evaluate,
-        Action<LanConnectWireCacheHandshakeDecision> observeDecision,
-        Action<LanConnectWireCacheHandshakeDecision> disconnectMismatch,
-        Action<Exception> observeEvaluationFailure)
+    internal static void ObserveHostDecision(
+        LanConnectWireCacheHandshakeDecision decision,
+        LanConnectWireCacheHandshakeTokenStatus remoteStatus,
+        ulong senderId,
+        string path,
+        Action<string> logInfo,
+        Action<string> logWarning)
     {
-        ArgumentNullException.ThrowIfNull(evaluate);
-        ArgumentNullException.ThrowIfNull(observeDecision);
-        ArgumentNullException.ThrowIfNull(disconnectMismatch);
-        ArgumentNullException.ThrowIfNull(observeEvaluationFailure);
+        ArgumentNullException.ThrowIfNull(decision);
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(logInfo);
+        ArgumentNullException.ThrowIfNull(logWarning);
 
-        LanConnectWireCacheHandshakeDecision decision;
+        string decisionName = decision.Kind switch
+        {
+            LanConnectWireCacheHandshakeDecisionKind.Match => "match",
+            LanConnectWireCacheHandshakeDecisionKind.Mismatch => "mismatch",
+            LanConnectWireCacheHandshakeDecisionKind.LocalUnavailable => "local-unavailable",
+            LanConnectWireCacheHandshakeDecisionKind.RemoteAbsent => "remote-absent",
+            _ => decision.Kind.ToString()
+        };
+        string diagnostic =
+            $"sts2_lan_connect wire_handshake host: path={path}, senderId={senderId}, " +
+            $"localSignature={decision.LocalToken?.Signature ?? "unavailable"}, " +
+            $"remoteSignature={decision.RemoteToken?.Signature ?? "absent"}, " +
+            $"decision={decisionName}, " +
+            $"localWidths={decision.LocalToken?.FormatWidths() ?? "unavailable"}, " +
+            $"remoteWidths={decision.RemoteToken?.FormatWidths() ?? "unavailable"}, " +
+            $"remoteSentinelStatus={remoteStatus}";
         try
         {
-            decision = evaluate()
-                ?? throw new InvalidOperationException("Wire cache handshake evaluation returned null.");
-        }
-        catch (Exception ex)
-        {
-            InvokeBestEffort(() => observeEvaluationFailure(ex));
-            return true;
-        }
-
-        InvokeBestEffort(() => observeDecision(decision));
-        if (decision.Kind != LanConnectWireCacheHandshakeDecisionKind.Mismatch)
-        {
-            return true;
-        }
-
-        InvokeBestEffort(() => disconnectMismatch(decision));
-        return false;
-    }
-
-    private static void InvokeBestEffort(Action action)
-    {
-        try
-        {
-            action();
+            if (decision.Kind == LanConnectWireCacheHandshakeDecisionKind.Match)
+            {
+                logInfo(diagnostic);
+            }
+            else
+            {
+                logWarning(diagnostic);
+            }
         }
         catch
         {
-            // Host gating is fail-open unless evaluation proved a genuine mismatch.
+            // Host diagnostics must never affect the game handler lifecycle.
         }
     }
 }

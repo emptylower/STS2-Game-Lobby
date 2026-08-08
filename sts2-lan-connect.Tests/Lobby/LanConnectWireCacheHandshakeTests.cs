@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Reflection;
 using Sts2LanConnect.Scripts;
 
 namespace Sts2LanConnect.Tests.Lobby;
@@ -38,88 +39,58 @@ public sealed class LanConnectWireCacheHandshakeTests
         Assert.Contains("category=5, entry=6, epoch=7, property=8", decision.Detail, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("lobby-join")]
+    [InlineData("load-join")]
+    [InlineData("rejoin")]
+    public void Host_decision_observer_only_warns_on_mismatch(string path)
+    {
+        LanConnectWireCacheHandshakeDecision decision = Decide(
+            Available(SignatureA),
+            Parse(Token(SignatureB, 5, 6, 7, 8)));
+        List<string> warnings = [];
+
+        LanConnectWireCacheHandshakeGate.ObserveHostDecision(
+            decision,
+            LanConnectWireCacheHandshakeTokenStatus.Valid,
+            42,
+            path,
+            _ => throw new InvalidOperationException("mismatch must be a warning"),
+            warnings.Add);
+
+        string warning = Assert.Single(warnings);
+        Assert.Contains($"path={path}", warning, StringComparison.Ordinal);
+        Assert.Contains("senderId=42", warning, StringComparison.Ordinal);
+        Assert.Contains($"localSignature={SignatureA}", warning, StringComparison.Ordinal);
+        Assert.Contains($"remoteSignature={SignatureB}", warning, StringComparison.Ordinal);
+        Assert.Contains("decision=mismatch", warning, StringComparison.Ordinal);
+        Assert.Contains("localWidths=category=1, entry=2, epoch=3, property=4", warning, StringComparison.Ordinal);
+        Assert.Contains("remoteWidths=category=5, entry=6, epoch=7, property=8", warning, StringComparison.Ordinal);
+
+        // Deliberately not asserted here: that the Harmony prefixes themselves return void
+        // and therefore cannot skip the original handler. Reflecting over those methods
+        // resolves their game-typed message parameters and needs sts2.dll, which this
+        // project does not have. sts2-lan-connect.GdUnitTests is the right home for that
+        // check. What this test does prove is that the host decision observer only warns.
+    }
+
     [Fact]
-    public void Host_gate_disconnects_and_skips_original_on_genuine_mismatch()
+    public void Host_mismatch_logging_failure_cannot_block_the_original_handler()
     {
         LanConnectWireCacheHandshakeDecision decision = Decide(
             Available(SignatureA),
             Parse(Token(SignatureB)));
-        LanConnectWireCacheHandshakeDecision? disconnectedDecision = null;
 
-        bool shouldRunOriginal = LanConnectWireCacheHandshakeGate.ShouldRunHostHandler(
-            () => decision,
-            _ => { },
-            mismatch => disconnectedDecision = mismatch,
-            _ => { });
-
-        Assert.False(shouldRunOriginal);
-        Assert.Same(decision, disconnectedDecision);
-    }
-
-    [Fact]
-    public void Host_gate_still_skips_original_when_mismatch_disconnect_throws()
-    {
-        LanConnectWireCacheHandshakeDecision decision = Decide(
-            Available(SignatureA),
-            Parse(Token(SignatureB)));
-
-        bool shouldRunOriginal = LanConnectWireCacheHandshakeGate.ShouldRunHostHandler(
-            () => decision,
-            _ => { },
-            _ => throw new InvalidOperationException("disconnect failed"),
-            _ => { });
-
-        Assert.False(shouldRunOriginal);
-    }
-
-    [Fact]
-    public void Host_gate_falls_through_for_every_non_mismatch_outcome()
-    {
-        LanConnectWireCacheHandshakeDecision[] decisions =
-        [
-            Decide(Available(SignatureA), Parse(Token(SignatureA))),
-            Decide(
-                LanConnectWireCacheCaptureResult.Unavailable(
-                    new InvalidOperationException("capture failed")),
-                Parse(Token(SignatureA))),
-            Decide(Available(SignatureA), LanConnectWireCacheHandshakeToken.Parse(null)),
-            Decide(
-                Available(SignatureA),
-                Parse("sts2_lan_connect_wire:v1:not-a-signature")),
-            Decide(
-                Available(SignatureA),
-                LanConnectWireCacheHandshakeToken.Parse(
-                    [Token(SignatureA), Token(SignatureB)]))
-        ];
-        List<LanConnectWireCacheHandshakeDecision> disconnected = [];
-
-        foreach (LanConnectWireCacheHandshakeDecision decision in decisions)
-        {
-            bool shouldRunOriginal = LanConnectWireCacheHandshakeGate.ShouldRunHostHandler(
-                () => decision,
+        Exception? failure = Record.Exception(() =>
+            LanConnectWireCacheHandshakeGate.ObserveHostDecision(
+                decision,
+                LanConnectWireCacheHandshakeTokenStatus.Valid,
+                42,
+                "load-join",
                 _ => { },
-                disconnected.Add,
-                _ => { });
+                _ => throw new InvalidOperationException("logger failed")));
 
-            Assert.True(shouldRunOriginal);
-        }
-
-        Assert.Empty(disconnected);
-    }
-
-    [Fact]
-    public void Host_gate_falls_through_when_evaluation_throws()
-    {
-        Exception? observed = null;
-
-        bool shouldRunOriginal = LanConnectWireCacheHandshakeGate.ShouldRunHostHandler(
-            () => throw new InvalidOperationException("evaluation failed"),
-            _ => { },
-            _ => throw new InvalidOperationException("must not disconnect"),
-            ex => observed = ex);
-
-        Assert.True(shouldRunOriginal);
-        Assert.IsType<InvalidOperationException>(observed);
+        Assert.Null(failure);
     }
 
     [Fact]
