@@ -206,6 +206,8 @@ internal sealed class LobbyCreateRoomRequest
 
     public string HostPlayerName { get; set; } = string.Empty;
 
+    public string ClientInstallationId { get; set; } = string.Empty;
+
     public string GameMode { get; set; } = LanConnectConstants.DefaultGameMode;
 
     public string Version { get; set; } = string.Empty;
@@ -247,6 +249,8 @@ internal sealed class LobbyCreateRoomResponse
 internal sealed class LobbyJoinRoomRequest
 {
     public string PlayerName { get; set; } = string.Empty;
+
+    public string ClientInstallationId { get; set; } = string.Empty;
 
     public string? Password { get; set; }
 

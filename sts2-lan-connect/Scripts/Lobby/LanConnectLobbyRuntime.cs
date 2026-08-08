@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -229,7 +230,7 @@ internal sealed partial class LanConnectLobbyRuntime :
     private LanConnectRotatingServerChatPort? _chatOwner;
     private LanConnectServerSwitchCoordinator? _serverSwitchCoordinator;
     private int _lobbyServerContextInitialized;
-    private string? _serverChatPlayerNetId;
+    private string? _serverChatClientInstallationId;
     private bool _chatEnabled = true;
     private int _chatEnabledRevision;
     private PendingHostRestart? _pendingHostRestart;
@@ -963,7 +964,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 TryApplyRoomChatAck(
                     GetChatCoordinator(),
                     envelope,
-                    session.NetService.NetId.ToString(),
+                    ResolveCurrentChatInstallationId(),
                     session.RoomId,
                     session.RoomSessionId);
             }
@@ -975,7 +976,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 TryApplyRoomChatMessage(
                     GetChatCoordinator(),
                     envelope,
-                    session.NetService.NetId.ToString(),
+                    ResolveCurrentChatInstallationId(),
                     session.RoomId,
                     session.RoomSessionId);
             }
@@ -1117,7 +1118,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 TryApplyRoomChatAck(
                     GetChatCoordinator(),
                     envelope,
-                    session.PlayerNetId,
+                    ResolveCurrentChatInstallationId(),
                     session.RoomId,
                     session.RoomSessionId);
             }
@@ -1129,7 +1130,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 TryApplyRoomChatMessage(
                     GetChatCoordinator(),
                     envelope,
-                    session.PlayerNetId,
+                    ResolveCurrentChatInstallationId(),
                     session.RoomId,
                     session.RoomSessionId);
             }
@@ -1579,7 +1580,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         }
 
         string senderName = LanConnectConfig.GetEffectivePlayerDisplayName();
-        string? senderNetId = _activeSession?.NetService.NetId.ToString() ?? _activeClientSession?.PlayerNetId;
+        string senderNetId = ResolveCurrentChatInstallationId();
         DateTimeOffset sentAt = DateTimeOffset.UtcNow;
         string messageId = clientMessageId ?? Guid.NewGuid().ToString("N");
         coordinator.BeginRoomPending(messageId, senderName, senderNetId, normalizedMessage, sentAt);
@@ -1635,7 +1636,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             controlClient.LatestRoomChatReady!.EnabledFeatures,
             roomSessionId);
         string senderName = LanConnectConfig.GetEffectivePlayerDisplayName();
-        string? senderNetId = _activeSession?.NetService.NetId.ToString() ?? _activeClientSession?.PlayerNetId;
+        string senderNetId = ResolveCurrentChatInstallationId();
         DateTimeOffset sentAt = DateTimeOffset.UtcNow;
         coordinator.BeginRoomPending(clientMessageId, senderName, senderNetId, canonical, sentAt);
         try
@@ -1751,7 +1752,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             throw new InvalidOperationException("Server switching is unavailable before the lobby runtime is ready.");
         await coordinator.SwitchAsync(
             baseUrl,
-            ResolveCurrentPlayerNetId(),
+            ResolveCurrentChatInstallationId(),
             LanConnectConfig.GetEffectivePlayerDisplayName(),
             cancellationToken);
         Interlocked.Exchange(ref _lobbyServerContextInitialized, 1);
@@ -1765,7 +1766,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             throw new InvalidOperationException("Server switching is unavailable before the lobby runtime is ready.");
         LanConnectServerContextLease context = await coordinator.SwitchWithContextAsync(
             baseUrl,
-            ResolveCurrentPlayerNetId(),
+            ResolveCurrentChatInstallationId(),
             LanConnectConfig.GetEffectivePlayerDisplayName(),
             cancellationToken);
         if (!context.Token.IsCancellationRequested)
@@ -1798,7 +1799,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 _activeSession.RoomId,
                 _activeSession.ControlChannelId,
                 senderName,
-                _activeSession.NetService.NetId.ToString(),
+                ResolveCurrentChatInstallationId(),
                 messageId,
                 messageText,
                 sentAt);
@@ -1813,7 +1814,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 _activeClientSession.ControlChannelId,
                 _activeClientSession.TicketId,
                 senderName,
-                _activeClientSession.PlayerNetId,
+                ResolveCurrentChatInstallationId(),
                 messageId,
                 messageText,
                 sentAt);
@@ -3036,36 +3037,16 @@ internal sealed partial class LanConnectLobbyRuntime :
         _chatOwner?.Current ?? throw new InvalidOperationException(
             "Chat is unavailable before the lobby runtime is ready.");
 
-    private string ResolveCurrentPlayerNetId()
+    private string ResolveCurrentChatInstallationId()
     {
-        string? activePlayerNetId = _activeSession?.NetService.NetId.ToString() ?? _activeClientSession?.PlayerNetId;
-        if (!string.IsNullOrWhiteSpace(activePlayerNetId))
+        if (!string.IsNullOrWhiteSpace(_serverChatClientInstallationId))
         {
-            _serverChatPlayerNetId = activePlayerNetId;
-            return activePlayerNetId;
+            return _serverChatClientInstallationId;
         }
 
-        if (!string.IsNullOrWhiteSpace(_serverChatPlayerNetId))
-        {
-            return _serverChatPlayerNetId;
-        }
-
-        try
-        {
-            ulong platformPlayerId = PlatformUtil.GetLocalPlayerId(PlatformUtil.PrimaryPlatform);
-            if (platformPlayerId > 1)
-            {
-                _serverChatPlayerNetId = platformPlayerId.ToString();
-                return _serverChatPlayerNetId;
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"sts2_lan_connect failed to resolve platform player id for server chat: {ex.Message}");
-        }
-
-        _serverChatPlayerNetId = LanConnectConfig.GetOrCreateClientNetId().ToString();
-        return _serverChatPlayerNetId;
+        _serverChatClientInstallationId = LanConnectConfig.GetOrCreateClientNetId()
+            .ToString(CultureInfo.InvariantCulture);
+        return _serverChatClientInstallationId;
     }
 
     private void OnChatStateChanged() => ChatStateChanged?.Invoke();
