@@ -35,7 +35,7 @@ internal static class LanConnectDebugReport
         string effectiveRegistryBaseUrl = LanConnectConfig.LobbyRegistryBaseUrl;
         IReadOnlyList<string> logLines = ReadRelevantLogLines(logPath);
         Dictionary<string, List<string>> identifiers = ExtractIdentifiers(logLines);
-        LanConnectWireCacheSnapshot wireCache = LanConnectWireCacheDiagnostics.GetCurrent();
+        LanConnectWireCacheCaptureResult wireCache = LanConnectWireCacheDiagnostics.GetCurrentResult();
         IReadOnlyList<LanConnectRuntimeMod> loadedMods =
             LanConnectModInventoryBuilder.BuildLoadedCurrentForDiagnostics();
 
@@ -45,16 +45,7 @@ internal static class LanConnectDebugReport
         builder.AppendLine($"game_version: {LanConnectBuildInfo.GetGameVersion()}");
         builder.AppendLine($"mod_version: {LanConnectBuildInfo.GetModVersion()}");
         builder.AppendLine($"gameplay_relevant_mods: {FormatList(LanConnectBuildInfo.GetModList())}");
-        builder.AppendLine($"wire_cache_signature_v1: {wireCache.Signature}");
-        builder.AppendLine($"wire_cache_category_id_bit_size: {wireCache.CategoryIdBitSize}");
-        builder.AppendLine($"wire_cache_entry_id_bit_size: {wireCache.EntryIdBitSize}");
-        builder.AppendLine($"wire_cache_epoch_id_bit_size: {wireCache.EpochIdBitSize}");
-        builder.AppendLine($"wire_cache_property_id_bit_size: {wireCache.PropertyIdBitSize}");
-        builder.AppendLine($"wire_cache_category_table_count: {wireCache.CategoryCount}");
-        builder.AppendLine($"wire_cache_entry_table_count: {wireCache.EntryCount}");
-        builder.AppendLine($"wire_cache_epoch_table_count: {wireCache.EpochCount}");
-        builder.AppendLine($"wire_cache_property_table_count: {wireCache.PropertyCount}");
-        builder.AppendLine($"model_id_serialization_cache_hash: {wireCache.VanillaHash}");
+        AppendWireCacheDiagnostics(builder, wireCache);
         builder.AppendLine($"loaded_mod_inventory_count: {loadedMods.Count}");
         builder.AppendLine("loaded_mod_inventory:");
         AppendLoadedModInventory(builder, loadedMods);
@@ -357,6 +348,31 @@ internal static class LanConnectDebugReport
                 $"  - id={FormatInlineValue(mod.Id)}, version={FormatInlineValue(mod.Version)}, " +
                 $"affects_gameplay={mod.AffectsGameplay.ToString().ToLowerInvariant()}");
         }
+    }
+
+    internal static void AppendWireCacheDiagnostics(
+        StringBuilder builder,
+        LanConnectWireCacheCaptureResult result)
+    {
+        if (!result.IsAvailable)
+        {
+            builder.AppendLine("wire_cache_signature_v1: <unavailable>");
+            builder.AppendLine(
+                $"wire_cache_signature_v1_unavailable_reason: {FormatInlineValue(result.FailureReason)}");
+            return;
+        }
+
+        LanConnectWireCacheSnapshot wireCache = result.Snapshot!;
+        builder.AppendLine($"wire_cache_signature_v1: {wireCache.Signature}");
+        builder.AppendLine($"wire_cache_category_id_bit_size: {wireCache.CategoryIdBitSize}");
+        builder.AppendLine($"wire_cache_entry_id_bit_size: {wireCache.EntryIdBitSize}");
+        builder.AppendLine($"wire_cache_epoch_id_bit_size: {wireCache.EpochIdBitSize}");
+        builder.AppendLine($"wire_cache_property_id_bit_size: {wireCache.PropertyIdBitSize}");
+        builder.AppendLine($"wire_cache_category_table_count: {wireCache.CategoryCount}");
+        builder.AppendLine($"wire_cache_entry_table_count: {wireCache.EntryCount}");
+        builder.AppendLine($"wire_cache_epoch_table_count: {wireCache.EpochCount}");
+        builder.AppendLine($"wire_cache_property_table_count: {wireCache.PropertyCount}");
+        builder.AppendLine($"model_id_serialization_cache_hash: {wireCache.VanillaHash}");
     }
 
     private static string FormatInlineValue(string? value)

@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Threading;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
 
@@ -7,44 +6,59 @@ namespace Sts2LanConnect.Scripts;
 
 internal static class LanConnectWireCacheDiagnostics
 {
-    private static readonly object Sync = new();
-    private static LanConnectWireCacheSnapshot? _cached;
-    private static int _startupSnapshotLogged;
+    public static LanConnectWireCacheCaptureResult GetCurrentResult() =>
+        RuntimeCacheHolder.Instance.GetCurrentResult();
 
-    public static LanConnectWireCacheSnapshot GetCurrent()
-    {
-        lock (Sync)
-        {
-            if (_cached != null)
-            {
-                return _cached;
-            }
-
-            try
-            {
-                _cached = GameCacheHolder.Capture();
-                GameCacheHolder.LogComputed(_cached);
-                return _cached;
-            }
-            catch (Exception ex)
-            {
-                GameCacheHolder.LogFailure(ex);
-                throw new InvalidOperationException(
-                    "WireCacheSignatureV1 could not capture ModelIdSerializationCache safely.",
-                    ex);
-            }
-        }
-    }
+    public static LanConnectWireCacheSnapshot GetRequiredCurrent() =>
+        GetCurrentResult().GetRequiredSnapshot();
 
     public static void LogStartupSnapshot()
     {
-        LanConnectWireCacheSnapshot snapshot = GetCurrent();
-        if (Interlocked.Exchange(ref _startupSnapshotLogged, 1) != 0)
+        LogStartupSnapshot(
+            RuntimeCacheHolder.Instance,
+            GameCacheHolder.LogStartup,
+            GameCacheHolder.LogStartupUnavailable);
+    }
+
+    internal static void LogStartupSnapshot(
+        LanConnectWireCacheCaptureCache cache,
+        Action<LanConnectWireCacheSnapshot> logAvailable,
+        Action<LanConnectWireCacheCaptureResult> logUnavailable)
+    {
+        try
         {
-            return;
+            LanConnectWireCacheCaptureResult result = cache.GetCurrentResult();
+            if (!cache.TryMarkStartupOutcomeLogged())
+            {
+                return;
+            }
+
+            if (result.IsAvailable)
+            {
+                logAvailable(result.Snapshot!);
+            }
+            else
+            {
+                logUnavailable(result);
+            }
+        }
+        catch
+        {
+            // Startup diagnostics are optional and must never block lobby initialization.
+        }
+    }
+
+    private static class RuntimeCacheHolder
+    {
+        // Keep production capture wiring lazy so loading diagnostics does not resolve sts2 types.
+        static RuntimeCacheHolder()
+        {
         }
 
-        GameCacheHolder.LogStartup(snapshot);
+        internal static readonly LanConnectWireCacheCaptureCache Instance = new(
+            GameCacheHolder.Capture,
+            GameCacheHolder.LogComputed,
+            GameCacheHolder.LogFailure);
     }
 
     private static class GameCacheHolder
@@ -122,6 +136,12 @@ internal static class LanConnectWireCacheDiagnostics
                 $"sts2_lan_connect wire_cache startup_complete: signature={snapshot.Signature}, " +
                 $"categoryBits={snapshot.CategoryIdBitSize}, entryBits={snapshot.EntryIdBitSize}, " +
                 $"epochBits={snapshot.EpochIdBitSize}, propertyBits={snapshot.PropertyIdBitSize}");
+        }
+
+        internal static void LogStartupUnavailable(LanConnectWireCacheCaptureResult result)
+        {
+            Log.Error(
+                $"sts2_lan_connect wire_cache startup_unavailable: reason={result.FailureReason}");
         }
 
         internal static void LogFailure(Exception exception)
