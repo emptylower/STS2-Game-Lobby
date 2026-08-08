@@ -306,9 +306,12 @@ public sealed class LanConnectWireCacheHandshakeTests
             epochBits,
             propertyBits).Serialize();
 
-    private sealed class ThrowingStringList : List<string>, IEnumerable<string>
+    // Deliberately NOT derived from List<string>: Enumerable.Where has a fast path for
+    // List<T> that enumerates through the concrete type, which bypasses an explicit
+    // interface implementation and would leave the throwing behaviour unreachable.
+    private sealed class ThrowingStringList : IEnumerable<string>
     {
-        IEnumerator<string> IEnumerable<string>.GetEnumerator() =>
+        public IEnumerator<string> GetEnumerator() =>
             throw new InvalidOperationException("enumeration failed");
 
         IEnumerator IEnumerable.GetEnumerator() =>
