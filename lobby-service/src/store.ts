@@ -252,7 +252,16 @@ export class LobbyStore {
     };
     this.id = deps.id ?? (() => randomUUID());
     this.peerPlayerNetIds = deps.peerPlayerNetIds ?? (() => new Set<string>());
-    this.warn = deps.warn ?? ((message) => console.warn(message));
+    const warn = deps.warn ?? ((message: string) => console.warn(message));
+    // A diagnostic must never turn an allowed join into a 500. The signature-missing
+    // rows are fail-open by design, so a throwing sink must not undo that.
+    this.warn = (message) => {
+      try {
+        warn(message);
+      } catch {
+        // Intentionally ignored.
+      }
+    };
   }
 
   listRooms(now = new Date()): RoomSummary[] {
@@ -309,7 +318,7 @@ export class LobbyStore {
       version: input.version.trim(),
       modVersion: input.modVersion.trim(),
       modList,
-      wireCacheSignatureV1: normalizeOptionalString(input.wireCacheSignatureV1),
+      wireCacheSignatureV1: normalizeWireCacheSignatureV1(input.wireCacheSignatureV1),
       hostModInventory,
       hostModInventoryHash,
       protocolProfile,
@@ -425,7 +434,7 @@ export class LobbyStore {
     const requestedVersion = input.version.trim();
     const requestedModVersion = input.modVersion.trim();
     const requestedModList = normalizeModList(input.modList ?? []);
-    const requestedWireCacheSignatureV1 = normalizeOptionalString(input.wireCacheSignatureV1);
+    const requestedWireCacheSignatureV1 = normalizeWireCacheSignatureV1(input.wireCacheSignatureV1);
     const availableSavedRunSlots = getAvailableSavedRunSlots(room);
     const canResumeSavedRun = room.savedRun !== undefined && availableSavedRunSlots.length > 0;
 
@@ -1010,6 +1019,21 @@ function normalizeModList(mods: string[]) {
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+// wcv1: followed by an unpadded base64url SHA-256 digest.
+const WIRE_CACHE_SIGNATURE_V1_PATTERN = /^wcv1:[A-Za-z0-9_-]{43}$/;
+
+/**
+ * Only a well-formed signature is authoritative. Anything else is treated as ABSENT
+ * rather than as a value that can mismatch, so a peer sending a placeholder or a
+ * future/foreign token is allowed through instead of being rejected. Rejecting a
+ * compatible player is worse than missing an incompatible one, which the in-band
+ * handshake gate also checks.
+ */
+function normalizeWireCacheSignatureV1(value: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized && WIRE_CACHE_SIGNATURE_V1_PATTERN.test(normalized) ? normalized : undefined;
 }
 
 function normalizeSavedRunInput(savedRun: CreateRoomInput["savedRun"]): SavedRunInfo | undefined {

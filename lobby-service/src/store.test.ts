@@ -671,6 +671,48 @@ test("joinRoom allows equal wire cache signatures", () => {
   assert.equal(joined.room.roomId, created.roomId);
 });
 
+test("joinRoom treats a malformed wire cache signature as absent rather than mismatched", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = createWireCacheRoom(store, WireCacheSignatureA);
+
+  // A peer that sends a placeholder, a truncated digest, or a future token shape must
+  // still be allowed: rejecting a compatible player is worse than missing an
+  // incompatible one, which the in-band handshake gate also checks.
+  for (const malformed of ["unavailable", "wcv1:", "wcv1:tooshort", "wcv2:whatever"]) {
+    const joined = store.joinRoom(created.roomId, {
+      ...basicJoinInput(),
+      wireCacheSignatureV1: malformed,
+    });
+    assert.equal(joined.room.roomId, created.roomId);
+  }
+});
+
+test("createRoom treats a malformed host wire cache signature as absent", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = createWireCacheRoom(store, "not-a-signature");
+
+  // The host advertised garbage, so nothing is authoritative and a valid joiner passes.
+  const joined = store.joinRoom(created.roomId, {
+    ...basicJoinInput(),
+    wireCacheSignatureV1: WireCacheSignatureB,
+  });
+
+  assert.equal(joined.room.roomId, created.roomId);
+});
+
+test("joinRoom still allows a signature-missing join when the warning sink throws", () => {
+  const store = new LobbyStore(baseConfig, {
+    warn: () => {
+      throw new Error("warn sink failed");
+    },
+  });
+  const created = createWireCacheRoom(store, WireCacheSignatureA);
+
+  const joined = store.joinRoom(created.roomId, basicJoinInput());
+
+  assert.equal(joined.room.roomId, created.roomId);
+});
+
 test("joinRoom rejects different wire cache signatures and names both signatures", () => {
   const store = new LobbyStore(baseConfig);
   const created = createWireCacheRoom(store, WireCacheSignatureA);
