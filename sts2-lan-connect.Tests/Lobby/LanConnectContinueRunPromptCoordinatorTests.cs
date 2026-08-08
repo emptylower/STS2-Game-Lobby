@@ -10,7 +10,7 @@ public sealed class LanConnectContinueRunPromptCoordinatorTests
     {
         LanConnectContinueRunPromptCoordinator coordinator = new();
         Assert.True(coordinator.TryBegin(1, "save-1", out var firstLease));
-        Task<string?> resolving = coordinator.ResolveAsync(
+        Task<LanConnectContinueRunPromptCoordinator.PromptResolution> resolving = coordinator.ResolveAsync(
             firstLease,
             cancellationToken => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken)
                 .ContinueWith(
@@ -22,7 +22,10 @@ public sealed class LanConnectContinueRunPromptCoordinatorTests
 
         coordinator.ClearScreen(1);
 
-        Assert.Null(await resolving.WaitAsync(TimeSpan.FromSeconds(2)));
+        LanConnectContinueRunPromptCoordinator.PromptResolution resolution =
+            await resolving.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Null(resolution.Choice);
+        Assert.False(resolution.Persisted);
         Assert.True(coordinator.TryBegin(2, "save-1", out var retryLease));
         coordinator.ClearScreen(retryLease.ScreenId);
     }
@@ -34,12 +37,17 @@ public sealed class LanConnectContinueRunPromptCoordinatorTests
         List<string> writes = new();
         Assert.True(coordinator.TryBegin(10, "save-2", out var lease));
 
-        string? result = await coordinator.ResolveAsync(
+        LanConnectContinueRunPromptCoordinator.PromptResolution result = await coordinator.ResolveAsync(
             lease,
             _ => Task.FromResult<string?>(null),
-            writes.Add);
+            choice =>
+            {
+                writes.Add(choice);
+                return true;
+            });
 
-        Assert.Null(result);
+        Assert.Null(result.Choice);
+        Assert.False(result.Persisted);
         Assert.Empty(writes);
         Assert.True(coordinator.TryBegin(11, "save-2", out var retryLease));
         coordinator.ClearScreen(retryLease.ScreenId);
@@ -54,12 +62,32 @@ public sealed class LanConnectContinueRunPromptCoordinatorTests
         List<string> writes = new();
         Assert.True(coordinator.TryBegin(20, "save-3", out var lease));
 
-        string? result = await coordinator.ResolveAsync(
+        LanConnectContinueRunPromptCoordinator.PromptResolution result = await coordinator.ResolveAsync(
             lease,
             _ => Task.FromResult<string?>(choice),
-            writes.Add);
+            selected =>
+            {
+                writes.Add(selected);
+                return true;
+            });
 
-        Assert.Equal(choice, result);
+        Assert.Equal(choice, result.Choice);
+        Assert.True(result.Persisted);
         Assert.Equal(choice, Assert.Single(writes));
+    }
+
+    [Fact]
+    public async Task Failed_persistence_does_not_report_the_choice_as_recorded()
+    {
+        LanConnectContinueRunPromptCoordinator coordinator = new();
+        Assert.True(coordinator.TryBegin(30, "save-4", out var lease));
+
+        LanConnectContinueRunPromptCoordinator.PromptResolution result = await coordinator.ResolveAsync(
+            lease,
+            _ => Task.FromResult<string?>(LanConnectHostChannels.Lobby),
+            _ => false);
+
+        Assert.Equal(LanConnectHostChannels.Lobby, result.Choice);
+        Assert.False(result.Persisted);
     }
 }

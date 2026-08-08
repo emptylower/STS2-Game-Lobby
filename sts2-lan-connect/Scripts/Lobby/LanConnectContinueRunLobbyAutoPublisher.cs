@@ -151,7 +151,8 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
         ulong instanceId = screen.GetInstanceId();
         try
         {
-            string? selectedHostChannel = await PromptCoordinator.ResolveAsync(
+            LanConnectContinueRunPromptCoordinator.PromptResolution resolution =
+                await PromptCoordinator.ResolveAsync(
                 promptLease,
                 cancellationToken => LanConnectContinueRunHostChannelPrompt.PromptAsync(
                     screen,
@@ -164,6 +165,7 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                     binding.GameMode,
                     choice,
                     "continue_save_channel_prompt"));
+            string? selectedHostChannel = resolution.Choice;
             if (selectedHostChannel == null)
             {
                 if (GodotObject.IsInstanceValid(screen) && screen.IsInsideTree())
@@ -172,6 +174,18 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                 }
                 GD.Print(
                     $"sts2_lan_connect continue_run_publish: channel prompt canceled saveKey={binding.SaveKey}, source={source}");
+                return;
+            }
+
+            if (!resolution.Persisted)
+            {
+                if (GodotObject.IsInstanceValid(screen) && screen.IsInsideTree())
+                {
+                    CompletedScreens.Add(instanceId);
+                }
+                GD.Print(
+                    $"sts2_lan_connect continue_run_publish: prompted host channel was not persisted; refusing publish saveKey={binding.SaveKey}, hostChannel={selectedHostChannel}, source={source}");
+                LanConnectPopupUtil.ShowInfo("未能保存本次联机方式选择。为避免误发布，已停止恢复大厅房间；请返回后重试。");
                 return;
             }
 
@@ -272,13 +286,18 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                 return;
             }
 
-            LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+            bool bindingPersisted = LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
                 context.Run,
                 binding.RoomName,
                 binding.Password,
                 binding.GameMode,
                 LanConnectHostChannels.Lobby,
                 "continue_save_publish");
+            if (!bindingPersisted)
+            {
+                GD.Print(
+                    $"sts2_lan_connect continue_run_publish: published room but skipped post-publish binding refresh screen={context.ScreenType}, saveKey={binding.SaveKey}");
+            }
             CompletedScreens.Add(screen.GetInstanceId());
             LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(screen, "continue_save_publish");
             GD.Print(

@@ -27,20 +27,20 @@ internal sealed class LanConnectContinueRunPromptCoordinator
         }
     }
 
-    public async Task<string?> ResolveAsync(
+    public async Task<PromptResolution> ResolveAsync(
         PromptLease lease,
         Func<CancellationToken, Task<string?>> prompt,
-        Action<string> persistChoice)
+        Func<string, bool> persistChoice)
     {
         try
         {
             string? choice = await prompt(lease.Cancellation.Token);
-            if (!string.IsNullOrWhiteSpace(choice))
+            if (string.IsNullOrWhiteSpace(choice))
             {
-                persistChoice(choice);
+                return new PromptResolution(null, false);
             }
 
-            return choice;
+            return new PromptResolution(choice, persistChoice(choice));
         }
         finally
         {
@@ -78,6 +78,8 @@ internal sealed class LanConnectContinueRunPromptCoordinator
             }
         }
     }
+
+    internal sealed record PromptResolution(string? Choice, bool Persisted);
 
     internal sealed class PromptLease
     {
