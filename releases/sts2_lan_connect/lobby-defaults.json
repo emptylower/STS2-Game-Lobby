@@ -4,7 +4,7 @@
   "readAccessToken": "",
   "createRoomToken": "Jsp-vspQBS8jI1L0aFshxr-wHZo2dyhSsYGvgh-QI8E",
   "wsUrl": "ws://sts2-test.43.133.192.249.nip.io/control",
-  "compatibilityProfile": "test_relaxed",
+  "compatibilityProfile": "strict",
   "connectionStrategy": "relay-only",
   "cfDiscoveryBaseUrl": "https://sts2-gamelobby-register.xyz",
   "seedPeers": [
