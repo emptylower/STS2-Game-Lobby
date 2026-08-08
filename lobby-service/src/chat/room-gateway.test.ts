@@ -230,19 +230,17 @@ test("rich hello defensively locks registration authority and capability scalars
   assert.deepEqual(client.closes, []);
 });
 
-test("ticket-authenticated identity keeps game routing and installation attribution separate", () => {
+test("ticket-authenticated identity locks game routing fields", () => {
   const gateway = createGateway();
   const authenticatedIdentity = {
     playerName: "Ticket Owner",
     playerNetId: "save-slot-owner",
-    clientInstallationId: "install-ticket-owner",
   };
   const client = peer("ticket-identity", "client", { authenticatedIdentity });
   gateway.registerPeer(client.registration);
 
   authenticatedIdentity.playerName = "mutated after registration";
   authenticatedIdentity.playerNetId = "mutated-after-registration";
-  authenticatedIdentity.clientInstallationId = "mutated-installation";
   gateway.handleControlEnvelope(
     "ticket-identity",
     hello("Message Spoof", "spoofed-game-peer"),
@@ -251,12 +249,11 @@ test("ticket-authenticated identity keeps game routing and installation attribut
   assert.deepEqual(gateway.getLockedIdentity("ticket-identity"), {
     playerName: "Ticket Owner",
     playerNetId: "save-slot-owner",
-    clientInstallationId: "install-ticket-owner",
   });
   assert.equal(client.frames.at(-1)?.type, "room_chat_ready");
 });
 
-test("combat context uses authenticated game net id instead of installation id", () => {
+test("combat and outward chat attribution use the authenticated game net id", () => {
   const gameNetId = "save-slot-owner";
   const clientInstallationId = "install-current-occupant";
   const gateway = createGateway({
@@ -272,7 +269,6 @@ test("combat context uses authenticated game net id instead of installation id",
     authenticatedIdentity: {
       playerName: "Current Occupant",
       playerNetId: gameNetId,
-      clientInstallationId,
     },
   });
   gateway.registerPeer(client.registration);
@@ -297,7 +293,8 @@ test("combat context uses authenticated game net id instead of installation id",
   ));
   const ack = client.frames.find((frame) => frame.type === "room_chat_ack");
   assert.ok(ack);
-  assert.equal((ack.message as Record<string, unknown>).senderId, clientInstallationId);
+  assert.equal((ack.message as Record<string, unknown>).senderId, gameNetId);
+  assert.equal(JSON.stringify(client.frames).includes(clientInstallationId), false);
 
   gateway.handleControlEnvelope("combat-identity-split", roomSend(
     "47474747-4747-4747-8747-474747474747",

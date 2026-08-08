@@ -922,6 +922,11 @@ test("kickPlayer bans only the current occupant installation and never the share
     playerNetId: "save-slot-12345",
     clientInstallationId: "install-original",
   });
+  assert.equal(
+    store.validateClientControl(created.roomId, created.controlChannelId, originalOwner.ticketId)
+      .clientInstallationId,
+    "install-original",
+  );
   const currentOccupant = store.joinRoom(created.roomId, {
     playerName: "Current Occupant",
     version: "1.2.3",
@@ -930,18 +935,23 @@ test("kickPlayer bans only the current occupant installation and never the share
     clientInstallationId: "install-takeover",
   });
   assert.equal(
-    store.validateClientControl(created.roomId, created.controlChannelId, originalOwner.ticketId)
-      .clientInstallationId,
-    "install-original",
-  );
-  assert.equal(
     store.validateClientControl(created.roomId, created.controlChannelId, currentOccupant.ticketId)
       .playerNetId,
     "save-slot-12345",
   );
 
-  store.kickPlayer(created.roomId, created.hostToken, "install-takeover");
-  store.kickPlayer(created.roomId, created.hostToken, "install-takeover");
+  assert.throws(
+    () => store.validateClientControl(
+      created.roomId,
+      created.controlChannelId,
+      originalOwner.ticketId,
+    ),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "invalid_ticket",
+  );
+  const kicked = store.kickPlayer(created.roomId, created.hostToken, "save-slot-12345");
+  assert.equal(kicked?.binding.clientInstallationId, "install-takeover");
+  assert.equal(kicked?.persistentBanCreated, true);
+  assert.equal(store.kickPlayer(created.roomId, created.hostToken, "save-slot-12345"), undefined);
   assert.equal(store.isClientInstallationKicked(created.roomId, "install-takeover"), true);
   assert.equal(store.isClientInstallationKicked(created.roomId, "install-original"), false);
 
@@ -1036,7 +1046,7 @@ test("getRoomSettings returns default for non-existent room", () => {
   assert.equal(settings.chatEnabled, true);
 });
 
-test("legacy join without clientInstallationId falls back to playerNetId and logs once", () => {
+test("kicking a legacy slot taker never bans the original owner whose installation id equals the slot", () => {
   const warnings: string[] = [];
   const store = new LobbyStore(baseConfig, { warn: (message) => warnings.push(message) });
   const created = store.createRoom(
@@ -1055,35 +1065,61 @@ test("legacy join without clientInstallationId falls back to playerNetId and log
     "203.0.113.10",
   );
 
-  const legacyTicket = store.joinRoom(created.roomId, {
-    playerName: "Legacy Client",
+  const originalOwner = store.joinRoom(created.roomId, {
+    playerName: "Original Owner",
+    clientInstallationId: "slot-owned-by-a",
     version: "1.2.3",
     modVersion: "0.1.0",
-    playerNetId: "12345",
+    playerNetId: "slot-owned-by-a",
   });
-  assert.equal(
-    store.validateClientControl(created.roomId, created.controlChannelId, legacyTicket.ticketId)
-      .clientInstallationId,
-    "12345",
+  store.validateClientControl(created.roomId, created.controlChannelId, originalOwner.ticketId);
+
+  const legacyTaker = store.joinRoom(created.roomId, {
+    playerName: "Legacy Taker",
+    version: "1.2.3",
+    modVersion: "0.1.0",
+    playerNetId: "slot-owned-by-a",
+  });
+  const legacyBinding = store.validateClientControl(
+    created.roomId,
+    created.controlChannelId,
+    legacyTaker.ticketId,
   );
+  assert.equal(legacyBinding.identityKind, "legacy");
+  assert.equal(legacyBinding.clientInstallationId, undefined);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]!, /identity mode=legacy/);
 
-  store.kickPlayer(created.roomId, created.hostToken, "12345");
+  const kicked = store.kickPlayer(created.roomId, created.hostToken, "slot-owned-by-a");
+  assert.equal(kicked?.binding.identityKind, "legacy");
+  assert.equal(kicked?.persistentBanCreated, false);
+  assert.equal(store.isClientInstallationKicked(created.roomId, "slot-owned-by-a"), false);
 
-  assert.throws(() => store.joinRoom(created.roomId, {
-    playerName: "Legacy Client",
+  const ownerRejoin = store.joinRoom(created.roomId, {
+    playerName: "Original Owner",
+    clientInstallationId: "slot-owned-by-a",
     version: "1.2.3",
     modVersion: "0.1.0",
-    playerNetId: "12345",
-  }), (error: unknown) => error instanceof LobbyStoreError && error.code === "kicked");
+    playerNetId: "slot-owned-by-a",
+  });
+  assert.equal(ownerRejoin.room.roomId, created.roomId);
+
+  const legacyRejoin = store.joinRoom(created.roomId, {
+    playerName: "Legacy Taker",
+    version: "1.2.3",
+    modVersion: "0.1.0",
+    playerNetId: "slot-owned-by-a",
+  });
+  assert.equal(legacyRejoin.room.roomId, created.roomId);
   assert.equal(warnings.length, 1);
 });
 
 test("installation kick does not outlive the room session", () => {
   const store = new LobbyStore(baseConfig, { warn: () => undefined });
   const first = createBasicRoom(store);
-  store.kickPlayer(first.roomId, first.hostToken, "install-guest");
+  const firstJoin = store.joinRoom(first.roomId, basicJoinInput());
+  store.validateClientControl(first.roomId, first.controlChannelId, firstJoin.ticketId);
+  store.kickPlayer(first.roomId, first.hostToken, "slot-guest");
   store.deleteRoom(first.roomId, first.hostToken);
 
   const second = createBasicRoom(store);
@@ -1093,6 +1129,69 @@ test("installation kick does not outlive the room session", () => {
     clientInstallationId: "install-guest",
   });
   assert.equal(joined.room.roomId, second.roomId);
+});
+
+test("kick authority survives a control disconnect until the slot is kicked", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = createBasicRoom(store);
+  const joined = store.joinRoom(created.roomId, basicJoinInput());
+  store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId);
+
+  const kicked = store.kickPlayer(created.roomId, created.hostToken, "slot-guest");
+  assert.equal(kicked?.binding.clientInstallationId, "install-guest");
+  assert.equal(kicked?.persistentBanCreated, true);
+  assert.throws(
+    () => store.joinRoom(created.roomId, basicJoinInput()),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "kicked",
+  );
+});
+
+test("kicked installation ids evict the oldest entry at the configured cap", () => {
+  const warnings: string[] = [];
+  const store = new LobbyStore({
+    ...baseConfig,
+    maxKickedClientInstallationIds: 2,
+  }, { warn: (message) => warnings.push(message) });
+  const created = createBasicRoom(store);
+
+  for (let index = 0; index < 3; index += 1) {
+    const joined = store.joinRoom(created.roomId, {
+      ...basicJoinInput(),
+      playerNetId: `slot-${index}`,
+      clientInstallationId: `install-${index}`,
+    });
+    store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId);
+    store.kickPlayer(created.roomId, created.hostToken, `slot-${index}`);
+  }
+
+  assert.equal(store.isClientInstallationKicked(created.roomId, "install-0"), false);
+  assert.equal(store.isClientInstallationKicked(created.roomId, "install-1"), true);
+  assert.equal(store.isClientInstallationKicked(created.roomId, "install-2"), true);
+  assert.equal(warnings.filter((message) => message.includes("kicked installation id evicted")).length, 1);
+});
+
+test("remembered slot bindings evict the oldest entry at the configured cap", () => {
+  const warnings: string[] = [];
+  const store = new LobbyStore({
+    ...baseConfig,
+    maxClientControlBindingsPerRoom: 2,
+  }, { warn: (message) => warnings.push(message) });
+  const created = createBasicRoom(store);
+
+  for (let index = 0; index < 3; index += 1) {
+    const joined = store.joinRoom(created.roomId, {
+      ...basicJoinInput(),
+      playerNetId: `slot-${index}`,
+      clientInstallationId: `install-${index}`,
+    });
+    store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId);
+  }
+
+  assert.equal(store.kickPlayer(created.roomId, created.hostToken, "slot-0"), undefined);
+  assert.equal(
+    warnings.filter((message) => message.includes("client control binding evicted")).length,
+    1,
+  );
 });
 
 test("relay-only strategy omits direct candidates", () => {

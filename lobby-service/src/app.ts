@@ -168,8 +168,8 @@ interface ControlPeer {
   detached: boolean;
   superseded: boolean;
   ticketId?: string;
+  controlBindingId?: string;
   playerNetId?: string;
-  clientInstallationId?: string;
   playerName?: string;
 }
 
@@ -197,6 +197,32 @@ export interface LobbyServiceDependencies {
   ) => void | Promise<void>;
 }
 
+export interface RoomPeerRoutingState {
+  roomSessionId: string;
+  detached: boolean;
+  isOpen: boolean;
+  playerNetId?: string | undefined;
+  clientInstallationId?: string | undefined;
+}
+
+export function collectRoomChatPeerPlayerNetIds(
+  peers: Iterable<RoomPeerRoutingState>,
+  roomSessionId: string,
+): ReadonlySet<string> {
+  const playerNetIds = new Set<string>();
+  for (const peer of peers) {
+    if (
+      peer.roomSessionId === roomSessionId
+      && !peer.detached
+      && peer.isOpen
+      && peer.playerNetId
+    ) {
+      playerNetIds.add(peer.playerNetId);
+    }
+  }
+  return playerNetIds;
+}
+
 export function createProductionDependencies(): LobbyServiceDependencies {
   return {};
 }
@@ -218,20 +244,15 @@ export async function createLobbyService(
     modSyncMaxDescriptors: env.modSyncMaxDescriptors,
     modSyncMaxPayloadBytes: env.modSyncMaxPayloadBytes,
   }, {
-    peerPlayerNetIds: (roomId, roomSessionId) => {
-      const playerNetIds = new Set<string>();
-      for (const peer of roomPeers.get(roomId) ?? []) {
-        if (
-          peer.roomSessionId === roomSessionId
-          && !peer.detached
-          && peer.socket.readyState === peer.socket.OPEN
-          && peer.playerNetId
-        ) {
-          playerNetIds.add(peer.playerNetId);
-        }
-      }
-      return playerNetIds;
-    },
+    peerPlayerNetIds: (roomId, roomSessionId) => collectRoomChatPeerPlayerNetIds(
+      [...(roomPeers.get(roomId) ?? [])].map((peer) => ({
+        roomSessionId: peer.roomSessionId,
+        detached: peer.detached,
+        isOpen: peer.socket.readyState === peer.socket.OPEN,
+        playerNetId: peer.playerNetId,
+      })),
+      roomSessionId,
+    ),
   });
   const relayManager = new RoomRelayManager(
     {
@@ -1299,12 +1320,10 @@ export async function createLobbyService(
         detached: false,
         superseded: false,
         ...(role === "client" ? { ticketId: requiredQuery(requestUrl, "ticketId") } : {}),
+        ...(joinTicket?.controlBindingId === undefined
+          ? {}
+          : { controlBindingId: joinTicket.controlBindingId }),
         ...(joinTicket?.playerNetId === undefined ? {} : { playerNetId: joinTicket.playerNetId }),
-        ...(joinTicket?.clientInstallationId === undefined
-          ? hostSession?.clientInstallationId === undefined
-            ? {}
-            : { clientInstallationId: hostSession.clientInstallationId }
-          : { clientInstallationId: joinTicket.clientInstallationId }),
         ...(joinTicket?.playerName === undefined
           ? hostSession?.hostPlayerName === undefined
             ? {}
@@ -1331,9 +1350,6 @@ export async function createLobbyService(
                 ...(peer.playerNetId === undefined
                   ? {}
                   : { playerNetId: peer.playerNetId }),
-                ...(peer.clientInstallationId === undefined
-                  ? {}
-                  : { clientInstallationId: peer.clientInstallationId }),
               },
             }),
         send: (frame) => sendJson(peer.socket, frame),
@@ -1401,11 +1417,11 @@ export async function createLobbyService(
             const targetNetId = String(parsed.targetPlayerNetId ?? "");
             if (!targetNetId) return;
             const hostToken = requiredQuery(requestUrl, "token");
-            const targetPeer = findCurrentPeerByNetId(peer.roomId, targetNetId);
+            const kickResult = store.kickPlayer(peer.roomId, hostToken, targetNetId);
+            const targetPeer = kickResult
+              ? findCurrentPeerByBindingId(peer.roomId, kickResult.binding.bindingId)
+              : undefined;
             if (targetPeer) {
-              if (targetPeer.clientInstallationId) {
-                store.kickPlayer(peer.roomId, hostToken, targetPeer.clientInstallationId);
-              }
               removePeer(targetPeer);
               sendJson(targetPeer.socket, {
                 type: "kicked",
@@ -1424,7 +1440,8 @@ export async function createLobbyService(
             console.log(
               `[control] kick_player roomId=${peer.roomId} targetNetId=${targetNetId} `
               + `session=${targetPeer?.connectionSessionId ?? "<none>"} `
-              + `installation=${targetPeer?.clientInstallationId ?? "<none>"}`,
+              + `identityKind=${kickResult?.binding.identityKind ?? "<none>"} `
+              + `persistentBan=${kickResult?.persistentBanCreated === true}`,
             );
             return;
           }
@@ -1455,7 +1472,7 @@ export async function createLobbyService(
             ? {
                 ...parsed,
                 playerName: identity.playerName,
-                playerNetId: identity.clientInstallationId ?? identity.playerNetId,
+                playerNetId: identity.playerNetId,
               }
             : parsed;
           broadcastToRoom(peer, {
@@ -1898,7 +1915,7 @@ export async function createLobbyService(
     }
   }
 
-  function findCurrentPeerByNetId(roomId: string, playerNetId: string): ControlPeer | undefined {
+  function findCurrentPeerByBindingId(roomId: string, controlBindingId: string): ControlPeer | undefined {
     const peers = roomPeers.get(roomId);
     if (!peers) return undefined;
     for (const peer of peers) {
@@ -1907,7 +1924,7 @@ export async function createLobbyService(
         && !peer.detached
         && !peer.superseded
         && peer.socket.readyState === peer.socket.OPEN
-        && peer.playerNetId === playerNetId
+        && peer.controlBindingId === controlBindingId
       ) return peer;
     }
     return undefined;

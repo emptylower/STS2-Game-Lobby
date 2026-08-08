@@ -86,14 +86,11 @@ export interface LockedRoomChatIdentity {
   playerName: string;
   // Game peer key used by combat references and peerPlayerNetIds.
   playerNetId: string;
-  // Human/install key used by chat attribution and moderation continuity.
-  clientInstallationId?: string;
 }
 
 export interface AuthenticatedRoomChatIdentity {
   playerName: string;
   playerNetId?: string;
-  clientInstallationId?: string;
 }
 
 interface RoomChatMessage extends CanonicalChatMessage {
@@ -405,7 +402,6 @@ export class RoomChatGateway {
       if (
         peer.identity.playerName !== identity.playerName
         || peer.identity.playerNetId !== identity.playerNetId
-        || peer.identity.clientInstallationId !== identity.clientInstallationId
         || !sameFeatures(peer.declaredFeatures, declaredFeatures)
       ) {
         this.rejectHello(peer, true);
@@ -1188,14 +1184,11 @@ function lockRoomChatIdentity(
   return {
     playerName: authenticated.playerName,
     playerNetId: authenticated.playerNetId ?? declared.playerNetId,
-    ...(authenticated.clientInstallationId === undefined
-      ? {}
-      : { clientInstallationId: authenticated.clientInstallationId }),
   };
 }
 
 function roomChatAttributionId(identity: LockedRoomChatIdentity): string {
-  return identity.clientInstallationId ?? identity.playerNetId;
+  return identity.playerNetId;
 }
 
 function isDisallowedNameChar(code: number): boolean {

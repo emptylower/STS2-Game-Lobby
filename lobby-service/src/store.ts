@@ -94,9 +94,26 @@ export interface JoinTicket {
   playerName: string;
   playerNetId?: string | undefined;
   clientInstallationId?: string | undefined;
+  identityKind: "installation" | "legacy";
+  controlBindingId?: string | undefined;
   issuedAt: Date;
   expiresAt: Date;
   connectionPlan: ConnectionPlan;
+}
+
+export interface ClientControlBinding {
+  bindingId: string;
+  roomId: string;
+  playerName: string;
+  playerNetId?: string | undefined;
+  clientInstallationId?: string | undefined;
+  identityKind: "installation" | "legacy";
+  boundAt: Date;
+}
+
+export interface KickPlayerResult {
+  binding: ClientControlBinding;
+  persistentBanCreated: boolean;
 }
 
 export interface RoomSettings {
@@ -190,6 +207,8 @@ export interface StoreConfig {
   connectionStrategy?: ConnectionStrategy;
   modSyncMaxDescriptors?: number;
   modSyncMaxPayloadBytes?: number;
+  maxKickedClientInstallationIds?: number;
+  maxClientControlBindingsPerRoom?: number;
 }
 
 export interface CreateRoomResult {
@@ -246,6 +265,7 @@ export class LobbyStore {
   private readonly rooms = new Map<string, Room>();
   private readonly tickets = new Map<string, JoinTicket>();
   private readonly hostSessions = new Map<string, HostSession>();
+  private readonly clientControlBindings = new Map<string, Map<string, ClientControlBinding>>();
   private readonly config: Required<StoreConfig>;
   private readonly id: () => string;
   private readonly peerPlayerNetIds: (roomId: string, roomSessionId: string) => ReadonlySet<string>;
@@ -260,6 +280,8 @@ export class LobbyStore {
       connectionStrategy: config.connectionStrategy ?? "direct-first",
       modSyncMaxDescriptors: config.modSyncMaxDescriptors ?? 64,
       modSyncMaxPayloadBytes: config.modSyncMaxPayloadBytes ?? 65_536,
+      maxKickedClientInstallationIds: config.maxKickedClientInstallationIds ?? 256,
+      maxClientControlBindingsPerRoom: config.maxClientControlBindingsPerRoom ?? 64,
     };
     this.id = deps.id ?? (() => randomUUID());
     this.peerPlayerNetIds = deps.peerPlayerNetIds ?? (() => new Set<string>());
@@ -420,9 +442,9 @@ export class LobbyStore {
 
     const connectionPlan = buildConnectionPlan(room, hostSession, this.config.connectionStrategy);
     const playerNetId = normalizeOptionalIdentity(input.playerNetId);
-    const requestedClientInstallationId = normalizeOptionalIdentity(input.clientInstallationId);
-    const clientInstallationId = requestedClientInstallationId ?? playerNetId;
-    if (requestedClientInstallationId === undefined) {
+    const clientInstallationId = normalizeOptionalIdentity(input.clientInstallationId);
+    const identityKind = clientInstallationId === undefined ? "legacy" : "installation";
+    if (identityKind === "legacy") {
       hostSession.legacyIdentityMode = true;
       this.logLegacyIdentityMode(hostSession, "join request omitted clientInstallationId");
     }
@@ -432,6 +454,7 @@ export class LobbyStore {
       playerName: input.playerName.trim(),
       playerNetId,
       clientInstallationId,
+      identityKind,
       issuedAt: now,
       expiresAt: new Date(now.getTime() + this.config.ticketTtlMs),
       connectionPlan,
@@ -463,8 +486,7 @@ export class LobbyStore {
     const availableSavedRunSlots = getAvailableSavedRunSlots(room);
     const canResumeSavedRun = room.savedRun !== undefined && availableSavedRunSlots.length > 0;
 
-    const clientInstallationId = normalizeOptionalIdentity(input.clientInstallationId)
-      ?? normalizeOptionalIdentity(input.playerNetId);
+    const clientInstallationId = normalizeOptionalIdentity(input.clientInstallationId);
     if (clientInstallationId && hostSession.kickedClientInstallationIds.has(clientInstallationId)) {
       throw new LobbyStoreError(403, "kicked", "你已被房主移出该房间，无法重新加入。");
     }
@@ -652,12 +674,31 @@ export class LobbyStore {
       throw new LobbyStoreError(401, "expired_ticket", "加入票据已过期。");
     }
 
+    if (ticket.controlBindingId !== undefined) {
+      throw new LobbyStoreError(401, "ticket_already_redeemed", "加入票据已使用。请重新加入房间获取新票据。");
+    }
+
     if (
       ticket.clientInstallationId
       && hostSession.kickedClientInstallationIds.has(ticket.clientInstallationId)
     ) {
       this.tickets.delete(ticket.ticketId);
       throw new LobbyStoreError(403, "kicked", "你已被房主移出该房间，无法重新加入。");
+    }
+
+    const binding: ClientControlBinding = {
+      bindingId: this.id(),
+      roomId,
+      playerName: ticket.playerName,
+      playerNetId: ticket.playerNetId,
+      clientInstallationId: ticket.clientInstallationId,
+      identityKind: ticket.identityKind,
+      boundAt: new Date(),
+    };
+    ticket.controlBindingId = binding.bindingId;
+    if (binding.playerNetId !== undefined) {
+      this.rememberClientControlBinding(binding);
+      this.invalidateOtherSlotTickets(binding, ticket.ticketId);
     }
 
     return ticket;
@@ -681,15 +722,28 @@ export class LobbyStore {
     return true;
   }
 
-  kickPlayer(roomId: string, hostToken: string, clientInstallationId: string) {
+  kickPlayer(roomId: string, hostToken: string, playerNetId: string): KickPlayerResult | undefined {
     const hostSession = this.requireHostSession(roomId);
     this.assertHostToken(hostSession, hostToken);
-    hostSession.kickedClientInstallationIds.add(clientInstallationId);
+    const roomBindings = this.clientControlBindings.get(roomId);
+    const binding = roomBindings?.get(playerNetId);
+    if (!binding) {
+      return undefined;
+    }
+
+    roomBindings?.delete(playerNetId);
+    const persistentBanCreated = binding.identityKind === "installation"
+      && binding.clientInstallationId !== undefined;
+    if (persistentBanCreated) {
+      this.addKickedClientInstallationId(hostSession, binding.clientInstallationId!);
+    }
+
     for (const ticket of this.tickets.values()) {
-      if (ticket.roomId === roomId && ticket.clientInstallationId === clientInstallationId) {
+      if (ticket.roomId === roomId && ticket.playerNetId === playerNetId) {
         this.tickets.delete(ticket.ticketId);
       }
     }
+    return { binding, persistentBanCreated };
   }
 
   isClientInstallationKicked(roomId: string, clientInstallationId: string) {
@@ -769,13 +823,69 @@ export class LobbyStore {
     hostSession.legacyIdentityModeLogged = true;
     this.warn(
       `[lobby] room identity mode=legacy roomId=${hostSession.roomId} reason=${reason}; `
-      + "kick and chat identity fall back to playerNetId",
+      + "legacy kicks disconnect the current slot binding without creating a persistent ban",
     );
+  }
+
+  private rememberClientControlBinding(binding: ClientControlBinding) {
+    const playerNetId = binding.playerNetId;
+    if (playerNetId === undefined) {
+      return;
+    }
+
+    let roomBindings = this.clientControlBindings.get(binding.roomId);
+    if (!roomBindings) {
+      roomBindings = new Map();
+      this.clientControlBindings.set(binding.roomId, roomBindings);
+    }
+    roomBindings.delete(playerNetId);
+    roomBindings.set(playerNetId, binding);
+    while (roomBindings.size > this.config.maxClientControlBindingsPerRoom) {
+      const oldestPlayerNetId = roomBindings.keys().next().value as string | undefined;
+      if (oldestPlayerNetId === undefined) {
+        break;
+      }
+      roomBindings.delete(oldestPlayerNetId);
+      this.warn(
+        `[lobby] client control binding evicted roomId=${binding.roomId} `
+        + `limit=${this.config.maxClientControlBindingsPerRoom}`,
+      );
+    }
+  }
+
+  private invalidateOtherSlotTickets(binding: ClientControlBinding, redeemedTicketId: string) {
+    for (const ticket of this.tickets.values()) {
+      if (
+        ticket.ticketId !== redeemedTicketId
+        && ticket.roomId === binding.roomId
+        && ticket.playerNetId === binding.playerNetId
+      ) {
+        this.tickets.delete(ticket.ticketId);
+      }
+    }
+  }
+
+  private addKickedClientInstallationId(hostSession: HostSession, clientInstallationId: string) {
+    hostSession.kickedClientInstallationIds.delete(clientInstallationId);
+    hostSession.kickedClientInstallationIds.add(clientInstallationId);
+    while (hostSession.kickedClientInstallationIds.size > this.config.maxKickedClientInstallationIds) {
+      const oldestClientInstallationId = hostSession.kickedClientInstallationIds.values()
+        .next().value as string | undefined;
+      if (oldestClientInstallationId === undefined) {
+        break;
+      }
+      hostSession.kickedClientInstallationIds.delete(oldestClientInstallationId);
+      this.warn(
+        `[lobby] kicked installation id evicted roomId=${hostSession.roomId} `
+        + `limit=${this.config.maxKickedClientInstallationIds}`,
+      );
+    }
   }
 
   private removeRoom(roomId: string) {
     this.rooms.delete(roomId);
     this.hostSessions.delete(roomId);
+    this.clientControlBindings.delete(roomId);
     for (const ticket of this.tickets.values()) {
       if (ticket.roomId === roomId) {
         this.tickets.delete(ticket.ticketId);
