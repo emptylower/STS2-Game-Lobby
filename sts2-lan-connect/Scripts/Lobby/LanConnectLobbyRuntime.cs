@@ -1359,6 +1359,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             session,
             () =>
             {
+                _pendingSaveBindingCoordinator.HostedFlowEnded();
                 _activeSession = null;
                 _joinedRoomPeerIds = new HashSet<ulong>();
                 LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
@@ -1367,7 +1368,6 @@ internal sealed partial class LanConnectLobbyRuntime :
             });
         if (cleared)
         {
-            _pendingSaveBindingCoordinator.HostedFlowEnded();
             GD.Print($"sts2_lan_connect lobby runtime: hosted room cleared roomId={session.RoomId}");
         }
 
