@@ -105,6 +105,7 @@ export interface JoinTicket {
 
 export interface ClientControlBinding {
   bindingId: string;
+  boundSequence: number;
   roomId: string;
   playerName: string;
   playerNetId?: string | undefined;
@@ -158,6 +159,8 @@ export interface HostSession {
   clientInstallationId?: string | undefined;
   relayState: RelayState;
   lastSeenAt: Date;
+  reportedPlayerNetIds?: Set<string> | undefined;
+  reportedBindingSequence?: number | undefined;
   // This client-owned ID can be reset to evade a kick. Unevadable bans require a
   // server-issued credential, which is deliberately outside this room-lifetime fix.
   kickedClientInstallationIds: Set<string>;
@@ -293,6 +296,7 @@ export class LobbyStore {
   private readonly id: () => string;
   private readonly peerPlayerNetIds: (roomId: string, roomSessionId: string) => ReadonlySet<string>;
   private readonly warn: (message: string) => void;
+  private nextClientControlBindingSequence = 0;
 
   constructor(config: StoreConfig, deps: LobbyStoreDependencies = {}) {
     this.config = {
@@ -404,6 +408,12 @@ export class LobbyStore {
       clientInstallationId,
       relayState: "disabled",
       lastSeenAt: now,
+      ...(room.savedRun === undefined
+        ? {}
+        : {
+            reportedPlayerNetIds: new Set(room.savedRun.connectedPlayerNetIds),
+            reportedBindingSequence: this.nextClientControlBindingSequence,
+          }),
       kickedClientInstallationIds: new Set(),
       legacyIdentityMode: clientInstallationId === undefined,
       legacyIdentityModeLogged: false,
@@ -634,12 +644,17 @@ export class LobbyStore {
     room.status = normalizeStatus(input.status, room.currentPlayers, room.maxPlayers);
     room.lastHeartbeatAt = now;
     hostSession.lastSeenAt = now;
-    if (room.savedRun && input.connectedPlayerNetIds) {
-      room.savedRun.connectedPlayerNetIds = normalizeNetIdList(input.connectedPlayerNetIds);
-      room.savedRun.slots = room.savedRun.slots.map((slot) => ({
-        ...slot,
-        isConnected: room.savedRun?.connectedPlayerNetIds.includes(slot.netId) ?? false,
-      }));
+    if (input.connectedPlayerNetIds !== undefined) {
+      const connectedPlayerNetIds = normalizeNetIdList(input.connectedPlayerNetIds);
+      hostSession.reportedPlayerNetIds = new Set(connectedPlayerNetIds);
+      hostSession.reportedBindingSequence = this.nextClientControlBindingSequence;
+      if (room.savedRun) {
+        room.savedRun.connectedPlayerNetIds = connectedPlayerNetIds;
+        room.savedRun.slots = room.savedRun.slots.map((slot) => ({
+          ...slot,
+          isConnected: room.savedRun?.connectedPlayerNetIds.includes(slot.netId) ?? false,
+        }));
+      }
     }
     return this.toRoomSummary(room);
   }
@@ -746,6 +761,7 @@ export class LobbyStore {
 
     const binding: ClientControlBinding = {
       bindingId: this.id(),
+      boundSequence: ++this.nextClientControlBindingSequence,
       roomId,
       playerName: ticket.playerName,
       playerNetId: ticket.playerNetId,
@@ -753,11 +769,11 @@ export class LobbyStore {
       identityKind: ticket.identityKind,
       boundAt: new Date(),
     };
-    ticket.controlBindingId = binding.bindingId;
     if (binding.playerNetId !== undefined) {
       this.rememberClientControlBinding(binding);
       this.invalidateOtherSlotTickets(binding, ticket.ticketId);
     }
+    ticket.controlBindingId = binding.bindingId;
 
     return ticket;
   }
@@ -999,13 +1015,55 @@ export class LobbyStore {
     }
     roomBindings.delete(playerNetId);
     roomBindings.set(playerNetId, binding);
-    if (roomBindings.size > this.config.maxClientControlBindingsPerRoom) {
-      this.warn(
-        `[lobby] client control binding capacity exceeded without obsolete generation `
-        + `roomId=${binding.roomId} limit=${this.config.maxClientControlBindingsPerRoom} `
-        + `size=${roomBindings.size}`,
-      );
+    if (roomBindings.size <= this.config.maxClientControlBindingsPerRoom) {
+      return;
     }
+
+    const hostSession = this.requireHostSession(binding.roomId);
+    const activePlayerNetIds = this.peerPlayerNetIds(
+      binding.roomId,
+      hostSession.roomSessionId,
+    );
+    for (const [candidatePlayerNetId, candidate] of roomBindings) {
+      if (
+        candidatePlayerNetId === playerNetId
+        || activePlayerNetIds.has(candidatePlayerNetId)
+        || hostSession.reportedPlayerNetIds === undefined
+        || hostSession.reportedBindingSequence === undefined
+        || hostSession.reportedBindingSequence < candidate.boundSequence
+        || hostSession.reportedPlayerNetIds.has(candidatePlayerNetId)
+      ) {
+        continue;
+      }
+
+      roomBindings.delete(candidatePlayerNetId);
+      const reboundSlots = this.reboundClientControlSlots.get(binding.roomId);
+      reboundSlots?.delete(candidatePlayerNetId);
+      if (reboundSlots?.size === 0) {
+        this.reboundClientControlSlots.delete(binding.roomId);
+      }
+      this.warn(
+        `[lobby] client control binding evicted roomId=${binding.roomId} `
+        + `playerNetId=${candidatePlayerNetId} bindingId=${candidate.bindingId} `
+        + `reason=inactive capacity=${this.config.maxClientControlBindingsPerRoom}`,
+      );
+      return;
+    }
+
+    roomBindings.delete(playerNetId);
+    if (roomBindings.size === 0) {
+      this.clientControlBindings.delete(binding.roomId);
+    }
+    this.warn(
+      `[lobby] client control binding refused roomId=${binding.roomId} `
+      + `playerNetId=${playerNetId} reason=no_inactive_binding `
+      + `capacity=${this.config.maxClientControlBindingsPerRoom}`,
+    );
+    throw new LobbyStoreError(
+      503,
+      "binding_capacity",
+      "房间控制连接已满，请稍后重试。",
+    );
   }
 
   private invalidateOtherSlotTickets(binding: ClientControlBinding, redeemedTicketId: string) {

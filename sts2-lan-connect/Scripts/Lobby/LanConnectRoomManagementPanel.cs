@@ -441,9 +441,16 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
             LanConnectRemoteLobbyPlayerPatches.ScheduleDelayedDisconnect(runtime, netId, target);
         }
 
+        string statusMessage = string.IsNullOrWhiteSpace(result.Message)
+            ? $"已将 {target.OccupantName} 移出房间"
+            : result.Message;
         if (_statusLabel != null)
         {
-            _statusLabel.Text = $"已将 {target.OccupantName} 移出房间";
+            _statusLabel.Text = statusMessage;
+        }
+        if (!string.IsNullOrWhiteSpace(result.Message))
+        {
+            LanConnectPopupUtil.ShowInfo(result.Message);
         }
 
         _lastPlayerListHash = -1;

@@ -1275,9 +1275,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                     : RunManager.Instance.IsInProgress
                         ? "starting"
                         : LanConnectConstants.DefaultRoomStatus,
-                ConnectedPlayerNetIds = session.Metadata.SavedRun != null
-                    ? session.GetConnectedPlayerNetIds()
-                    : null
+                ConnectedPlayerNetIds = session.GetConnectedPlayerNetIds()
             });
         }
         catch (Exception ex)
@@ -1861,54 +1859,67 @@ internal sealed partial class LanConnectLobbyRuntime :
         HostedRoomSession? session = _activeSession;
         if (session == null)
         {
-            return new(false, "no_hosted_room", "当前没有可管理的托管房间。");
+            return new(
+                false,
+                false,
+                false,
+                "no_hosted_room",
+                "当前没有可管理的托管房间。");
         }
 
-        string requestId = Guid.NewGuid().ToString("N");
-        TaskCompletionSource<LobbyControlEnvelope>? completion =
-            session.KickPlayerResultSupported
-                ? session.BeginKickRequest(requestId)
-                : null;
-        try
-        {
-            await session.ControlClient.SendAsync(
-                BuildKickPlayerEnvelope(session.RoomId, target, requestId),
-                CancellationToken.None);
-            if (completion == null)
+        return await LanConnectLobbyKickCompatibility.SendOrRemoveLocallyAsync(
+            session.KickPlayerResultSupported,
+            target.OccupantName,
+            async () =>
             {
-                return LanConnectLobbyKickResult.AcceptedByLegacyService();
-            }
+                string requestId = Guid.NewGuid().ToString("N");
+                TaskCompletionSource<LobbyControlEnvelope> completion =
+                    session.BeginKickRequest(requestId);
+                try
+                {
+                    await session.ControlClient.SendAsync(
+                        BuildKickPlayerEnvelope(session.RoomId, target, requestId),
+                        CancellationToken.None);
 
-            LobbyControlEnvelope response = await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            return LanConnectLobbyKickResult.FromResponse(
-                target,
-                response.Accepted == true,
-                response.PlayerNetId,
-                response.BindingId,
-                response.Reason,
-                response.Message);
-        }
-        catch (TimeoutException)
-        {
-            Log.Warn(
-                $"sts2_lan_connect kick rejected locally: confirmation timed out "
-                + $"playerNetId={target.PlayerNetId} bindingId={target.BindingId ?? "<legacy>"}");
-            return new(false, "confirmation_timeout", "大厅服务未确认移出请求，请刷新列表后重试。");
-        }
-        catch (Exception ex)
-        {
-            Log.Warn(
-                $"sts2_lan_connect kick rejected locally: send failed "
-                + $"playerNetId={target.PlayerNetId} error={ex.Message}");
-            return new(false, "send_failed", "移出请求发送失败，请稍后重试。");
-        }
-        finally
-        {
-            if (completion != null)
-            {
-                session.ForgetKickRequest(requestId);
-            }
-        }
+                    LobbyControlEnvelope response =
+                        await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    return LanConnectLobbyKickResult.FromResponse(
+                        target,
+                        response.Accepted == true,
+                        response.PlayerNetId,
+                        response.BindingId,
+                        response.Reason,
+                        response.Message);
+                }
+                catch (TimeoutException)
+                {
+                    Log.Warn(
+                        $"sts2_lan_connect kick rejected locally: confirmation timed out "
+                        + $"playerNetId={target.PlayerNetId} bindingId={target.BindingId ?? "<legacy>"}");
+                    return new(
+                        false,
+                        false,
+                        false,
+                        "confirmation_timeout",
+                        "大厅服务未确认移出请求，请刷新列表后重试。");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn(
+                        $"sts2_lan_connect kick rejected locally: send failed "
+                        + $"playerNetId={target.PlayerNetId} error={ex.Message}");
+                    return new(
+                        false,
+                        false,
+                        false,
+                        "send_failed",
+                        "移出请求发送失败，请稍后重试。");
+                }
+                finally
+                {
+                    session.ForgetKickRequest(requestId);
+                }
+            });
     }
 
     internal async Task SendRoomSettingsAsync(bool chatEnabled)

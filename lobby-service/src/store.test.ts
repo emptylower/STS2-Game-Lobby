@@ -1440,6 +1440,127 @@ test("every active occupant remains kickable at the supported room capacity", ()
   assert.equal(warnings.some((message) => message.includes("binding capacity exceeded")), false);
 });
 
+test("client control binding cap evicts oldest inactive slots and their rebound markers", () => {
+  const activePlayerNetIds = new Set<string>();
+  const warnings: string[] = [];
+  const store = new LobbyStore({
+    ...baseConfig,
+    maxClientControlBindingsPerRoom: 3,
+  }, {
+    peerPlayerNetIds: () => activePlayerNetIds,
+    warn: (message) => warnings.push(message),
+  });
+  const created = createBasicRoom(store);
+  const bind = (playerNetId: string, clientInstallationId: string) => {
+    const joined = store.joinRoom(created.roomId, {
+      ...basicJoinInput(),
+      playerNetId,
+      clientInstallationId,
+    });
+    return store.validateClientControl(
+      created.roomId,
+      created.controlChannelId,
+      joined.ticketId,
+    );
+  };
+
+  bind("1001", "install-control-active");
+  activePlayerNetIds.add("1001");
+  bind("1002", "install-game-active");
+  bind("1003", "install-obsolete-first");
+  bind("1003", "install-obsolete-replacement");
+  store.heartbeat(created.roomId, {
+    hostToken: created.hostToken,
+    currentPlayers: 3,
+    status: "open",
+    connectedPlayerNetIds: ["1002"],
+  });
+
+  bind("1004", "install-incoming");
+  assert.deepEqual(
+    store.listClientControlBindingHandles(created.roomId, created.hostToken)
+      .map((binding) => binding.playerNetId),
+    ["1001", "1002", "1004"],
+  );
+
+  store.heartbeat(created.roomId, {
+    hostToken: created.hostToken,
+    currentPlayers: 3,
+    status: "open",
+    connectedPlayerNetIds: ["1002"],
+  });
+  bind("1003", "install-obsolete-returned");
+  assert.deepEqual(
+    store.listClientControlBindingHandles(created.roomId, created.hostToken)
+      .map((binding) => binding.playerNetId),
+    ["1001", "1002", "1003"],
+  );
+  assert.equal(
+    store.kickPlayer(created.roomId, created.hostToken, "1003").outcome,
+    "kicked",
+  );
+  assert.equal(
+    warnings.some((message) => message.includes("playerNetId=1001")),
+    false,
+  );
+  assert.equal(
+    warnings.some((message) => message.includes("playerNetId=1002")),
+    false,
+  );
+  assert.equal(
+    warnings.filter((message) => message.includes("client control binding evicted")).length,
+    2,
+  );
+  assert.equal(warnings[0]?.includes("playerNetId=1003"), true);
+  assert.equal(warnings[1]?.includes("playerNetId=1004"), true);
+});
+
+test("client control binding cap refuses a newcomer when every retained slot is active", () => {
+  const activePlayerNetIds = new Set<string>();
+  const warnings: string[] = [];
+  const store = new LobbyStore({
+    ...baseConfig,
+    maxClientControlBindingsPerRoom: 2,
+  }, {
+    peerPlayerNetIds: () => activePlayerNetIds,
+    warn: (message) => warnings.push(message),
+  });
+  const created = createBasicRoom(store);
+  const bind = (playerNetId: string) => {
+    const joined = store.joinRoom(created.roomId, {
+      ...basicJoinInput(),
+      playerNetId,
+      clientInstallationId: `install-${playerNetId}`,
+    });
+    return store.validateClientControl(
+      created.roomId,
+      created.controlChannelId,
+      joined.ticketId,
+    );
+  };
+
+  bind("2001");
+  activePlayerNetIds.add("2001");
+  bind("2002");
+  store.heartbeat(created.roomId, {
+    hostToken: created.hostToken,
+    currentPlayers: 3,
+    status: "open",
+    connectedPlayerNetIds: ["2002"],
+  });
+
+  assert.throws(
+    () => bind("2003"),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "binding_capacity",
+  );
+  assert.deepEqual(
+    store.listClientControlBindingHandles(created.roomId, created.hostToken)
+      .map((binding) => binding.playerNetId),
+    ["2001", "2002"],
+  );
+  assert.equal(warnings.some((message) => message.includes("playerNetId=2003")), true);
+});
+
 test("relay-only strategy omits direct candidates", () => {
   const store = new LobbyStore({
     ...baseConfig,

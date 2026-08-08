@@ -6,6 +6,51 @@ namespace Sts2LanConnect.Tests.Lobby;
 public sealed class LanConnectLobbyKickBindingTests
 {
     [Fact]
+    public async Task Legacy_service_uses_only_guarded_local_removal_without_sending_a_kick()
+    {
+        int serverKickSends = 0;
+        LanConnectLobbyKickResult result =
+            await LanConnectLobbyKickCompatibility.SendOrRemoveLocallyAsync(
+                bindingAwareKickSupported: false,
+                "Current Occupant",
+                () =>
+                {
+                    serverKickSends++;
+                    return Task.FromResult(new LanConnectLobbyKickResult(
+                        true,
+                        true,
+                        true,
+                        "accepted",
+                        string.Empty));
+                });
+
+        Assert.Equal(0, serverKickSends);
+        Assert.False(result.Accepted);
+        Assert.True(result.ShouldScheduleDisconnect);
+        Assert.False(result.PersistentBanRequested);
+        Assert.Equal("local_only_not_banned", result.Reason);
+        Assert.Equal(
+            "旧版大厅服务不支持安全封禁：仅在本地移出 Current Occupant，不会封禁；该玩家仍可重新加入。",
+            result.Message);
+
+        LanConnectLobbyKickTargetDirectory directory = new();
+        Assert.True(directory.RememberBinding("slot-legacy", "binding-original"));
+        Assert.True(directory.ObserveConnected("slot-legacy"));
+        LanConnectLobbyKickTarget original = directory.Capture("slot-legacy", "Current Occupant");
+        Assert.True(directory.RememberBinding("slot-legacy", "binding-replacement"));
+
+        int disconnects = 0;
+        if (result.ShouldScheduleDisconnect)
+        {
+            Assert.False(directory.TryRunIfCurrent(original, () => disconnects++));
+        }
+        Assert.Equal(0, disconnects);
+        Assert.Equal(
+            "binding-replacement",
+            directory.Capture("slot-legacy", "Replacement").BindingId);
+    }
+
+    [Fact]
     public void Modern_kick_carries_slot_and_opaque_binding_with_contract_casing()
     {
         LobbyControlEnvelope envelope = LanConnectLobbyRuntime.BuildKickPlayerEnvelope(

@@ -211,6 +211,10 @@ internal static class LanConnectRemoteLobbyPlayerPatches
         }
 
         ScheduleDelayedDisconnect(runtime, targetNetId, target);
+        if (!string.IsNullOrWhiteSpace(result.Message))
+        {
+            LanConnectPopupUtil.ShowInfo(result.Message);
+        }
     }
 
     private static string ResolvePlayerName(ulong targetNetId)

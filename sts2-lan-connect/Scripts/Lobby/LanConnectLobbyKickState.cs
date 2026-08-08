@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -15,13 +16,18 @@ internal readonly record struct LanConnectLobbyKickTarget(
 
 internal readonly record struct LanConnectLobbyKickResult(
     bool Accepted,
+    bool ShouldScheduleDisconnect,
+    bool PersistentBanRequested,
     string Reason,
     string Message)
 {
-    internal bool ShouldScheduleDisconnect => Accepted;
-
-    internal static LanConnectLobbyKickResult AcceptedByLegacyService() =>
-        new(true, "legacy_service", string.Empty);
+    internal static LanConnectLobbyKickResult LocalRemovalOnly(string occupantName) =>
+        new(
+            false,
+            true,
+            false,
+            "local_only_not_banned",
+            $"旧版大厅服务不支持安全封禁：仅在本地移出 {occupantName}，不会封禁；该玩家仍可重新加入。");
 
     internal static LanConnectLobbyKickResult FromResponse(
         LanConnectLobbyKickTarget target,
@@ -35,6 +41,8 @@ internal readonly record struct LanConnectLobbyKickResult(
         {
             return new(
                 false,
+                false,
+                false,
                 string.IsNullOrWhiteSpace(reason) ? "rejected" : reason.Trim(),
                 string.IsNullOrWhiteSpace(message)
                     ? "目标玩家已变化，请刷新列表后重试。"
@@ -45,8 +53,27 @@ internal readonly record struct LanConnectLobbyKickResult(
         bool bindingMatches = target.BindingId == null ||
             string.Equals(bindingId?.Trim(), target.BindingId, StringComparison.Ordinal);
         return slotMatches && bindingMatches
-            ? new(true, "accepted", string.Empty)
-            : new(false, "mismatched_response", "移出请求的确认信息不匹配，请刷新列表后重试。");
+            ? new(true, true, target.BindingId != null, "accepted", string.Empty)
+            : new(
+                false,
+                false,
+                false,
+                "mismatched_response",
+                "移出请求的确认信息不匹配，请刷新列表后重试。");
+    }
+}
+
+internal static class LanConnectLobbyKickCompatibility
+{
+    internal static Task<LanConnectLobbyKickResult> SendOrRemoveLocallyAsync(
+        bool bindingAwareKickSupported,
+        string occupantName,
+        Func<Task<LanConnectLobbyKickResult>> sendBindingAwareKick)
+    {
+        ArgumentNullException.ThrowIfNull(sendBindingAwareKick);
+        return bindingAwareKickSupported
+            ? sendBindingAwareKick()
+            : Task.FromResult(LanConnectLobbyKickResult.LocalRemovalOnly(occupantName));
     }
 }
 
