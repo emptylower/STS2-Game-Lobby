@@ -48,6 +48,7 @@ import { renderServerAdminPage } from "./server-admin-ui.js";
 import { ServiceUpdateManager } from "./service-update.js";
 import {
   LobbyStore,
+  MaxSupportedRoomPlayers,
   LobbyStoreError,
   type CreateRoomInput,
   type HeartbeatInput,
@@ -81,7 +82,7 @@ import {
 } from "./chat/ticket-store.js";
 import { installUpgradeRouter, type ChatUpgradeDecision } from "./chat/upgrade-router.js";
 
-const MaxLobbyPlayers = 256;
+const MaxLobbyPlayers = MaxSupportedRoomPlayers;
 const MaxRoomNameLength = 80;
 const MaxPlayerNameLength = 32;
 const MaxGameModeLength = 32;
@@ -1378,6 +1379,7 @@ export async function createLobbyService(
         roomId,
         controlChannelId,
         role,
+        kickPlayerResultSupported: true,
       });
 
       if (role === "host") {
@@ -1449,6 +1451,9 @@ export async function createLobbyService(
           }
 
           if (parsed.type === "kick_player" && peer.role === "host") {
+            const kickRequestId = typeof parsed.kickRequestId === "string"
+              ? parsed.kickRequestId.trim()
+              : "";
             const modernTargetNetId = typeof parsed.playerNetId === "string"
               ? parsed.playerNetId.trim()
               : "";
@@ -1459,6 +1464,15 @@ export async function createLobbyService(
               ? parsed.targetPlayerNetId.trim()
               : "";
             if (modernTargetNetId && !requestedBindingId) {
+              sendJson(socket, {
+                type: "kick_player_result",
+                roomId: peer.roomId,
+                kickRequestId,
+                accepted: false,
+                playerNetId: modernTargetNetId,
+                reason: "missing_binding_id",
+                message: "目标玩家已变化，请刷新列表后重试。",
+              });
               console.warn(
                 `[control] kick_player rejected roomId=${peer.roomId} `
                 + `targetNetId=${modernTargetNetId} reason=missing_binding_id`,
@@ -1466,7 +1480,20 @@ export async function createLobbyService(
               return;
             }
             const targetNetId = modernTargetNetId || legacyTargetNetId;
-            if (!targetNetId) return;
+            if (!targetNetId) {
+              sendJson(socket, {
+                type: "kick_player_result",
+                roomId: peer.roomId,
+                kickRequestId,
+                accepted: false,
+                reason: "missing_target",
+                message: "未找到要移出的玩家，请刷新列表后重试。",
+              });
+              console.warn(
+                `[control] kick_player rejected roomId=${peer.roomId} reason=missing_target`,
+              );
+              return;
+            }
             const hostToken = requiredQuery(requestUrl, "token");
             const kickResult = store.kickPlayer(
               peer.roomId,
@@ -1475,12 +1502,30 @@ export async function createLobbyService(
               modernTargetNetId ? requestedBindingId : undefined,
             );
             if (kickResult.outcome !== "kicked") {
+              sendJson(socket, {
+                type: "kick_player_result",
+                roomId: peer.roomId,
+                kickRequestId,
+                accepted: false,
+                playerNetId: targetNetId,
+                ...(requestedBindingId ? { bindingId: requestedBindingId } : {}),
+                reason: kickResult.outcome,
+                message: "目标玩家已变化，请刷新列表后重试。",
+              });
               console.warn(
                 `[control] kick_player rejected roomId=${peer.roomId} targetNetId=${targetNetId} `
                 + `reason=${kickResult.outcome}`,
               );
               return;
             }
+            sendJson(socket, {
+              type: "kick_player_result",
+              roomId: peer.roomId,
+              kickRequestId,
+              accepted: true,
+              playerNetId: targetNetId,
+              bindingId: kickResult.binding.bindingId,
+            });
             const targetPeer = findCurrentPeerByBindingId(
               peer.roomId,
               kickResult.binding.bindingId,

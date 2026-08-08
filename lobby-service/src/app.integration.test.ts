@@ -259,6 +259,7 @@ test("close terminates active control-channel sockets and finishes promptly", as
       roomId: created.roomId,
       controlChannelId: created.controlChannelId,
       role: "host",
+      kickPlayerResultSupported: true,
     });
 
     await Promise.race([
@@ -1042,11 +1043,20 @@ test("slot takeover supersedes stale control peer and kick bans only current ins
     const kickedClose = waitForChatClose(takeover);
     host.send(JSON.stringify({
       type: "kick_player",
+      kickRequestId: "accepted-kick-request",
       playerNetId: "save-slot-owner",
       bindingId: takeoverBinding.bindingId,
       targetPlayerNetId: "save-slot-owner",
       targetPlayerName: "Takeover",
     }));
+    const accepted = await waitForChatFrame(
+      host,
+      (frame) => frame.type === "kick_player_result"
+        && frame.kickRequestId === "accepted-kick-request",
+    );
+    assert.equal(accepted.accepted, true);
+    assert.equal(accepted.playerNetId, "save-slot-owner");
+    assert.equal(accepted.bindingId, takeoverBinding.bindingId);
     assert.equal((await kickedFrame).reason, "host_kick");
     assert.deepEqual(await kickedClose, { code: 4001, reason: "kicked" });
     assert.equal(
@@ -1160,13 +1170,21 @@ test("a stale kick handle after slot supersede neither bans nor notifies the rep
 
     host.send(JSON.stringify({
       type: "kick_player",
+      kickRequestId: "stale-kick-request",
       playerNetId: "shared-save-slot",
       bindingId: firstBinding.bindingId,
       targetPlayerNetId: "shared-save-slot",
       targetPlayerName: "First",
     }));
-    host.send(JSON.stringify({ type: "ping" }));
-    await waitForChatFrame(host, (frame) => frame.type === "pong");
+    const rejected = await waitForChatFrame(
+      host,
+      (frame) => frame.type === "kick_player_result"
+        && frame.kickRequestId === "stale-kick-request",
+    );
+    assert.equal(rejected.accepted, false);
+    assert.equal(rejected.reason, "stale_binding");
+    assert.equal(rejected.message, "目标玩家已变化，请刷新列表后重试。");
+    assert.equal(rejected.bindingId, firstBinding.bindingId);
 
     assert.equal(replacement.readyState, WebSocket.OPEN);
     assert.equal(

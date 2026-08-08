@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   LobbyStore,
   LobbyStoreError,
+  MaxSupportedRoomPlayers,
   type CreateRoomResult,
   type JoinRoomInput,
   type KickPlayerResult,
@@ -1319,6 +1320,42 @@ test("a stale binding handle cannot ban the replacement occupant", () => {
   assert.equal(currentKick.persistentBanCreated, true);
 });
 
+test("a legacy slot-only kick is rejected after that slot has rebound", () => {
+  const warnings: string[] = [];
+  const store = new LobbyStore(baseConfig, { warn: (message) => warnings.push(message) });
+  const created = createBasicRoom(store);
+  const firstJoin = store.joinRoom(created.roomId, {
+    ...basicJoinInput(),
+    clientInstallationId: "install-first",
+  });
+  store.validateClientControl(created.roomId, created.controlChannelId, firstJoin.ticketId);
+  const replacementJoin = store.joinRoom(created.roomId, {
+    ...basicJoinInput(),
+    clientInstallationId: "install-replacement",
+  });
+  const replacementBinding = store.validateClientControl(
+    created.roomId,
+    created.controlChannelId,
+    replacementJoin.ticketId,
+  );
+
+  assert.equal(
+    store.kickPlayer(created.roomId, created.hostToken, "slot-guest").outcome,
+    "legacy_rebound",
+  );
+  assert.equal(store.isClientInstallationKicked(created.roomId, "install-first"), false);
+  assert.equal(store.isClientInstallationKicked(created.roomId, "install-replacement"), false);
+  assert.equal(warnings.some((message) => message.includes("legacy kick rejected")), true);
+
+  const modernKick = requireKicked(store.kickPlayer(
+    created.roomId,
+    created.hostToken,
+    "slot-guest",
+    replacementBinding.controlBindingId,
+  ));
+  assert.equal(modernKick.binding.clientInstallationId, "install-replacement");
+});
+
 test("kicked installation ids evict the oldest entry at the configured cap", () => {
   const warnings: string[] = [];
   const store = new LobbyStore({
@@ -1352,28 +1389,55 @@ test("kicked installation ids evict the oldest entry at the configured cap", () 
   assert.equal(warnings.filter((message) => message.includes("kicked installation id evicted")).length, 1);
 });
 
-test("remembered slot bindings evict the oldest entry at the configured cap", () => {
+test("every active occupant remains kickable at the supported room capacity", () => {
   const warnings: string[] = [];
-  const store = new LobbyStore({
-    ...baseConfig,
-    maxClientControlBindingsPerRoom: 2,
-  }, { warn: (message) => warnings.push(message) });
-  const created = createBasicRoom(store);
+  const store = new LobbyStore(baseConfig, { warn: (message) => warnings.push(message) });
+  const created = store.createRoom(
+    {
+      roomName: "满容量绑定测试",
+      hostPlayerName: "Host",
+      clientInstallationId: "install-host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.1.0",
+      maxPlayers: MaxSupportedRoomPlayers,
+      hostConnectionInfo: { enetPort: 33771 },
+    },
+    "203.0.113.10",
+  );
+  const bindings = new Map<string, string>();
 
-  for (let index = 0; index < 3; index += 1) {
+  for (let index = 0; index < MaxSupportedRoomPlayers; index += 1) {
+    const playerNetId = `slot-${index}`;
     const joined = store.joinRoom(created.roomId, {
       ...basicJoinInput(),
-      playerNetId: `slot-${index}`,
+      playerNetId,
       clientInstallationId: `install-${index}`,
     });
-    store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId);
+    const binding = store.validateClientControl(
+      created.roomId,
+      created.controlChannelId,
+      joined.ticketId,
+    );
+    bindings.set(playerNetId, binding.controlBindingId!);
   }
 
-  assert.equal(store.kickPlayer(created.roomId, created.hostToken, "slot-0").outcome, "not_found");
-  assert.equal(
-    warnings.filter((message) => message.includes("client control binding evicted")).length,
-    1,
-  );
+  const first = requireKicked(store.kickPlayer(
+    created.roomId,
+    created.hostToken,
+    "slot-0",
+    bindings.get("slot-0"),
+  ));
+  const lastSlot = `slot-${MaxSupportedRoomPlayers - 1}`;
+  const last = requireKicked(store.kickPlayer(
+    created.roomId,
+    created.hostToken,
+    lastSlot,
+    bindings.get(lastSlot),
+  ));
+  assert.equal(first.binding.clientInstallationId, "install-0");
+  assert.equal(last.binding.clientInstallationId, `install-${MaxSupportedRoomPlayers - 1}`);
+  assert.equal(warnings.some((message) => message.includes("binding capacity exceeded")), false);
 });
 
 test("relay-only strategy omits direct candidates", () => {

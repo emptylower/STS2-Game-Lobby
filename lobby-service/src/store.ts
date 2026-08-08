@@ -8,6 +8,8 @@ export type RelayState = "disabled" | "planned" | "ready";
 export type ConnectionStrategy = "direct-first" | "relay-first" | "relay-only";
 export type ProtocolProfile = "legacy_4p" | "extended_8p";
 
+export const MaxSupportedRoomPlayers = 256;
+
 const Legacy4pProtocolProfile: ProtocolProfile = "legacy_4p";
 const Extended8pProtocolProfile: ProtocolProfile = "extended_8p";
 const LegacyCompatibleModVersion = "0.2.2";
@@ -122,6 +124,9 @@ export type KickPlayerResult =
     outcome: "stale_binding";
     requestedBindingId: string;
     currentBindingId: string;
+  }
+  | {
+    outcome: "legacy_rebound";
   }
   | {
     outcome: "not_found";
@@ -283,6 +288,7 @@ export class LobbyStore {
   private readonly tickets = new Map<string, JoinTicket>();
   private readonly hostSessions = new Map<string, HostSession>();
   private readonly clientControlBindings = new Map<string, Map<string, ClientControlBinding>>();
+  private readonly reboundClientControlSlots = new Map<string, Set<string>>();
   private readonly config: Required<StoreConfig>;
   private readonly id: () => string;
   private readonly peerPlayerNetIds: (roomId: string, roomSessionId: string) => ReadonlySet<string>;
@@ -298,7 +304,8 @@ export class LobbyStore {
       modSyncMaxDescriptors: config.modSyncMaxDescriptors ?? 64,
       modSyncMaxPayloadBytes: config.modSyncMaxPayloadBytes ?? 65_536,
       maxKickedClientInstallationIds: config.maxKickedClientInstallationIds ?? 256,
-      maxClientControlBindingsPerRoom: config.maxClientControlBindingsPerRoom ?? 64,
+      maxClientControlBindingsPerRoom:
+        config.maxClientControlBindingsPerRoom ?? MaxSupportedRoomPlayers,
     };
     this.id = deps.id ?? (() => randomUUID());
     this.peerPlayerNetIds = deps.peerPlayerNetIds ?? (() => new Set<string>());
@@ -788,6 +795,16 @@ export class LobbyStore {
     }
 
     const normalizedBindingId = normalizeOptionalIdentity(requestedBindingId);
+    if (
+      normalizedBindingId === undefined
+      && this.reboundClientControlSlots.get(roomId)?.has(playerNetId)
+    ) {
+      this.warn(
+        `[lobby] legacy kick rejected roomId=${roomId} playerNetId=${playerNetId} `
+        + "reason=legacy_rebound",
+      );
+      return { outcome: "legacy_rebound" };
+    }
     if (normalizedBindingId !== undefined && normalizedBindingId !== binding.bindingId) {
       this.warn(
         `[lobby] stale kick rejected roomId=${roomId} playerNetId=${playerNetId} `
@@ -971,17 +988,22 @@ export class LobbyStore {
       roomBindings = new Map();
       this.clientControlBindings.set(binding.roomId, roomBindings);
     }
+    const previous = roomBindings.get(playerNetId);
+    if (previous !== undefined && previous.bindingId !== binding.bindingId) {
+      let reboundSlots = this.reboundClientControlSlots.get(binding.roomId);
+      if (!reboundSlots) {
+        reboundSlots = new Set();
+        this.reboundClientControlSlots.set(binding.roomId, reboundSlots);
+      }
+      reboundSlots.add(playerNetId);
+    }
     roomBindings.delete(playerNetId);
     roomBindings.set(playerNetId, binding);
-    while (roomBindings.size > this.config.maxClientControlBindingsPerRoom) {
-      const oldestPlayerNetId = roomBindings.keys().next().value as string | undefined;
-      if (oldestPlayerNetId === undefined) {
-        break;
-      }
-      roomBindings.delete(oldestPlayerNetId);
+    if (roomBindings.size > this.config.maxClientControlBindingsPerRoom) {
       this.warn(
-        `[lobby] client control binding evicted roomId=${binding.roomId} `
-        + `limit=${this.config.maxClientControlBindingsPerRoom}`,
+        `[lobby] client control binding capacity exceeded without obsolete generation `
+        + `roomId=${binding.roomId} limit=${this.config.maxClientControlBindingsPerRoom} `
+        + `size=${roomBindings.size}`,
       );
     }
   }
@@ -1019,6 +1041,7 @@ export class LobbyStore {
     this.rooms.delete(roomId);
     this.hostSessions.delete(roomId);
     this.clientControlBindings.delete(roomId);
+    this.reboundClientControlSlots.delete(roomId);
     for (const ticket of this.tickets.values()) {
       if (ticket.roomId === roomId) {
         this.tickets.delete(ticket.ticketId);
