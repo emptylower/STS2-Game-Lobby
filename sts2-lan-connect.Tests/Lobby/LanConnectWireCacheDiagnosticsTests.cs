@@ -1,3 +1,4 @@
+using System.Text;
 using Sts2LanConnect.Scripts;
 
 namespace Sts2LanConnect.Tests.Lobby;
@@ -22,15 +23,24 @@ public sealed class LanConnectWireCacheDiagnosticsTests
     [Fact]
     public void Debug_report_keeps_other_sections_and_marks_signature_unavailable()
     {
-        string report = LanConnectDebugReport.Build(
-            default,
+        // Build depends on the sts2 game assembly and cannot run end-to-end in this project.
+        // This does not cover "Build must never propagate a capture failure"; that belongs in
+        // sts2-lan-connect.GdUnitTests if the coverage is added later.
+        LanConnectWireCacheCaptureCache cache = new(
             static () => throw new MissingMemberException("required cache table was renamed"));
+        StringBuilder builder = new();
+        builder.AppendLine("STS2 LAN Connect Client Debug Report");
 
+        LanConnectDebugReport.AppendWireCacheDiagnostics(builder, cache.GetCurrentResult());
+        builder.AppendLine("loaded_mod_inventory_count: 2");
+        builder.AppendLine("Recent Relevant Client Log Lines");
+
+        string report = builder.ToString();
         Assert.Contains("wire_cache_signature_v1: <unavailable>", report);
         Assert.Contains(
             "wire_cache_signature_v1_unavailable_reason: MissingMemberException: required cache table was renamed",
             report);
-        Assert.Contains("loaded_mod_inventory_count:", report);
+        Assert.Contains("loaded_mod_inventory_count: 2", report);
         Assert.Contains("Recent Relevant Client Log Lines", report);
     }
 
