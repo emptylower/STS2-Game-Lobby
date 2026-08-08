@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { LobbyStore, LobbyStoreError, type CreateRoomResult, type JoinRoomInput } from "./store.js";
+import {
+  LobbyStore,
+  LobbyStoreError,
+  type CreateRoomResult,
+  type JoinRoomInput,
+  type KickPlayerResult,
+} from "./store.js";
 import type { LobbyModDescriptor } from "./mod-sync/protocol.js";
 
 const baseConfig = {
@@ -20,6 +26,14 @@ function sequenceIds(...ids: string[]) {
     }
     return next;
   };
+}
+
+function requireKicked(result: KickPlayerResult) {
+  assert.equal(result.outcome, "kicked");
+  if (result.outcome !== "kicked") {
+    throw new Error("Expected kicked outcome");
+  }
+  return result;
 }
 
 function createBasicRoom(store: LobbyStore): CreateRoomResult {
@@ -934,11 +948,12 @@ test("kickPlayer bans only the current occupant installation and never the share
     playerNetId: "save-slot-12345",
     clientInstallationId: "install-takeover",
   });
-  assert.equal(
-    store.validateClientControl(created.roomId, created.controlChannelId, currentOccupant.ticketId)
-      .playerNetId,
-    "save-slot-12345",
+  const currentBinding = store.validateClientControl(
+    created.roomId,
+    created.controlChannelId,
+    currentOccupant.ticketId,
   );
+  assert.equal(currentBinding.playerNetId, "save-slot-12345");
 
   assert.throws(
     () => store.validateClientControl(
@@ -948,10 +963,18 @@ test("kickPlayer bans only the current occupant installation and never the share
     ),
     (error: unknown) => error instanceof LobbyStoreError && error.code === "invalid_ticket",
   );
-  const kicked = store.kickPlayer(created.roomId, created.hostToken, "save-slot-12345");
-  assert.equal(kicked?.binding.clientInstallationId, "install-takeover");
-  assert.equal(kicked?.persistentBanCreated, true);
-  assert.equal(store.kickPlayer(created.roomId, created.hostToken, "save-slot-12345"), undefined);
+  const kicked = requireKicked(store.kickPlayer(
+    created.roomId,
+    created.hostToken,
+    "save-slot-12345",
+    currentBinding.controlBindingId,
+  ));
+  assert.equal(kicked.binding.clientInstallationId, "install-takeover");
+  assert.equal(kicked.persistentBanCreated, true);
+  assert.equal(
+    store.kickPlayer(created.roomId, created.hostToken, "save-slot-12345").outcome,
+    "not_found",
+  );
   assert.equal(store.isClientInstallationKicked(created.roomId, "install-takeover"), true);
   assert.equal(store.isClientInstallationKicked(created.roomId, "install-original"), false);
 
@@ -1067,19 +1090,19 @@ test("declaring the original owner's public slot as an installation id cannot ba
 
   const originalOwner = store.joinRoom(created.roomId, {
     playerName: "Original Owner",
-    clientInstallationId: "slot-owned-by-a",
+    clientInstallationId: "76561198000000001",
     version: "1.2.3",
     modVersion: "0.1.0",
-    playerNetId: "slot-owned-by-a",
+    playerNetId: "76561198000000001",
   });
   store.validateClientControl(created.roomId, created.controlChannelId, originalOwner.ticketId);
 
   const legacyTaker = store.joinRoom(created.roomId, {
     playerName: "Hostile Taker",
-    clientInstallationId: "slot-owned-by-a",
+    clientInstallationId: "76561198000000001",
     version: "1.2.3",
     modVersion: "0.1.0",
-    playerNetId: "slot-owned-by-a",
+    playerNetId: "76561198000000001",
   });
   const legacyBinding = store.validateClientControl(
     created.roomId,
@@ -1091,26 +1114,31 @@ test("declaring the original owner's public slot as an installation id cannot ba
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]!, /identity mode=legacy/);
 
-  const kicked = store.kickPlayer(created.roomId, created.hostToken, "slot-owned-by-a");
-  assert.equal(kicked?.binding.identityKind, "legacy");
-  assert.equal(kicked?.persistentBanCreated, false);
-  assert.equal(store.isClientInstallationKicked(created.roomId, "slot-owned-by-a"), false);
+  const kicked = requireKicked(store.kickPlayer(
+    created.roomId,
+    created.hostToken,
+    "76561198000000001",
+    legacyBinding.controlBindingId,
+  ));
+  assert.equal(kicked.binding.identityKind, "legacy");
+  assert.equal(kicked.persistentBanCreated, false);
+  assert.equal(store.isClientInstallationKicked(created.roomId, "76561198000000001"), false);
 
   const ownerRejoin = store.joinRoom(created.roomId, {
     playerName: "Original Owner",
-    clientInstallationId: "slot-owned-by-a",
+    clientInstallationId: "76561198000000001",
     version: "1.2.3",
     modVersion: "0.1.0",
-    playerNetId: "slot-owned-by-a",
+    playerNetId: "76561198000000001",
   });
   assert.equal(ownerRejoin.room.roomId, created.roomId);
 
   const legacyRejoin = store.joinRoom(created.roomId, {
     playerName: "Hostile Taker",
-    clientInstallationId: "slot-owned-by-a",
+    clientInstallationId: "76561198000000001",
     version: "1.2.3",
     modVersion: "0.1.0",
-    playerNetId: "slot-owned-by-a",
+    playerNetId: "76561198000000001",
   });
   assert.equal(legacyRejoin.room.roomId, created.roomId);
   assert.equal(warnings.length, 1);
@@ -1157,12 +1185,42 @@ test("a declared installation id matching another known save slot is treated as 
   assert.equal(ticket.clientInstallationId, undefined);
 });
 
+test("a legacy numeric game net id never becomes a persistent installation identity", () => {
+  const store = new LobbyStore(baseConfig, { warn: () => undefined });
+  const created = createBasicRoom(store);
+  const joined = store.joinRoom(created.roomId, {
+    ...basicJoinInput(),
+    playerNetId: "76561198000000002",
+    clientInstallationId: "76561198000000001",
+  });
+  const ticket = store.validateClientControl(
+    created.roomId,
+    created.controlChannelId,
+    joined.ticketId,
+  );
+
+  assert.equal(ticket.identityKind, "legacy");
+  assert.equal(ticket.clientInstallationId, undefined);
+  const kicked = requireKicked(store.kickPlayer(
+    created.roomId,
+    created.hostToken,
+    "76561198000000002",
+    ticket.controlBindingId,
+  ));
+  assert.equal(kicked.persistentBanCreated, false);
+  assert.equal(store.isClientInstallationKicked(created.roomId, "76561198000000001"), false);
+});
+
 test("installation kick does not outlive the room session", () => {
   const store = new LobbyStore(baseConfig, { warn: () => undefined });
   const first = createBasicRoom(store);
   const firstJoin = store.joinRoom(first.roomId, basicJoinInput());
-  store.validateClientControl(first.roomId, first.controlChannelId, firstJoin.ticketId);
-  store.kickPlayer(first.roomId, first.hostToken, "slot-guest");
+  const firstBinding = store.validateClientControl(
+    first.roomId,
+    first.controlChannelId,
+    firstJoin.ticketId,
+  );
+  store.kickPlayer(first.roomId, first.hostToken, "slot-guest", firstBinding.controlBindingId);
   store.deleteRoom(first.roomId, first.hostToken);
 
   const second = createBasicRoom(store);
@@ -1178,15 +1236,87 @@ test("kick authority survives a control disconnect until the slot is kicked", ()
   const store = new LobbyStore(baseConfig);
   const created = createBasicRoom(store);
   const joined = store.joinRoom(created.roomId, basicJoinInput());
-  store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId);
+  const binding = store.validateClientControl(
+    created.roomId,
+    created.controlChannelId,
+    joined.ticketId,
+  );
 
-  const kicked = store.kickPlayer(created.roomId, created.hostToken, "slot-guest");
-  assert.equal(kicked?.binding.clientInstallationId, "install-guest");
-  assert.equal(kicked?.persistentBanCreated, true);
+  const kicked = requireKicked(store.kickPlayer(
+    created.roomId,
+    created.hostToken,
+    "slot-guest",
+    binding.controlBindingId,
+  ));
+  assert.equal(kicked.binding.clientInstallationId, "install-guest");
+  assert.equal(kicked.persistentBanCreated, true);
   assert.throws(
     () => store.joinRoom(created.roomId, basicJoinInput()),
     (error: unknown) => error instanceof LobbyStoreError && error.code === "kicked",
   );
+});
+
+test("a legacy slot-only kick disconnects without creating a persistent ban", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = createBasicRoom(store);
+  const joined = store.joinRoom(created.roomId, basicJoinInput());
+  store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId);
+
+  const kicked = requireKicked(store.kickPlayer(
+    created.roomId,
+    created.hostToken,
+    "slot-guest",
+  ));
+
+  assert.equal(kicked.legacyRequest, true);
+  assert.equal(kicked.persistentBanCreated, false);
+  assert.equal(store.isClientInstallationKicked(created.roomId, "install-guest"), false);
+  assert.equal(store.joinRoom(created.roomId, basicJoinInput()).room.roomId, created.roomId);
+});
+
+test("a stale binding handle cannot ban the replacement occupant", () => {
+  const warnings: string[] = [];
+  const store = new LobbyStore(baseConfig, { warn: (message) => warnings.push(message) });
+  const created = createBasicRoom(store);
+  const firstJoin = store.joinRoom(created.roomId, {
+    ...basicJoinInput(),
+    clientInstallationId: "install-first",
+  });
+  const firstBinding = store.validateClientControl(
+    created.roomId,
+    created.controlChannelId,
+    firstJoin.ticketId,
+  );
+  const replacementJoin = store.joinRoom(created.roomId, {
+    ...basicJoinInput(),
+    clientInstallationId: "install-replacement",
+  });
+  const replacementBinding = store.validateClientControl(
+    created.roomId,
+    created.controlChannelId,
+    replacementJoin.ticketId,
+  );
+
+  const staleKick = store.kickPlayer(
+    created.roomId,
+    created.hostToken,
+    "slot-guest",
+    firstBinding.controlBindingId,
+  );
+
+  assert.equal(staleKick.outcome, "stale_binding");
+  assert.equal(store.isClientInstallationKicked(created.roomId, "install-first"), false);
+  assert.equal(store.isClientInstallationKicked(created.roomId, "install-replacement"), false);
+  assert.equal(warnings.some((message) => message.includes("stale kick rejected")), true);
+
+  const currentKick = requireKicked(store.kickPlayer(
+    created.roomId,
+    created.hostToken,
+    "slot-guest",
+    replacementBinding.controlBindingId,
+  ));
+  assert.equal(currentKick.binding.clientInstallationId, "install-replacement");
+  assert.equal(currentKick.persistentBanCreated, true);
 });
 
 test("kicked installation ids evict the oldest entry at the configured cap", () => {
@@ -1203,8 +1333,17 @@ test("kicked installation ids evict the oldest entry at the configured cap", () 
       playerNetId: `slot-${index}`,
       clientInstallationId: `install-${index}`,
     });
-    store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId);
-    store.kickPlayer(created.roomId, created.hostToken, `slot-${index}`);
+    const binding = store.validateClientControl(
+      created.roomId,
+      created.controlChannelId,
+      joined.ticketId,
+    );
+    store.kickPlayer(
+      created.roomId,
+      created.hostToken,
+      `slot-${index}`,
+      binding.controlBindingId,
+    );
   }
 
   assert.equal(store.isClientInstallationKicked(created.roomId, "install-0"), false);
@@ -1230,7 +1369,7 @@ test("remembered slot bindings evict the oldest entry at the configured cap", ()
     store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId);
   }
 
-  assert.equal(store.kickPlayer(created.roomId, created.hostToken, "slot-0"), undefined);
+  assert.equal(store.kickPlayer(created.roomId, created.hostToken, "slot-0").outcome, "not_found");
   assert.equal(
     warnings.filter((message) => message.includes("client control binding evicted")).length,
     1,

@@ -111,9 +111,26 @@ export interface ClientControlBinding {
   boundAt: Date;
 }
 
-export interface KickPlayerResult {
-  binding: ClientControlBinding;
-  persistentBanCreated: boolean;
+export type KickPlayerResult =
+  | {
+    outcome: "kicked";
+    binding: ClientControlBinding;
+    persistentBanCreated: boolean;
+    legacyRequest: boolean;
+  }
+  | {
+    outcome: "stale_binding";
+    requestedBindingId: string;
+    currentBindingId: string;
+  }
+  | {
+    outcome: "not_found";
+  };
+
+export interface ClientControlBindingHandle {
+  bindingId: string;
+  playerNetId: string;
+  playerName: string;
 }
 
 export interface RoomSettings {
@@ -756,17 +773,37 @@ export class LobbyStore {
     return true;
   }
 
-  kickPlayer(roomId: string, hostToken: string, playerNetId: string): KickPlayerResult | undefined {
+  kickPlayer(
+    roomId: string,
+    hostToken: string,
+    playerNetId: string,
+    requestedBindingId?: string,
+  ): KickPlayerResult {
     const hostSession = this.requireHostSession(roomId);
     this.assertHostToken(hostSession, hostToken);
     const roomBindings = this.clientControlBindings.get(roomId);
     const binding = roomBindings?.get(playerNetId);
     if (!binding) {
-      return undefined;
+      return { outcome: "not_found" };
+    }
+
+    const normalizedBindingId = normalizeOptionalIdentity(requestedBindingId);
+    if (normalizedBindingId !== undefined && normalizedBindingId !== binding.bindingId) {
+      this.warn(
+        `[lobby] stale kick rejected roomId=${roomId} playerNetId=${playerNetId} `
+        + `requestedBindingId=${normalizedBindingId} currentBindingId=${binding.bindingId}`,
+      );
+      return {
+        outcome: "stale_binding",
+        requestedBindingId: normalizedBindingId,
+        currentBindingId: binding.bindingId,
+      };
     }
 
     roomBindings?.delete(playerNetId);
-    const persistentBanCreated = binding.identityKind === "installation"
+    const legacyRequest = normalizedBindingId === undefined;
+    const persistentBanCreated = !legacyRequest
+      && binding.identityKind === "installation"
       && binding.clientInstallationId !== undefined;
     if (persistentBanCreated) {
       this.addKickedClientInstallationId(hostSession, binding.clientInstallationId!);
@@ -777,7 +814,31 @@ export class LobbyStore {
         this.tickets.delete(ticket.ticketId);
       }
     }
-    return { binding, persistentBanCreated };
+    return {
+      outcome: "kicked",
+      binding,
+      persistentBanCreated,
+      legacyRequest,
+    };
+  }
+
+  listClientControlBindingHandles(
+    roomId: string,
+    hostToken: string,
+  ): ClientControlBindingHandle[] {
+    const hostSession = this.requireHostSession(roomId);
+    this.assertHostToken(hostSession, hostToken);
+    const handles: ClientControlBindingHandle[] = [];
+    for (const binding of this.clientControlBindings.get(roomId)?.values() ?? []) {
+      if (binding.playerNetId !== undefined) {
+        handles.push({
+          bindingId: binding.bindingId,
+          playerNetId: binding.playerNetId,
+          playerName: binding.playerName,
+        });
+      }
+    }
+    return handles;
   }
 
   isClientInstallationKicked(roomId: string, clientInstallationId: string) {
@@ -868,6 +929,10 @@ export class LobbyStore {
   ): string | undefined {
     const clientInstallationId = normalizeOptionalIdentity(clientInstallationIdValue);
     if (clientInstallationId === undefined) {
+      return undefined;
+    }
+
+    if (/^[0-9]+$/.test(clientInstallationId)) {
       return undefined;
     }
 

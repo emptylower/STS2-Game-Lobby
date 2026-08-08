@@ -1826,18 +1826,19 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     internal async Task SendKickPlayerAsync(string targetPlayerNetId, string targetPlayerName)
     {
-        if (_activeSession == null)
+        HostedRoomSession? session = _activeSession;
+        if (session == null)
         {
             return;
         }
 
-        await _activeSession.ControlClient.SendAsync(new LobbyControlEnvelope
-        {
-            Type = "kick_player",
-            RoomId = _activeSession.RoomId,
-            TargetPlayerNetId = targetPlayerNetId,
-            TargetPlayerName = targetPlayerName,
-        }, CancellationToken.None);
+        await session.ControlClient.SendAsync(
+            BuildKickPlayerEnvelope(
+                session.RoomId,
+                targetPlayerNetId,
+                targetPlayerName,
+                session.GetKickBindingId(targetPlayerNetId)),
+            CancellationToken.None);
     }
 
     internal async Task SendRoomSettingsAsync(bool chatEnabled)
@@ -2237,6 +2238,14 @@ internal sealed partial class LanConnectLobbyRuntime :
     {
         switch (envelope.Type)
         {
+            case "player_control_binding":
+                if (!string.IsNullOrWhiteSpace(envelope.PlayerNetId) &&
+                    !string.IsNullOrWhiteSpace(envelope.BindingId))
+                {
+                    session.RememberKickBinding(envelope.PlayerNetId, envelope.BindingId);
+                }
+
+                break;
             case "player_name_sync":
                 if (!ulong.TryParse(envelope.PlayerNetId, out ulong playerNetId) || string.IsNullOrWhiteSpace(envelope.PlayerName))
                 {
@@ -3010,6 +3019,26 @@ internal sealed partial class LanConnectLobbyRuntime :
         SentAtUnixMs = sentAt.ToUnixTimeMilliseconds()
     };
 
+    internal static LobbyControlEnvelope BuildKickPlayerEnvelope(
+        string roomId,
+        string playerNetId,
+        string playerName,
+        string? bindingId)
+    {
+        string? normalizedBindingId = string.IsNullOrWhiteSpace(bindingId)
+            ? null
+            : bindingId.Trim();
+        return new LobbyControlEnvelope
+        {
+            Type = "kick_player",
+            RoomId = roomId,
+            PlayerNetId = normalizedBindingId == null ? null : playerNetId,
+            BindingId = normalizedBindingId,
+            TargetPlayerNetId = playerNetId,
+            TargetPlayerName = playerName
+        };
+    }
+
     internal static LobbyControlEnvelope CreateJoinedRoomChatEnvelope(
         string roomId,
         string controlChannelId,
@@ -3234,6 +3263,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         private readonly Action<ulong, NetErrorInfo> _clientDisconnectedHandler;
         private Action<LobbyControlEnvelope>? _controlEnvelopeHandler;
         internal readonly HashSet<ulong> _connectedPeerIds = new();
+        private readonly Dictionary<string, string> _kickBindingIds = new(StringComparer.Ordinal);
 
         public IReadOnlyCollection<ulong> ConnectedPeerIds => _connectedPeerIds;
 
@@ -3312,6 +3342,16 @@ internal sealed partial class LanConnectLobbyRuntime :
             };
             return current;
         }
+
+        public void RememberKickBinding(string playerNetId, string bindingId)
+        {
+            _kickBindingIds[playerNetId.Trim()] = bindingId.Trim();
+        }
+
+        public string? GetKickBindingId(string playerNetId) =>
+            _kickBindingIds.TryGetValue(playerNetId.Trim(), out string? bindingId)
+                ? bindingId
+                : null;
 
         public void OnDisconnected(NetErrorInfo _)
         {

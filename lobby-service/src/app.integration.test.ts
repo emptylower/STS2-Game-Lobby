@@ -8,7 +8,11 @@ import test from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { inspect } from "node:util";
 import { WebSocket } from "ws";
-import { collectRoomChatPeerPlayerNetIds, createLobbyService } from "./app.js";
+import {
+  collectRoomChatPeerPlayerNetIds,
+  createLobbyService,
+  sanitizeRelayedControlEnvelope,
+} from "./app.js";
 import { ChatPeerRegistry } from "./chat/peer-registry.js";
 import { loadLobbyServiceConfig, type LobbyServiceConfig } from "./config.js";
 import { hashServerAdminPassword } from "./server-admin-auth.js";
@@ -121,6 +125,24 @@ test("app chat routing projects game slot ids and never installation ids", () =>
 
   assert.deepEqual([...projected], ["save-slot-owner"]);
   assert.equal(projected.has("install-current-occupant"), false);
+});
+
+test("relayed control envelopes strip reserved identity fields", () => {
+  const relayed = sanitizeRelayedControlEnvelope({
+    type: "player_name_sync",
+    playerNetId: "public-slot",
+    playerName: "Player",
+    clientInstallationId: "lci_private",
+    bindingId: "attacker-binding",
+    controlBindingId: "attacker-control-binding",
+    identityKind: "installation",
+  });
+
+  assert.deepEqual(relayed, {
+    type: "player_name_sync",
+    playerNetId: "public-slot",
+    playerName: "Player",
+  });
 });
 
 test("factory does not listen until start and closes all resources", async () => {
@@ -934,6 +956,12 @@ test("slot takeover supersedes stale control peer and kick bans only current ins
     );
     sockets.push(host);
     await waitForChatFrame(host, (frame) => frame.type === "connected");
+    const takeoverBinding = await waitForChatFrame(
+      host,
+      (frame) => frame.type === "player_control_binding"
+        && frame.playerNetId === "save-slot-owner",
+    );
+    assert.equal(typeof takeoverBinding.bindingId, "string");
     host.send(JSON.stringify({
       type: "host_hello",
       roomId: created.roomId,
@@ -965,6 +993,25 @@ test("slot takeover supersedes stale control peer and kick bans only current ins
       },
     }));
     await waitForChatFrame(takeover, (frame) => frame.type === "room_chat_ready");
+    const sanitizedRelay = waitForChatFrame(
+      host,
+      (frame) => frame.type === "identity_probe",
+    );
+    takeover.send(JSON.stringify({
+      type: "identity_probe",
+      playerNetId: "save-slot-owner",
+      clientInstallationId: "install-takeover",
+      bindingId: "injected-binding",
+      controlBindingId: "injected-control-binding",
+      identityKind: "installation",
+    }));
+    assert.deepEqual(await sanitizedRelay, {
+      type: "identity_probe",
+      playerNetId: "save-slot-owner",
+      roomId: created.roomId,
+      controlChannelId: created.controlChannelId,
+      role: "client",
+    });
     const messageId = "45454545-4545-4545-8545-454545454545";
     const deliveredToHost = waitForChatFrame(
       host,
@@ -995,6 +1042,8 @@ test("slot takeover supersedes stale control peer and kick bans only current ins
     const kickedClose = waitForChatClose(takeover);
     host.send(JSON.stringify({
       type: "kick_player",
+      playerNetId: "save-slot-owner",
+      bindingId: takeoverBinding.bindingId,
       targetPlayerNetId: "save-slot-owner",
       targetPlayerName: "Takeover",
     }));
@@ -1014,6 +1063,118 @@ test("slot takeover supersedes stale control peer and kick bans only current ins
     const legacyJoin = await issueJoin("Legacy");
     assert.equal(legacyJoin.response.status, 200);
     assert.ok(legacyJoin.body.ticketId);
+  } finally {
+    for (const socket of sockets) {
+      try {
+        socket.terminate();
+      } catch {
+        // ignore test cleanup races
+      }
+    }
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("a stale kick handle after slot supersede neither bans nor notifies the replacement", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const sockets: WebSocket[] = [];
+  try {
+    const address = await service.start();
+    const httpBase = `http://127.0.0.1:${address.port}`;
+    const createResponse = await fetch(`${httpBase}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "stale-kick-handle",
+        hostPlayerName: "Host",
+        clientInstallationId: "install-host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as {
+      roomId: string;
+      controlChannelId: string;
+      hostToken: string;
+    };
+    const issueJoin = async (playerName: string, clientInstallationId: string) => {
+      const response = await fetch(`${httpBase}/rooms/${created.roomId}/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          playerName,
+          playerNetId: "shared-save-slot",
+          clientInstallationId,
+          version: "1.0.0",
+          modVersion: "1.0.0",
+          modList: [],
+        }),
+      });
+      return {
+        response,
+        body: await response.json() as { ticketId?: string; code?: string },
+      };
+    };
+    const wsBase = `ws://127.0.0.1:${address.port}${config.wsPath}`;
+    const clientUrl = (ticketId: string) =>
+      `${wsBase}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=client&ticketId=${ticketId}`;
+    const host = await openControlWebSocket(
+      `${wsBase}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=host&token=${created.hostToken}`,
+    );
+    sockets.push(host);
+    await waitForChatFrame(host, (frame) => frame.type === "connected");
+
+    const firstJoin = await issueJoin("First", "install-first");
+    assert.equal(firstJoin.response.status, 200);
+    const first = await openControlWebSocket(clientUrl(firstJoin.body.ticketId!));
+    sockets.push(first);
+    await waitForChatFrame(first, (frame) => frame.type === "connected");
+    const firstBinding = await waitForChatFrame(
+      host,
+      (frame) => frame.type === "player_control_binding"
+        && frame.playerName === "First",
+    );
+    const firstClosed = waitForChatClose(first);
+
+    const replacementJoin = await issueJoin("Replacement", "install-replacement");
+    assert.equal(replacementJoin.response.status, 200);
+    const replacement = await openControlWebSocket(clientUrl(replacementJoin.body.ticketId!));
+    sockets.push(replacement);
+    await waitForChatFrame(replacement, (frame) => frame.type === "connected");
+    const replacementBinding = await waitForChatFrame(
+      host,
+      (frame) => frame.type === "player_control_binding"
+        && frame.playerName === "Replacement",
+    );
+    assert.notEqual(firstBinding.bindingId, replacementBinding.bindingId);
+    assert.deepEqual(await firstClosed, { code: 4002, reason: "superseded" });
+
+    host.send(JSON.stringify({
+      type: "kick_player",
+      playerNetId: "shared-save-slot",
+      bindingId: firstBinding.bindingId,
+      targetPlayerNetId: "shared-save-slot",
+      targetPlayerName: "First",
+    }));
+    host.send(JSON.stringify({ type: "ping" }));
+    await waitForChatFrame(host, (frame) => frame.type === "pong");
+
+    assert.equal(replacement.readyState, WebSocket.OPEN);
+    assert.equal(
+      chatSocketState(replacement).frames.some((frame) => frame.type === "kicked"),
+      false,
+    );
+    const replacementRetry = await issueJoin("Replacement", "install-replacement");
+    assert.equal(replacementRetry.response.status, 200);
   } finally {
     for (const socket of sockets) {
       try {
@@ -1093,11 +1254,20 @@ test("kick still bans the latest slot binding after its control socket disconnec
     );
     sockets.push(host);
     await waitForChatFrame(host, (frame) => frame.type === "connected");
+    const binding = await waitForChatFrame(
+      host,
+      (frame) => frame.type === "player_control_binding"
+        && frame.playerNetId === "save-slot-owner",
+    );
     host.send(JSON.stringify({
       type: "kick_player",
+      playerNetId: "save-slot-owner",
+      bindingId: binding.bindingId,
       targetPlayerNetId: "save-slot-owner",
       targetPlayerName: "Taker",
     }));
+    host.send(JSON.stringify({ type: "ping" }));
+    await waitForChatFrame(host, (frame) => frame.type === "pong");
 
     const retry = await issueJoin();
     assert.equal(retry.response.status, 403);

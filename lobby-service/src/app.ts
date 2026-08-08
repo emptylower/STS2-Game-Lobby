@@ -223,6 +223,23 @@ export function collectRoomChatPeerPlayerNetIds(
   return playerNetIds;
 }
 
+const ReservedRelayedIdentityFields = [
+  "clientInstallationId",
+  "bindingId",
+  "controlBindingId",
+  "identityKind",
+] as const;
+
+export function sanitizeRelayedControlEnvelope(
+  envelope: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const sanitized = { ...envelope };
+  for (const field of ReservedRelayedIdentityFields) {
+    delete sanitized[field];
+  }
+  return sanitized;
+}
+
 export function createProductionDependencies(): LobbyServiceDependencies {
   return {};
 }
@@ -1363,6 +1380,24 @@ export async function createLobbyService(
         role,
       });
 
+      if (role === "host") {
+        const hostToken = requiredQuery(requestUrl, "token");
+        for (const binding of store.listClientControlBindingHandles(roomId, hostToken)) {
+          sendJson(socket, {
+            type: "player_control_binding",
+            roomId,
+            playerNetId: binding.playerNetId,
+            playerName: binding.playerName,
+            bindingId: binding.bindingId,
+          });
+        }
+      } else if (
+        joinTicket?.controlBindingId !== undefined
+        && joinTicket.playerNetId !== undefined
+      ) {
+        sendControlBindingHandleToHosts(peer);
+      }
+
       if (role === "client") {
         const settings = store.getRoomSettings(roomId);
         sendJson(socket, { type: "room_settings", roomId, ...settings });
@@ -1414,13 +1449,42 @@ export async function createLobbyService(
           }
 
           if (parsed.type === "kick_player" && peer.role === "host") {
-            const targetNetId = String(parsed.targetPlayerNetId ?? "");
+            const modernTargetNetId = typeof parsed.playerNetId === "string"
+              ? parsed.playerNetId.trim()
+              : "";
+            const requestedBindingId = typeof parsed.bindingId === "string"
+              ? parsed.bindingId.trim()
+              : "";
+            const legacyTargetNetId = typeof parsed.targetPlayerNetId === "string"
+              ? parsed.targetPlayerNetId.trim()
+              : "";
+            if (modernTargetNetId && !requestedBindingId) {
+              console.warn(
+                `[control] kick_player rejected roomId=${peer.roomId} `
+                + `targetNetId=${modernTargetNetId} reason=missing_binding_id`,
+              );
+              return;
+            }
+            const targetNetId = modernTargetNetId || legacyTargetNetId;
             if (!targetNetId) return;
             const hostToken = requiredQuery(requestUrl, "token");
-            const kickResult = store.kickPlayer(peer.roomId, hostToken, targetNetId);
-            const targetPeer = kickResult
-              ? findCurrentPeerByBindingId(peer.roomId, kickResult.binding.bindingId)
-              : undefined;
+            const kickResult = store.kickPlayer(
+              peer.roomId,
+              hostToken,
+              targetNetId,
+              modernTargetNetId ? requestedBindingId : undefined,
+            );
+            if (kickResult.outcome !== "kicked") {
+              console.warn(
+                `[control] kick_player rejected roomId=${peer.roomId} targetNetId=${targetNetId} `
+                + `reason=${kickResult.outcome}`,
+              );
+              return;
+            }
+            const targetPeer = findCurrentPeerByBindingId(
+              peer.roomId,
+              kickResult.binding.bindingId,
+            );
             if (targetPeer) {
               removePeer(targetPeer);
               sendJson(targetPeer.socket, {
@@ -1440,8 +1504,9 @@ export async function createLobbyService(
             console.log(
               `[control] kick_player roomId=${peer.roomId} targetNetId=${targetNetId} `
               + `session=${targetPeer?.connectionSessionId ?? "<none>"} `
-              + `identityKind=${kickResult?.binding.identityKind ?? "<none>"} `
-              + `persistentBan=${kickResult?.persistentBanCreated === true}`,
+              + `identityKind=${kickResult.binding.identityKind} `
+              + `legacyRequest=${kickResult.legacyRequest} `
+              + `persistentBan=${kickResult.persistentBanCreated}`,
             );
             return;
           }
@@ -1476,7 +1541,7 @@ export async function createLobbyService(
               }
             : parsed;
           broadcastToRoom(peer, {
-            ...authenticatedEnvelope,
+            ...sanitizeRelayedControlEnvelope(authenticatedEnvelope),
             roomId: peer.roomId,
             controlChannelId: peer.controlChannelId,
             role: peer.role,
@@ -1928,6 +1993,32 @@ export async function createLobbyService(
       ) return peer;
     }
     return undefined;
+  }
+
+  function sendControlBindingHandleToHosts(clientPeer: ControlPeer) {
+    if (
+      clientPeer.role !== "client"
+      || clientPeer.controlBindingId === undefined
+      || clientPeer.playerNetId === undefined
+    ) {
+      return;
+    }
+
+    for (const candidate of roomPeers.get(clientPeer.roomId) ?? []) {
+      if (
+        candidate.role === "host"
+        && !candidate.detached
+        && candidate.socket.readyState === candidate.socket.OPEN
+      ) {
+        sendJson(candidate.socket, {
+          type: "player_control_binding",
+          roomId: clientPeer.roomId,
+          playerNetId: clientPeer.playerNetId,
+          playerName: clientPeer.playerName ?? "",
+          bindingId: clientPeer.controlBindingId,
+        });
+      }
+    }
   }
 
   function cleanupExpiredRoomsNow(now = new Date()) {
