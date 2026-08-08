@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [0.5.6-rc1] - 2026-08-08
+
+客户端与 lobby-service `0.5.6-rc1` 测试候选同步发布准备；两端版本特意对齐，便于玩家和服主核对 WireCache 签名与 binding-aware kick 支持。本版本不是正式版。
+
+### Added
+
+- （客户端）新增 `WireCacheSignatureV1`，对四张 ModelId net-id 表与四个编码位宽生成指纹；签名、位宽、表条目数及每个 MOD 的 `affects_gameplay` 标记写入调试报告和 `godot.log`。
+- （服务端）建房方与加入方都提供有效签名时，在签发 join ticket 前拒绝真实线上编码不一致；签名缺失、格式非法或诊断失败一律 fail-open。
+- （客户端）游戏握手在 join request 发出前再次检查签名；真实不一致即使在 relaxed 配置下也不能跳过，缺失或不可读仍允许加入。
+- （客户端）续局来源改为 `lan` / `lobby` / 未知三态；未知来源显示一次性选择并持久化，旧 schema 中被错误写成 LAN 的存档会重新询问。
+- （客户端/服务端）大厅新增与存档槽位分离的安装级 credential，以及绑定到当前控制占用者的 opaque kick handle。
+
+### Changed
+
+- （客户端）发布默认兼容配置由 `test_relaxed` 改为 `strict`，恢复原版 gameplay MOD / ID 数据库不一致检查；relaxed 只作为显式测试选项保留。
+- （客户端/服务端）客户端与 lobby-service 版本同步为 `0.5.6-rc1`。客户端的新签名门禁和 binding-aware kick 需要配套服务支持。
+- （客户端）旧 lobby-service 无法证明支持 binding-aware kick 时，不再发送可能误封存档槽位的服务端踢出请求；本地移出后明确告知房主目标未被封禁。
+
+### Fixed
+
+- 修复 `affects_gameplay: false` MOD 不进入原版 `idDatabaseHash`、却改变 ModelId net-id 表和位宽时，双方通过握手后黑屏或卡在等待页的问题。线上编码不同现在会在加入前明确拒绝。
+- 修复 safe-load 给缺失绑定隐式写入 `hostChannel=lan`，以及存档修复删除绑定，导致续局回主菜单后无法发布房间的问题。
+- 修复房主重开后队友看不到房间；该问题与续局绑定被误写/删除共用同一根因。
+- 修复槽位接管后踢出当前占用者会永久拉黑原槽位主人，以及踢出通知可能按槽位路由到错误连接的问题。
+- 修复列表绘制后发生槽位接管时，旧的踢出动作会跟随槽位落到新占用者的问题；服务端现在拒绝 stale binding handle，且不会改变封禁或连接状态。
+
+### Known Limitations
+
+- 旧版房主客户端仍可能在踢出后的 1.5 秒内短暂断开替代占用者；房主控制 WebSocket 丢失后该房间会禁用踢出。
+- 踢出会使另一位玩家针对同一槽位的在途 ticket 失效；新建存档开始游戏后的局中重连仍不可用。
+
 ## [0.5.5] - 2026-07-31
 
 客户端 `0.5.5` 正式版完成玩家验证并发布；lobby-service 协议没有变化，继续使用 `0.5.4`。

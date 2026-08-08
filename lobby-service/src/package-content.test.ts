@@ -252,9 +252,9 @@ test("service package uses exact production allowlist and deterministic temporar
       version?: unknown;
       packages?: Record<string, { version?: unknown }>;
     };
-    assert.equal(packageJson.version, "0.5.4");
-    assert.equal(packageLock.version, "0.5.4");
-    assert.equal(packageLock.packages?.[""]?.version, "0.5.4");
+    assert.equal(packageJson.version, "0.5.6-rc1");
+    assert.equal(packageLock.version, "0.5.6-rc1");
+    assert.equal(packageLock.packages?.[""]?.version, "0.5.6-rc1");
 
     for (const packagePath of expectedFiles) {
       assert.deepEqual(
@@ -307,7 +307,7 @@ test("service package rejects malformed protected traversal and symlink outputs"
   }
 });
 
-test("release sources pin service v0.5.4 and client v0.5.5 while preserving older fixtures", () => {
+test("release sources pin service and client v0.5.6-rc1 while preserving older fixtures", () => {
   const servicePackage = JSON.parse(readFileSync(join(repositoryRoot, "lobby-service/package.json"), "utf8")) as {
     version?: unknown;
   };
@@ -319,12 +319,12 @@ test("release sources pin service v0.5.4 and client v0.5.5 while preserving olde
     version?: unknown;
   };
   const clientProject = readFileSync(join(repositoryRoot, "sts2-lan-connect/sts2_lan_connect.csproj"), "utf8");
-  assert.equal(servicePackage.version, "0.5.4");
-  assert.equal(serviceLock.version, "0.5.4");
-  assert.equal(serviceLock.packages?.[""]?.version, "0.5.4");
-  assert.equal(clientManifest.version, "0.5.5");
-  assert.match(clientProject, /<Version>0\.5\.5<\/Version>/);
-  assert.match(clientProject, /<AssemblyVersion>0\.5\.5\.0<\/AssemblyVersion>/);
+  assert.equal(servicePackage.version, "0.5.6-rc1");
+  assert.equal(serviceLock.version, "0.5.6-rc1");
+  assert.equal(serviceLock.packages?.[""]?.version, "0.5.6-rc1");
+  assert.equal(clientManifest.version, "0.5.6-rc1");
+  assert.match(clientProject, /<Version>0\.5\.6-rc1<\/Version>/);
+  assert.match(clientProject, /<AssemblyVersion>0\.5\.6\.0<\/AssemblyVersion>/);
 
   const serviceFixture = readFileSync(
     join(repositoryRoot, "lobby-service/src/chat/compatibility.integration.test.ts"),

@@ -10,7 +10,16 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端正式版为 [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)，lobby-service 继续使用 `0.5.4`。安装或更新客户端后必须完整重启游戏。
+当前测试候选为客户端与 lobby-service [`0.5.6-rc1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc1)，不是正式版；最新正式客户端仍为 [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)。测试时两端必须配套升级，安装或更新客户端后必须完整重启游戏。
+
+## v0.5.6-rc1 现场问题修复测试
+
+- 加入前会比较双方实际使用的 ModelId 线上编码。内容 MOD 组合不同并改变 net-id 表或位宽时，现在会明确提示不一致并拒绝加入，而不是进入后黑屏或一方卡在等待页；这是预期行为。
+- `affects_gameplay: false` 只表示该 MOD 不进入原版 `idDatabaseHash`，不保证它不会占用 ModelId。新签名会补上这层检查；签名缺失或读取失败时仍允许加入。
+- 默认兼容配置已从测试用 relaxed 恢复为 strict。普通 MOD 差异的显式 relaxed 入口不能跳过真实线上编码或游戏版本不一致。
+- 继续大厅存档或由房主重开时，房间绑定不会再被 safe-load/修复误写或删除。来源不明确的旧存档会询问一次“LAN 还是游戏大厅”，保存后不再重复询问。
+- 槽位接管后的踢出会针对当前占用者，不再永久封禁槽位原主人。列表过期时服务端拒绝操作；旧服务端不支持安全结果时只本地移出，并提示该玩家仍可回来。
+- 遇到加入失败、黑屏、等待页卡住或 MOD 误判，请同时提交两台机器各自的完整 `godot.log`。本版日志包含 WireCache 签名、四个位宽、表条目数和每个 MOD 的 `affects_gameplay` 标记。
 
 ## v0.5.5 游戏版本兼容
 
@@ -267,7 +276,16 @@
 
 # STS2 LAN Connect User Guide
 
-The current stable client is [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5), while lobby-service remains on `0.5.4`. Fully restart the game after installing or updating the client.
+The current client and lobby-service test candidate is [`0.5.6-rc1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc1), not a final release. The latest stable client remains [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5). Upgrade both candidate components together and fully restart the game after installing the client.
+
+## v0.5.6-rc1 Field-Fix Testing
+
+- The join flow now compares the actual ModelId wire encoding. Content-MOD sets that change net-id tables or bit widths are intentionally rejected before a black screen or stuck waiting room.
+- `affects_gameplay: false` only excludes a MOD from vanilla `idDatabaseHash`; it does not guarantee that the MOD takes no ModelIds. The new signature covers that gap and remains fail-open when unavailable.
+- The shipped profile is `strict` again. Explicit relaxed handling for ordinary MOD differences cannot bypass a genuine wire-signature or game-version mismatch.
+- Safe load and repair preserve continue-run bindings. Ambiguous legacy saves ask once whether they came from LAN or the game lobby.
+- A kick after slot takeover targets the current occupant instead of banning the original owner. Stale list actions are rejected; old services only permit a guarded local removal and report that no ban occurred.
+- For join failures, black screens, stuck waiting rooms, or MOD false positives, provide the complete `godot.log` from both machines. This build prints the WireCache signature, four bit widths, table counts, and every MOD's `affects_gameplay` flag.
 
 ## v0.5.5 Game Compatibility
 
