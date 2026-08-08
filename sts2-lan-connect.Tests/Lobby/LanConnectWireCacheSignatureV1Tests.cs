@@ -5,12 +5,11 @@ namespace Sts2LanConnect.Tests.Lobby;
 public sealed class LanConnectWireCacheSignatureV1Tests
 {
     [Fact]
-    public void Identical_inputs_are_deterministic()
+    public void Known_vector_is_stable_across_processes_and_runtimes()
     {
-        string first = Compute();
-        string second = Compute();
+        string signature = Compute();
 
-        Assert.Equal(first, second);
+        Assert.Equal("wcv1:B8vj2oR2rdCBmxvsTfJDeJCrioE9zYTa60RqvasB55o", signature);
     }
 
     [Theory]
