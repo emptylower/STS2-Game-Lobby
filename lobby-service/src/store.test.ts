@@ -1046,7 +1046,7 @@ test("getRoomSettings returns default for non-existent room", () => {
   assert.equal(settings.chatEnabled, true);
 });
 
-test("kicking a legacy slot taker never bans the original owner whose installation id equals the slot", () => {
+test("declaring the original owner's public slot as an installation id cannot ban the owner", () => {
   const warnings: string[] = [];
   const store = new LobbyStore(baseConfig, { warn: (message) => warnings.push(message) });
   const created = store.createRoom(
@@ -1075,7 +1075,8 @@ test("kicking a legacy slot taker never bans the original owner whose installati
   store.validateClientControl(created.roomId, created.controlChannelId, originalOwner.ticketId);
 
   const legacyTaker = store.joinRoom(created.roomId, {
-    playerName: "Legacy Taker",
+    playerName: "Hostile Taker",
+    clientInstallationId: "slot-owned-by-a",
     version: "1.2.3",
     modVersion: "0.1.0",
     playerNetId: "slot-owned-by-a",
@@ -1105,13 +1106,55 @@ test("kicking a legacy slot taker never bans the original owner whose installati
   assert.equal(ownerRejoin.room.roomId, created.roomId);
 
   const legacyRejoin = store.joinRoom(created.roomId, {
-    playerName: "Legacy Taker",
+    playerName: "Hostile Taker",
+    clientInstallationId: "slot-owned-by-a",
     version: "1.2.3",
     modVersion: "0.1.0",
     playerNetId: "slot-owned-by-a",
   });
   assert.equal(legacyRejoin.room.roomId, created.roomId);
   assert.equal(warnings.length, 1);
+});
+
+test("a declared installation id matching another known save slot is treated as legacy", () => {
+  const store = new LobbyStore(baseConfig, { warn: () => undefined });
+  const created = store.createRoom(
+    {
+      roomName: "已知槽位身份测试",
+      hostPlayerName: "Host",
+      clientInstallationId: "install-host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.1.0",
+      maxPlayers: 4,
+      hostConnectionInfo: { enetPort: 33771 },
+      savedRun: {
+        saveKey: "save-key",
+        slots: [
+          { netId: "76561198000000001", playerName: "A" },
+          { netId: "76561198000000002", playerName: "B" },
+        ],
+      },
+    },
+    "203.0.113.10",
+  );
+
+  const joined = store.joinRoom(created.roomId, {
+    playerName: "Attacker",
+    version: "1.2.3",
+    modVersion: "0.1.0",
+    desiredSavePlayerNetId: "76561198000000002",
+    playerNetId: "76561198000000002",
+    clientInstallationId: "76561198000000001",
+  });
+  const ticket = store.validateClientControl(
+    created.roomId,
+    created.controlChannelId,
+    joined.ticketId,
+  );
+
+  assert.equal(ticket.identityKind, "legacy");
+  assert.equal(ticket.clientInstallationId, undefined);
 });
 
 test("installation kick does not outlive the room session", () => {

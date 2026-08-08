@@ -366,17 +366,22 @@ export class LobbyStore {
       savedRun: normalizeSavedRunInput(input.savedRun),
     };
 
+    const clientInstallationId = this.resolveClientInstallationIdentity(
+      room,
+      undefined,
+      input.clientInstallationId,
+    );
     const hostSession: HostSession = {
       roomId,
       roomSessionId,
       controlChannelId,
       hostToken,
       hostPlayerName: input.hostPlayerName.trim(),
-      clientInstallationId: normalizeOptionalIdentity(input.clientInstallationId),
+      clientInstallationId,
       relayState: "disabled",
       lastSeenAt: now,
       kickedClientInstallationIds: new Set(),
-      legacyIdentityMode: input.clientInstallationId === undefined,
+      legacyIdentityMode: clientInstallationId === undefined,
       legacyIdentityModeLogged: false,
       roomSettings: { chatEnabled: true },
     };
@@ -442,11 +447,20 @@ export class LobbyStore {
 
     const connectionPlan = buildConnectionPlan(room, hostSession, this.config.connectionStrategy);
     const playerNetId = normalizeOptionalIdentity(input.playerNetId);
-    const clientInstallationId = normalizeOptionalIdentity(input.clientInstallationId);
+    const clientInstallationId = this.resolveClientInstallationIdentity(
+      room,
+      playerNetId,
+      input.clientInstallationId,
+    );
     const identityKind = clientInstallationId === undefined ? "legacy" : "installation";
     if (identityKind === "legacy") {
       hostSession.legacyIdentityMode = true;
-      this.logLegacyIdentityMode(hostSession, "join request omitted clientInstallationId");
+      this.logLegacyIdentityMode(
+        hostSession,
+        input.clientInstallationId === undefined
+          ? "join request omitted clientInstallationId"
+          : "join request declared a public slot id as clientInstallationId",
+      );
     }
     const ticket: JoinTicket = {
       ticketId: this.id(),
@@ -486,7 +500,11 @@ export class LobbyStore {
     const availableSavedRunSlots = getAvailableSavedRunSlots(room);
     const canResumeSavedRun = room.savedRun !== undefined && availableSavedRunSlots.length > 0;
 
-    const clientInstallationId = normalizeOptionalIdentity(input.clientInstallationId);
+    const clientInstallationId = this.resolveClientInstallationIdentity(
+      room,
+      input.playerNetId,
+      input.clientInstallationId,
+    );
     if (clientInstallationId && hostSession.kickedClientInstallationIds.has(clientInstallationId)) {
       throw new LobbyStoreError(403, "kicked", "你已被房主移出该房间，无法重新加入。");
     }
@@ -678,6 +696,22 @@ export class LobbyStore {
       throw new LobbyStoreError(401, "ticket_already_redeemed", "加入票据已使用。请重新加入房间获取新票据。");
     }
 
+    const room = this.requireRoom(roomId);
+    const redeemedClientInstallationId = this.resolveClientInstallationIdentity(
+      room,
+      ticket.playerNetId,
+      ticket.clientInstallationId,
+    );
+    if (ticket.clientInstallationId !== undefined && redeemedClientInstallationId === undefined) {
+      ticket.clientInstallationId = undefined;
+      ticket.identityKind = "legacy";
+      hostSession.legacyIdentityMode = true;
+      this.logLegacyIdentityMode(
+        hostSession,
+        "control ticket declared an identity that now matches a public slot id",
+      );
+    }
+
     if (
       ticket.clientInstallationId
       && hostSession.kickedClientInstallationIds.has(ticket.clientInstallationId)
@@ -825,6 +859,40 @@ export class LobbyStore {
       `[lobby] room identity mode=legacy roomId=${hostSession.roomId} reason=${reason}; `
       + "legacy kicks disconnect the current slot binding without creating a persistent ban",
     );
+  }
+
+  private resolveClientInstallationIdentity(
+    room: Room,
+    playerNetIdValue: string | undefined,
+    clientInstallationIdValue: string | undefined,
+  ): string | undefined {
+    const clientInstallationId = normalizeOptionalIdentity(clientInstallationIdValue);
+    if (clientInstallationId === undefined) {
+      return undefined;
+    }
+
+    const playerNetId = normalizeOptionalIdentity(playerNetIdValue);
+    if (clientInstallationId === playerNetId) {
+      return undefined;
+    }
+
+    if (room.savedRun?.slots.some((slot) => slot.netId === clientInstallationId)) {
+      return undefined;
+    }
+
+    if (this.clientControlBindings.get(room.roomId)?.has(clientInstallationId)) {
+      return undefined;
+    }
+
+    const hostSession = this.hostSessions.get(room.roomId);
+    if (
+      hostSession
+      && this.peerPlayerNetIds(room.roomId, hostSession.roomSessionId).has(clientInstallationId)
+    ) {
+      return undefined;
+    }
+
+    return clientInstallationId;
   }
 
   private rememberClientControlBinding(binding: ClientControlBinding) {

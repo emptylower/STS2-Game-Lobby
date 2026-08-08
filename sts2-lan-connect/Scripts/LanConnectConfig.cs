@@ -18,6 +18,8 @@ internal sealed class LanConnectConfigData
 
     public string LanClientNetId { get; set; } = string.Empty;
 
+    public string ClientInstallationId { get; set; } = string.Empty;
+
     public string LobbyServerBaseUrl { get; set; } = string.Empty;
 
     public string LobbyRegistryBaseUrl { get; set; } = string.Empty;
@@ -94,6 +96,14 @@ internal static class LanConnectConfig
             }
 
             return resolution.NetId;
+        }
+    }
+
+    public static string GetOrCreateClientInstallationId()
+    {
+        lock (Sync)
+        {
+            return EnsureClientInstallationCredentialUnsafe();
         }
     }
 
@@ -477,7 +487,21 @@ internal static class LanConnectConfig
         lock (Sync)
         {
             LoadUnsafe(GetConfigPath(), createIfMissing: true);
+            EnsureClientInstallationCredentialUnsafe();
         }
+    }
+
+    private static string EnsureClientInstallationCredentialUnsafe()
+    {
+        LanConnectInstallationCredentialResolution resolution =
+            LanConnectInstallationCredential.Resolve(_data.ClientInstallationId);
+        if (!string.Equals(_data.ClientInstallationId, resolution.Credential, StringComparison.Ordinal))
+        {
+            _data.ClientInstallationId = resolution.Credential;
+            SaveUnsafe();
+        }
+
+        return resolution.Credential;
     }
 
     private static void SaveUnsafe()
@@ -544,6 +568,11 @@ internal static class LanConnectConfig
     {
         _data.LanClientNetId = LanConnectClientIdentity.TryParse(_data.LanClientNetId, out ulong clientNetId)
             ? clientNetId.ToString(CultureInfo.InvariantCulture)
+            : string.Empty;
+        _data.ClientInstallationId = LanConnectInstallationCredential.TryNormalize(
+            _data.ClientInstallationId,
+            out string clientInstallationId)
+            ? clientInstallationId
             : string.Empty;
 
         if (LanConnectLobbyEndpointDefaults.IsLegacyLocalhostBaseUrl(_data.LobbyServerBaseUrl))

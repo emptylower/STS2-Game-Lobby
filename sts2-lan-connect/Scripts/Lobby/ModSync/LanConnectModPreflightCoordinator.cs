@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -43,7 +42,7 @@ internal sealed record LanConnectModPreflightJoinRequest
     {
         Room = room,
         PlayerName = LanConnectConfig.GetEffectivePlayerDisplayName(),
-        ClientInstallationId = LanConnectConfig.GetOrCreateClientNetId().ToString(CultureInfo.InvariantCulture),
+        ClientInstallationId = LanConnectConfig.GetOrCreateClientInstallationId(),
         Password = string.IsNullOrWhiteSpace(password) ? null : password,
         GameVersion = LanConnectBuildInfo.GetGameVersion(),
         ModVersion = LanConnectBuildInfo.GetModVersion(),
