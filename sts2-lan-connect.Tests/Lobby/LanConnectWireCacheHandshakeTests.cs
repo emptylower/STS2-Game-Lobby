@@ -38,6 +38,90 @@ public sealed class LanConnectWireCacheHandshakeTests
     }
 
     [Fact]
+    public void Host_gate_disconnects_and_skips_original_on_genuine_mismatch()
+    {
+        LanConnectWireCacheHandshakeDecision decision = Decide(
+            Available(SignatureA),
+            Parse(Token(SignatureB)));
+        LanConnectWireCacheHandshakeDecision? disconnectedDecision = null;
+
+        bool shouldRunOriginal = LanConnectWireCacheHandshakeGate.ShouldRunHostHandler(
+            () => decision,
+            _ => { },
+            mismatch => disconnectedDecision = mismatch,
+            _ => { });
+
+        Assert.False(shouldRunOriginal);
+        Assert.Same(decision, disconnectedDecision);
+    }
+
+    [Fact]
+    public void Host_gate_still_skips_original_when_mismatch_disconnect_throws()
+    {
+        LanConnectWireCacheHandshakeDecision decision = Decide(
+            Available(SignatureA),
+            Parse(Token(SignatureB)));
+
+        bool shouldRunOriginal = LanConnectWireCacheHandshakeGate.ShouldRunHostHandler(
+            () => decision,
+            _ => { },
+            _ => throw new InvalidOperationException("disconnect failed"),
+            _ => { });
+
+        Assert.False(shouldRunOriginal);
+    }
+
+    [Fact]
+    public void Host_gate_falls_through_for_every_non_mismatch_outcome()
+    {
+        LanConnectWireCacheHandshakeDecision[] decisions =
+        [
+            Decide(Available(SignatureA), Parse(Token(SignatureA))),
+            Decide(
+                LanConnectWireCacheCaptureResult.Unavailable(
+                    new InvalidOperationException("capture failed")),
+                Parse(Token(SignatureA))),
+            Decide(Available(SignatureA), LanConnectWireCacheHandshakeToken.Parse(null)),
+            Decide(
+                Available(SignatureA),
+                Parse("sts2_lan_connect_wire:v1:not-a-signature")),
+            Decide(
+                Available(SignatureA),
+                LanConnectWireCacheHandshakeToken.Parse(
+                    [Token(SignatureA), Token(SignatureB)]))
+        ];
+        List<LanConnectWireCacheHandshakeDecision> disconnected = [];
+
+        foreach (LanConnectWireCacheHandshakeDecision decision in decisions)
+        {
+            bool shouldRunOriginal = LanConnectWireCacheHandshakeGate.ShouldRunHostHandler(
+                () => decision,
+                _ => { },
+                disconnected.Add,
+                _ => { });
+
+            Assert.True(shouldRunOriginal);
+        }
+
+        Assert.Empty(disconnected);
+    }
+
+    [Fact]
+    public void Host_gate_falls_through_when_evaluation_throws()
+    {
+        Exception? observed = null;
+
+        bool shouldRunOriginal = LanConnectWireCacheHandshakeGate.ShouldRunHostHandler(
+            () => throw new InvalidOperationException("evaluation failed"),
+            _ => { },
+            _ => throw new InvalidOperationException("must not disconnect"),
+            ex => observed = ex);
+
+        Assert.True(shouldRunOriginal);
+        Assert.IsType<InvalidOperationException>(observed);
+    }
+
+    [Fact]
     public void Local_unavailable_is_allowed_with_warning()
     {
         LanConnectWireCacheHandshakeDecision decision = Decide(
