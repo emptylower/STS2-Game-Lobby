@@ -83,6 +83,7 @@ export interface Room extends RoomSummary {
   passwordHash?: string | undefined;
   hostConnectionInfo: HostConnectionInfo;
   modList: string[];
+  wireCacheSignatureV1?: string | undefined;
   hostModInventory?: LobbyModDescriptor[] | undefined;
   hostModInventoryHash?: string | undefined;
 }
@@ -125,6 +126,7 @@ export interface CreateRoomInput {
   version: string;
   modVersion: string;
   modList?: string[] | undefined;
+  wireCacheSignatureV1?: string | undefined;
   hostModInventory?: LobbyModDescriptor[] | undefined;
   protocolProfile?: ProtocolProfile | string | undefined;
   maxPlayers: number;
@@ -145,6 +147,7 @@ export interface JoinRoomInput {
   version: string;
   modVersion: string;
   modList?: string[] | undefined;
+  wireCacheSignatureV1?: string | undefined;
   desiredSavePlayerNetId?: string | undefined;
   playerNetId?: string | undefined;
 }
@@ -198,9 +201,16 @@ export interface JoinRoomResult {
   connectionPlan: ConnectionPlan;
 }
 
+interface JoinCompatibilityContext {
+  room: Room;
+  hostSession: HostSession;
+  availableSavedRunSlots: SavedRunSlot[];
+}
+
 export interface LobbyStoreDependencies {
   id?(): string;
   peerPlayerNetIds?(roomId: string, roomSessionId: string): ReadonlySet<string>;
+  warn?(message: string): void;
 }
 
 export interface ModMismatchDetails {
@@ -228,6 +238,7 @@ export class LobbyStore {
   private readonly config: Required<StoreConfig>;
   private readonly id: () => string;
   private readonly peerPlayerNetIds: (roomId: string, roomSessionId: string) => ReadonlySet<string>;
+  private readonly warn: (message: string) => void;
 
   constructor(config: StoreConfig, deps: LobbyStoreDependencies = {}) {
     this.config = {
@@ -241,6 +252,7 @@ export class LobbyStore {
     };
     this.id = deps.id ?? (() => randomUUID());
     this.peerPlayerNetIds = deps.peerPlayerNetIds ?? (() => new Set<string>());
+    this.warn = deps.warn ?? ((message) => console.warn(message));
   }
 
   listRooms(now = new Date()): RoomSummary[] {
@@ -297,6 +309,7 @@ export class LobbyStore {
       version: input.version.trim(),
       modVersion: input.modVersion.trim(),
       modList,
+      wireCacheSignatureV1: normalizeOptionalString(input.wireCacheSignatureV1),
       hostModInventory,
       hostModInventoryHash,
       protocolProfile,
@@ -335,46 +348,24 @@ export class LobbyStore {
     };
   }
 
-  joinRoom(roomId: string, input: JoinRoomInput, now = new Date()): JoinRoomResult {
-    const room = this.requireRoom(roomId);
-    const hostSession = this.requireHostSession(roomId);
-    const requestedVersion = input.version.trim();
-    const requestedModVersion = input.modVersion.trim();
-    const requestedModList = normalizeModList(input.modList ?? []);
-    const availableSavedRunSlots = getAvailableSavedRunSlots(room);
-    const canResumeSavedRun = room.savedRun !== undefined && availableSavedRunSlots.length > 0;
-
-    const playerNetId = input.playerNetId?.trim();
-    if (playerNetId && hostSession.kickedPlayerNetIds.has(playerNetId)) {
-      throw new LobbyStoreError(403, "kicked", "你已被房主移出该房间，无法重新加入。");
-    }
-
-    if (room.status === "closed") {
-      throw new LobbyStoreError(410, "room_closed", "该房间已经关闭。");
-    }
-
-    if (room.status === "starting" && !canResumeSavedRun) {
-      throw new LobbyStoreError(409, "room_started", "该房间已经开始游戏，当前不允许再加入。");
-    }
-
-    if (!room.savedRun && room.currentPlayers >= room.maxPlayers) {
-      throw new LobbyStoreError(409, "room_full", "该房间已满。");
-    }
-
-    if (this.config.strictGameVersionCheck && room.version !== requestedVersion) {
-      throw new LobbyStoreError(
-        409,
-        "version_mismatch",
-        `游戏版本不匹配。房间版本：${room.version}；当前客户端版本：${requestedVersion}。`,
-      );
-    }
-
-    if (this.config.strictModVersionCheck) {
-      const modMismatch = describeModMismatch(room, requestedModVersion, requestedModList);
-      if (modMismatch) {
-        throw new LobbyStoreError(409, modMismatch.code, modMismatch.message, modMismatch.details);
+  findWireCacheMismatchForJoin(roomId: string, input: JoinRoomInput): LobbyStoreError | undefined {
+    try {
+      this.validateJoinCompatibility(roomId, input, false);
+    } catch (error) {
+      if (error instanceof LobbyStoreError && error.code === "wire_cache_signature_mismatch") {
+        return error;
+      }
+      if (!(error instanceof LobbyStoreError)) {
+        throw error;
       }
     }
+
+    return undefined;
+  }
+
+  joinRoom(roomId: string, input: JoinRoomInput, now = new Date()): JoinRoomResult {
+    const { room, hostSession, availableSavedRunSlots } =
+      this.validateJoinCompatibility(roomId, input, true);
 
     if (room.requiresPassword && !verifyPassword(input.password ?? "", room.passwordHash)) {
       throw new LobbyStoreError(401, "invalid_password", "房间密码错误。");
@@ -421,6 +412,79 @@ export class LobbyStore {
       expiresAt: ticket.expiresAt,
       room: this.toRoomSummary(room),
       connectionPlan,
+    };
+  }
+
+  private validateJoinCompatibility(
+    roomId: string,
+    input: JoinRoomInput,
+    warnWhenSignatureMissing: boolean,
+  ): JoinCompatibilityContext {
+    const room = this.requireRoom(roomId);
+    const hostSession = this.requireHostSession(roomId);
+    const requestedVersion = input.version.trim();
+    const requestedModVersion = input.modVersion.trim();
+    const requestedModList = normalizeModList(input.modList ?? []);
+    const requestedWireCacheSignatureV1 = normalizeOptionalString(input.wireCacheSignatureV1);
+    const availableSavedRunSlots = getAvailableSavedRunSlots(room);
+    const canResumeSavedRun = room.savedRun !== undefined && availableSavedRunSlots.length > 0;
+
+    const playerNetId = input.playerNetId?.trim();
+    if (playerNetId && hostSession.kickedPlayerNetIds.has(playerNetId)) {
+      throw new LobbyStoreError(403, "kicked", "你已被房主移出该房间，无法重新加入。");
+    }
+
+    if (room.status === "closed") {
+      throw new LobbyStoreError(410, "room_closed", "该房间已经关闭。");
+    }
+
+    if (room.status === "starting" && !canResumeSavedRun) {
+      throw new LobbyStoreError(409, "room_started", "该房间已经开始游戏，当前不允许再加入。");
+    }
+
+    if (!room.savedRun && room.currentPlayers >= room.maxPlayers) {
+      throw new LobbyStoreError(409, "room_full", "该房间已满。");
+    }
+
+    if (this.config.strictGameVersionCheck && room.version !== requestedVersion) {
+      throw new LobbyStoreError(
+        409,
+        "version_mismatch",
+        `游戏版本不匹配。房间版本：${room.version}；当前客户端版本：${requestedVersion}。`,
+      );
+    }
+
+    if (this.config.strictModVersionCheck) {
+      const modMismatch = describeModMismatch(room, requestedModVersion, requestedModList);
+      if (modMismatch) {
+        throw new LobbyStoreError(409, modMismatch.code, modMismatch.message, modMismatch.details);
+      }
+    }
+
+    if (room.wireCacheSignatureV1 && requestedWireCacheSignatureV1) {
+      if (room.wireCacheSignatureV1 !== requestedWireCacheSignatureV1) {
+        throw new LobbyStoreError(
+          409,
+          "wire_cache_signature_mismatch",
+          `网络编码签名不匹配。房主签名：${room.wireCacheSignatureV1}；加入者签名：${requestedWireCacheSignatureV1}。`,
+          {
+            roomWireCacheSignatureV1: room.wireCacheSignatureV1,
+            requestedWireCacheSignatureV1,
+          },
+        );
+      }
+    } else if (warnWhenSignatureMissing && (room.wireCacheSignatureV1 || requestedWireCacheSignatureV1)) {
+      this.warn(
+        `[lobby] wire cache signature unavailable; allowing join roomId=${roomId} `
+        + `host=${room.wireCacheSignatureV1 ?? "<absent>"} `
+        + `joiner=${requestedWireCacheSignatureV1 ?? "<absent>"}`,
+      );
+    }
+
+    return {
+      room,
+      hostSession,
+      availableSavedRunSlots,
     };
   }
 
@@ -941,6 +1005,11 @@ function normalizeModList(mods: string[]) {
     .map((value) => value.trim())
     .filter((value, index, source) => value !== "" && source.indexOf(value) === index)
     .sort((left, right) => left.localeCompare(right, "en"));
+}
+
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }
 
 function normalizeSavedRunInput(savedRun: CreateRoomInput["savedRun"]): SavedRunInfo | undefined {

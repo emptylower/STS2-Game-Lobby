@@ -357,6 +357,7 @@ const CURRENT_PROBE_CAPABILITIES = {
   modSyncProtocolVersion: 1,
   modSyncEnabled: true,
   modSyncMinimumClientVersion: "0.5.1",
+  wireCacheSignatureV1Enforced: true,
 } as const;
 
 test("GET /probe returns exact current chat capabilities", async () => {
@@ -377,6 +378,114 @@ test("GET /probe returns exact current chat capabilities", async () => {
     const healthBody = (await health.json()) as Record<string, unknown>;
     assert.equal(healthBody.ok, true);
     assert.equal("capabilities" in healthBody, false);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("old client without a wire cache signature can join a signed room", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+
+  try {
+    const createResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "mixed-version-room",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        wireCacheSignatureV1: `wcv1:${"a".repeat(43)}`,
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as { roomId: string };
+
+    const joinResponse = await fetch(`http://127.0.0.1:${address.port}/rooms/${created.roomId}/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        playerName: "Legacy Guest",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+      }),
+    });
+    assert.equal(joinResponse.status, 200);
+    const joined = await joinResponse.json() as { roomId: string; ticketId: string };
+    assert.equal(joined.roomId, created.roomId);
+    assert.ok(joined.ticketId);
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("repeated wire cache rejections do not consume join rate-limit state or issue a ticket", async () => {
+  const config = testConfig({
+    port: 0,
+    createJoinRateLimitMaxRequests: 1,
+    createJoinRateLimitWindowMs: 60_000,
+  });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  const hostSignature = `wcv1:${"a".repeat(43)}`;
+  const joinerSignature = `wcv1:${"b".repeat(43)}`;
+
+  try {
+    const createResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "wire-cache-lifecycle",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "1.0.0",
+        modList: [],
+        wireCacheSignatureV1: hostSignature,
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as { roomId: string };
+    const joinWith = (wireCacheSignatureV1: string) => fetch(
+      `http://127.0.0.1:${address.port}/rooms/${created.roomId}/join`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          playerName: "Guest",
+          version: "1.0.0",
+          modVersion: "1.0.0",
+          modList: [],
+          wireCacheSignatureV1,
+        }),
+      },
+    );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const rejected = await joinWith(joinerSignature);
+      assert.equal(rejected.status, 409);
+      const body = await rejected.json() as { code: string; message: string };
+      assert.equal(body.code, "wire_cache_signature_mismatch");
+      assert.match(body.message, new RegExp(hostSignature));
+      assert.match(body.message, new RegExp(joinerSignature));
+      assert.equal("ticketId" in body, false);
+    }
+
+    const allowed = await joinWith(hostSignature);
+    assert.equal(allowed.status, 200, "rejections must not consume the single allowed join request");
+    const body = await allowed.json() as { ticketId: string };
+    assert.ok(body.ticketId);
   } finally {
     await service.close();
     cleanupTempDir(config);

@@ -48,6 +48,28 @@ function basicJoinInput(): JoinRoomInput {
   };
 }
 
+const WireCacheSignatureA = `wcv1:${"a".repeat(43)}`;
+const WireCacheSignatureB = `wcv1:${"b".repeat(43)}`;
+
+function createWireCacheRoom(
+  store: LobbyStore,
+  wireCacheSignatureV1: string | undefined,
+): CreateRoomResult {
+  return store.createRoom(
+    {
+      roomName: "网络编码测试房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.1.0",
+      wireCacheSignatureV1,
+      maxPlayers: 4,
+      hostConnectionInfo: { enetPort: 33771 },
+    },
+    "203.0.113.10",
+  );
+}
+
 test("create and join share a HostSession roomSessionId", () => {
   const store = new LobbyStore(baseConfig, { id: sequenceIds("room", "control", "room-session", "ticket") });
   const created = createBasicRoom(store);
@@ -635,6 +657,129 @@ test("relaxed compatibility can skip game and mod version checks", () => {
   });
 
   assert.equal(joined.room.roomId, created.roomId);
+});
+
+test("joinRoom allows equal wire cache signatures", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = createWireCacheRoom(store, WireCacheSignatureA);
+
+  const joined = store.joinRoom(created.roomId, {
+    ...basicJoinInput(),
+    wireCacheSignatureV1: WireCacheSignatureA,
+  });
+
+  assert.equal(joined.room.roomId, created.roomId);
+});
+
+test("joinRoom rejects different wire cache signatures and names both signatures", () => {
+  const store = new LobbyStore(baseConfig);
+  const created = createWireCacheRoom(store, WireCacheSignatureA);
+
+  assert.throws(
+    () => store.joinRoom(created.roomId, {
+      ...basicJoinInput(),
+      wireCacheSignatureV1: WireCacheSignatureB,
+    }),
+    (error: unknown) =>
+      error instanceof LobbyStoreError
+      && error.statusCode === 409
+      && error.code === "wire_cache_signature_mismatch"
+      && error.message.includes(WireCacheSignatureA)
+      && error.message.includes(WireCacheSignatureB),
+  );
+});
+
+test("joinRoom allows and warns when the host signature is present and joiner signature is absent", () => {
+  const warnings: string[] = [];
+  const store = new LobbyStore(baseConfig, { warn: (message) => warnings.push(message) });
+  const created = createWireCacheRoom(store, WireCacheSignatureA);
+
+  const joined = store.joinRoom(created.roomId, basicJoinInput());
+
+  assert.equal(joined.room.roomId, created.roomId);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /host=wcv1:/);
+  assert.match(warnings[0]!, /joiner=<absent>/);
+});
+
+test("joinRoom allows and warns when the host signature is absent and joiner signature is present", () => {
+  const warnings: string[] = [];
+  const store = new LobbyStore(baseConfig, { warn: (message) => warnings.push(message) });
+  const created = createWireCacheRoom(store, undefined);
+
+  const joined = store.joinRoom(created.roomId, {
+    ...basicJoinInput(),
+    wireCacheSignatureV1: WireCacheSignatureA,
+  });
+
+  assert.equal(joined.room.roomId, created.roomId);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /host=<absent>/);
+  assert.match(warnings[0]!, /joiner=wcv1:/);
+});
+
+test("joinRoom allows when both wire cache signatures are absent without warning", () => {
+  const warnings: string[] = [];
+  const store = new LobbyStore(baseConfig, { warn: (message) => warnings.push(message) });
+  const created = createWireCacheRoom(store, undefined);
+
+  const joined = store.joinRoom(created.roomId, basicJoinInput());
+
+  assert.equal(joined.room.roomId, created.roomId);
+  assert.deepEqual(warnings, []);
+});
+
+test("repeated wire cache mismatches create no ticket or saved-run reservation state", () => {
+  const store = new LobbyStore(baseConfig, {
+    id: sequenceIds("room", "control", "room-session", "ticket"),
+  });
+  const created = store.createRoom(
+    {
+      roomName: "网络编码续局房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.1.0",
+      wireCacheSignatureV1: WireCacheSignatureA,
+      maxPlayers: 4,
+      hostConnectionInfo: { enetPort: 33771 },
+      savedRun: {
+        saveKey: "save-1",
+        slots: [
+          { netId: "1", isHost: true },
+          { netId: "2", isHost: false },
+        ],
+        connectedPlayerNetIds: ["1"],
+      },
+    },
+    "203.0.113.10",
+  );
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    assert.throws(
+      () => store.joinRoom(created.roomId, {
+        ...basicJoinInput(),
+        wireCacheSignatureV1: WireCacheSignatureB,
+        desiredSavePlayerNetId: "2",
+      }),
+      (error: unknown) =>
+        error instanceof LobbyStoreError && error.code === "wire_cache_signature_mismatch",
+    );
+  }
+
+  const afterRejections = store.listRooms()[0]!;
+  assert.equal(afterRejections.currentPlayers, 1);
+  assert.deepEqual(afterRejections.savedRun?.connectedPlayerNetIds, ["1"]);
+  assert.equal(afterRejections.savedRun?.slots[1]?.isConnected, false);
+  assert.equal(store.hasTicketForRoom(created.roomId, "ticket"), false);
+
+  const joined = store.joinRoom(created.roomId, {
+    ...basicJoinInput(),
+    wireCacheSignatureV1: WireCacheSignatureA,
+    desiredSavePlayerNetId: "2",
+  });
+  assert.equal(joined.ticketId, "ticket", "rejections must not allocate ticket IDs");
+  assert.equal(store.hasTicketForRoom(created.roomId, "ticket"), true);
 });
 
 test("joinRoom returns missing mod details when mod lists differ", () => {

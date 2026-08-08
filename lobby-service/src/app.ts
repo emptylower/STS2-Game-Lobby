@@ -87,6 +87,7 @@ const MaxPlayerNameLength = 32;
 const MaxGameModeLength = 32;
 const MaxVersionLength = 32;
 const MaxModVersionLength = 32;
+const MaxWireCacheSignatureLength = 64;
 const MaxProtocolProfileLength = 32;
 const MaxPasswordLength = 64;
 const MaxModListEntries = 128;
@@ -443,6 +444,7 @@ export async function createLobbyService(
         modSyncProtocolVersion: MOD_SYNC_PROTOCOL_VERSION,
         modSyncEnabled: serverAdminStateStore.getState().modSyncEnabled,
         modSyncMinimumClientVersion: MOD_SYNC_MINIMUM_CLIENT_VERSION,
+        wireCacheSignatureV1Enforced: true,
       },
     });
   });
@@ -582,6 +584,10 @@ export async function createLobbyService(
         version: boundedString(body?.version, "version", MaxVersionLength),
         modVersion: boundedString(body?.modVersion, "modVersion", MaxModVersionLength),
         modList: boundedStringArray(body?.modList, "modList", MaxModListEntries, MaxModListEntryLength),
+        wireCacheSignatureV1: optionalBoundedString(
+          body?.wireCacheSignatureV1,
+          "wireCacheSignatureV1",
+          MaxWireCacheSignatureLength),
         hostModInventory: body?.hostModInventory === undefined
           ? undefined
           : parseModInventory(body.hostModInventory, "hostModInventory"),
@@ -671,21 +677,29 @@ export async function createLobbyService(
 
   app.post("/rooms/:id/join", async (req, res, next) => {
     try {
-      assertCreateJoinRateLimit(req, "join_room");
       cleanupExpiredRoomsNow();
       const body = req.body as Partial<JoinRoomInput> | undefined;
-      if (typeof body?.playerName === "string") {
-        await assertNameAllowedByModeration(body.playerName, "player_name", requestIp(req));
-      }
-      const response = store.joinRoom(req.params.id, {
+      const joinInput: JoinRoomInput = {
         playerName: boundedString(body?.playerName, "playerName", MaxPlayerNameLength),
         password: optionalBoundedString(body?.password, "password", MaxPasswordLength),
         version: boundedString(body?.version, "version", MaxVersionLength),
         modVersion: boundedString(body?.modVersion, "modVersion", MaxModVersionLength),
         modList: boundedStringArray(body?.modList, "modList", MaxModListEntries, MaxModListEntryLength),
+        wireCacheSignatureV1: optionalBoundedString(
+          body?.wireCacheSignatureV1,
+          "wireCacheSignatureV1",
+          MaxWireCacheSignatureLength),
         desiredSavePlayerNetId: optionalBoundedString(body?.desiredSavePlayerNetId, "desiredSavePlayerNetId", MaxNetIdLength),
         playerNetId: optionalBoundedString(body?.playerNetId, "playerNetId", MaxNetIdLength),
-      });
+      };
+      const wireCacheMismatch = store.findWireCacheMismatchForJoin(req.params.id, joinInput);
+      if (wireCacheMismatch) {
+        throw wireCacheMismatch;
+      }
+
+      assertCreateJoinRateLimit(req, "join_room");
+      await assertNameAllowedByModeration(joinInput.playerName, "player_name", requestIp(req));
+      const response = store.joinRoom(req.params.id, joinInput);
       const relayEndpoint = relayManager.getRoomEndpoint(req.params.id, resolveAdvertisedRelayHost(req));
       if (relayEndpoint) {
         response.connectionPlan.relayAllowed = true;
