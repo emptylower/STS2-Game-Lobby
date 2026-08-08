@@ -218,6 +218,10 @@ internal sealed partial class LanConnectLobbyRuntime :
     private readonly LanConnectPendingSaveBindingCoordinator _pendingSaveBindingCoordinator = new(
         LoadPendingSaveBindingTarget,
         PersistPendingSaveBinding);
+    private readonly LanConnectCurrentSaveBindingWriter _currentSaveBindingWriter = new(
+        LoadCurrentSaveBindingTarget,
+        GetCurrentRunNetService,
+        PersistCurrentSaveBinding);
     private JoinedClientSession? _activeClientSession;
     private bool _heartbeatInFlight;
     private double _timeUntilHeartbeat;
@@ -823,7 +827,7 @@ internal sealed partial class LanConnectLobbyRuntime :
     public override void _ExitTree()
     {
         ClearHostOrigin();
-        _pendingSaveBindingCoordinator.HostedFlowEnded("runtime_exit");
+        _pendingSaveBindingCoordinator.HostedFlowEnded();
         if (_itemLinkCaptureRouteOnlyForTests || _referenceModeRouteOnlyForTests)
         {
             if (ReferenceEquals(Instance, this))
@@ -896,7 +900,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         GD.Print($"sts2_lan_connect lobby runtime: cleared host origin channel={_hostOrigin.HostChannel}");
         _hostOrigin.Detach();
         _hostOrigin = null;
-        _pendingSaveBindingCoordinator.HostedFlowEnded("host_origin_cleared");
+        _pendingSaveBindingCoordinator.HostedFlowEnded();
     }
 
     private async Task ShutdownAsync(
@@ -1349,6 +1353,24 @@ internal sealed partial class LanConnectLobbyRuntime :
             return;
         }
 
+        ClearHostOrigin(session.NetService);
+        bool cleared = _legacyControlEnvelopeOrchestrator.CleanupCurrentGeneration(
+            () => _activeSession,
+            session,
+            () =>
+            {
+                _activeSession = null;
+                _joinedRoomPeerIds = new HashSet<ulong>();
+                LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
+                LeaveChatRoomIfIdle();
+                ResetProtocolProfileIfIdle($"close_hosted_room:{session.RoomId}");
+            });
+        if (cleared)
+        {
+            _pendingSaveBindingCoordinator.HostedFlowEnded();
+            GD.Print($"sts2_lan_connect lobby runtime: hosted room cleared roomId={session.RoomId}");
+        }
+
         GD.Print($"sts2_lan_connect lobby runtime: deleting hosted room roomId={session.RoomId}");
         try
         {
@@ -1370,22 +1392,6 @@ internal sealed partial class LanConnectLobbyRuntime :
         finally
         {
             session.Dispose();
-            bool cleared = _legacyControlEnvelopeOrchestrator.CleanupCurrentGeneration(
-                () => _activeSession,
-                session,
-                () =>
-                {
-                    _activeSession = null;
-                    _joinedRoomPeerIds = new HashSet<ulong>();
-                    LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
-                    LeaveChatRoomIfIdle();
-                    ResetProtocolProfileIfIdle($"close_hosted_room:{session.RoomId}");
-                });
-            if (cleared)
-            {
-                _pendingSaveBindingCoordinator.HostedSessionTornDown();
-                GD.Print($"sts2_lan_connect lobby runtime: hosted room cleared roomId={session.RoomId}");
-            }
         }
     }
 
@@ -2000,21 +2006,21 @@ internal sealed partial class LanConnectLobbyRuntime :
         HostedRoomSession? session = _activeSession;
         if (session != null)
         {
-            if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out SerializableRun? run, out string failureReason) || run == null)
-            {
-                GD.Print($"sts2_lan_connect lobby runtime: skip save binding persist source={source}, reason={failureReason}");
-                return;
-            }
-
-            LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
-                run,
-                session.Metadata.RoomName,
-                session.Metadata.Password,
-                session.Metadata.GameMode,
-                LanConnectHostChannels.Lobby,
+            LanConnectCurrentSaveBindingWriter.PersistOutcome outcome = _currentSaveBindingWriter.Persist(
+                new LanConnectCurrentSaveBindingWriter.BindingTarget(
+                    session.NetService,
+                    session.IsClosing,
+                    session.Metadata.SaveKey,
+                    session.Metadata.RoomName,
+                    session.Metadata.Password,
+                    session.Metadata.GameMode,
+                    LanConnectHostChannels.Lobby),
                 source);
-            _pendingSaveBindingCoordinator.CompleteActivePersist(
-                LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run));
+            LogCurrentSaveBindingOutcome(outcome, session.Metadata.SaveKey, source, "hosted_room");
+            if (outcome.Result == LanConnectCurrentSaveBindingWriter.PersistResult.Persisted && outcome.SaveKey != null)
+            {
+                _pendingSaveBindingCoordinator.CompleteActivePersist(outcome.SaveKey);
+            }
             return;
         }
 
@@ -2050,24 +2056,102 @@ internal sealed partial class LanConnectLobbyRuntime :
             return;
         }
 
-        if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out SerializableRun? lanRun, out string lanFailure) || lanRun == null)
-        {
-            GD.Print($"sts2_lan_connect lobby runtime: skip LAN host binding persist source={source}, reason={lanFailure}");
-            return;
-        }
-
         string roomName = string.IsNullOrWhiteSpace(origin.RoomName)
             ? "LAN 联机房间"
             : origin.RoomName;
+        LanConnectCurrentSaveBindingWriter.PersistOutcome originOutcome = _currentSaveBindingWriter.Persist(
+            new LanConnectCurrentSaveBindingWriter.BindingTarget(
+                origin.NetService,
+                IsClosing: false,
+                origin.SaveKey,
+                roomName,
+                origin.Password,
+                origin.GameMode,
+                origin.HostChannel),
+            source);
+        LogCurrentSaveBindingOutcome(originOutcome, origin.SaveKey, source, "host_origin");
+        if (originOutcome.Result == LanConnectCurrentSaveBindingWriter.PersistResult.Persisted)
+        {
+            origin.SaveKey = originOutcome.SaveKey;
+            origin.HasPersisted = true;
+        }
+    }
+
+    private static void LogCurrentSaveBindingOutcome(
+        LanConnectCurrentSaveBindingWriter.PersistOutcome outcome,
+        string? expectedSaveKey,
+        string source,
+        string target)
+    {
+        switch (outcome.Result)
+        {
+            case LanConnectCurrentSaveBindingWriter.PersistResult.Persisted:
+                return;
+            case LanConnectCurrentSaveBindingWriter.PersistResult.SaveUnavailable:
+                GD.Print(
+                    $"sts2_lan_connect lobby runtime: skip save binding persist source={source}, target={target}, reason={outcome.FailureReason}");
+                return;
+            case LanConnectCurrentSaveBindingWriter.PersistResult.RefusedClosing:
+                GD.Print(
+                    $"sts2_lan_connect lobby runtime: skip save binding persist source={source}, target={target}, reason=session_closing");
+                return;
+            case LanConnectCurrentSaveBindingWriter.PersistResult.RefusedDifferentSave:
+                GD.Print(
+                    $"sts2_lan_connect lobby runtime: refuse save binding persist source={source}, target={target}, reason=save_key_mismatch, expected={expectedSaveKey}, actual={outcome.SaveKey}");
+                return;
+            case LanConnectCurrentSaveBindingWriter.PersistResult.RefusedDifferentNetService:
+                GD.Print(
+                    $"sts2_lan_connect lobby runtime: refuse save binding persist source={source}, target={target}, reason=net_service_mismatch, actualSaveKey={outcome.SaveKey}");
+                return;
+        }
+    }
+
+    private static LanConnectCurrentSaveBindingWriter.LoadResult LoadCurrentSaveBindingTarget()
+    {
+        if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(
+                out SerializableRun? run,
+                out string failureReason)
+            || run == null)
+        {
+            return new LanConnectCurrentSaveBindingWriter.LoadResult(
+                false,
+                null,
+                null,
+                failureReason);
+        }
+
+        return new LanConnectCurrentSaveBindingWriter.LoadResult(
+            true,
+            LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run),
+            run,
+            string.Empty);
+    }
+
+    private static object? GetCurrentRunNetService() => RunManager.Instance.NetService;
+
+    private static void PersistCurrentSaveBinding(
+        LanConnectCurrentSaveBindingWriter.LoadedSave loadedSave,
+        LanConnectCurrentSaveBindingWriter.PersistenceRequest request)
+    {
+        if (loadedSave.Value is not SerializableRun run)
+        {
+            throw new InvalidOperationException("Current save binding target is not a SerializableRun.");
+        }
+
+        string actualSaveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run);
+        if (!string.Equals(actualSaveKey, loadedSave.SaveKey, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Current save binding key changed: expected={loadedSave.SaveKey}, actual={actualSaveKey}.");
+        }
 
         LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
-            lanRun,
-            roomName,
-            origin.Password,
-            origin.GameMode,
-            origin.HostChannel,
-            source);
-        origin.HasPersisted = true;
+            run,
+            request.RoomName,
+            request.Password,
+            request.GameMode,
+            request.HostChannel,
+            request.Source);
     }
 
     private static LanConnectPendingSaveBindingCoordinator.LoadedSave? LoadPendingSaveBindingTarget()
@@ -3108,6 +3192,8 @@ internal sealed partial class LanConnectLobbyRuntime :
         public string GameMode { get; }
 
         public bool HasPersisted { get; set; }
+
+        public string? SaveKey { get; set; }
 
         public void Detach()
         {

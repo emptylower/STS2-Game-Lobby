@@ -23,17 +23,18 @@ public sealed class LanConnectPendingSaveBindingIntentStateTests
     }
 
     [Fact]
-    public void Teardown_then_save_persists_the_exact_pending_binding_once()
+    public void Hosted_flow_end_discards_an_unconsumed_intent_without_writing()
     {
         PendingHarness harness = new("save-2");
         Assert.True(harness.Coordinator.AttachHostedRoom("大厅续局", null, "custom", "save-2"));
 
         harness.Coordinator.HostedSessionTornDown();
+        harness.Coordinator.HostedFlowEnded();
 
+        Assert.Empty(harness.Writes);
         Assert.Equal(
-            LanConnectPendingSaveBindingCoordinator.PendingPersistResult.Persisted,
-            harness.Coordinator.HostedFlowEnded("teardown_completion"));
-        AssertExactLobbyWrite(harness, "save-2", "大厅续局", "teardown_completion:pending_lobby_intent");
+            LanConnectPendingSaveBindingCoordinator.PendingPersistResult.NoIntent,
+            harness.Coordinator.PersistForCurrentSave("later_save"));
     }
 
     [Fact]
@@ -111,7 +112,7 @@ public sealed class LanConnectPendingSaveBindingIntentStateTests
         else
         {
             harness.CurrentSaveKey = null;
-            harness.Coordinator.HostedFlowEnded("hosted_flow_end");
+            harness.Coordinator.HostedFlowEnded();
         }
 
         Assert.Equal(

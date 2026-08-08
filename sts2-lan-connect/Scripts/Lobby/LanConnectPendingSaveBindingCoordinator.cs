@@ -27,11 +27,9 @@ internal sealed class LanConnectPendingSaveBindingCoordinator
 
     public void HostedSessionTornDown() => _state.PreserveAcrossHostedSessionTeardown();
 
-    public PendingPersistResult HostedFlowEnded(string source)
+    public void HostedFlowEnded()
     {
-        PendingPersistResult result = PersistForCurrentSave(source);
         _state.Discard();
-        return result;
     }
 
     public bool CompleteActivePersist(string saveKey)
