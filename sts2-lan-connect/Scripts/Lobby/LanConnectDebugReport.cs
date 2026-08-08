@@ -24,8 +24,15 @@ internal static class LanConnectDebugReport
     private const int LogTailWindow = 2500;
     private const int MaxLineLength = 600;
 
-    public static string Build(LanConnectDebugOverlayState overlayState)
+    public static string Build(LanConnectDebugOverlayState overlayState) =>
+        Build(overlayState, LanConnectWireCacheDiagnostics.GetCurrentResult);
+
+    internal static string Build(
+        LanConnectDebugOverlayState overlayState,
+        Func<LanConnectWireCacheCaptureResult> wireCacheCaptureProvider)
     {
+        ArgumentNullException.ThrowIfNull(wireCacheCaptureProvider);
+
         StringBuilder builder = new();
         string writableDataDirectory = LanConnectPaths.ResolveWritableDataDirectory();
         string configPath = Path.Combine(writableDataDirectory, "config.json");
@@ -35,6 +42,9 @@ internal static class LanConnectDebugReport
         string effectiveRegistryBaseUrl = LanConnectConfig.LobbyRegistryBaseUrl;
         IReadOnlyList<string> logLines = ReadRelevantLogLines(logPath);
         Dictionary<string, List<string>> identifiers = ExtractIdentifiers(logLines);
+        LanConnectWireCacheCaptureResult wireCache = CaptureWireCacheSafely(wireCacheCaptureProvider);
+        IReadOnlyList<LanConnectRuntimeMod> loadedMods =
+            LanConnectModInventoryBuilder.BuildLoadedCurrentForDiagnostics();
 
         builder.AppendLine("STS2 LAN Connect Client Debug Report");
         builder.AppendLine($"generated_at_utc: {DateTimeOffset.UtcNow:O}");
@@ -42,6 +52,10 @@ internal static class LanConnectDebugReport
         builder.AppendLine($"game_version: {LanConnectBuildInfo.GetGameVersion()}");
         builder.AppendLine($"mod_version: {LanConnectBuildInfo.GetModVersion()}");
         builder.AppendLine($"gameplay_relevant_mods: {FormatList(LanConnectBuildInfo.GetModList())}");
+        AppendWireCacheDiagnostics(builder, wireCache);
+        builder.AppendLine($"loaded_mod_inventory_count: {loadedMods.Count}");
+        builder.AppendLine("loaded_mod_inventory:");
+        AppendLoadedModInventory(builder, loadedMods);
         builder.AppendLine($"player_name: {LanConnectConfig.GetEffectivePlayerDisplayName()}");
         builder.AppendLine($"persistent_lan_client_net_id: {LanConnectConfig.GetPersistedClientNetIdForDiagnostics()}");
         builder.AppendLine($"primary_platform: {PlatformUtil.PrimaryPlatform}");
@@ -109,6 +123,21 @@ internal static class LanConnectDebugReport
         }
 
         return builder.ToString();
+    }
+
+    private static LanConnectWireCacheCaptureResult CaptureWireCacheSafely(
+        Func<LanConnectWireCacheCaptureResult> captureProvider)
+    {
+        try
+        {
+            return captureProvider()
+                ?? LanConnectWireCacheCaptureResult.Unavailable(
+                    new InvalidOperationException("Wire cache capture provider returned no result."));
+        }
+        catch (Exception ex)
+        {
+            return LanConnectWireCacheCaptureResult.Unavailable(ex);
+        }
     }
 
     private static IReadOnlyList<string> ReadRelevantLogLines(string? logPath)
@@ -323,5 +352,55 @@ internal static class LanConnectDebugReport
     private static string FormatValue(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? "<none>" : value.Trim();
+    }
+
+    private static void AppendLoadedModInventory(
+        StringBuilder builder,
+        IReadOnlyList<LanConnectRuntimeMod> loadedMods)
+    {
+        if (loadedMods.Count == 0)
+        {
+            builder.AppendLine("  <none>");
+            return;
+        }
+
+        foreach (LanConnectRuntimeMod mod in loadedMods)
+        {
+            builder.AppendLine(
+                $"  - id={FormatInlineValue(mod.Id)}, version={FormatInlineValue(mod.Version)}, " +
+                $"affects_gameplay={mod.AffectsGameplay.ToString().ToLowerInvariant()}");
+        }
+    }
+
+    internal static void AppendWireCacheDiagnostics(
+        StringBuilder builder,
+        LanConnectWireCacheCaptureResult result)
+    {
+        if (!result.IsAvailable)
+        {
+            builder.AppendLine("wire_cache_signature_v1: <unavailable>");
+            builder.AppendLine(
+                $"wire_cache_signature_v1_unavailable_reason: {FormatInlineValue(result.FailureReason)}");
+            return;
+        }
+
+        LanConnectWireCacheSnapshot wireCache = result.Snapshot!;
+        builder.AppendLine($"wire_cache_signature_v1: {wireCache.Signature}");
+        builder.AppendLine($"wire_cache_category_id_bit_size: {wireCache.CategoryIdBitSize}");
+        builder.AppendLine($"wire_cache_entry_id_bit_size: {wireCache.EntryIdBitSize}");
+        builder.AppendLine($"wire_cache_epoch_id_bit_size: {wireCache.EpochIdBitSize}");
+        builder.AppendLine($"wire_cache_property_id_bit_size: {wireCache.PropertyIdBitSize}");
+        builder.AppendLine($"wire_cache_category_table_count: {wireCache.CategoryCount}");
+        builder.AppendLine($"wire_cache_entry_table_count: {wireCache.EntryCount}");
+        builder.AppendLine($"wire_cache_epoch_table_count: {wireCache.EpochCount}");
+        builder.AppendLine($"wire_cache_property_table_count: {wireCache.PropertyCount}");
+        builder.AppendLine($"model_id_serialization_cache_hash: {wireCache.VanillaHash}");
+    }
+
+    private static string FormatInlineValue(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? "<none>"
+            : value.Replace('\r', ' ').Replace('\n', ' ').Trim();
     }
 }

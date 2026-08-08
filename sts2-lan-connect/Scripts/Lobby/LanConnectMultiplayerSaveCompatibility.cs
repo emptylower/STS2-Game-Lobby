@@ -30,8 +30,36 @@ internal static class LanConnectMultiplayerSaveCompatibility
     private static int _cachedProfileId = -1;
     private static bool _cachedHasRunSave;
     private static long _cachedSaveWriteTicks = long.MinValue;
-    private static readonly FieldInfo? MultiplayerSubmenuLoadingOverlayField = typeof(NMultiplayerSubmenu).GetField("_loadingOverlay", BindingFlags.Instance | BindingFlags.NonPublic);
-    private static readonly FieldInfo? MultiplayerSubmenuStackField = typeof(NSubmenu).GetField("_stack", BindingFlags.Instance | BindingFlags.NonPublic);
+
+    private static class MultiplayerSubmenuReflectionHolder
+    {
+        // The explicit cctor prevents beforefieldinit from resolving sts2 types until first use.
+        static MultiplayerSubmenuReflectionHolder()
+        {
+        }
+
+        internal static readonly FieldInfo? LoadingOverlayField = typeof(NMultiplayerSubmenu).GetField(
+            "_loadingOverlay",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        internal static readonly FieldInfo? StackField = typeof(NSubmenu).GetField(
+            "_stack",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+    }
+
+    private static class BindingCoordinatorHolder
+    {
+        // The explicit cctor prevents beforefieldinit from resolving sts2 types until first use.
+        static BindingCoordinatorHolder()
+        {
+        }
+
+        internal static readonly LanConnectRunBindingCoordinator<SerializableRun> Instance = new(
+            LoadSafeRunForCoordinator,
+            LanConnectMultiplayerSaveRoomBinding.BuildSaveKey,
+            LanConnectConfig.TryGetSaveRoomBinding,
+            static (_, _) => throw new InvalidOperationException(
+                "Safe-load binding coordinator must not persist save bindings."));
+    }
 
     public static bool ShouldInterceptOfficialLoadButtons()
     {
@@ -79,60 +107,75 @@ internal static class LanConnectMultiplayerSaveCompatibility
 
     public static Task StartLoadedRunAsLanHostAsync(Control loadingOverlay, NSubmenuStack stack)
     {
-        if (!TryLoadSafeCurrentRun(out SerializableRun? run, out string failureReason) || run == null)
-        {
-            Log.Warn($"sts2_lan_connect save_compat: safe load failed before host start. reason={failureReason}");
-            ShowInvalidSavePopup();
-            return Task.CompletedTask;
-        }
-
-        loadingOverlay.Visible = true;
-        try
-        {
-            NetHostGameService netService = new();
-            int maxPlayers = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
-            NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, maxPlayers);
-            if (error.HasValue)
+        NetHostGameService? netService = null;
+        ExecuteSafeLoad(
+            BindingCoordinatorHolder.Instance,
+            isLoading => loadingOverlay.Visible = isLoading,
+            _ =>
             {
+                netService = new NetHostGameService();
+                int maxPlayers = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
+                NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, maxPlayers);
+                if (!error.HasValue)
+                {
+                    return true;
+                }
+
                 NErrorPopup? popup = NErrorPopup.Create(error.Value);
                 if (popup != null)
                 {
                     NModalContainer.Instance?.Add(popup);
                 }
-
-                return Task.CompletedTask;
-            }
-
-            LanConnectResolvedRoomBinding binding = LanConnectMultiplayerSaveRoomBinding.Resolve(run);
-            LanConnectLanSafeLoadChannelActionKind channelAction = LanConnectLanSafeLoadChannelDecision.Decide(binding.HostChannel);
-            if (channelAction == LanConnectLanSafeLoadChannelActionKind.KeepBinding)
+                return false;
+            },
+            run =>
             {
+                LanConnectResolvedRoomBinding binding = LanConnectMultiplayerSaveRoomBinding.Resolve(run);
                 GD.Print(
-                    $"sts2_lan_connect save_compat: keeping lobby host binding for saveKey={binding.SaveKey}; lobby room will be republished after load.");
-            }
-            else if (!string.Equals(binding.HostChannel, LanConnectHostChannels.Lan, StringComparison.Ordinal))
+                    $"sts2_lan_connect save_compat: preserving host binding during ENet safe load. saveKey={binding.SaveKey}, hostChannel={LanConnectHostChannels.DescribePersisted(binding.HostChannel)}");
+
+                GD.Print(
+                    $"sts2_lan_connect save_compat: starting loaded multiplayer run via ENet override. players=[{string.Join(",", run.Players.Select(static player => player.NetId))}]");
+                PushLoadedRunScreen(stack, netService!, run);
+            },
+            failureReason =>
             {
-                LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
-                    run,
-                    binding.RoomName,
-                    binding.Password,
-                    binding.GameMode,
-                    LanConnectHostChannels.Lan,
-                    "explicit_lan_load_action");
-                GD.Print(
-                    $"sts2_lan_connect save_compat: migrated host channel from {LanConnectHostChannels.DescribePersisted(binding.HostChannel)} to lan because user selected LAN safe load. saveKey={binding.SaveKey}");
+                Log.Warn($"sts2_lan_connect save_compat: safe load failed before host start. reason={failureReason}");
+                ShowInvalidSavePopup();
+            });
+
+        return Task.CompletedTask;
+    }
+
+    internal static bool ExecuteSafeLoad<TRun>(
+        LanConnectRunBindingCoordinator<TRun> bindingCoordinator,
+        Action<bool> setLoading,
+        Func<TRun, bool> startHost,
+        Action<TRun> startLoadedRun,
+        Action<string> loadFailure)
+        where TRun : class
+    {
+        if (!bindingCoordinator.TryLoadForSafeLoad(out TRun? run, out string failureReason) || run == null)
+        {
+            loadFailure(failureReason);
+            return false;
+        }
+
+        setLoading(true);
+        try
+        {
+            if (!startHost(run))
+            {
+                return false;
             }
 
-            GD.Print(
-                $"sts2_lan_connect save_compat: starting loaded multiplayer run via ENet override. players=[{string.Join(",", run.Players.Select(static player => player.NetId))}]");
-            PushLoadedRunScreen(stack, netService, run);
+            startLoadedRun(run);
+            return true;
         }
         finally
         {
-            loadingOverlay.Visible = false;
+            setLoading(false);
         }
-
-        return Task.CompletedTask;
     }
 
     public static bool TryResolveMultiplayerSubmenuContext(
@@ -140,8 +183,8 @@ internal static class LanConnectMultiplayerSaveCompatibility
         out Control? loadingOverlay,
         out NSubmenuStack? stack)
     {
-        loadingOverlay = MultiplayerSubmenuLoadingOverlayField?.GetValue(submenu) as Control;
-        stack = MultiplayerSubmenuStackField?.GetValue(submenu) as NSubmenuStack;
+        loadingOverlay = MultiplayerSubmenuReflectionHolder.LoadingOverlayField?.GetValue(submenu) as Control;
+        stack = MultiplayerSubmenuReflectionHolder.StackField?.GetValue(submenu) as NSubmenuStack;
         return loadingOverlay != null && stack != null;
     }
 
@@ -269,6 +312,12 @@ internal static class LanConnectMultiplayerSaveCompatibility
 
         run = null;
         return false;
+    }
+
+    private static LanConnectRunBindingCoordinator<SerializableRun>.LoadResult LoadSafeRunForCoordinator()
+    {
+        bool success = TryLoadSafeCurrentRun(out SerializableRun? run, out string failureReason);
+        return new LanConnectRunBindingCoordinator<SerializableRun>.LoadResult(success, run, failureReason);
     }
 
     private static void PushLoadedRunScreen(NSubmenuStack stack, NetHostGameService netService, SerializableRun run)

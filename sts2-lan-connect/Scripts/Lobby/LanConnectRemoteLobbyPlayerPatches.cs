@@ -13,6 +13,7 @@ namespace Sts2LanConnect.Scripts;
 internal static class LanConnectRemoteLobbyPlayerPatches
 {
     private const string KickButtonName = "LanConnectKickButton";
+    private const string KickTargetMetaKey = "sts2_lan_connect_kick_target";
     private const string RegisteredMetaKey = "sts2_lan_connect_remote_lobby_player_registered";
     private static readonly object RegistrySync = new();
     private static readonly Dictionary<ulong, NRemoteLobbyPlayer> RegisteredPlayers = new();
@@ -103,7 +104,8 @@ internal static class LanConnectRemoteLobbyPlayerPatches
 
     private static void EnsureKickButton(NRemoteLobbyPlayer player)
     {
-        bool isHost = LanConnectLobbyRuntime.Instance?.HasActiveHostedRoom == true;
+        LanConnectLobbyRuntime? runtime = LanConnectLobbyRuntime.Instance;
+        bool isHost = runtime?.HasActiveHostedRoom == true;
         Button? existing = player.GetNodeOrNull<Button>(KickButtonName);
 
         // Don't show kick on the host's own entry or if not the host
@@ -116,6 +118,18 @@ internal static class LanConnectRemoteLobbyPlayerPatches
             }
 
             return;
+        }
+
+        ulong targetNetId = player.PlayerId;
+        LanConnectLobbyKickTarget target = runtime!.CaptureKickTarget(
+            targetNetId.ToString(),
+            ResolvePlayerName(targetNetId));
+        if (existing != null &&
+            !string.Equals(existing.GetMeta(KickTargetMetaKey).AsString(), target.Fingerprint, StringComparison.Ordinal))
+        {
+            player.RemoveChild(existing);
+            existing.QueueFree();
+            existing = null;
         }
 
         if (existing != null)
@@ -133,6 +147,7 @@ internal static class LanConnectRemoteLobbyPlayerPatches
             CustomMinimumSize = new Vector2(42, 42),
             MouseFilter = Control.MouseFilterEnum.Stop,
         };
+        kickButton.SetMeta(KickTargetMetaKey, target.Fingerprint);
         kickButton.AddThemeColorOverride("font_color", TextColor);
         kickButton.AddThemeColorOverride("font_hover_color", TextColor);
         kickButton.AddThemeColorOverride("font_pressed_color", TextColor);
@@ -145,8 +160,7 @@ internal static class LanConnectRemoteLobbyPlayerPatches
         kickButton.AddThemeStyleboxOverride("pressed", hover);
         kickButton.AddThemeStyleboxOverride("focus", normal);
 
-        ulong targetNetId = player.PlayerId;
-        kickButton.Pressed += () => OnLobbyKickPressed(targetNetId, ResolvePlayerName(targetNetId));
+        kickButton.Pressed += () => TaskHelper.RunSafely(OnLobbyKickPressedAsync(targetNetId, target));
 
         // Add directly to the NRemoteLobbyPlayer control and position absolutely
         player.AddChild(kickButton);
@@ -173,7 +187,9 @@ internal static class LanConnectRemoteLobbyPlayerPatches
         );
     }
 
-    private static void OnLobbyKickPressed(ulong targetNetId, string targetName)
+    private static async Task OnLobbyKickPressedAsync(
+        ulong targetNetId,
+        LanConnectLobbyKickTarget target)
     {
         LanConnectLobbyRuntime? runtime = LanConnectLobbyRuntime.Instance;
         if (runtime == null || !runtime.HasActiveHostedRoom)
@@ -181,14 +197,24 @@ internal static class LanConnectRemoteLobbyPlayerPatches
             return;
         }
 
-        string netIdStr = targetNetId.ToString();
-        Log.Info($"sts2_lan_connect lobby_kick: kicking netId={netIdStr} name={targetName}");
+        Log.Info(
+            $"sts2_lan_connect lobby_kick: requesting netId={target.PlayerNetId} "
+            + $"bindingId={target.BindingId ?? "<legacy>"} name={target.OccupantName}");
+        LanConnectLobbyKickResult result = await runtime.SendKickPlayerAsync(target);
+        if (!result.ShouldScheduleDisconnect)
+        {
+            Log.Warn(
+                $"sts2_lan_connect lobby_kick: rejected netId={target.PlayerNetId} "
+                + $"bindingId={target.BindingId ?? "<legacy>"} reason={result.Reason}");
+            LanConnectPopupUtil.ShowInfo(result.Message);
+            return;
+        }
 
-        // 1. Send through control channel (server-side enforcement)
-        TaskHelper.RunSafely(runtime.SendKickPlayerAsync(netIdStr, targetName));
-
-        // 2. Delayed ENet disconnect — give WebSocket kicked message 1.5s to arrive first
-        ScheduleDelayedDisconnect(runtime, targetNetId);
+        ScheduleDelayedDisconnect(runtime, targetNetId, target);
+        if (!string.IsNullOrWhiteSpace(result.Message))
+        {
+            LanConnectPopupUtil.ShowInfo(result.Message);
+        }
     }
 
     private static string ResolvePlayerName(ulong targetNetId)
@@ -196,7 +222,10 @@ internal static class LanConnectRemoteLobbyPlayerPatches
         return LanConnectLobbyPlayerNameDirectory.TryGetPlayerName(targetNetId) ?? targetNetId.ToString();
     }
 
-    internal static void ScheduleDelayedDisconnect(LanConnectLobbyRuntime runtime, ulong targetNetId)
+    internal static void ScheduleDelayedDisconnect(
+        LanConnectLobbyRuntime runtime,
+        ulong targetNetId,
+        LanConnectLobbyKickTarget target)
     {
         NetHostGameService? hostService = runtime.GetHostNetService();
         if (hostService == null)
@@ -209,12 +238,24 @@ internal static class LanConnectRemoteLobbyPlayerPatches
         {
             return;
         }
+        Func<Action, bool> disconnectIfCurrent = runtime.CreateKickDisconnectAction(target);
 
         tree.CreateTimer(1.5).Timeout += () =>
         {
             try
             {
-                hostService.DisconnectClient(targetNetId, MegaCrit.Sts2.Core.Entities.Multiplayer.NetError.Quit, now: false);
+                bool disconnected = disconnectIfCurrent(() =>
+                    hostService.DisconnectClient(
+                        targetNetId,
+                        MegaCrit.Sts2.Core.Entities.Multiplayer.NetError.Quit,
+                        now: false));
+                if (!disconnected)
+                {
+                    Log.Info(
+                        $"sts2_lan_connect kick: delayed ENet disconnect cancelled for "
+                        + $"netId={targetNetId} bindingId={target.BindingId ?? "<legacy>"}");
+                    return;
+                }
                 Log.Info($"sts2_lan_connect kick: delayed ENet disconnect for netId={targetNetId}");
             }
             catch (Exception ex)

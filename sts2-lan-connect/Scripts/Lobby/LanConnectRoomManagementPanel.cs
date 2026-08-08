@@ -315,7 +315,7 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
             players.Add(entry);
         }
 
-        int hash = ComputePlayerListHash(players);
+        int hash = ComputePlayerListHash(runtime, players);
         if (hash == _lastPlayerListHash)
         {
             return;
@@ -379,9 +379,10 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
                 // Larger button for mobile — easy to tap
                 Button kickButton = CreatePixelButton("移出", DangerColor, DangerHoverColor, CardColor);
                 kickButton.CustomMinimumSize = new Vector2(100, 48);
-                string capturedNetId = entry.PlayerNetId;
-                string capturedName = entry.PlayerName;
-                kickButton.Pressed += () => OnKickPressed(capturedNetId, capturedName);
+                LanConnectLobbyKickTarget target = runtime.CaptureKickTarget(
+                    entry.PlayerNetId,
+                    entry.PlayerName);
+                kickButton.Pressed += () => TaskHelper.RunSafely(OnKickPressedAsync(target));
                 rowContent.AddChild(kickButton);
             }
         }
@@ -408,7 +409,7 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
         }
     }
 
-    private void OnKickPressed(string playerNetId, string playerName)
+    private async Task OnKickPressedAsync(LanConnectLobbyKickTarget target)
     {
         LanConnectLobbyRuntime? runtime = LanConnectLobbyRuntime.Instance;
         if (runtime == null || !runtime.HasActiveHostedRoom)
@@ -417,20 +418,39 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
             return;
         }
 
-        Log.Info($"sts2_lan_connect room_mgmt: kicking playerNetId={playerNetId} playerName={playerName}");
-
-        // 1. Send kick through control channel (server-side enforcement)
-        TaskHelper.RunSafely(runtime.SendKickPlayerAsync(playerNetId, playerName));
-
-        // 2. Delayed ENet disconnect — give WebSocket kicked message 1.5s to arrive first
-        if (ulong.TryParse(playerNetId, out ulong netId))
+        Log.Info(
+            $"sts2_lan_connect room_mgmt: requesting kick playerNetId={target.PlayerNetId} "
+            + $"bindingId={target.BindingId ?? "<legacy>"} playerName={target.OccupantName}");
+        LanConnectLobbyKickResult result = await runtime.SendKickPlayerAsync(target);
+        if (!result.ShouldScheduleDisconnect)
         {
-            LanConnectRemoteLobbyPlayerPatches.ScheduleDelayedDisconnect(runtime, netId);
+            Log.Warn(
+                $"sts2_lan_connect room_mgmt: kick rejected playerNetId={target.PlayerNetId} "
+                + $"bindingId={target.BindingId ?? "<legacy>"} reason={result.Reason}");
+            if (_statusLabel != null)
+            {
+                _statusLabel.Text = result.Message;
+            }
+            LanConnectPopupUtil.ShowInfo(result.Message);
+            _lastPlayerListHash = -1;
+            return;
         }
 
+        if (ulong.TryParse(target.PlayerNetId, out ulong netId))
+        {
+            LanConnectRemoteLobbyPlayerPatches.ScheduleDelayedDisconnect(runtime, netId, target);
+        }
+
+        string statusMessage = string.IsNullOrWhiteSpace(result.Message)
+            ? $"已将 {target.OccupantName} 移出房间"
+            : result.Message;
         if (_statusLabel != null)
         {
-            _statusLabel.Text = $"已将 {playerName} 移出房间";
+            _statusLabel.Text = statusMessage;
+        }
+        if (!string.IsNullOrWhiteSpace(result.Message))
+        {
+            LanConnectPopupUtil.ShowInfo(result.Message);
         }
 
         _lastPlayerListHash = -1;
@@ -514,12 +534,17 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
         }
     }
 
-    private static int ComputePlayerListHash(List<LobbyPlayerNameEntry> players)
+    private static int ComputePlayerListHash(
+        LanConnectLobbyRuntime runtime,
+        List<LobbyPlayerNameEntry> players)
     {
         int hash = players.Count;
         foreach (LobbyPlayerNameEntry entry in players)
         {
-            hash = HashCode.Combine(hash, entry.PlayerNetId, entry.PlayerName);
+            LanConnectLobbyKickTarget target = runtime.CaptureKickTarget(
+                entry.PlayerNetId,
+                entry.PlayerName);
+            hash = HashCode.Combine(hash, target.Fingerprint);
         }
 
         return hash;

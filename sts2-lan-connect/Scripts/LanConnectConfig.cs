@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using Godot;
 using MegaCrit.Sts2.Core.Logging;
 
@@ -18,6 +17,8 @@ internal sealed class LanConnectConfigData
     public string LastEndpoint { get; set; } = string.Empty;
 
     public string LanClientNetId { get; set; } = string.Empty;
+
+    public string ClientInstallationId { get; set; } = string.Empty;
 
     public string LobbyServerBaseUrl { get; set; } = string.Empty;
 
@@ -95,6 +96,14 @@ internal static class LanConnectConfig
             }
 
             return resolution.NetId;
+        }
+    }
+
+    public static string GetOrCreateClientInstallationId()
+    {
+        lock (Sync)
+        {
+            return EnsureClientInstallationCredentialUnsafe();
         }
     }
 
@@ -424,7 +433,7 @@ internal static class LanConnectConfig
         {
             LanConnectSavedRoomBinding? binding = _data.SaveRoomBindings.FirstOrDefault(existing =>
                 string.Equals(existing.SaveKey, saveKey, StringComparison.Ordinal));
-            return binding == null ? null : CloneBinding(binding);
+            return binding == null ? null : CloneBindingForPersistence(binding);
         }
     }
 
@@ -436,7 +445,7 @@ internal static class LanConnectConfig
                 string.IsNullOrWhiteSpace(existing.SaveKey)
                 || string.Equals(existing.SaveKey, binding.SaveKey, StringComparison.Ordinal));
 
-            _data.SaveRoomBindings.Insert(0, CloneBinding(binding));
+            _data.SaveRoomBindings.Insert(0, CloneBindingForPersistence(binding));
             if (_data.SaveRoomBindings.Count > 16)
             {
                 _data.SaveRoomBindings.RemoveRange(16, _data.SaveRoomBindings.Count - 16);
@@ -477,39 +486,62 @@ internal static class LanConnectConfig
     {
         lock (Sync)
         {
-            string path = GetConfigPath();
-            if (!File.Exists(path))
-            {
-                NormalizeDefaultsUnsafe();
-                SaveUnsafe();
-                return;
-            }
-
-            try
-            {
-                string json = File.ReadAllText(path);
-                _data = JsonSerializer.Deserialize<LanConnectConfigData>(json) ?? new LanConnectConfigData();
-                NormalizeDefaultsUnsafe();
-            }
-            catch (Exception ex)
-            {
-                Log.Warn($"sts2_lan_connect failed to read config: {ex.Message}");
-                _data = new LanConnectConfigData();
-                NormalizeDefaultsUnsafe();
-                SaveUnsafe();
-            }
+            LoadUnsafe(GetConfigPath(), createIfMissing: true);
+            EnsureClientInstallationCredentialUnsafe();
         }
+    }
+
+    private static string EnsureClientInstallationCredentialUnsafe()
+    {
+        LanConnectInstallationCredentialResolution resolution =
+            LanConnectInstallationCredential.Resolve(_data.ClientInstallationId);
+        if (!string.Equals(_data.ClientInstallationId, resolution.Credential, StringComparison.Ordinal))
+        {
+            _data.ClientInstallationId = resolution.Credential;
+            SaveUnsafe();
+        }
+
+        return resolution.Credential;
     }
 
     private static void SaveUnsafe()
     {
-        string path = GetConfigPath();
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        string json = JsonSerializer.Serialize(_data, new JsonSerializerOptions
+        SaveUnsafe(GetConfigPath());
+    }
+
+    private static void SaveUnsafe(string path)
+    {
+        LanConnectConfigPersistence.Save(path, _data);
+    }
+
+    private static void LoadUnsafe(string path, bool createIfMissing)
+    {
+        if (!File.Exists(path))
         {
-            WriteIndented = true
-        });
-        File.WriteAllText(path, json);
+            _data = new LanConnectConfigData();
+            NormalizeDefaultsUnsafe();
+            if (createIfMissing)
+            {
+                SaveUnsafe(path);
+            }
+            return;
+        }
+
+        try
+        {
+            _data = LanConnectConfigPersistence.Load(path);
+            NormalizeDefaultsUnsafe();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"sts2_lan_connect failed to read config: {ex.Message}");
+            _data = new LanConnectConfigData();
+            NormalizeDefaultsUnsafe();
+            if (createIfMissing)
+            {
+                SaveUnsafe(path);
+            }
+        }
     }
 
     private static string GetConfigPath()
@@ -536,6 +568,11 @@ internal static class LanConnectConfig
     {
         _data.LanClientNetId = LanConnectClientIdentity.TryParse(_data.LanClientNetId, out ulong clientNetId)
             ? clientNetId.ToString(CultureInfo.InvariantCulture)
+            : string.Empty;
+        _data.ClientInstallationId = LanConnectInstallationCredential.TryNormalize(
+            _data.ClientInstallationId,
+            out string clientInstallationId)
+            ? clientInstallationId
             : string.Empty;
 
         if (LanConnectLobbyEndpointDefaults.IsLegacyLocalhostBaseUrl(_data.LobbyServerBaseUrl))
@@ -570,7 +607,7 @@ internal static class LanConnectConfig
 
         _data.SaveRoomBindings = _data.SaveRoomBindings
             .Where(binding => !string.IsNullOrWhiteSpace(binding.SaveKey) && !string.IsNullOrWhiteSpace(binding.RoomName))
-            .Select(CloneBinding)
+            .Select(CloneBindingForPersistence)
             .Take(16)
             .ToList();
     }
@@ -589,10 +626,11 @@ internal static class LanConnectConfig
             : value.Trim();
     }
 
-    private static LanConnectSavedRoomBinding CloneBinding(LanConnectSavedRoomBinding binding)
+    internal static LanConnectSavedRoomBinding CloneBindingForPersistence(LanConnectSavedRoomBinding binding)
     {
         return new LanConnectSavedRoomBinding
         {
+            SchemaVersion = binding.SchemaVersion,
             SaveKey = binding.SaveKey,
             RoomName = SanitizeRoomName(binding.RoomName),
             Password = binding.Password,

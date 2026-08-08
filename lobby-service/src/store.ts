@@ -8,6 +8,8 @@ export type RelayState = "disabled" | "planned" | "ready";
 export type ConnectionStrategy = "direct-first" | "relay-first" | "relay-only";
 export type ProtocolProfile = "legacy_4p" | "extended_8p";
 
+export const MaxSupportedRoomPlayers = 256;
+
 const Legacy4pProtocolProfile: ProtocolProfile = "legacy_4p";
 const Extended8pProtocolProfile: ProtocolProfile = "extended_8p";
 const LegacyCompatibleModVersion = "0.2.2";
@@ -83,6 +85,7 @@ export interface Room extends RoomSummary {
   passwordHash?: string | undefined;
   hostConnectionInfo: HostConnectionInfo;
   modList: string[];
+  wireCacheSignatureV1?: string | undefined;
   hostModInventory?: LobbyModDescriptor[] | undefined;
   hostModInventoryHash?: string | undefined;
 }
@@ -90,9 +93,50 @@ export interface Room extends RoomSummary {
 export interface JoinTicket {
   ticketId: string;
   roomId: string;
+  playerName: string;
+  playerNetId?: string | undefined;
+  clientInstallationId?: string | undefined;
+  identityKind: "installation" | "legacy";
+  controlBindingId?: string | undefined;
   issuedAt: Date;
   expiresAt: Date;
   connectionPlan: ConnectionPlan;
+}
+
+export interface ClientControlBinding {
+  bindingId: string;
+  boundSequence: number;
+  roomId: string;
+  playerName: string;
+  playerNetId?: string | undefined;
+  clientInstallationId?: string | undefined;
+  identityKind: "installation" | "legacy";
+  boundAt: Date;
+}
+
+export type KickPlayerResult =
+  | {
+    outcome: "kicked";
+    binding: ClientControlBinding;
+    persistentBanCreated: boolean;
+    legacyRequest: boolean;
+  }
+  | {
+    outcome: "stale_binding";
+    requestedBindingId: string;
+    currentBindingId: string;
+  }
+  | {
+    outcome: "legacy_rebound";
+  }
+  | {
+    outcome: "not_found";
+  };
+
+export interface ClientControlBindingHandle {
+  bindingId: string;
+  playerNetId: string;
+  playerName: string;
 }
 
 export interface RoomSettings {
@@ -111,9 +155,17 @@ export interface HostSession {
   roomSessionId: string;
   controlChannelId: string;
   hostToken: string;
+  hostPlayerName: string;
+  clientInstallationId?: string | undefined;
   relayState: RelayState;
   lastSeenAt: Date;
-  kickedPlayerNetIds: Set<string>;
+  reportedPlayerNetIds?: Set<string> | undefined;
+  reportedBindingSequence?: number | undefined;
+  // This client-owned ID can be reset to evade a kick. Unevadable bans require a
+  // server-issued credential, which is deliberately outside this room-lifetime fix.
+  kickedClientInstallationIds: Set<string>;
+  legacyIdentityMode: boolean;
+  legacyIdentityModeLogged: boolean;
   roomSettings: RoomSettings;
 }
 
@@ -121,10 +173,12 @@ export interface CreateRoomInput {
   roomName: string;
   password?: string | undefined;
   hostPlayerName: string;
+  clientInstallationId?: string | undefined;
   gameMode: string;
   version: string;
   modVersion: string;
   modList?: string[] | undefined;
+  wireCacheSignatureV1?: string | undefined;
   hostModInventory?: LobbyModDescriptor[] | undefined;
   protocolProfile?: ProtocolProfile | string | undefined;
   maxPlayers: number;
@@ -141,10 +195,12 @@ export interface CreateRoomInput {
 
 export interface JoinRoomInput {
   playerName: string;
+  clientInstallationId?: string | undefined;
   password?: string | undefined;
   version: string;
   modVersion: string;
   modList?: string[] | undefined;
+  wireCacheSignatureV1?: string | undefined;
   desiredSavePlayerNetId?: string | undefined;
   playerNetId?: string | undefined;
 }
@@ -176,6 +232,8 @@ export interface StoreConfig {
   connectionStrategy?: ConnectionStrategy;
   modSyncMaxDescriptors?: number;
   modSyncMaxPayloadBytes?: number;
+  maxKickedClientInstallationIds?: number;
+  maxClientControlBindingsPerRoom?: number;
 }
 
 export interface CreateRoomResult {
@@ -198,9 +256,16 @@ export interface JoinRoomResult {
   connectionPlan: ConnectionPlan;
 }
 
+interface JoinCompatibilityContext {
+  room: Room;
+  hostSession: HostSession;
+  availableSavedRunSlots: SavedRunSlot[];
+}
+
 export interface LobbyStoreDependencies {
   id?(): string;
   peerPlayerNetIds?(roomId: string, roomSessionId: string): ReadonlySet<string>;
+  warn?(message: string): void;
 }
 
 export interface ModMismatchDetails {
@@ -225,9 +290,13 @@ export class LobbyStore {
   private readonly rooms = new Map<string, Room>();
   private readonly tickets = new Map<string, JoinTicket>();
   private readonly hostSessions = new Map<string, HostSession>();
+  private readonly clientControlBindings = new Map<string, Map<string, ClientControlBinding>>();
+  private readonly reboundClientControlSlots = new Map<string, Set<string>>();
   private readonly config: Required<StoreConfig>;
   private readonly id: () => string;
   private readonly peerPlayerNetIds: (roomId: string, roomSessionId: string) => ReadonlySet<string>;
+  private readonly warn: (message: string) => void;
+  private nextClientControlBindingSequence = 0;
 
   constructor(config: StoreConfig, deps: LobbyStoreDependencies = {}) {
     this.config = {
@@ -238,9 +307,22 @@ export class LobbyStore {
       connectionStrategy: config.connectionStrategy ?? "direct-first",
       modSyncMaxDescriptors: config.modSyncMaxDescriptors ?? 64,
       modSyncMaxPayloadBytes: config.modSyncMaxPayloadBytes ?? 65_536,
+      maxKickedClientInstallationIds: config.maxKickedClientInstallationIds ?? 256,
+      maxClientControlBindingsPerRoom:
+        config.maxClientControlBindingsPerRoom ?? MaxSupportedRoomPlayers,
     };
     this.id = deps.id ?? (() => randomUUID());
     this.peerPlayerNetIds = deps.peerPlayerNetIds ?? (() => new Set<string>());
+    const warn = deps.warn ?? ((message: string) => console.warn(message));
+    // A diagnostic must never turn an allowed join into a 500. The signature-missing
+    // rows are fail-open by design, so a throwing sink must not undo that.
+    this.warn = (message) => {
+      try {
+        warn(message);
+      } catch {
+        // Intentionally ignored.
+      }
+    };
   }
 
   listRooms(now = new Date()): RoomSummary[] {
@@ -297,6 +379,7 @@ export class LobbyStore {
       version: input.version.trim(),
       modVersion: input.modVersion.trim(),
       modList,
+      wireCacheSignatureV1: normalizeWireCacheSignatureV1(input.wireCacheSignatureV1),
       hostModInventory,
       hostModInventoryHash,
       protocolProfile,
@@ -311,14 +394,29 @@ export class LobbyStore {
       savedRun: normalizeSavedRunInput(input.savedRun),
     };
 
+    const clientInstallationId = this.resolveClientInstallationIdentity(
+      room,
+      undefined,
+      input.clientInstallationId,
+    );
     const hostSession: HostSession = {
       roomId,
       roomSessionId,
       controlChannelId,
       hostToken,
+      hostPlayerName: input.hostPlayerName.trim(),
+      clientInstallationId,
       relayState: "disabled",
       lastSeenAt: now,
-      kickedPlayerNetIds: new Set(),
+      ...(room.savedRun === undefined
+        ? {}
+        : {
+            reportedPlayerNetIds: new Set(room.savedRun.connectedPlayerNetIds),
+            reportedBindingSequence: this.nextClientControlBindingSequence,
+          }),
+      kickedClientInstallationIds: new Set(),
+      legacyIdentityMode: clientInstallationId === undefined,
+      legacyIdentityModeLogged: false,
       roomSettings: { chatEnabled: true },
     };
 
@@ -335,17 +433,113 @@ export class LobbyStore {
     };
   }
 
+  findWireCacheMismatchForJoin(roomId: string, input: JoinRoomInput): LobbyStoreError | undefined {
+    try {
+      this.validateJoinCompatibility(roomId, input, false);
+    } catch (error) {
+      if (error instanceof LobbyStoreError && error.code === "wire_cache_signature_mismatch") {
+        return error;
+      }
+      if (!(error instanceof LobbyStoreError)) {
+        throw error;
+      }
+    }
+
+    return undefined;
+  }
+
   joinRoom(roomId: string, input: JoinRoomInput, now = new Date()): JoinRoomResult {
+    const { room, hostSession, availableSavedRunSlots } =
+      this.validateJoinCompatibility(roomId, input, true);
+
+    if (room.requiresPassword && !verifyPassword(input.password ?? "", room.passwordHash)) {
+      throw new LobbyStoreError(401, "invalid_password", "房间密码错误。");
+    }
+
+    if (room.savedRun) {
+      const connectedPlayerNetIds = new Set(room.savedRun.connectedPlayerNetIds);
+      if (availableSavedRunSlots.length === 0) {
+        throw new LobbyStoreError(409, "save_slot_unavailable", "该续局房间当前没有可接管角色。");
+      }
+
+      const desiredSavePlayerNetId = input.desiredSavePlayerNetId?.trim();
+      if (desiredSavePlayerNetId) {
+        const selectedSlot = room.savedRun.slots.find((slot) => slot.netId === desiredSavePlayerNetId);
+        if (!selectedSlot) {
+          throw new LobbyStoreError(409, "save_slot_invalid", "所选续局角色不存在。");
+        }
+
+        if (connectedPlayerNetIds.has(desiredSavePlayerNetId)) {
+          throw new LobbyStoreError(409, "save_slot_unavailable", "所选续局角色已被其他玩家接管。");
+        }
+      } else if (availableSavedRunSlots.length > 1) {
+        throw new LobbyStoreError(409, "save_slot_required", "该续局房间需要先选择一个可接管角色。");
+      }
+    } else if (room.currentPlayers >= room.maxPlayers) {
+      throw new LobbyStoreError(409, "room_full", "该房间已满。");
+    }
+
+    const connectionPlan = buildConnectionPlan(room, hostSession, this.config.connectionStrategy);
+    const playerNetId = normalizeOptionalIdentity(input.playerNetId);
+    const clientInstallationId = this.resolveClientInstallationIdentity(
+      room,
+      playerNetId,
+      input.clientInstallationId,
+    );
+    const identityKind = clientInstallationId === undefined ? "legacy" : "installation";
+    if (identityKind === "legacy") {
+      hostSession.legacyIdentityMode = true;
+      this.logLegacyIdentityMode(
+        hostSession,
+        input.clientInstallationId === undefined
+          ? "join request omitted clientInstallationId"
+          : "join request declared a public slot id as clientInstallationId",
+      );
+    }
+    const ticket: JoinTicket = {
+      ticketId: this.id(),
+      roomId,
+      playerName: input.playerName.trim(),
+      playerNetId,
+      clientInstallationId,
+      identityKind,
+      issuedAt: now,
+      expiresAt: new Date(now.getTime() + this.config.ticketTtlMs),
+      connectionPlan,
+    };
+    this.tickets.set(ticket.ticketId, ticket);
+
+    return {
+      ticketId: ticket.ticketId,
+      roomId,
+      roomSessionId: hostSession.roomSessionId,
+      issuedAt: ticket.issuedAt,
+      expiresAt: ticket.expiresAt,
+      room: this.toRoomSummary(room),
+      connectionPlan,
+    };
+  }
+
+  private validateJoinCompatibility(
+    roomId: string,
+    input: JoinRoomInput,
+    warnWhenSignatureMissing: boolean,
+  ): JoinCompatibilityContext {
     const room = this.requireRoom(roomId);
     const hostSession = this.requireHostSession(roomId);
     const requestedVersion = input.version.trim();
     const requestedModVersion = input.modVersion.trim();
     const requestedModList = normalizeModList(input.modList ?? []);
+    const requestedWireCacheSignatureV1 = normalizeWireCacheSignatureV1(input.wireCacheSignatureV1);
     const availableSavedRunSlots = getAvailableSavedRunSlots(room);
     const canResumeSavedRun = room.savedRun !== undefined && availableSavedRunSlots.length > 0;
 
-    const playerNetId = input.playerNetId?.trim();
-    if (playerNetId && hostSession.kickedPlayerNetIds.has(playerNetId)) {
+    const clientInstallationId = this.resolveClientInstallationIdentity(
+      room,
+      input.playerNetId,
+      input.clientInstallationId,
+    );
+    if (clientInstallationId && hostSession.kickedClientInstallationIds.has(clientInstallationId)) {
       throw new LobbyStoreError(403, "kicked", "你已被房主移出该房间，无法重新加入。");
     }
 
@@ -376,51 +570,30 @@ export class LobbyStore {
       }
     }
 
-    if (room.requiresPassword && !verifyPassword(input.password ?? "", room.passwordHash)) {
-      throw new LobbyStoreError(401, "invalid_password", "房间密码错误。");
-    }
-
-    if (room.savedRun) {
-      const connectedPlayerNetIds = new Set(room.savedRun.connectedPlayerNetIds);
-      if (availableSavedRunSlots.length === 0) {
-        throw new LobbyStoreError(409, "save_slot_unavailable", "该续局房间当前没有可接管角色。");
+    if (room.wireCacheSignatureV1 && requestedWireCacheSignatureV1) {
+      if (room.wireCacheSignatureV1 !== requestedWireCacheSignatureV1) {
+        throw new LobbyStoreError(
+          409,
+          "wire_cache_signature_mismatch",
+          `网络编码签名不匹配。房主签名：${room.wireCacheSignatureV1}；加入者签名：${requestedWireCacheSignatureV1}。`,
+          {
+            roomWireCacheSignatureV1: room.wireCacheSignatureV1,
+            requestedWireCacheSignatureV1,
+          },
+        );
       }
-
-      const desiredSavePlayerNetId = input.desiredSavePlayerNetId?.trim();
-      if (desiredSavePlayerNetId) {
-        const selectedSlot = room.savedRun.slots.find((slot) => slot.netId === desiredSavePlayerNetId);
-        if (!selectedSlot) {
-          throw new LobbyStoreError(409, "save_slot_invalid", "所选续局角色不存在。");
-        }
-
-        if (connectedPlayerNetIds.has(desiredSavePlayerNetId)) {
-          throw new LobbyStoreError(409, "save_slot_unavailable", "所选续局角色已被其他玩家接管。");
-        }
-      } else if (availableSavedRunSlots.length > 1) {
-        throw new LobbyStoreError(409, "save_slot_required", "该续局房间需要先选择一个可接管角色。");
-      }
-    } else if (room.currentPlayers >= room.maxPlayers) {
-      throw new LobbyStoreError(409, "room_full", "该房间已满。");
+    } else if (warnWhenSignatureMissing && (room.wireCacheSignatureV1 || requestedWireCacheSignatureV1)) {
+      this.warn(
+        `[lobby] wire cache signature unavailable; allowing join roomId=${roomId} `
+        + `host=${room.wireCacheSignatureV1 ?? "<absent>"} `
+        + `joiner=${requestedWireCacheSignatureV1 ?? "<absent>"}`,
+      );
     }
-
-    const connectionPlan = buildConnectionPlan(room, hostSession, this.config.connectionStrategy);
-    const ticket: JoinTicket = {
-      ticketId: this.id(),
-      roomId,
-      issuedAt: now,
-      expiresAt: new Date(now.getTime() + this.config.ticketTtlMs),
-      connectionPlan,
-    };
-    this.tickets.set(ticket.ticketId, ticket);
 
     return {
-      ticketId: ticket.ticketId,
-      roomId,
-      roomSessionId: hostSession.roomSessionId,
-      issuedAt: ticket.issuedAt,
-      expiresAt: ticket.expiresAt,
-      room: this.toRoomSummary(room),
-      connectionPlan,
+      room,
+      hostSession,
+      availableSavedRunSlots,
     };
   }
 
@@ -471,12 +644,17 @@ export class LobbyStore {
     room.status = normalizeStatus(input.status, room.currentPlayers, room.maxPlayers);
     room.lastHeartbeatAt = now;
     hostSession.lastSeenAt = now;
-    if (room.savedRun && input.connectedPlayerNetIds) {
-      room.savedRun.connectedPlayerNetIds = normalizeNetIdList(input.connectedPlayerNetIds);
-      room.savedRun.slots = room.savedRun.slots.map((slot) => ({
-        ...slot,
-        isConnected: room.savedRun?.connectedPlayerNetIds.includes(slot.netId) ?? false,
-      }));
+    if (input.connectedPlayerNetIds !== undefined) {
+      const connectedPlayerNetIds = normalizeNetIdList(input.connectedPlayerNetIds);
+      hostSession.reportedPlayerNetIds = new Set(connectedPlayerNetIds);
+      hostSession.reportedBindingSequence = this.nextClientControlBindingSequence;
+      if (room.savedRun) {
+        room.savedRun.connectedPlayerNetIds = connectedPlayerNetIds;
+        room.savedRun.slots = room.savedRun.slots.map((slot) => ({
+          ...slot,
+          isConnected: room.savedRun?.connectedPlayerNetIds.includes(slot.netId) ?? false,
+        }));
+      }
     }
     return this.toRoomSummary(room);
   }
@@ -531,6 +709,9 @@ export class LobbyStore {
     }
 
     this.assertHostToken(hostSession, token);
+    if (hostSession.legacyIdentityMode) {
+      this.logLegacyIdentityMode(hostSession, "create request omitted clientInstallationId");
+    }
     return hostSession;
   }
 
@@ -549,6 +730,50 @@ export class LobbyStore {
       this.tickets.delete(ticket.ticketId);
       throw new LobbyStoreError(401, "expired_ticket", "加入票据已过期。");
     }
+
+    if (ticket.controlBindingId !== undefined) {
+      throw new LobbyStoreError(401, "ticket_already_redeemed", "加入票据已使用。请重新加入房间获取新票据。");
+    }
+
+    const room = this.requireRoom(roomId);
+    const redeemedClientInstallationId = this.resolveClientInstallationIdentity(
+      room,
+      ticket.playerNetId,
+      ticket.clientInstallationId,
+    );
+    if (ticket.clientInstallationId !== undefined && redeemedClientInstallationId === undefined) {
+      ticket.clientInstallationId = undefined;
+      ticket.identityKind = "legacy";
+      hostSession.legacyIdentityMode = true;
+      this.logLegacyIdentityMode(
+        hostSession,
+        "control ticket declared an identity that now matches a public slot id",
+      );
+    }
+
+    if (
+      ticket.clientInstallationId
+      && hostSession.kickedClientInstallationIds.has(ticket.clientInstallationId)
+    ) {
+      this.tickets.delete(ticket.ticketId);
+      throw new LobbyStoreError(403, "kicked", "你已被房主移出该房间，无法重新加入。");
+    }
+
+    const binding: ClientControlBinding = {
+      bindingId: this.id(),
+      boundSequence: ++this.nextClientControlBindingSequence,
+      roomId,
+      playerName: ticket.playerName,
+      playerNetId: ticket.playerNetId,
+      clientInstallationId: ticket.clientInstallationId,
+      identityKind: ticket.identityKind,
+      boundAt: new Date(),
+    };
+    if (binding.playerNetId !== undefined) {
+      this.rememberClientControlBinding(binding);
+      this.invalidateOtherSlotTickets(binding, ticket.ticketId);
+    }
+    ticket.controlBindingId = binding.bindingId;
 
     return ticket;
   }
@@ -571,19 +796,91 @@ export class LobbyStore {
     return true;
   }
 
-  kickPlayer(roomId: string, hostToken: string, playerNetId: string) {
+  kickPlayer(
+    roomId: string,
+    hostToken: string,
+    playerNetId: string,
+    requestedBindingId?: string,
+  ): KickPlayerResult {
     const hostSession = this.requireHostSession(roomId);
     this.assertHostToken(hostSession, hostToken);
-    hostSession.kickedPlayerNetIds.add(playerNetId);
+    const roomBindings = this.clientControlBindings.get(roomId);
+    const binding = roomBindings?.get(playerNetId);
+    if (!binding) {
+      return { outcome: "not_found" };
+    }
+
+    const normalizedBindingId = normalizeOptionalIdentity(requestedBindingId);
+    if (
+      normalizedBindingId === undefined
+      && this.reboundClientControlSlots.get(roomId)?.has(playerNetId)
+    ) {
+      this.warn(
+        `[lobby] legacy kick rejected roomId=${roomId} playerNetId=${playerNetId} `
+        + "reason=legacy_rebound",
+      );
+      return { outcome: "legacy_rebound" };
+    }
+    if (normalizedBindingId !== undefined && normalizedBindingId !== binding.bindingId) {
+      this.warn(
+        `[lobby] stale kick rejected roomId=${roomId} playerNetId=${playerNetId} `
+        + `requestedBindingId=${normalizedBindingId} currentBindingId=${binding.bindingId}`,
+      );
+      return {
+        outcome: "stale_binding",
+        requestedBindingId: normalizedBindingId,
+        currentBindingId: binding.bindingId,
+      };
+    }
+
+    roomBindings?.delete(playerNetId);
+    const legacyRequest = normalizedBindingId === undefined;
+    const persistentBanCreated = !legacyRequest
+      && binding.identityKind === "installation"
+      && binding.clientInstallationId !== undefined;
+    if (persistentBanCreated) {
+      this.addKickedClientInstallationId(hostSession, binding.clientInstallationId!);
+    }
+
+    for (const ticket of this.tickets.values()) {
+      if (ticket.roomId === roomId && ticket.playerNetId === playerNetId) {
+        this.tickets.delete(ticket.ticketId);
+      }
+    }
+    return {
+      outcome: "kicked",
+      binding,
+      persistentBanCreated,
+      legacyRequest,
+    };
   }
 
-  isPlayerKicked(roomId: string, playerNetId: string) {
+  listClientControlBindingHandles(
+    roomId: string,
+    hostToken: string,
+  ): ClientControlBindingHandle[] {
+    const hostSession = this.requireHostSession(roomId);
+    this.assertHostToken(hostSession, hostToken);
+    const handles: ClientControlBindingHandle[] = [];
+    for (const binding of this.clientControlBindings.get(roomId)?.values() ?? []) {
+      if (binding.playerNetId !== undefined) {
+        handles.push({
+          bindingId: binding.bindingId,
+          playerNetId: binding.playerNetId,
+          playerName: binding.playerName,
+        });
+      }
+    }
+    return handles;
+  }
+
+  isClientInstallationKicked(roomId: string, clientInstallationId: string) {
     const hostSession = this.hostSessions.get(roomId);
     if (!hostSession) {
       return false;
     }
 
-    return hostSession.kickedPlayerNetIds.has(playerNetId);
+    return hostSession.kickedClientInstallationIds.has(clientInstallationId);
   }
 
   updateRoomSettings(roomId: string, hostToken: string, settings: Partial<RoomSettings>): RoomSettings {
@@ -646,9 +943,163 @@ export class LobbyStore {
     }
   }
 
+  private logLegacyIdentityMode(hostSession: HostSession, reason: string) {
+    if (hostSession.legacyIdentityModeLogged) {
+      return;
+    }
+
+    hostSession.legacyIdentityModeLogged = true;
+    this.warn(
+      `[lobby] room identity mode=legacy roomId=${hostSession.roomId} reason=${reason}; `
+      + "legacy kicks disconnect the current slot binding without creating a persistent ban",
+    );
+  }
+
+  private resolveClientInstallationIdentity(
+    room: Room,
+    playerNetIdValue: string | undefined,
+    clientInstallationIdValue: string | undefined,
+  ): string | undefined {
+    const clientInstallationId = normalizeOptionalIdentity(clientInstallationIdValue);
+    if (clientInstallationId === undefined) {
+      return undefined;
+    }
+
+    if (/^[0-9]+$/.test(clientInstallationId)) {
+      return undefined;
+    }
+
+    const playerNetId = normalizeOptionalIdentity(playerNetIdValue);
+    if (clientInstallationId === playerNetId) {
+      return undefined;
+    }
+
+    if (room.savedRun?.slots.some((slot) => slot.netId === clientInstallationId)) {
+      return undefined;
+    }
+
+    if (this.clientControlBindings.get(room.roomId)?.has(clientInstallationId)) {
+      return undefined;
+    }
+
+    const hostSession = this.hostSessions.get(room.roomId);
+    if (
+      hostSession
+      && this.peerPlayerNetIds(room.roomId, hostSession.roomSessionId).has(clientInstallationId)
+    ) {
+      return undefined;
+    }
+
+    return clientInstallationId;
+  }
+
+  private rememberClientControlBinding(binding: ClientControlBinding) {
+    const playerNetId = binding.playerNetId;
+    if (playerNetId === undefined) {
+      return;
+    }
+
+    let roomBindings = this.clientControlBindings.get(binding.roomId);
+    if (!roomBindings) {
+      roomBindings = new Map();
+      this.clientControlBindings.set(binding.roomId, roomBindings);
+    }
+    const previous = roomBindings.get(playerNetId);
+    if (previous !== undefined && previous.bindingId !== binding.bindingId) {
+      let reboundSlots = this.reboundClientControlSlots.get(binding.roomId);
+      if (!reboundSlots) {
+        reboundSlots = new Set();
+        this.reboundClientControlSlots.set(binding.roomId, reboundSlots);
+      }
+      reboundSlots.add(playerNetId);
+    }
+    roomBindings.delete(playerNetId);
+    roomBindings.set(playerNetId, binding);
+    if (roomBindings.size <= this.config.maxClientControlBindingsPerRoom) {
+      return;
+    }
+
+    const hostSession = this.requireHostSession(binding.roomId);
+    const activePlayerNetIds = this.peerPlayerNetIds(
+      binding.roomId,
+      hostSession.roomSessionId,
+    );
+    for (const [candidatePlayerNetId, candidate] of roomBindings) {
+      if (
+        candidatePlayerNetId === playerNetId
+        || activePlayerNetIds.has(candidatePlayerNetId)
+        || hostSession.reportedPlayerNetIds === undefined
+        || hostSession.reportedBindingSequence === undefined
+        || hostSession.reportedBindingSequence < candidate.boundSequence
+        || hostSession.reportedPlayerNetIds.has(candidatePlayerNetId)
+      ) {
+        continue;
+      }
+
+      roomBindings.delete(candidatePlayerNetId);
+      const reboundSlots = this.reboundClientControlSlots.get(binding.roomId);
+      reboundSlots?.delete(candidatePlayerNetId);
+      if (reboundSlots?.size === 0) {
+        this.reboundClientControlSlots.delete(binding.roomId);
+      }
+      this.warn(
+        `[lobby] client control binding evicted roomId=${binding.roomId} `
+        + `playerNetId=${candidatePlayerNetId} bindingId=${candidate.bindingId} `
+        + `reason=inactive capacity=${this.config.maxClientControlBindingsPerRoom}`,
+      );
+      return;
+    }
+
+    roomBindings.delete(playerNetId);
+    if (roomBindings.size === 0) {
+      this.clientControlBindings.delete(binding.roomId);
+    }
+    this.warn(
+      `[lobby] client control binding refused roomId=${binding.roomId} `
+      + `playerNetId=${playerNetId} reason=no_inactive_binding `
+      + `capacity=${this.config.maxClientControlBindingsPerRoom}`,
+    );
+    throw new LobbyStoreError(
+      503,
+      "binding_capacity",
+      "房间控制连接已满，请稍后重试。",
+    );
+  }
+
+  private invalidateOtherSlotTickets(binding: ClientControlBinding, redeemedTicketId: string) {
+    for (const ticket of this.tickets.values()) {
+      if (
+        ticket.ticketId !== redeemedTicketId
+        && ticket.roomId === binding.roomId
+        && ticket.playerNetId === binding.playerNetId
+      ) {
+        this.tickets.delete(ticket.ticketId);
+      }
+    }
+  }
+
+  private addKickedClientInstallationId(hostSession: HostSession, clientInstallationId: string) {
+    hostSession.kickedClientInstallationIds.delete(clientInstallationId);
+    hostSession.kickedClientInstallationIds.add(clientInstallationId);
+    while (hostSession.kickedClientInstallationIds.size > this.config.maxKickedClientInstallationIds) {
+      const oldestClientInstallationId = hostSession.kickedClientInstallationIds.values()
+        .next().value as string | undefined;
+      if (oldestClientInstallationId === undefined) {
+        break;
+      }
+      hostSession.kickedClientInstallationIds.delete(oldestClientInstallationId);
+      this.warn(
+        `[lobby] kicked installation id evicted roomId=${hostSession.roomId} `
+        + `limit=${this.config.maxKickedClientInstallationIds}`,
+      );
+    }
+  }
+
   private removeRoom(roomId: string) {
     this.rooms.delete(roomId);
     this.hostSessions.delete(roomId);
+    this.clientControlBindings.delete(roomId);
+    this.reboundClientControlSlots.delete(roomId);
     for (const ticket of this.tickets.values()) {
       if (ticket.roomId === roomId) {
         this.tickets.delete(ticket.ticketId);
@@ -941,6 +1392,31 @@ function normalizeModList(mods: string[]) {
     .map((value) => value.trim())
     .filter((value, index, source) => value !== "" && source.indexOf(value) === index)
     .sort((left, right) => left.localeCompare(right, "en"));
+}
+
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function normalizeOptionalIdentity(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+// wcv1: followed by an unpadded base64url SHA-256 digest.
+const WIRE_CACHE_SIGNATURE_V1_PATTERN = /^wcv1:[A-Za-z0-9_-]{43}$/;
+
+/**
+ * Only a well-formed signature is authoritative. Anything else is treated as ABSENT
+ * rather than as a value that can mismatch, so a peer sending a placeholder or a
+ * future/foreign token is allowed through instead of being rejected. Rejecting a
+ * compatible player is worse than missing an incompatible one, which the in-band
+ * handshake gate also checks.
+ */
+function normalizeWireCacheSignatureV1(value: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized && WIRE_CACHE_SIGNATURE_V1_PATTERN.test(normalized) ? normalized : undefined;
 }
 
 function normalizeSavedRunInput(savedRun: CreateRoomInput["savedRun"]): SavedRunInfo | undefined {

@@ -29,17 +29,4 @@ public sealed class LanConnectHostChannelsTests
         Assert.Equal(expected, LanConnectHostChannels.IsValid(input));
     }
 
-    [Fact]
-    public void DecideContinueRunPublish_skips_lan_only()
-    {
-        Assert.Equal(
-            LanConnectContinueRunPublishDecisionKind.SkipLanOrigin,
-            LanConnectContinueRunPublishDecision.Decide(LanConnectHostChannels.Lan));
-        Assert.Equal(
-            LanConnectContinueRunPublishDecisionKind.Publish,
-            LanConnectContinueRunPublishDecision.Decide(LanConnectHostChannels.Lobby));
-        Assert.Equal(
-            LanConnectContinueRunPublishDecisionKind.Publish,
-            LanConnectContinueRunPublishDecision.Decide(LanConnectHostChannels.Resolve(null)));
-    }
 }

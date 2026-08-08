@@ -28,6 +28,18 @@ internal static class LanConnectModInventoryBuilder
 
     public static IReadOnlyList<LobbyModDescriptor> BuildCurrent()
     {
+        return Build(ResolveCurrentRuntimeMods());
+    }
+
+    public static IReadOnlyList<LanConnectRuntimeMod> BuildLoadedCurrentForDiagnostics()
+    {
+        return ResolveCurrentRuntimeMods()
+            .Where(static mod => mod.IsLoaded)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<LanConnectRuntimeMod> ResolveCurrentRuntimeMods()
+    {
         PropertyInfo modsProperty = typeof(ModManager).GetProperty(
             "Mods",
             BindingFlags.Public | BindingFlags.Static)
@@ -37,7 +49,7 @@ internal static class LanConnectModInventoryBuilder
             throw new InvalidOperationException("ModManager.Mods has an unsupported runtime shape.");
         }
 
-        return Build(values.Cast<object>().Select(ResolveRuntimeMod));
+        return values.Cast<object>().Select(ResolveRuntimeMod).ToArray();
     }
 
     public static IReadOnlyList<LobbyModDescriptor> Build(IEnumerable<LanConnectRuntimeMod> runtimeMods)

@@ -230,6 +230,89 @@ test("rich hello defensively locks registration authority and capability scalars
   assert.deepEqual(client.closes, []);
 });
 
+test("ticket-authenticated identity locks game routing fields", () => {
+  const gateway = createGateway();
+  const authenticatedIdentity = {
+    playerName: "Ticket Owner",
+    playerNetId: "save-slot-owner",
+  };
+  const client = peer("ticket-identity", "client", { authenticatedIdentity });
+  gateway.registerPeer(client.registration);
+
+  authenticatedIdentity.playerName = "mutated after registration";
+  authenticatedIdentity.playerNetId = "mutated-after-registration";
+  gateway.handleControlEnvelope(
+    "ticket-identity",
+    hello("Message Spoof", "spoofed-game-peer"),
+  );
+
+  assert.deepEqual(gateway.getLockedIdentity("ticket-identity"), {
+    playerName: "Ticket Owner",
+    playerNetId: "save-slot-owner",
+  });
+  assert.equal(client.frames.at(-1)?.type, "room_chat_ready");
+});
+
+test("combat and outward chat attribution use the authenticated game net id", () => {
+  const gameNetId = "save-slot-owner";
+  const clientInstallationId = "install-current-occupant";
+  const gateway = createGateway({
+    ...combatGatewayOptions,
+    context: (roomId) => ({
+      roomId,
+      roomSessionId: "session-1",
+      chatEnabled: true,
+      peerPlayerNetIds: new Set([gameNetId]),
+    }),
+  });
+  const client = peer("combat-identity-split", "client", {
+    authenticatedIdentity: {
+      playerName: "Current Occupant",
+      playerNetId: gameNetId,
+    },
+  });
+  gateway.registerPeer(client.registration);
+  gateway.handleControlEnvelope(
+    "combat-identity-split",
+    hello("Spoofed Name", "spoofed-game-peer"),
+  );
+  client.frames.length = 0;
+
+  gateway.handleControlEnvelope("combat-identity-split", roomSend(
+    "46464646-4646-4646-8646-464646464646",
+    {
+      formatVersion: 1,
+      segments: [{
+        kind: "power_state",
+        modelId: "MegaCrit.Strength",
+        amount: 2,
+        roomSessionId: "session-1",
+        ownerPlayerNetId: gameNetId,
+      }],
+    },
+  ));
+  const ack = client.frames.find((frame) => frame.type === "room_chat_ack");
+  assert.ok(ack);
+  assert.equal((ack.message as Record<string, unknown>).senderId, gameNetId);
+  assert.equal(JSON.stringify(client.frames).includes(clientInstallationId), false);
+
+  gateway.handleControlEnvelope("combat-identity-split", roomSend(
+    "47474747-4747-4747-8747-474747474747",
+    {
+      formatVersion: 1,
+      segments: [{
+        kind: "power_state",
+        modelId: "MegaCrit.Strength",
+        amount: 2,
+        roomSessionId: "session-1",
+        ownerPlayerNetId: clientInstallationId,
+      }],
+    },
+  ));
+  assert.equal(client.frames.at(-1)?.type, "room_chat_error");
+  assert.equal(client.frames.at(-1)?.code, "invalid_content");
+});
+
 test("rich hello mutation returns protocol mismatch then closes 1002", () => {
   const mutations: Array<[string, (candidate: Record<string, unknown>) => void]> = [
     ["playerName", (candidate) => { candidate.playerName = "Mallory"; }],

@@ -48,6 +48,7 @@ import { renderServerAdminPage } from "./server-admin-ui.js";
 import { ServiceUpdateManager } from "./service-update.js";
 import {
   LobbyStore,
+  MaxSupportedRoomPlayers,
   LobbyStoreError,
   type CreateRoomInput,
   type HeartbeatInput,
@@ -81,12 +82,13 @@ import {
 } from "./chat/ticket-store.js";
 import { installUpgradeRouter, type ChatUpgradeDecision } from "./chat/upgrade-router.js";
 
-const MaxLobbyPlayers = 256;
+const MaxLobbyPlayers = MaxSupportedRoomPlayers;
 const MaxRoomNameLength = 80;
 const MaxPlayerNameLength = 32;
 const MaxGameModeLength = 32;
 const MaxVersionLength = 32;
 const MaxModVersionLength = 32;
+const MaxWireCacheSignatureLength = 64;
 const MaxProtocolProfileLength = 32;
 const MaxPasswordLength = 64;
 const MaxModListEntries = 128;
@@ -164,7 +166,10 @@ interface ControlPeer {
   controlChannelId: string;
   role: "host" | "client";
   lastSeenAt: number;
+  detached: boolean;
+  superseded: boolean;
   ticketId?: string;
+  controlBindingId?: string;
   playerNetId?: string;
   playerName?: string;
 }
@@ -193,6 +198,49 @@ export interface LobbyServiceDependencies {
   ) => void | Promise<void>;
 }
 
+export interface RoomPeerRoutingState {
+  roomSessionId: string;
+  detached: boolean;
+  isOpen: boolean;
+  playerNetId?: string | undefined;
+  clientInstallationId?: string | undefined;
+}
+
+export function collectRoomChatPeerPlayerNetIds(
+  peers: Iterable<RoomPeerRoutingState>,
+  roomSessionId: string,
+): ReadonlySet<string> {
+  const playerNetIds = new Set<string>();
+  for (const peer of peers) {
+    if (
+      peer.roomSessionId === roomSessionId
+      && !peer.detached
+      && peer.isOpen
+      && peer.playerNetId
+    ) {
+      playerNetIds.add(peer.playerNetId);
+    }
+  }
+  return playerNetIds;
+}
+
+const ReservedRelayedIdentityFields = [
+  "clientInstallationId",
+  "bindingId",
+  "controlBindingId",
+  "identityKind",
+] as const;
+
+export function sanitizeRelayedControlEnvelope(
+  envelope: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const sanitized = { ...envelope };
+  for (const field of ReservedRelayedIdentityFields) {
+    delete sanitized[field];
+  }
+  return sanitized;
+}
+
 export function createProductionDependencies(): LobbyServiceDependencies {
   return {};
 }
@@ -214,19 +262,15 @@ export async function createLobbyService(
     modSyncMaxDescriptors: env.modSyncMaxDescriptors,
     modSyncMaxPayloadBytes: env.modSyncMaxPayloadBytes,
   }, {
-    peerPlayerNetIds: (roomId, roomSessionId) => {
-      const playerNetIds = new Set<string>();
-      for (const peer of roomPeers.get(roomId) ?? []) {
-        if (
-          peer.roomSessionId === roomSessionId
-          && peer.socket.readyState === peer.socket.OPEN
-          && peer.playerNetId
-        ) {
-          playerNetIds.add(peer.playerNetId);
-        }
-      }
-      return playerNetIds;
-    },
+    peerPlayerNetIds: (roomId, roomSessionId) => collectRoomChatPeerPlayerNetIds(
+      [...(roomPeers.get(roomId) ?? [])].map((peer) => ({
+        roomSessionId: peer.roomSessionId,
+        detached: peer.detached,
+        isOpen: peer.socket.readyState === peer.socket.OPEN,
+        playerNetId: peer.playerNetId,
+      })),
+      roomSessionId,
+    ),
   });
   const relayManager = new RoomRelayManager(
     {
@@ -443,6 +487,7 @@ export async function createLobbyService(
         modSyncProtocolVersion: MOD_SYNC_PROTOCOL_VERSION,
         modSyncEnabled: serverAdminStateStore.getState().modSyncEnabled,
         modSyncMinimumClientVersion: MOD_SYNC_MINIMUM_CLIENT_VERSION,
+        wireCacheSignatureV1Enforced: true,
       },
     });
   });
@@ -578,10 +623,18 @@ export async function createLobbyService(
         roomName: boundedString(body?.roomName, "roomName", MaxRoomNameLength),
         password: optionalBoundedString(body?.password, "password", MaxPasswordLength),
         hostPlayerName: boundedString(body?.hostPlayerName, "hostPlayerName", MaxPlayerNameLength),
+        clientInstallationId: optionalBoundedString(
+          body?.clientInstallationId,
+          "clientInstallationId",
+          MaxNetIdLength),
         gameMode: boundedString(body?.gameMode, "gameMode", MaxGameModeLength),
         version: boundedString(body?.version, "version", MaxVersionLength),
         modVersion: boundedString(body?.modVersion, "modVersion", MaxModVersionLength),
         modList: boundedStringArray(body?.modList, "modList", MaxModListEntries, MaxModListEntryLength),
+        wireCacheSignatureV1: optionalBoundedString(
+          body?.wireCacheSignatureV1,
+          "wireCacheSignatureV1",
+          MaxWireCacheSignatureLength),
         hostModInventory: body?.hostModInventory === undefined
           ? undefined
           : parseModInventory(body.hostModInventory, "hostModInventory"),
@@ -671,21 +724,33 @@ export async function createLobbyService(
 
   app.post("/rooms/:id/join", async (req, res, next) => {
     try {
-      assertCreateJoinRateLimit(req, "join_room");
       cleanupExpiredRoomsNow();
       const body = req.body as Partial<JoinRoomInput> | undefined;
-      if (typeof body?.playerName === "string") {
-        await assertNameAllowedByModeration(body.playerName, "player_name", requestIp(req));
-      }
-      const response = store.joinRoom(req.params.id, {
+      const joinInput: JoinRoomInput = {
         playerName: boundedString(body?.playerName, "playerName", MaxPlayerNameLength),
         password: optionalBoundedString(body?.password, "password", MaxPasswordLength),
         version: boundedString(body?.version, "version", MaxVersionLength),
         modVersion: boundedString(body?.modVersion, "modVersion", MaxModVersionLength),
         modList: boundedStringArray(body?.modList, "modList", MaxModListEntries, MaxModListEntryLength),
+        wireCacheSignatureV1: optionalBoundedString(
+          body?.wireCacheSignatureV1,
+          "wireCacheSignatureV1",
+          MaxWireCacheSignatureLength),
         desiredSavePlayerNetId: optionalBoundedString(body?.desiredSavePlayerNetId, "desiredSavePlayerNetId", MaxNetIdLength),
         playerNetId: optionalBoundedString(body?.playerNetId, "playerNetId", MaxNetIdLength),
-      });
+        clientInstallationId: optionalBoundedString(
+          body?.clientInstallationId,
+          "clientInstallationId",
+          MaxNetIdLength),
+      };
+      const wireCacheMismatch = store.findWireCacheMismatchForJoin(req.params.id, joinInput);
+      if (wireCacheMismatch) {
+        throw wireCacheMismatch;
+      }
+
+      assertCreateJoinRateLimit(req, "join_room");
+      await assertNameAllowedByModeration(joinInput.playerName, "player_name", requestIp(req));
+      const response = store.joinRoom(req.params.id, joinInput);
       const relayEndpoint = relayManager.getRoomEndpoint(req.params.id, resolveAdvertisedRelayHost(req));
       if (relayEndpoint) {
         response.connectionPlan.relayAllowed = true;
@@ -1247,15 +1312,16 @@ export async function createLobbyService(
         throw new InputError("role 必须为 host 或 client。");
       }
 
-      if (role === "host") {
-        store.validateHostControl(
+      const hostSession = role === "host"
+        ? store.validateHostControl(
           roomId,
           controlChannelId,
           requiredQuery(requestUrl, "token"),
-        );
-      } else {
-        store.validateClientControl(roomId, controlChannelId, requiredQuery(requestUrl, "ticketId"));
-      }
+        )
+        : undefined;
+      const joinTicket = role === "client"
+        ? store.validateClientControl(roomId, controlChannelId, requiredQuery(requestUrl, "ticketId"))
+        : undefined;
       const roomContext = store.getRoomChatContext(roomId);
       if (!roomContext) {
         throw new InputError("房间会话不存在或已过期。");
@@ -1269,9 +1335,21 @@ export async function createLobbyService(
         controlChannelId,
         role,
         lastSeenAt: Date.now(),
+        detached: false,
+        superseded: false,
         ...(role === "client" ? { ticketId: requiredQuery(requestUrl, "ticketId") } : {}),
+        ...(joinTicket?.controlBindingId === undefined
+          ? {}
+          : { controlBindingId: joinTicket.controlBindingId }),
+        ...(joinTicket?.playerNetId === undefined ? {} : { playerNetId: joinTicket.playerNetId }),
+        ...(joinTicket?.playerName === undefined
+          ? hostSession?.hostPlayerName === undefined
+            ? {}
+            : { playerName: hostSession.hostPlayerName }
+          : { playerName: joinTicket.playerName }),
       };
 
+      supersedeExistingSlotPeer(peer);
       roomChatGateway.registerPeer({
         connectionSessionId: peer.connectionSessionId,
         clientIp: resolveChatClientIp(req),
@@ -1282,6 +1360,16 @@ export async function createLobbyService(
         ...(peer.ticketId === undefined
           ? {}
           : { authenticatedTicketId: peer.ticketId }),
+        ...(peer.playerName === undefined
+          ? {}
+          : {
+              authenticatedIdentity: {
+                playerName: peer.playerName,
+                ...(peer.playerNetId === undefined
+                  ? {}
+                  : { playerNetId: peer.playerNetId }),
+              },
+            }),
         send: (frame) => sendJson(peer.socket, frame),
         close: (code, reason) => peer.socket.close(code, reason),
       });
@@ -1291,7 +1379,26 @@ export async function createLobbyService(
         roomId,
         controlChannelId,
         role,
+        kickPlayerResultSupported: true,
       });
+
+      if (role === "host") {
+        const hostToken = requiredQuery(requestUrl, "token");
+        for (const binding of store.listClientControlBindingHandles(roomId, hostToken)) {
+          sendJson(socket, {
+            type: "player_control_binding",
+            roomId,
+            playerNetId: binding.playerNetId,
+            playerName: binding.playerName,
+            bindingId: binding.bindingId,
+          });
+        }
+      } else if (
+        joinTicket?.controlBindingId !== undefined
+        && joinTicket.playerNetId !== undefined
+      ) {
+        sendControlBindingHandleToHosts(peer);
+      }
 
       if (role === "client") {
         const settings = store.getRoomSettings(roomId);
@@ -1300,6 +1407,9 @@ export async function createLobbyService(
 
       socket.on("message", (payload) => {
         try {
+          if (peer.detached) {
+            return;
+          }
           peer.lastSeenAt = Date.now();
           if (peer.role === "host") {
             store.touchHostSession(peer.roomId);
@@ -1341,12 +1451,87 @@ export async function createLobbyService(
           }
 
           if (parsed.type === "kick_player" && peer.role === "host") {
-            const targetNetId = String(parsed.targetPlayerNetId ?? "");
-            if (!targetNetId) return;
+            const kickRequestId = typeof parsed.kickRequestId === "string"
+              ? parsed.kickRequestId.trim()
+              : "";
+            const modernTargetNetId = typeof parsed.playerNetId === "string"
+              ? parsed.playerNetId.trim()
+              : "";
+            const requestedBindingId = typeof parsed.bindingId === "string"
+              ? parsed.bindingId.trim()
+              : "";
+            const legacyTargetNetId = typeof parsed.targetPlayerNetId === "string"
+              ? parsed.targetPlayerNetId.trim()
+              : "";
+            if (modernTargetNetId && !requestedBindingId) {
+              sendJson(socket, {
+                type: "kick_player_result",
+                roomId: peer.roomId,
+                kickRequestId,
+                accepted: false,
+                playerNetId: modernTargetNetId,
+                reason: "missing_binding_id",
+                message: "目标玩家已变化，请刷新列表后重试。",
+              });
+              console.warn(
+                `[control] kick_player rejected roomId=${peer.roomId} `
+                + `targetNetId=${modernTargetNetId} reason=missing_binding_id`,
+              );
+              return;
+            }
+            const targetNetId = modernTargetNetId || legacyTargetNetId;
+            if (!targetNetId) {
+              sendJson(socket, {
+                type: "kick_player_result",
+                roomId: peer.roomId,
+                kickRequestId,
+                accepted: false,
+                reason: "missing_target",
+                message: "未找到要移出的玩家，请刷新列表后重试。",
+              });
+              console.warn(
+                `[control] kick_player rejected roomId=${peer.roomId} reason=missing_target`,
+              );
+              return;
+            }
             const hostToken = requiredQuery(requestUrl, "token");
-            store.kickPlayer(peer.roomId, hostToken, targetNetId);
-            const targetPeer = findPeerByNetId(peer.roomId, targetNetId);
+            const kickResult = store.kickPlayer(
+              peer.roomId,
+              hostToken,
+              targetNetId,
+              modernTargetNetId ? requestedBindingId : undefined,
+            );
+            if (kickResult.outcome !== "kicked") {
+              sendJson(socket, {
+                type: "kick_player_result",
+                roomId: peer.roomId,
+                kickRequestId,
+                accepted: false,
+                playerNetId: targetNetId,
+                ...(requestedBindingId ? { bindingId: requestedBindingId } : {}),
+                reason: kickResult.outcome,
+                message: "目标玩家已变化，请刷新列表后重试。",
+              });
+              console.warn(
+                `[control] kick_player rejected roomId=${peer.roomId} targetNetId=${targetNetId} `
+                + `reason=${kickResult.outcome}`,
+              );
+              return;
+            }
+            sendJson(socket, {
+              type: "kick_player_result",
+              roomId: peer.roomId,
+              kickRequestId,
+              accepted: true,
+              playerNetId: targetNetId,
+              bindingId: kickResult.binding.bindingId,
+            });
+            const targetPeer = findCurrentPeerByBindingId(
+              peer.roomId,
+              kickResult.binding.bindingId,
+            );
             if (targetPeer) {
+              removePeer(targetPeer);
               sendJson(targetPeer.socket, {
                 type: "kicked",
                 roomId: peer.roomId,
@@ -1361,7 +1546,13 @@ export async function createLobbyService(
               playerNetId: targetNetId,
               playerName: String(parsed.targetPlayerName ?? ""),
             });
-            console.log(`[control] kick_player roomId=${peer.roomId} targetNetId=${targetNetId} found=${!!targetPeer}`);
+            console.log(
+              `[control] kick_player roomId=${peer.roomId} targetNetId=${targetNetId} `
+              + `session=${targetPeer?.connectionSessionId ?? "<none>"} `
+              + `identityKind=${kickResult.binding.identityKind} `
+              + `legacyRequest=${kickResult.legacyRequest} `
+              + `persistentBan=${kickResult.persistentBanCreated}`,
+            );
             return;
           }
 
@@ -1386,8 +1577,16 @@ export async function createLobbyService(
             return;
           }
 
+          const identity = roomChatGateway.getLockedIdentity(peer.connectionSessionId);
+          const authenticatedEnvelope = parsed.type === "room_chat" && identity
+            ? {
+                ...parsed,
+                playerName: identity.playerName,
+                playerNetId: identity.playerNetId,
+              }
+            : parsed;
           broadcastToRoom(peer, {
-            ...parsed,
+            ...sanitizeRelayedControlEnvelope(authenticatedEnvelope),
             roomId: peer.roomId,
             controlChannelId: peer.controlChannelId,
             role: peer.role,
@@ -1773,6 +1972,10 @@ export async function createLobbyService(
   }
 
   function removePeer(peer: ControlPeer) {
+    if (peer.detached) {
+      return;
+    }
+    peer.detached = true;
     roomChatGateway.unregisterPeer(peer.connectionSessionId);
     const peers = roomPeers.get(peer.roomId);
     if (!peers) {
@@ -1792,6 +1995,7 @@ export async function createLobbyService(
     }
 
     for (const peer of peers) {
+      peer.detached = true;
       roomChatGateway.unregisterPeer(peer.connectionSessionId);
       peer.socket.close(code, reason);
     }
@@ -1799,13 +2003,67 @@ export async function createLobbyService(
     roomPeers.delete(roomId);
   }
 
-  function findPeerByNetId(roomId: string, playerNetId: string): ControlPeer | undefined {
+  function supersedeExistingSlotPeer(replacement: ControlPeer) {
+    if (replacement.role !== "client" || !replacement.playerNetId) {
+      return;
+    }
+
+    for (const existing of [...(roomPeers.get(replacement.roomId) ?? [])]) {
+      if (
+        existing.role === "client"
+        && !existing.detached
+        && existing.playerNetId === replacement.playerNetId
+      ) {
+        existing.superseded = true;
+        removePeer(existing);
+        existing.socket.close(4002, "superseded");
+        console.log(
+          `[control] superseded roomId=${replacement.roomId} playerNetId=${replacement.playerNetId} `
+          + `oldSession=${existing.connectionSessionId} newSession=${replacement.connectionSessionId}`,
+        );
+      }
+    }
+  }
+
+  function findCurrentPeerByBindingId(roomId: string, controlBindingId: string): ControlPeer | undefined {
     const peers = roomPeers.get(roomId);
     if (!peers) return undefined;
     for (const peer of peers) {
-      if (peer.playerNetId === playerNetId) return peer;
+      if (
+        peer.role === "client"
+        && !peer.detached
+        && !peer.superseded
+        && peer.socket.readyState === peer.socket.OPEN
+        && peer.controlBindingId === controlBindingId
+      ) return peer;
     }
     return undefined;
+  }
+
+  function sendControlBindingHandleToHosts(clientPeer: ControlPeer) {
+    if (
+      clientPeer.role !== "client"
+      || clientPeer.controlBindingId === undefined
+      || clientPeer.playerNetId === undefined
+    ) {
+      return;
+    }
+
+    for (const candidate of roomPeers.get(clientPeer.roomId) ?? []) {
+      if (
+        candidate.role === "host"
+        && !candidate.detached
+        && candidate.socket.readyState === candidate.socket.OPEN
+      ) {
+        sendJson(candidate.socket, {
+          type: "player_control_binding",
+          roomId: clientPeer.roomId,
+          playerNetId: clientPeer.playerNetId,
+          playerName: clientPeer.playerName ?? "",
+          bindingId: clientPeer.controlBindingId,
+        });
+      }
+    }
   }
 
   function cleanupExpiredRoomsNow(now = new Date()) {
@@ -1825,7 +2083,7 @@ export async function createLobbyService(
     }
 
     for (const peer of peers) {
-      if (peer === sender || peer.socket.readyState !== peer.socket.OPEN) {
+      if (peer === sender || peer.detached || peer.socket.readyState !== peer.socket.OPEN) {
         continue;
       }
 

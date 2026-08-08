@@ -24,10 +24,12 @@ internal sealed record LanConnectModPreflightJoinRequest
 {
     public LobbyRoomSummary Room { get; init; } = new();
     public string PlayerName { get; init; } = string.Empty;
+    public string ClientInstallationId { get; init; } = string.Empty;
     public string? Password { get; init; }
     public string GameVersion { get; init; } = string.Empty;
     public string ModVersion { get; init; } = string.Empty;
     public List<string> ModList { get; init; } = [];
+    public string? WireCacheSignatureV1 { get; init; }
     public List<LobbyModDescriptor> LocalMods { get; init; } = [];
     public string? DesiredSavePlayerNetId { get; init; }
     public string? PlayerNetId { get; init; }
@@ -40,10 +42,12 @@ internal sealed record LanConnectModPreflightJoinRequest
     {
         Room = room,
         PlayerName = LanConnectConfig.GetEffectivePlayerDisplayName(),
+        ClientInstallationId = LanConnectConfig.GetOrCreateClientInstallationId(),
         Password = string.IsNullOrWhiteSpace(password) ? null : password,
         GameVersion = LanConnectBuildInfo.GetGameVersion(),
         ModVersion = LanConnectBuildInfo.GetModVersion(),
         ModList = LanConnectBuildInfo.GetModList(),
+        WireCacheSignatureV1 = LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature,
         LocalMods = LanConnectBuildInfo.GetModInventory(),
         DesiredSavePlayerNetId = string.IsNullOrWhiteSpace(desiredSavePlayerNetId) ? null : desiredSavePlayerNetId,
         PlayerNetId = string.IsNullOrWhiteSpace(playerNetId) ? null : playerNetId
@@ -189,10 +193,12 @@ internal sealed class LanConnectModPreflightCoordinator
             new LobbyJoinRoomRequest
             {
                 PlayerName = request.PlayerName,
+                ClientInstallationId = request.ClientInstallationId,
                 Password = request.Password,
                 Version = request.GameVersion,
                 ModVersion = request.ModVersion,
                 ModList = request.ModList,
+                WireCacheSignatureV1 = request.WireCacheSignatureV1,
                 DesiredSavePlayerNetId = request.DesiredSavePlayerNetId,
                 PlayerNetId = request.PlayerNetId
             },

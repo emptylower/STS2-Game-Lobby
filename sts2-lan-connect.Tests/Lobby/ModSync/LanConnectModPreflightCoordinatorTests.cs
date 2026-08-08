@@ -231,6 +231,27 @@ public sealed class LanConnectModPreflightCoordinatorTests
         Assert.Equal(password, ports.PreflightRequest?.Password);
         Assert.Equal(password, ports.JoinRequest?.Password);
         Assert.Equal(desiredSavePlayerNetId, ports.JoinRequest?.DesiredSavePlayerNetId);
+        Assert.Equal("wcv1:test-signature", ports.JoinRequest?.WireCacheSignatureV1);
+        Assert.Equal("install-local", ports.JoinRequest?.ClientInstallationId);
+    }
+
+    [Fact]
+    public async Task Saved_run_takeover_keeps_installation_identity_distinct_from_slot_identity()
+    {
+        FakePorts ports = new();
+        LanConnectModPreflightCoordinator sut = new(ports);
+        LanConnectModPreflightJoinRequest request = Request() with
+        {
+            DesiredSavePlayerNetId = "save-slot-original-owner",
+            PlayerNetId = "save-slot-original-owner",
+            ClientInstallationId = "install-current-occupant"
+        };
+
+        await sut.JoinAsync(request);
+
+        Assert.Equal("save-slot-original-owner", ports.JoinRequest?.DesiredSavePlayerNetId);
+        Assert.Equal("save-slot-original-owner", ports.JoinRequest?.PlayerNetId);
+        Assert.Equal("install-current-occupant", ports.JoinRequest?.ClientInstallationId);
     }
 
     private static LanConnectModPreflightJoinRequest Request(
@@ -239,10 +260,12 @@ public sealed class LanConnectModPreflightCoordinatorTests
     {
         Room = Room("v0.109.0"),
         PlayerName = "Ironclad",
+        ClientInstallationId = "install-local",
         Password = password,
         GameVersion = "v0.109.0",
         ModVersion = "0.5.1",
         ModList = ["gameplay.mod"],
+        WireCacheSignatureV1 = "wcv1:test-signature",
         LocalMods =
         [
             new LobbyModDescriptor

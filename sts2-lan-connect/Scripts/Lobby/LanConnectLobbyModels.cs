@@ -155,6 +155,8 @@ internal sealed class LobbyProbeCapabilities
 
     public string ModSyncMinimumClientVersion { get; set; } = string.Empty;
 
+    public bool WireCacheSignatureV1Enforced { get; set; }
+
     [JsonIgnore]
     public bool SupportsTextServerChat => ServerChatVersion == 1;
 
@@ -204,6 +206,8 @@ internal sealed class LobbyCreateRoomRequest
 
     public string HostPlayerName { get; set; } = string.Empty;
 
+    public string ClientInstallationId { get; set; } = string.Empty;
+
     public string GameMode { get; set; } = LanConnectConstants.DefaultGameMode;
 
     public string Version { get; set; } = string.Empty;
@@ -211,6 +215,8 @@ internal sealed class LobbyCreateRoomRequest
     public string ModVersion { get; set; } = string.Empty;
 
     public List<string> ModList { get; set; } = new();
+
+    public string? WireCacheSignatureV1 { get; set; }
 
     public List<LobbyModDescriptor>? HostModInventory { get; set; }
 
@@ -244,6 +250,8 @@ internal sealed class LobbyJoinRoomRequest
 {
     public string PlayerName { get; set; } = string.Empty;
 
+    public string ClientInstallationId { get; set; } = string.Empty;
+
     public string? Password { get; set; }
 
     public string Version { get; set; } = string.Empty;
@@ -251,6 +259,8 @@ internal sealed class LobbyJoinRoomRequest
     public string ModVersion { get; set; } = string.Empty;
 
     public List<string> ModList { get; set; } = new();
+
+    public string? WireCacheSignatureV1 { get; set; }
 
     public string? DesiredSavePlayerNetId { get; set; }
 
@@ -386,6 +396,14 @@ internal sealed class LobbyControlEnvelope
     public string? TicketId { get; set; }
 
     public string? PlayerNetId { get; set; }
+
+    public string? BindingId { get; set; }
+
+    public string? KickRequestId { get; set; }
+
+    public bool? KickPlayerResultSupported { get; set; }
+
+    public bool? Accepted { get; set; }
 
     public string? PlayerName { get; set; }
 

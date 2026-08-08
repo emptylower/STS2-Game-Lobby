@@ -201,6 +201,8 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         InitialGameInfoMessage initialMessage,
         LanConnectLobbyHandshakeCompatibility.PeerVersionSnapshot hostInfo)
     {
+        ValidateWireCacheCompatibility(hostInfo);
+
         ConnectionFailureReason? declaredCompatibilityFailure = null;
         if (initialMessage.connectionFailureReason.HasValue)
         {
@@ -227,8 +229,10 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         string localVersion = LanConnectBuildInfo.GetGameVersion();
         ValidateGameVersion(hostInfo.Version, localVersion);
 
-        List<string> localMods = LanConnectBuildInfo.GetModList();
-        List<string> hostMods = hostInfo.GameplayAffectingMods;
+        List<string> localMods = LanConnectWireCacheHandshakeToken.FilterSentinels(
+            LanConnectBuildInfo.GetModList());
+        List<string> hostMods = LanConnectWireCacheHandshakeToken.FilterSentinels(
+            hostInfo.GameplayAffectingMods);
         List<string> missingModsOnLocal = hostMods.Except(localMods).ToList();
         List<string> missingModsOnHost = localMods.Except(hostMods).ToList();
         ConnectionFailureExtraInfo extraInfo = LanConnectLobbyHandshakeCompatibility.PopulateFailureExtraInfo(
@@ -277,6 +281,47 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             throw new ClientConnectionFailedException(
                 $"房主报告了连接兼容性错误：{declaredCompatibilityFailure.Value}",
                 new NetErrorInfo(declaredCompatibilityFailure.Value));
+        }
+    }
+
+    private void ValidateWireCacheCompatibility(
+        LanConnectLobbyHandshakeCompatibility.PeerVersionSnapshot hostInfo)
+    {
+        LanConnectWireCacheCaptureResult localCapture =
+            LanConnectWireCacheDiagnostics.GetCurrentResult();
+        LanConnectWireCacheHandshakeDecision decision =
+            LanConnectWireCacheHandshakeDecision.Evaluate(
+                localCapture,
+                hostInfo.WireCacheToken,
+                _relaxedCompatibility);
+
+        string decisionName = decision.Kind switch
+        {
+            LanConnectWireCacheHandshakeDecisionKind.Match => "match",
+            LanConnectWireCacheHandshakeDecisionKind.Mismatch => "mismatch",
+            LanConnectWireCacheHandshakeDecisionKind.LocalUnavailable => "local-unavailable",
+            LanConnectWireCacheHandshakeDecisionKind.RemoteAbsent => "remote-absent",
+            _ => decision.Kind.ToString()
+        };
+        string localSignature = decision.LocalToken?.Signature ?? "unavailable";
+        string remoteSignature = decision.RemoteToken?.Signature ?? "absent";
+        string diagnostic =
+            $"sts2_lan_connect wire_handshake join: localSignature={localSignature}, " +
+            $"remoteSignature={remoteSignature}, decision={decisionName}, " +
+            $"localWidths={decision.LocalToken?.FormatWidths() ?? "unavailable"}, " +
+            $"remoteWidths={decision.RemoteToken?.FormatWidths() ?? "unavailable"}, " +
+            $"remoteSentinelStatus={hostInfo.WireCacheToken.Status}, detail={decision.Detail}";
+
+        bool isAllowed = LanConnectWireCacheHandshakeGate.ShouldAllowJoin(
+            decision,
+            diagnostic,
+            message => _logger.Info(message),
+            message => _logger.Warn(message));
+        if (!isAllowed)
+        {
+            throw new ClientConnectionFailedException(
+                decision.Detail,
+                new NetErrorInfo(ConnectionFailureReason.ModMismatch));
         }
     }
 

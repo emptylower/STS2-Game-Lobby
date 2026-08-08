@@ -67,7 +67,12 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
         {
             version = "v0.109.0",
             idDatabaseHash = 109,
-            gameplayAffectingMods = [" mod-b ", "mod-a", "mod-a"]
+            gameplayAffectingMods = [" mod-b ", "mod-a", "mod-a"],
+            otherMods =
+            [
+                "utility-mod",
+                "sts2_lan_connect_wire:v1:wcv1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:bits=2,3,4,5"
+            ]
         };
 
         LanConnectLobbyHandshakeCompatibility.PeerVersionSnapshot snapshot =
@@ -76,6 +81,9 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
         Assert.Equal("v0.109.0", snapshot.Version);
         Assert.Equal(109UL, snapshot.IdDatabaseHash);
         Assert.Equal(["mod-a", "mod-b"], snapshot.GameplayAffectingMods);
+        Assert.Equal(["utility-mod"], snapshot.OtherMods);
+        Assert.Equal(LanConnectWireCacheHandshakeTokenStatus.Valid, snapshot.WireCacheToken.Status);
+        Assert.Equal(5, snapshot.WireCacheToken.Token!.PropertyIdBitSize);
         Assert.Null(snapshot.RawVersionInfo);
     }
 
@@ -88,7 +96,8 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
             {
                 version = "v0.110.1",
                 idDatabaseHash = 110,
-                gameplayAffectingMods = ["mod-current"]
+                gameplayAffectingMods = ["mod-current"],
+                otherMods = ["utility-current"]
             }
         };
 
@@ -98,6 +107,8 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
         Assert.Equal("v0.110.1", snapshot.Version);
         Assert.Equal(110UL, snapshot.IdDatabaseHash);
         Assert.Equal(["mod-current"], snapshot.GameplayAffectingMods);
+        Assert.Equal(["utility-current"], snapshot.OtherMods);
+        Assert.Equal(LanConnectWireCacheHandshakeTokenStatus.Absent, snapshot.WireCacheToken.Status);
         Assert.IsType<TestPeerVersionInfo>(snapshot.RawVersionInfo);
     }
 
@@ -115,6 +126,25 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
             LanConnectLobbyHandshakeCompatibility.ReadInitialGameInfo(message);
 
         Assert.Equal(["legacy-mod"], snapshot.GameplayAffectingMods);
+    }
+
+    [Fact]
+    public void Preserves_duplicate_other_mod_sentinels_for_ambiguity_detection()
+    {
+        string sentinel =
+            "sts2_lan_connect_wire:v1:wcv1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        LegacyInitialGameInfo message = new()
+        {
+            version = "v0.110.1",
+            idDatabaseHash = 110,
+            otherMods = [sentinel, sentinel]
+        };
+
+        LanConnectLobbyHandshakeCompatibility.PeerVersionSnapshot snapshot =
+            LanConnectLobbyHandshakeCompatibility.ReadInitialGameInfo(message);
+
+        Assert.Equal(LanConnectWireCacheHandshakeTokenStatus.Duplicate, snapshot.WireCacheToken.Status);
+        Assert.Empty(snapshot.OtherMods);
     }
 
     [Fact]
@@ -145,12 +175,19 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
         {
             version = "remote",
             idDatabaseHash = 110,
-            gameplayAffectingMods = ["host-mod"]
+            gameplayAffectingMods = ["host-mod"],
+            otherMods =
+            [
+                "remote-utility",
+                "sts2_lan_connect_wire:v1:wcv1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            ]
         };
         LanConnectLobbyHandshakeCompatibility.PeerVersionSnapshot snapshot = new(
             remotePeerInfo.version,
             remotePeerInfo.idDatabaseHash,
             remotePeerInfo.gameplayAffectingMods,
+            [],
+            LanConnectWireCacheHandshakeToken.Parse(null),
             remotePeerInfo);
         List<string> missingOnLocal = ["host-mod"];
         List<string> missingOnHost = ["local-mod"];
@@ -164,6 +201,8 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
         Assert.Same(missingOnHost, legacy.missingModsOnHost);
         Assert.Equal("local-current", current.localInfo.version);
         Assert.Equal("remote", current.remoteInfo.version);
+        Assert.Equal(["local-utility"], current.localInfo.otherMods);
+        Assert.Equal(["remote-utility"], current.remoteInfo.otherMods);
         Assert.False(current.localIsHost);
     }
 
@@ -194,6 +233,7 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
         public string version;
         public uint idDatabaseHash;
         public List<string>? gameplayAffectingMods;
+        public List<string>? otherMods;
     }
 
     private struct CurrentInitialGameInfo
@@ -213,12 +253,14 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
         public string version;
         public uint idDatabaseHash;
         public List<string> gameplayAffectingMods;
+        public List<string>? otherMods;
 
         public static TestPeerVersionInfo LocalDefault() => new()
         {
             version = "local-current",
             idDatabaseHash = 999,
-            gameplayAffectingMods = ["local-mod"]
+            gameplayAffectingMods = ["local-mod"],
+            otherMods = ["local-utility"]
         };
     }
 

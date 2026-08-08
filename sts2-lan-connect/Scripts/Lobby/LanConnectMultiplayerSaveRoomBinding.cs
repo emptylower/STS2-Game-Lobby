@@ -17,6 +17,10 @@ namespace Sts2LanConnect.Scripts;
 
 internal sealed class LanConnectSavedRoomBinding
 {
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; set; }
+
     public string SaveKey { get; set; } = string.Empty;
 
     public string RoomName { get; set; } = string.Empty;
@@ -43,6 +47,8 @@ internal sealed class LanConnectSavedRoomBinding
 
 internal sealed class LanConnectResolvedRoomBinding
 {
+    public int SchemaVersion { get; init; }
+
     public string SaveKey { get; init; } = string.Empty;
 
     public string RoomName { get; init; } = string.Empty;
@@ -110,7 +116,8 @@ internal static class LanConnectMultiplayerSaveRoomBinding
                 Password = string.IsNullOrWhiteSpace(storedBinding.Password) ? null : storedBinding.Password,
                 GameMode = string.IsNullOrWhiteSpace(storedBinding.GameMode) ? GetLobbyGameMode(run) : storedBinding.GameMode,
                 HasStoredBinding = true,
-                HostChannel = storedBinding.HostChannel ?? string.Empty
+                HostChannel = storedBinding.HostChannel ?? string.Empty,
+                SchemaVersion = storedBinding.SchemaVersion
             };
         }
 
@@ -121,14 +128,12 @@ internal static class LanConnectMultiplayerSaveRoomBinding
             Password = null,
             GameMode = GetLobbyGameMode(run),
             HasStoredBinding = false,
-            HostChannel = string.Empty
+            HostChannel = string.Empty,
+            SchemaVersion = 0
         };
     }
 
-    public static void PersistBinding(SerializableRun run, string roomName, string? password, string gameMode, string source)
-        => PersistHostBinding(run, roomName, password, gameMode, LanConnectHostChannels.Lobby, source);
-
-    public static void PersistHostBinding(
+    public static bool PersistHostBinding(
         SerializableRun run,
         string roomName,
         string? password,
@@ -140,20 +145,21 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         if (string.IsNullOrWhiteSpace(trimmedRoomName))
         {
             GD.Print($"sts2_lan_connect save_binding: skip persist because room name is empty. source={source}");
-            return;
+            return false;
         }
 
         if (!LanConnectHostChannels.IsValid(hostChannel))
         {
             GD.Print(
                 $"sts2_lan_connect save_binding: skip persist because hostChannel is invalid. source={source}, hostChannel={LanConnectHostChannels.DescribePersisted(hostChannel)}");
-            return;
+            return false;
         }
 
         string normalizedHostChannel = hostChannel.Trim().ToLowerInvariant();
 
         LanConnectSavedRoomBinding binding = new()
         {
+            SchemaVersion = LanConnectSavedRoomBinding.CurrentSchemaVersion,
             SaveKey = BuildSaveKey(run),
             RoomName = trimmedRoomName,
             Password = string.IsNullOrWhiteSpace(password) ? string.Empty : LanConnectConfig.SanitizeRoomPassword(password),
@@ -169,6 +175,7 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         LanConnectConfig.UpsertSaveRoomBinding(binding);
         GD.Print(
             $"sts2_lan_connect save_binding: persisted source={source}, saveKey={binding.SaveKey}, roomName='{binding.RoomName}', hostChannel={binding.HostChannel}, passwordSet={!string.IsNullOrWhiteSpace(binding.Password)}, playerCount={binding.PlayerCount}, signature={binding.PlayerSignature}");
+        return true;
     }
 
     public static string GetLobbyGameMode(GameMode gameMode)

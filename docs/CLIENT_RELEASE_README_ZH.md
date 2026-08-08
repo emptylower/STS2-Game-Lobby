@@ -14,23 +14,34 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.5.5` |
+| 客户端版本 | `0.5.6-rc1`（测试候选） |
 | 默认大厅 | `sts2-test.43.133.192.249.nip.io`（可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
-| 连接策略 | `test_relaxed + relay-only` |
+| 连接策略 | `strict + relay-only` |
 
-`0.5.5` 新增游戏 ABI 向下兼容：同一客户端 DLL 会在运行时识别旧版平铺握手结构和 `0.110.x` 的 `PeerVersionInfo` 结构，并为普通加入、读档加入和运行中重连发送当前游戏所需的请求。旧 `LobbyPlayer` 与新 `StartRunLobbyPlayer` 的扩容序列化补丁也会按运行时类型选择。
+`0.5.6-rc1` 是用于现场验证的测试候选，不是正式版。客户端和 lobby-service 版本特意同步为 `0.5.6-rc1`：新的 `WireCacheSignatureV1` 加入门禁和 binding-aware kick 需要服务端配套支持，玩家与服主可直接比较同一个版本号。
 
-`0.5.5` 已作为客户端正式版发布；lobby-service 无需升级，继续使用 `0.5.4`。同一客户端包以游戏 `0.107.1`、`0.109.0`、`0.109.1` 与 `0.110.x` 为加载目标，并保留 `0.5.4` 的 AI 审核交互，以及 `0.5.3` 的 LAN/大厅续局通道拆分、续局身份码、存档保护和聊天 HUD。
+本版会比较四张 ModelId net-id 表和四个位宽。`affects_gameplay: false` 的 MOD 仍可能改变线上编码；双方真实签名不一致时会在 ticket 签发或游戏 join request 之前拒绝，缺失/不可读签名则允许加入。发布默认配置已由 `test_relaxed` 改为 `strict`。
 
-同一房间内的所有玩家必须使用完全相同的游戏版本。房主和客户端版本不同时，加入流程会直接提示双方版本并中止；普通非联机 MOD 不进入预检、不提示、不禁用，也不影响加入。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。
+续局来源现在按 `lan` / `lobby` / 未知三态处理，未知存档只询问一次；safe-load 和修复不会再误写或删除绑定。踢出使用与存档槽位分离的安装 credential 和当前占用者 binding handle，避免槽位接管后误封原主人。
+
+同一客户端包继续以游戏 `0.107.1`、`0.109.0`、`0.109.1` 与 `0.110.x` 为加载目标。同一房间内所有玩家必须使用完全相同的游戏版本，并在本轮测试中统一使用客户端和 lobby-service `0.5.6-rc1`。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。
+
+本候选版是在既有功能之上叠加的，先前版本的能力全部保留：`0.5.5` 的游戏 ABI 向下兼容（运行时识别旧版平铺握手与 `0.110.x` 的 `PeerVersionInfo` 结构，并按运行时类型选择 `LobbyPlayer` 或 `StartRunLobbyPlayer` 的扩容序列化补丁）、`0.5.4` 的 AI 审核交互，以及 `0.5.3` 的 LAN/大厅续局通道拆分、续局身份码、存档保护和聊天 HUD。
+
+### v0.5.6-rc1 测试重点
+
+- 使用不同内容 MOD 组合加入同一房间，确认编码不一致时在黑屏前收到明确拒绝；该拒绝是预期行为。
+- 从主菜单继续大厅存档、由房主执行重开，确认房间重新发布且队友可见。
+- 测试槽位接管后踢出，确认原槽位主人没有被封禁，列表刷新后的 stale 操作不会转向新人。
+- 遇到加入失败、黑屏或等待页卡住时，提交两台机器各自的完整 `godot.log`。日志会打印签名、位宽、表条目数和每个 MOD 的 `affects_gameplay` 标记。
 
 ### 加入前 MOD 预检
 
 - 缺少 Workshop gameplay MOD：查看真实 Workshop 标题、发布者和大小后，勾选并确认订阅；可取消、重试或改为手动处理。
 - 缺少手动 MOD 或 Workshop ID：按列表手动安装，客户端不会尝试其他下载来源。
 - 多出 gameplay MOD：列表默认全部不勾选；只有选中并完成二次确认后才修改本机启用状态。
-- 用户可在 relaxed 配置允许时选择“仍然尝试加入”，但该入口只适用于 MOD 差异，不能跳过游戏版本不一致。
+- 用户可在显式 relaxed 配置允许时选择“仍然尝试加入”，但该入口只适用于普通 MOD 差异，不能跳过游戏版本或 `WireCacheSignatureV1` 真实不一致。
 - 安装或禁用完成后按提示重启游戏。公开房会恢复并重新预检；密码房会再次要求密码。
 
 `0.5.2` 主要改进（保留作历史参考）：聊天引用体验升级——Android 点击输入区旁的“引用”按钮，桌面按 `Alt+R`，即可进入一次性引用模式；消息改为单一行内富文本自然换行，引用使用游戏原生预览，动态 Power 说明按实际层数和玩家上下文生成。
@@ -177,21 +188,34 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.5.5` |
+| Client version | `0.5.6-rc1` (release candidate) |
 | Default lobby | `sts2-test.43.133.192.249.nip.io` |
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
-| Connection policy | `test_relaxed + relay-only` |
+| Connection policy | `strict + relay-only` |
 
-Client `0.5.5` adds backward-compatible game ABI handling. One DLL detects the legacy flat handshake or the `0.110.x` `PeerVersionInfo` handshake at runtime, fills all join request variants accordingly, and selects the old `LobbyPlayer` or new `StartRunLobbyPlayer` serialization carrier.
+`0.5.6-rc1` is a field-test candidate, not a final release. Client and lobby-service deliberately share the same version because the `WireCacheSignatureV1` join gate and binding-aware kick require matching service support.
 
-Client `0.5.5` is the current stable release. No lobby-service update is required: keep using service `0.5.4`. Supported game targets are `0.107.1`, `0.109.0`, `0.109.1`, and `0.110.x`; every player in a room must still use the exact same game version. The build retains all `0.5.4` moderation behavior plus the `0.5.3` LAN/lobby continue split, resume codes, save protection, and chat HUD.
+The candidate fingerprints the four ModelId net-id tables and bit widths. A genuine peer mismatch is rejected before ticket issuance or the game join request, while missing or unreadable signatures remain fail-open. The shipped compatibility profile is now `strict`.
+
+Continue-run origin is an explicit LAN/lobby/unknown choice, with a one-time prompt for ambiguous legacy saves. Safe load and repair preserve bindings. Kick identity is separate from save slots and uses the rendered occupant's binding handle.
+
+One client package continues to target game versions `0.107.1`, `0.109.0`, `0.109.1`, and `0.110.x`. Every participant must use the exact same game version and, for this test, client and lobby-service `0.5.6-rc1`.
+
+This candidate builds on top of the existing feature set; nothing from earlier versions was removed. It still carries `0.5.5`'s backward-compatible game ABI handling (detecting the legacy flat handshake or the `0.110.x` `PeerVersionInfo` handshake at runtime and selecting the old `LobbyPlayer` or new `StartRunLobbyPlayer` serialization carrier), `0.5.4`'s AI moderation flow, and `0.5.3`'s LAN/lobby continue-run channel split, resume identity code, save protection, and chat HUD.
+
+### v0.5.6-rc1 Test Focus
+
+- Verify mismatched content-MOD wire tables are rejected before a black screen; this refusal is intentional.
+- Resume a lobby save and restart as host, then verify the room is republished and visible to teammates.
+- Exercise slot takeover followed by kick, confirming the original slot owner is not banned and stale actions do not retarget a replacement.
+- For join failures, black screens, or stuck waiting rooms, provide the complete `godot.log` from both machines.
 
 ### MOD Preflight Before Join
 
 - Inspect real Workshop metadata before consenting to subscriptions; cancel and retry remain available.
 - Manually install items without a valid Workshop mapping. No host, lobby-service, or arbitrary-URL DLL/PCK/ZIP download is supported.
 - Extra gameplay MODs are never disabled silently. Select them explicitly and confirm again.
-- Relaxed continuation applies only to MOD differences and never bypasses the exact game-version requirement.
+- Explicit relaxed continuation applies only to ordinary MOD differences and never bypasses the exact game-version or genuine `WireCacheSignatureV1` mismatch requirements.
 - Restart after installation or disablement. Public rooms resume and preflight again; password rooms ask for the password again.
 
 Historical `0.5.0` changes: node-local server chat, rich room chat, generation-checked combat references, and Android input/layout/icon fixes.
