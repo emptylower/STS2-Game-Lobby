@@ -16,6 +16,25 @@ internal sealed class LanConnectSaveRepairResult
     public string Message { get; init; } = string.Empty;
 }
 
+internal sealed record LanConnectSaveRepairContext(
+    int ProfileId,
+    string VanillaSaveDir,
+    string ModdedProfileDir,
+    string ModdedSaveDir,
+    string BackupDir,
+    Func<LanConnectSaveRepairBindingInspection> InspectBinding,
+    Func<LanConnectSaveRepairValidation> Validate,
+    Action<string, string> Log);
+
+internal sealed record LanConnectSaveRepairBindingInspection(
+    bool RunLoaded,
+    string SaveKey,
+    bool HasBinding);
+
+internal sealed record LanConnectSaveRepairValidation(
+    bool Success,
+    string Message);
+
 internal static class LanConnectMultiplayerSaveRepair
 {
     private static class BindingCoordinatorHolder
@@ -29,7 +48,8 @@ internal static class LanConnectMultiplayerSaveRepair
             LoadRunForCoordinator,
             LanConnectMultiplayerSaveRoomBinding.BuildSaveKey,
             LanConnectConfig.TryGetSaveRoomBinding,
-            PersistBindingFromCoordinator);
+            static (_, _) => throw new InvalidOperationException(
+                "Save-repair binding coordinator must not persist save bindings."));
     }
 
     public static Task<LanConnectSaveRepairResult> RepairCurrentProfileAsync()
@@ -57,27 +77,41 @@ internal static class LanConnectMultiplayerSaveRepair
             userId.ToString(CultureInfo.InvariantCulture),
             $"profile{profileId}");
 
-        LanConnectSaveDiagnostics.LogNow(
-            "save_repair:begin",
-            $"profile={profileId}, vanillaSaveDir={vanillaSaveDir}, moddedSaveDir={moddedSaveDir}");
+        return RepairCurrentProfile(
+            new LanConnectSaveRepairContext(
+                profileId,
+                vanillaSaveDir,
+                moddedProfileDir,
+                moddedSaveDir,
+                backupDir,
+                InspectCurrentBinding,
+                ValidateCurrentSave,
+                (source, extra) => LanConnectSaveDiagnostics.LogNow(source, extra)));
+    }
 
-        if (!Directory.Exists(vanillaSaveDir))
+    internal static LanConnectSaveRepairResult RepairCurrentProfile(LanConnectSaveRepairContext context)
+    {
+        context.Log(
+            "save_repair:begin",
+            $"profile={context.ProfileId}, vanillaSaveDir={context.VanillaSaveDir}, moddedSaveDir={context.ModdedSaveDir}");
+
+        if (!Directory.Exists(context.VanillaSaveDir))
         {
             return new LanConnectSaveRepairResult
             {
                 Success = false,
-                Message = $"修复失败：未找到原版存档目录 {vanillaSaveDir}"
+                Message = $"修复失败：未找到原版存档目录 {context.VanillaSaveDir}"
             };
         }
 
         int filesCopied = 0;
-        bool backupCreated = BackupProfileIfNeeded(moddedProfileDir, backupDir);
-        Directory.CreateDirectory(moddedSaveDir);
+        bool backupCreated = BackupProfileIfNeeded(context.ModdedProfileDir, context.BackupDir);
+        Directory.CreateDirectory(context.ModdedSaveDir);
 
-        foreach (string sourceFile in Directory.GetFiles(vanillaSaveDir, "*", SearchOption.AllDirectories))
+        foreach (string sourceFile in Directory.GetFiles(context.VanillaSaveDir, "*", SearchOption.AllDirectories))
         {
-            string relativePath = Path.GetRelativePath(vanillaSaveDir, sourceFile);
-            string destinationFile = Path.Combine(moddedSaveDir, relativePath);
+            string relativePath = Path.GetRelativePath(context.VanillaSaveDir, sourceFile);
+            string destinationFile = Path.Combine(context.ModdedSaveDir, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
             if (!File.Exists(destinationFile) || File.GetLastWriteTimeUtc(sourceFile) > File.GetLastWriteTimeUtc(destinationFile))
             {
@@ -87,8 +121,7 @@ internal static class LanConnectMultiplayerSaveRepair
         }
 
         string bindingSummary;
-        LanConnectRunBindingCoordinator<SerializableRun>.RepairBindingInspection bindingInspection =
-            BindingCoordinatorHolder.Instance.InspectRepairBinding();
+        LanConnectSaveRepairBindingInspection bindingInspection = context.InspectBinding();
         if (bindingInspection.RunLoaded)
         {
             bindingSummary = bindingInspection.HasBinding
@@ -100,33 +133,51 @@ internal static class LanConnectMultiplayerSaveRepair
             bindingSummary = "当前多人存档无法立即解析，未更改房间绑定。";
         }
 
-        string validation;
-        bool validationSucceeded;
-        if (!SaveManager.Instance.HasMultiplayerRunSave)
-        {
-            validation = "修复完成：当前没有多人续局存档，已完成备份与 vanilla -> modded 同步。";
-            validationSucceeded = true;
-        }
-        else if (LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(out var repairedRun, out string repairedFailureReason) && repairedRun != null)
-        {
-            validation = $"修复完成：多人存档重检成功，saveKey={LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(repairedRun)}";
-            validationSucceeded = true;
-        }
-        else
-        {
-            validation = $"修复完成，但多人存档重检仍失败：{repairedFailureReason}";
-            validationSucceeded = false;
-        }
+        LanConnectSaveRepairValidation validation = context.Validate();
 
-        LanConnectSaveDiagnostics.LogNow(
+        context.Log(
             "save_repair:finish",
-            $"profile={profileId}, filesCopied={filesCopied}, backupCreated={backupCreated}, validation={(validationSucceeded ? "ok" : "failed")}");
+            $"profile={context.ProfileId}, filesCopied={filesCopied}, backupCreated={backupCreated}, validation={(validation.Success ? "ok" : "failed")}");
 
         return new LanConnectSaveRepairResult
         {
-            Success = validationSucceeded,
-            Message = $"{validation}\n备份：{(backupCreated ? backupDir : "当前 modded profile 无旧文件，无需备份")}\n同步文件数：{filesCopied}\n{bindingSummary}"
+            Success = validation.Success,
+            Message = $"{validation.Message}\n备份：{(backupCreated ? context.BackupDir : "当前 modded profile 无旧文件，无需备份")}\n同步文件数：{filesCopied}\n{bindingSummary}"
         };
+    }
+
+    private static LanConnectSaveRepairBindingInspection InspectCurrentBinding()
+    {
+        LanConnectRunBindingCoordinator<SerializableRun>.RepairBindingInspection inspection =
+            BindingCoordinatorHolder.Instance.InspectRepairBinding();
+        return new LanConnectSaveRepairBindingInspection(
+            inspection.RunLoaded,
+            inspection.SaveKey,
+            inspection.HasBinding);
+    }
+
+    private static LanConnectSaveRepairValidation ValidateCurrentSave()
+    {
+        if (!SaveManager.Instance.HasMultiplayerRunSave)
+        {
+            return new LanConnectSaveRepairValidation(
+                true,
+                "修复完成：当前没有多人续局存档，已完成备份与 vanilla -> modded 同步。");
+        }
+
+        if (LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(
+                out SerializableRun? repairedRun,
+                out string repairedFailureReason)
+            && repairedRun != null)
+        {
+            return new LanConnectSaveRepairValidation(
+                true,
+                $"修复完成：多人存档重检成功，saveKey={LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(repairedRun)}");
+        }
+
+        return new LanConnectSaveRepairValidation(
+            false,
+            $"修复完成，但多人存档重检仍失败：{repairedFailureReason}");
     }
 
     private static LanConnectRunBindingCoordinator<SerializableRun>.LoadResult LoadRunForCoordinator()
@@ -138,19 +189,6 @@ internal static class LanConnectMultiplayerSaveRepair
             success,
             run,
             failureReason);
-    }
-
-    private static void PersistBindingFromCoordinator(
-        SerializableRun run,
-        LanConnectRunBindingCoordinator<SerializableRun>.BindingWrite write)
-    {
-        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
-            run,
-            write.RoomName,
-            write.Password,
-            write.GameMode,
-            write.HostChannel,
-            write.Source);
     }
 
     private static bool BackupProfileIfNeeded(string sourceProfileDir, string backupProfileDir)

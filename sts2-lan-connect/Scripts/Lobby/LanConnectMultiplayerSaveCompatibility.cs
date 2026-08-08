@@ -30,8 +30,21 @@ internal static class LanConnectMultiplayerSaveCompatibility
     private static int _cachedProfileId = -1;
     private static bool _cachedHasRunSave;
     private static long _cachedSaveWriteTicks = long.MinValue;
-    private static readonly FieldInfo? MultiplayerSubmenuLoadingOverlayField = typeof(NMultiplayerSubmenu).GetField("_loadingOverlay", BindingFlags.Instance | BindingFlags.NonPublic);
-    private static readonly FieldInfo? MultiplayerSubmenuStackField = typeof(NSubmenu).GetField("_stack", BindingFlags.Instance | BindingFlags.NonPublic);
+
+    private static class MultiplayerSubmenuReflectionHolder
+    {
+        // The explicit cctor prevents beforefieldinit from resolving sts2 types until first use.
+        static MultiplayerSubmenuReflectionHolder()
+        {
+        }
+
+        internal static readonly FieldInfo? LoadingOverlayField = typeof(NMultiplayerSubmenu).GetField(
+            "_loadingOverlay",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        internal static readonly FieldInfo? StackField = typeof(NSubmenu).GetField(
+            "_stack",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+    }
 
     private static class BindingCoordinatorHolder
     {
@@ -44,7 +57,8 @@ internal static class LanConnectMultiplayerSaveCompatibility
             LoadSafeRunForCoordinator,
             LanConnectMultiplayerSaveRoomBinding.BuildSaveKey,
             LanConnectConfig.TryGetSaveRoomBinding,
-            PersistBindingFromCoordinator);
+            static (_, _) => throw new InvalidOperationException(
+                "Safe-load binding coordinator must not persist save bindings."));
     }
 
     public static bool ShouldInterceptOfficialLoadButtons()
@@ -140,8 +154,8 @@ internal static class LanConnectMultiplayerSaveCompatibility
         out Control? loadingOverlay,
         out NSubmenuStack? stack)
     {
-        loadingOverlay = MultiplayerSubmenuLoadingOverlayField?.GetValue(submenu) as Control;
-        stack = MultiplayerSubmenuStackField?.GetValue(submenu) as NSubmenuStack;
+        loadingOverlay = MultiplayerSubmenuReflectionHolder.LoadingOverlayField?.GetValue(submenu) as Control;
+        stack = MultiplayerSubmenuReflectionHolder.StackField?.GetValue(submenu) as NSubmenuStack;
         return loadingOverlay != null && stack != null;
     }
 
@@ -275,19 +289,6 @@ internal static class LanConnectMultiplayerSaveCompatibility
     {
         bool success = TryLoadSafeCurrentRun(out SerializableRun? run, out string failureReason);
         return new LanConnectRunBindingCoordinator<SerializableRun>.LoadResult(success, run, failureReason);
-    }
-
-    private static void PersistBindingFromCoordinator(
-        SerializableRun run,
-        LanConnectRunBindingCoordinator<SerializableRun>.BindingWrite write)
-    {
-        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
-            run,
-            write.RoomName,
-            write.Password,
-            write.GameMode,
-            write.HostChannel,
-            write.Source);
     }
 
     private static void PushLoadedRunScreen(NSubmenuStack stack, NetHostGameService netService, SerializableRun run)

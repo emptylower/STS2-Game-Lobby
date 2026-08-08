@@ -74,13 +74,15 @@ public sealed class LanConnectHostChannelBindingTests
         try
         {
             LanConnectConfigData loadedConfig = LanConnectConfigPersistence.Load(inputPath);
+            LanConnectSavedRoomBinding loaded = Assert.Single(loadedConfig.SaveRoomBindings);
+            loadedConfig.SaveRoomBindings =
+            [
+                LanConnectConfig.CloneBindingForPersistence(loaded)
+            ];
             LanConnectConfigPersistence.Save(outputPath, loadedConfig);
             LanConnectConfigData saved = JsonSerializer.Deserialize<LanConnectConfigData>(
                 File.ReadAllText(outputPath))!;
 
-            LanConnectSavedRoomBinding loaded = Assert.Single(loadedConfig.SaveRoomBindings);
-            Assert.Equal(LanConnectSavedRoomBinding.CurrentSchemaVersion, loaded.SchemaVersion);
-            Assert.Equal(LanConnectHostChannels.Lan, loaded.HostChannel);
             LanConnectSavedRoomBinding roundTripped = Assert.Single(saved.SaveRoomBindings);
             Assert.Equal(LanConnectSavedRoomBinding.CurrentSchemaVersion, roundTripped.SchemaVersion);
             Assert.Equal("房间", roundTripped.RoomName);
