@@ -32,7 +32,11 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
             () => new(true, "save-1", string.Empty),
             run => run,
             _ => null,
-            (_, write) => writes.Add(write));
+            (_, write) =>
+            {
+                writes.Add(write);
+                return true;
+            });
 
         bool loaded = LanConnectMultiplayerSaveCompatibility.ExecuteSafeLoad(
             coordinator,
@@ -130,6 +134,7 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
             {
                 writes.Add(write);
                 events.Add("persist");
+                return true;
             });
 
         await coordinator.ExecuteHostedRestartAsync(
@@ -156,6 +161,42 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
         Assert.Equal(
             ["persist", "after_persist", "prepare", "return_to_main_menu"],
             events);
+    }
+
+    [Fact]
+    public async Task Hosted_restart_does_not_complete_or_leave_when_binding_write_is_skipped()
+    {
+        List<string> events = new();
+        LanConnectRunBindingCoordinator<string> coordinator = new(
+            () => new(true, "save-4", string.Empty),
+            run => run,
+            _ => null,
+            (_, _) =>
+            {
+                events.Add("persist_skipped");
+                return false;
+            });
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ExecuteHostedRestartAsync(
+                "save-4",
+                "大厅续局",
+                null,
+                "standard",
+                () => events.Add("after_persist"),
+                () =>
+                {
+                    events.Add("prepare");
+                    return Task.CompletedTask;
+                },
+                () =>
+                {
+                    events.Add("return_to_main_menu");
+                    return Task.CompletedTask;
+                }));
+
+        Assert.Contains("saveKey=save-4", error.Message);
+        Assert.Equal(["persist_skipped"], events);
     }
 
     private static void AssertRepairEntryDoesNotRemoveBindings()

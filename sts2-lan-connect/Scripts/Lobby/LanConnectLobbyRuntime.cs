@@ -2188,7 +2188,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         return new LanConnectRunBindingCoordinator<SerializableRun>.LoadResult(success, run, failureReason);
     }
 
-    private static void PersistRunBindingFromCoordinator(
+    private static bool PersistRunBindingFromCoordinator(
         SerializableRun run,
         LanConnectRunBindingCoordinator<SerializableRun>.BindingWrite write)
     {
@@ -2199,7 +2199,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 $"Hosted restart binding saveKey changed: expected={write.SaveKey}, actual={actualSaveKey}.");
         }
 
-        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+        return LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
             run,
             write.RoomName,
             write.Password,

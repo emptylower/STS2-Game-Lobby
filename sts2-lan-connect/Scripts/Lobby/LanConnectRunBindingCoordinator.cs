@@ -9,13 +9,13 @@ internal sealed class LanConnectRunBindingCoordinator<TRun>
     private readonly Func<LoadResult> _loadRun;
     private readonly Func<TRun, string> _buildSaveKey;
     private readonly Func<string, LanConnectSavedRoomBinding?> _readBinding;
-    private readonly Action<TRun, BindingWrite> _persistBinding;
+    private readonly Func<TRun, BindingWrite, bool> _persistBinding;
 
     public LanConnectRunBindingCoordinator(
         Func<LoadResult> loadRun,
         Func<TRun, string> buildSaveKey,
         Func<string, LanConnectSavedRoomBinding?> readBinding,
-        Action<TRun, BindingWrite> persistBinding)
+        Func<TRun, BindingWrite, bool> persistBinding)
     {
         _loadRun = loadRun;
         _buildSaveKey = buildSaveKey;
@@ -64,7 +64,12 @@ internal sealed class LanConnectRunBindingCoordinator<TRun>
             LanConnectHostChannels.Lobby,
             LanConnectSavedRoomBinding.CurrentSchemaVersion,
             "host_restart_before_main_menu");
-        _persistBinding(run, write);
+        if (!_persistBinding(run, write))
+        {
+            throw new InvalidOperationException(
+                $"Hosted restart binding was not persisted for saveKey={write.SaveKey}.");
+        }
+
         afterPersist();
         await prepareReturn();
         await returnToMainMenu();
