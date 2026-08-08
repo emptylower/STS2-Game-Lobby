@@ -107,6 +107,26 @@ internal sealed record LanConnectWireCacheHandshakeToken(
         return otherMods == null && currentToken == null ? null : filtered;
     }
 
+    internal static bool TryReplaceSentinels(
+        IEnumerable<string>? otherMods,
+        LanConnectWireCacheHandshakeToken? currentToken,
+        out List<string>? replacement,
+        out Exception? failure)
+    {
+        try
+        {
+            replacement = ReplaceSentinels(otherMods, currentToken);
+            failure = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            replacement = null;
+            failure = ex;
+            return false;
+        }
+    }
+
     internal static bool IsSentinel(string? value) =>
         value?.StartsWith(Prefix, StringComparison.Ordinal) == true;
 

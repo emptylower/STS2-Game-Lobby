@@ -1,3 +1,4 @@
+using System.Collections;
 using Sts2LanConnect.Scripts;
 
 namespace Sts2LanConnect.Tests.Lobby;
@@ -251,6 +252,22 @@ public sealed class LanConnectWireCacheHandshakeTests
         Assert.DoesNotContain(result!, LanConnectWireCacheHandshakeToken.IsSentinel);
     }
 
+    [Fact]
+    public void Advertisement_replacement_contains_throwing_other_mods_list()
+    {
+        ThrowingStringList otherMods = new();
+
+        bool replaced = LanConnectWireCacheHandshakeToken.TryReplaceSentinels(
+            otherMods,
+            ParsedToken(Token(SignatureA)),
+            out List<string>? replacement,
+            out Exception? failure);
+
+        Assert.False(replaced);
+        Assert.Null(replacement);
+        Assert.IsType<InvalidOperationException>(failure);
+    }
+
     private static LanConnectWireCacheHandshakeDecision Decide(
         LanConnectWireCacheCaptureResult local,
         LanConnectWireCacheHandshakeTokenParseResult remote,
@@ -288,4 +305,13 @@ public sealed class LanConnectWireCacheHandshakeTests
             entryBits,
             epochBits,
             propertyBits).Serialize();
+
+    private sealed class ThrowingStringList : List<string>, IEnumerable<string>
+    {
+        IEnumerator<string> IEnumerable<string>.GetEnumerator() =>
+            throw new InvalidOperationException("enumeration failed");
+
+        IEnumerator IEnumerable.GetEnumerator() =>
+            throw new InvalidOperationException("enumeration failed");
+    }
 }

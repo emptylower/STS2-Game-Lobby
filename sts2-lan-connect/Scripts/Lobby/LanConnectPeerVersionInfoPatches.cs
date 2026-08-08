@@ -77,6 +77,17 @@ internal static class LanConnectPeerVersionInfoPatches
                         $"sts2_lan_connect wire_handshake advertise: signature=unavailable, " +
                         $"decision=local-unavailable, reason={capture.FailureReason}"));
                 }
+
+                if (!LanConnectWireCacheHandshakeToken.TryReplaceSentinels(
+                        __result.otherMods,
+                        token,
+                        out List<string>? replacement,
+                        out Exception? replacementFailure))
+                {
+                    throw replacementFailure!;
+                }
+
+                __result.otherMods = replacement;
             }
             catch (Exception ex)
             {
@@ -84,10 +95,6 @@ internal static class LanConnectPeerVersionInfoPatches
                     $"sts2_lan_connect wire_handshake advertise: signature=unavailable, " +
                     $"decision=local-unavailable, reason={ex.GetType().Name}: {ex.Message}"));
             }
-
-            __result.otherMods = LanConnectWireCacheHandshakeToken.ReplaceSentinels(
-                __result.otherMods,
-                token);
         }
     }
 
