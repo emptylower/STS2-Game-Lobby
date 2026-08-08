@@ -17,6 +17,8 @@ internal static class LanConnectLobbyHandshakeCompatibility
         string Version,
         ulong IdDatabaseHash,
         List<string> GameplayAffectingMods,
+        List<string> OtherMods,
+        LanConnectWireCacheHandshakeTokenParseResult WireCacheToken,
         object? RawVersionInfo);
 
     internal static PeerVersionSnapshot ReadInitialGameInfo(object initialMessage)
@@ -34,11 +36,14 @@ internal static class LanConnectLobbyHandshakeCompatibility
             versionSource,
             "gameplayAffectingMods",
             "mods");
+        List<string> rawOtherMods = ReadRawStringList(versionSource, "otherMods");
 
         return new PeerVersionSnapshot(
             version,
             idDatabaseHash,
-            gameplayAffectingMods,
+            LanConnectWireCacheHandshakeToken.FilterSentinels(gameplayAffectingMods),
+            LanConnectWireCacheHandshakeToken.FilterSentinels(rawOtherMods),
+            LanConnectWireCacheHandshakeToken.Parse(rawOtherMods),
             rawVersionInfo);
     }
 
@@ -81,8 +86,13 @@ internal static class LanConnectLobbyHandshakeCompatibility
                     "localInfo/remoteInfo compatible with InitialGameInfoMessage.versionInfo");
             }
 
-            localInfoField.SetValue(extraInfo, CreateLocalVersionInfo(localInfoField.FieldType));
-            remoteInfoField.SetValue(extraInfo, remoteInfo.RawVersionInfo);
+            localInfoField.SetValue(
+                extraInfo,
+                CloneVersionInfoWithoutWireSentinels(
+                    CreateLocalVersionInfo(localInfoField.FieldType)));
+            remoteInfoField.SetValue(
+                extraInfo,
+                CloneVersionInfoWithoutWireSentinels(remoteInfo.RawVersionInfo));
             SetFieldIfPresent(extraInfo, "localIsHost", false);
         }
 
@@ -120,7 +130,24 @@ internal static class LanConnectLobbyHandshakeCompatibility
         throw new MissingFieldException(source.GetType().FullName, fieldName);
     }
 
-    private static List<string> ReadStringList(object source, params string[] fieldNames)
+    private static List<string> ReadStringList(object source, params string[] fieldNames) =>
+        ReadStringListCore(source, filterSentinels: true, fieldNames);
+
+    private static List<string> ReadStringListCore(
+        object source,
+        bool filterSentinels,
+        params string[] fieldNames)
+    {
+        List<string> result = ReadRawStringList(source, fieldNames)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static item => item, StringComparer.Ordinal)
+            .ToList();
+        return filterSentinels
+            ? LanConnectWireCacheHandshakeToken.FilterSentinels(result)
+            : result;
+    }
+
+    private static List<string> ReadRawStringList(object source, params string[] fieldNames)
     {
         object? value = fieldNames
             .Select(fieldName => source.GetType().GetField(fieldName, InstanceFields)?.GetValue(source))
@@ -129,10 +156,34 @@ internal static class LanConnectLobbyHandshakeCompatibility
             ? values
                 .Where(static item => !string.IsNullOrWhiteSpace(item))
                 .Select(static item => item.Trim())
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(static item => item, StringComparer.Ordinal)
                 .ToList()
-            : new List<string>();
+            : [];
+    }
+
+    private static object CloneVersionInfoWithoutWireSentinels(object source)
+    {
+        Type sourceType = source.GetType();
+        if (!sourceType.IsValueType)
+        {
+            return source;
+        }
+
+        object clone = Activator.CreateInstance(sourceType)
+            ?? throw new InvalidOperationException($"Could not clone {sourceType.FullName}.");
+        foreach (FieldInfo field in sourceType.GetFields(InstanceFields))
+        {
+            field.SetValue(clone, field.GetValue(source));
+        }
+
+        FieldInfo? otherModsField = sourceType.GetField("otherMods", InstanceFields);
+        if (otherModsField?.GetValue(source) is IEnumerable<string> otherMods)
+        {
+            otherModsField.SetValue(
+                clone,
+                LanConnectWireCacheHandshakeToken.FilterSentinels(otherMods));
+        }
+
+        return clone;
     }
 
     private static void SetFieldIfPresent(object target, string fieldName, object value)

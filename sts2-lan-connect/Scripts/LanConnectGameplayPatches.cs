@@ -25,6 +25,7 @@ internal static class LanConnectGameplayPatches
         // they must apply even when RMP is present and gameplay patches are skipped.
         if (TryApplyGroup("SaveManager", () => LanConnectSaveManagerPatches.Apply(HarmonyInstance))) applied++; else failed++;
         if (TryApplyGroup("JoinScreenAutoJoin", () => LanConnectJoinScreenAutoJoinPatches.Apply(HarmonyInstance))) applied++; else failed++;
+        if (TryApplyGroup("PeerVersionInfo", () => LanConnectPeerVersionInfoPatches.Apply(HarmonyInstance))) applied++; else failed++;
 
         if (LanConnectExternalModDetection.IsRmpModLoaded)
         {
