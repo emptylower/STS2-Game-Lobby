@@ -23,6 +23,7 @@ internal sealed record LanConnectSaveRepairContext(
     string ModdedSaveDir,
     string BackupDir,
     Func<LanConnectSaveRepairBindingInspection> InspectBinding,
+    Func<string, bool> RemoveBinding,
     Func<LanConnectSaveRepairValidation> Validate,
     Action<string, string> Log);
 
@@ -85,6 +86,8 @@ internal static class LanConnectMultiplayerSaveRepair
                 moddedSaveDir,
                 backupDir,
                 InspectCurrentBinding,
+                static _ => throw new InvalidOperationException(
+                    "Save repair must not remove save bindings."),
                 ValidateCurrentSave,
                 (source, extra) => LanConnectSaveDiagnostics.LogNow(source, extra)));
     }

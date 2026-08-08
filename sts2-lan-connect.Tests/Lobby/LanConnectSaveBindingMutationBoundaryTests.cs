@@ -23,6 +23,32 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
     }
 
     [Fact]
+    public void Safe_load_execution_observes_no_persisted_write()
+    {
+        List<LanConnectRunBindingCoordinator<string>.BindingWrite> writes = new();
+        List<bool> loadingStates = new();
+        List<string> startedRuns = new();
+        LanConnectRunBindingCoordinator<string> coordinator = new(
+            () => new(true, "save-1", string.Empty),
+            run => run,
+            _ => null,
+            (_, write) => writes.Add(write));
+
+        bool loaded = LanConnectMultiplayerSaveCompatibility.ExecuteSafeLoad(
+            coordinator,
+            loadingStates.Add,
+            _ => true,
+            startedRuns.Add,
+            failureReason => throw new Xunit.Sdk.XunitException(
+                $"Safe load unexpectedly failed: {failureReason}"));
+
+        Assert.True(loaded);
+        Assert.Equal([true, false], loadingStates);
+        Assert.Equal(["save-1"], startedRuns);
+        Assert.Empty(writes);
+    }
+
+    [Fact]
     public void Save_compatibility_outer_type_initialization_does_not_resolve_sts2_reflection_fields()
     {
         RuntimeHelpers.RunClassConstructor(typeof(LanConnectMultiplayerSaveCompatibility).TypeHandle);
@@ -43,16 +69,23 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
         {
             [existing.SaveKey] = existing
         };
+        List<string> removals = new();
         LanConnectSaveRepairResult result = LanConnectMultiplayerSaveRepair.RepairCurrentProfile(
             profile.CreateContext(() => new LanConnectSaveRepairBindingInspection(
                 true,
                 existing.SaveKey,
-                bindings.ContainsKey(existing.SaveKey))));
+                bindings.ContainsKey(existing.SaveKey)),
+                saveKey =>
+                {
+                    removals.Add(saveKey);
+                    return bindings.Remove(saveKey);
+                }));
 
         AssertRepairEntryDoesNotRemoveBindings();
 
         Assert.True(result.Success);
         Assert.Contains($"已保留当前多人存档的房间绑定 {existing.SaveKey}", result.Message);
+        Assert.Empty(removals);
         Assert.Same(existing, bindings["save-1"]);
         Assert.Equal(
             LanConnectContinueRunPublishDecisionKind.Publish,
@@ -64,16 +97,23 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
     {
         using RepairProfileHarness profile = new();
         Dictionary<string, LanConnectSavedRoomBinding> bindings = new();
+        List<string> removals = new();
         LanConnectSaveRepairResult result = LanConnectMultiplayerSaveRepair.RepairCurrentProfile(
             profile.CreateContext(() => new LanConnectSaveRepairBindingInspection(
                 true,
                 "save-2",
-                bindings.ContainsKey("save-2"))));
+                bindings.ContainsKey("save-2")),
+                saveKey =>
+                {
+                    removals.Add(saveKey);
+                    return bindings.Remove(saveKey);
+                }));
 
         AssertRepairEntryDoesNotRemoveBindings();
 
         Assert.True(result.Success);
         Assert.Contains("当前多人存档没有已保存的房间绑定 save-2", result.Message);
+        Assert.Empty(removals);
         Assert.Empty(bindings);
     }
 
@@ -210,7 +250,8 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
         public string BackupDir { get; }
 
         public LanConnectSaveRepairContext CreateContext(
-            Func<LanConnectSaveRepairBindingInspection> inspectBinding) =>
+            Func<LanConnectSaveRepairBindingInspection> inspectBinding,
+            Func<string, bool> removeBinding) =>
             new(
                 1,
                 VanillaSaveDir,
@@ -218,6 +259,7 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
                 ModdedSaveDir,
                 BackupDir,
                 inspectBinding,
+                removeBinding,
                 () => new LanConnectSaveRepairValidation(true, "修复完成"),
                 (_, _) => { });
 
