@@ -29,7 +29,11 @@ internal static class LanConnectConstants
 
     public static readonly string DefaultLobbyServerBaseUrl = LanConnectLobbyEndpointDefaults.GetDefaultBaseUrl();
 
-    public const string DefaultCompatibilityProfile = "test_relaxed";
+    // strict, deliberately. test_relaxed swallows the vanilla ModelDb hash check, which is
+    // the check that would otherwise stop two players with different content mods from
+    // connecting and then desyncing into a black screen. Relaxed remains available as an
+    // explicit opt-in for testing; it must never be the shipped default again.
+    public const string DefaultCompatibilityProfile = "strict";
 
     public const string DefaultConnectionStrategy = "relay-only";
 
