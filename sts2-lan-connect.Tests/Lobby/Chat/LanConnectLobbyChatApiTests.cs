@@ -41,11 +41,13 @@ public sealed class LanConnectLobbyChatApiTests
         LobbyProbeResponse legacyProbe = Deserialize<LobbyProbeResponse>("""{"ok":true,"capabilities":{}}""");
         Assert.Equal(0, legacyProbe.Capabilities.ModSyncProtocolVersion);
         Assert.False(legacyProbe.Capabilities.ModSyncEnabled);
+        Assert.False(legacyProbe.Capabilities.WireCacheSignatureV1Enforced);
 
         LobbyProbeResponse probe = Deserialize<LobbyProbeResponse>("""
-            {"ok":true,"capabilities":{"modSyncProtocolVersion":1,"modSyncEnabled":true}}
+            {"ok":true,"capabilities":{"modSyncProtocolVersion":1,"modSyncEnabled":true,"wireCacheSignatureV1Enforced":true}}
             """);
         Assert.True(probe.Capabilities.ModSyncEnabled);
+        Assert.True(probe.Capabilities.WireCacheSignatureV1Enforced);
 
         LobbyModPreflightResponse preflight = Deserialize<LobbyModPreflightResponse>("""
             {"enabled":true,"protocolVersion":1,"gameVersion":{"host":"v0.109.0","local":"v0.109.0","exactMatch":true},"missingWorkshopMods":[],"missingManualMods":[],"extraGameplayMods":[],"versionMismatches":[],"canContinueRelaxed":true,"hostInventoryAvailable":true}
@@ -302,6 +304,33 @@ public sealed class LanConnectLobbyChatApiTests
         string diagnostics = string.Join("\n", logs);
         Assert.Contains("hostModCount=1", diagnostics, StringComparison.Ordinal);
         Assert.DoesNotContain("private.host.mod", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task New_client_signature_is_ignored_by_an_old_service_without_degrading_join()
+    {
+        RecordingHandler handler = new("""{"ticketId":"ticket-1"}""");
+        using LobbyApiClient client = new(
+            "https://legacy-lobby.example",
+            httpMessageHandler: handler,
+            diagnosticSink: _ => { });
+
+        LobbyJoinRoomResponse response = await client.JoinRoomAsync("room-1", new LobbyJoinRoomRequest
+        {
+            PlayerName = "Ironclad",
+            Version = "v0.109.0",
+            ModVersion = "0.5.5",
+            ModList = [],
+            WireCacheSignatureV1 = "wcv1:legacy-service-ignores-this"
+        });
+
+        Assert.Equal("ticket-1", response.TicketId);
+        RecordedRequest request = Assert.Single(handler.Requests);
+        Assert.Equal("https://legacy-lobby.example/rooms/room-1/join", request.Uri);
+        using JsonDocument body = JsonDocument.Parse(request.Body!);
+        Assert.Equal(
+            "wcv1:legacy-service-ignores-this",
+            body.RootElement.GetProperty("wireCacheSignatureV1").GetString());
     }
 
     [Fact]

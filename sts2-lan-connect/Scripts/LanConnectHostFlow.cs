@@ -231,6 +231,7 @@ internal static class LanConnectHostFlow
                 Version = LanConnectBuildInfo.GetGameVersion(),
                 ModVersion = LanConnectBuildInfo.GetModVersion(),
                 ModList = LanConnectBuildInfo.GetModList(),
+                WireCacheSignatureV1 = LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature,
                 HostModInventory = LanConnectBuildInfo.GetModInventory(),
                 ProtocolProfile = protocolProfile,
                 MaxPlayers = maxPlayers,

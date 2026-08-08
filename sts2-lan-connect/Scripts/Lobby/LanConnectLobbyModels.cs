@@ -155,6 +155,8 @@ internal sealed class LobbyProbeCapabilities
 
     public string ModSyncMinimumClientVersion { get; set; } = string.Empty;
 
+    public bool WireCacheSignatureV1Enforced { get; set; }
+
     [JsonIgnore]
     public bool SupportsTextServerChat => ServerChatVersion == 1;
 
@@ -212,6 +214,8 @@ internal sealed class LobbyCreateRoomRequest
 
     public List<string> ModList { get; set; } = new();
 
+    public string? WireCacheSignatureV1 { get; set; }
+
     public List<LobbyModDescriptor>? HostModInventory { get; set; }
 
     public string? ProtocolProfile { get; set; }
@@ -251,6 +255,8 @@ internal sealed class LobbyJoinRoomRequest
     public string ModVersion { get; set; } = string.Empty;
 
     public List<string> ModList { get; set; } = new();
+
+    public string? WireCacheSignatureV1 { get; set; }
 
     public string? DesiredSavePlayerNetId { get; set; }
 

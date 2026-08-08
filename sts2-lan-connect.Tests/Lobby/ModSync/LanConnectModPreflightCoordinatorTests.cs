@@ -231,6 +231,7 @@ public sealed class LanConnectModPreflightCoordinatorTests
         Assert.Equal(password, ports.PreflightRequest?.Password);
         Assert.Equal(password, ports.JoinRequest?.Password);
         Assert.Equal(desiredSavePlayerNetId, ports.JoinRequest?.DesiredSavePlayerNetId);
+        Assert.Equal("wcv1:test-signature", ports.JoinRequest?.WireCacheSignatureV1);
     }
 
     private static LanConnectModPreflightJoinRequest Request(
@@ -243,6 +244,7 @@ public sealed class LanConnectModPreflightCoordinatorTests
         GameVersion = "v0.109.0",
         ModVersion = "0.5.1",
         ModList = ["gameplay.mod"],
+        WireCacheSignatureV1 = "wcv1:test-signature",
         LocalMods =
         [
             new LobbyModDescriptor

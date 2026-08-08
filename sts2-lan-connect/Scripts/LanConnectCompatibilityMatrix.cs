@@ -49,6 +49,8 @@ internal static class LanConnectCompatibilityMatrix
             "save_slot_required" => "这是续局房间，需要先选择一个可接管角色。",
             "save_slot_invalid" => "所选续局角色不存在。",
             "save_slot_unavailable" => "所选续局角色已被其他玩家接管，或当前没有可接管角色。",
+            "wire_cache_signature_mismatch" =>
+                $"双方的内容/MOD 表产生了不同的网络编码，无法安全联机。请对齐双方的 MOD 列表和版本后重试。\n{fallbackMessage}",
             _ => fallbackMessage
         };
     }
