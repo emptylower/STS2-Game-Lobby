@@ -97,6 +97,26 @@ public sealed class LanConnectPendingSaveBindingIntentStateTests
         AssertExactLobbyWrite(harness, "save-2", "新大厅", "save_event:pending_lobby_intent");
     }
 
+    [Fact]
+    public void Failed_persistence_keeps_the_pending_intent_for_retry()
+    {
+        PendingHarness harness = new("save-1")
+        {
+            PersistResult = false
+        };
+        harness.Coordinator.AttachHostedRoom("大厅续局", null, "standard", "save-1");
+
+        Assert.Equal(
+            LanConnectPendingSaveBindingCoordinator.PendingPersistResult.SkippedByPersistence,
+            harness.Coordinator.PersistForCurrentSave("first_save_event"));
+
+        harness.PersistResult = true;
+        Assert.Equal(
+            LanConnectPendingSaveBindingCoordinator.PendingPersistResult.Persisted,
+            harness.Coordinator.PersistForCurrentSave("retry_save_event"));
+        Assert.Equal(2, harness.Writes.Count);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -146,12 +166,18 @@ public sealed class LanConnectPendingSaveBindingIntentStateTests
                 () => CurrentSaveKey == null
                     ? null
                     : new LanConnectPendingSaveBindingCoordinator.LoadedSave(CurrentSaveKey, CurrentSaveKey),
-                (save, request) => Writes.Add((save, request)));
+                (save, request) =>
+                {
+                    Writes.Add((save, request));
+                    return PersistResult;
+                });
         }
 
         public string? CurrentSaveKey { get; set; }
 
         public LanConnectPendingSaveBindingCoordinator Coordinator { get; }
+
+        public bool PersistResult { get; set; } = true;
 
         public List<(LanConnectPendingSaveBindingCoordinator.LoadedSave Save,
             LanConnectPendingSaveBindingCoordinator.PersistenceRequest Request)> Writes { get; } = new();

@@ -6,11 +6,11 @@ internal sealed class LanConnectPendingSaveBindingCoordinator
 {
     private readonly LanConnectPendingSaveBindingIntentState _state = new();
     private readonly Func<LoadedSave?> _loadCurrentSave;
-    private readonly Action<LoadedSave, PersistenceRequest> _persist;
+    private readonly Func<LoadedSave, PersistenceRequest, bool> _persist;
 
     public LanConnectPendingSaveBindingCoordinator(
         Func<LoadedSave?> loadCurrentSave,
-        Action<LoadedSave, PersistenceRequest> persist)
+        Func<LoadedSave, PersistenceRequest, bool> persist)
     {
         _loadCurrentSave = loadCurrentSave;
         _persist = persist;
@@ -69,7 +69,7 @@ internal sealed class LanConnectPendingSaveBindingCoordinator
             return PendingPersistResult.RefusedDifferentSave;
         }
 
-        _persist(
+        bool persisted = _persist(
             loadedSave,
             new PersistenceRequest(
                 intent.RoomName,
@@ -78,6 +78,11 @@ internal sealed class LanConnectPendingSaveBindingCoordinator
                 LanConnectHostChannels.Lobby,
                 LanConnectSavedRoomBinding.CurrentSchemaVersion,
                 $"{source}:pending_lobby_intent"));
+        if (!persisted)
+        {
+            return PendingPersistResult.SkippedByPersistence;
+        }
+
         _state.Complete(intent);
         return PendingPersistResult.Persisted;
     }
@@ -96,6 +101,7 @@ internal sealed class LanConnectPendingSaveBindingCoordinator
     {
         NoIntent,
         SaveUnavailable,
+        SkippedByPersistence,
         Persisted,
         RefusedMissingKey,
         RefusedDifferentSave

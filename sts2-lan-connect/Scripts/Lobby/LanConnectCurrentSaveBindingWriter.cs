@@ -6,12 +6,12 @@ internal sealed class LanConnectCurrentSaveBindingWriter
 {
     private readonly Func<LoadResult> _loadCurrentSave;
     private readonly Func<object?> _getCurrentNetService;
-    private readonly Action<LoadedSave, PersistenceRequest> _persist;
+    private readonly Func<LoadedSave, PersistenceRequest, bool> _persist;
 
     public LanConnectCurrentSaveBindingWriter(
         Func<LoadResult> loadCurrentSave,
         Func<object?> getCurrentNetService,
-        Action<LoadedSave, PersistenceRequest> persist)
+        Func<LoadedSave, PersistenceRequest, bool> persist)
     {
         _loadCurrentSave = loadCurrentSave;
         _getCurrentNetService = getCurrentNetService;
@@ -44,7 +44,7 @@ internal sealed class LanConnectCurrentSaveBindingWriter
         }
 
         LoadedSave save = new(loaded.SaveKey, loaded.Value);
-        _persist(
+        bool persisted = _persist(
             save,
             new PersistenceRequest(
                 target.RoomName,
@@ -52,7 +52,10 @@ internal sealed class LanConnectCurrentSaveBindingWriter
                 target.GameMode,
                 target.HostChannel,
                 source));
-        return new PersistOutcome(PersistResult.Persisted, loaded.SaveKey, string.Empty);
+        return new PersistOutcome(
+            persisted ? PersistResult.Persisted : PersistResult.SkippedByPersistence,
+            loaded.SaveKey,
+            string.Empty);
     }
 
     internal sealed record LoadResult(
@@ -88,6 +91,7 @@ internal sealed class LanConnectCurrentSaveBindingWriter
     {
         Persisted,
         SaveUnavailable,
+        SkippedByPersistence,
         RefusedClosing,
         RefusedDifferentSave,
         RefusedDifferentNetService

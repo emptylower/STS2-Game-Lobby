@@ -100,6 +100,26 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
         Assert.Equal(LanConnectHostChannels.Lobby, write.Request.HostChannel);
     }
 
+    [Fact]
+    public void Persistence_skip_is_reported_as_not_persisted()
+    {
+        object netService = new();
+        WriterHarness harness = new("save-1", netService)
+        {
+            PersistResult = false
+        };
+
+        LanConnectCurrentSaveBindingWriter.PersistOutcome outcome = harness.Writer.Persist(
+            Target(netService, expectedSaveKey: "save-1"),
+            "save_event");
+
+        Assert.Equal(
+            LanConnectCurrentSaveBindingWriter.PersistResult.SkippedByPersistence,
+            outcome.Result);
+        Assert.Equal("save-1", outcome.SaveKey);
+        Assert.Single(harness.Writes);
+    }
+
     private static LanConnectCurrentSaveBindingWriter.BindingTarget Target(
         object netService,
         string? expectedSaveKey,
@@ -124,10 +144,16 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
                     saveKey,
                     string.Empty),
                 () => currentNetService,
-                (save, request) => Writes.Add((save, request)));
+                (save, request) =>
+                {
+                    Writes.Add((save, request));
+                    return PersistResult;
+                });
         }
 
         public LanConnectCurrentSaveBindingWriter Writer { get; }
+
+        public bool PersistResult { get; set; } = true;
 
         public List<(LanConnectCurrentSaveBindingWriter.LoadedSave Save,
             LanConnectCurrentSaveBindingWriter.PersistenceRequest Request)> Writes { get; } = new();

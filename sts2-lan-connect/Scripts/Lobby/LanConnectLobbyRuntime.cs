@@ -2042,6 +2042,11 @@ internal sealed partial class LanConnectLobbyRuntime :
                 GD.Print(
                     $"sts2_lan_connect lobby runtime: refuse pending lobby binding without an exact saveKey source={source}");
             }
+            else if (pendingResult == LanConnectPendingSaveBindingCoordinator.PendingPersistResult.SkippedByPersistence)
+            {
+                GD.Print(
+                    $"sts2_lan_connect lobby runtime: pending lobby binding was not persisted source={source}; keeping pending intent");
+            }
             return;
         }
 
@@ -2091,6 +2096,10 @@ internal sealed partial class LanConnectLobbyRuntime :
                 GD.Print(
                     $"sts2_lan_connect lobby runtime: skip save binding persist source={source}, target={target}, reason={outcome.FailureReason}");
                 return;
+            case LanConnectCurrentSaveBindingWriter.PersistResult.SkippedByPersistence:
+                GD.Print(
+                    $"sts2_lan_connect lobby runtime: save binding persistence reported no write source={source}, target={target}, actualSaveKey={outcome.SaveKey}");
+                return;
             case LanConnectCurrentSaveBindingWriter.PersistResult.RefusedClosing:
                 GD.Print(
                     $"sts2_lan_connect lobby runtime: skip save binding persist source={source}, target={target}, reason=session_closing");
@@ -2129,7 +2138,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     private static object? GetCurrentRunNetService() => RunManager.Instance.NetService;
 
-    private static void PersistCurrentSaveBinding(
+    private static bool PersistCurrentSaveBinding(
         LanConnectCurrentSaveBindingWriter.LoadedSave loadedSave,
         LanConnectCurrentSaveBindingWriter.PersistenceRequest request)
     {
@@ -2145,7 +2154,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 $"Current save binding key changed: expected={loadedSave.SaveKey}, actual={actualSaveKey}.");
         }
 
-        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+        return LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
             run,
             request.RoomName,
             request.Password,
@@ -2198,7 +2207,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             write.Source);
     }
 
-    private static void PersistPendingSaveBinding(
+    private static bool PersistPendingSaveBinding(
         LanConnectPendingSaveBindingCoordinator.LoadedSave loadedSave,
         LanConnectPendingSaveBindingCoordinator.PersistenceRequest request)
     {
@@ -2207,7 +2216,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             throw new InvalidOperationException("Pending save binding target is not a SerializableRun.");
         }
 
-        LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
+        return LanConnectMultiplayerSaveRoomBinding.PersistHostBinding(
             run,
             request.RoomName,
             request.Password,
