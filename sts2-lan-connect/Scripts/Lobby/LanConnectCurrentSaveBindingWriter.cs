@@ -6,15 +6,18 @@ internal sealed class LanConnectCurrentSaveBindingWriter
 {
     private readonly Func<LoadResult> _loadCurrentSave;
     private readonly Func<object?> _getCurrentNetService;
+    private readonly Func<string, LanConnectSavedRoomBinding?> _readBinding;
     private readonly Func<LoadedSave, PersistenceRequest, bool> _persist;
 
     public LanConnectCurrentSaveBindingWriter(
         Func<LoadResult> loadCurrentSave,
         Func<object?> getCurrentNetService,
+        Func<string, LanConnectSavedRoomBinding?> readBinding,
         Func<LoadedSave, PersistenceRequest, bool> persist)
     {
         _loadCurrentSave = loadCurrentSave;
         _getCurrentNetService = getCurrentNetService;
+        _readBinding = readBinding;
         _persist = persist;
     }
 
@@ -42,6 +45,17 @@ internal sealed class LanConnectCurrentSaveBindingWriter
         {
             return new PersistOutcome(PersistResult.RefusedDifferentNetService, loaded.SaveKey, string.Empty);
         }
+        else
+        {
+            LanConnectSavedRoomBinding? existingBinding = _readBinding(loaded.SaveKey);
+            if (existingBinding != null
+                && LanConnectContinueRunPublishDecision.Decide(
+                    existingBinding.HostChannel,
+                    existingBinding.SchemaVersion) == LanConnectContinueRunPublishDecisionKind.SkipLanOrigin)
+            {
+                return new PersistOutcome(PersistResult.RefusedExplicitLanBinding, loaded.SaveKey, string.Empty);
+            }
+        }
 
         LoadedSave save = new(loaded.SaveKey, loaded.Value);
         bool persisted = _persist(
@@ -52,6 +66,10 @@ internal sealed class LanConnectCurrentSaveBindingWriter
                 target.GameMode,
                 target.HostChannel,
                 source));
+        if (persisted)
+        {
+            target.RecordPersistedSaveKey(loaded.SaveKey);
+        }
         return new PersistOutcome(
             persisted ? PersistResult.Persisted : PersistResult.SkippedByPersistence,
             loaded.SaveKey,
@@ -73,7 +91,8 @@ internal sealed class LanConnectCurrentSaveBindingWriter
         string RoomName,
         string? Password,
         string GameMode,
-        string HostChannel);
+        string HostChannel,
+        Action<string> RecordPersistedSaveKey);
 
     internal sealed record PersistenceRequest(
         string RoomName,
@@ -94,6 +113,7 @@ internal sealed class LanConnectCurrentSaveBindingWriter
         SkippedByPersistence,
         RefusedClosing,
         RefusedDifferentSave,
-        RefusedDifferentNetService
+        RefusedDifferentNetService,
+        RefusedExplicitLanBinding
     }
 }

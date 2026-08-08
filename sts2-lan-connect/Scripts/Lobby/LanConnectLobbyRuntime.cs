@@ -221,6 +221,7 @@ internal sealed partial class LanConnectLobbyRuntime :
     private readonly LanConnectCurrentSaveBindingWriter _currentSaveBindingWriter = new(
         LoadCurrentSaveBindingTarget,
         GetCurrentRunNetService,
+        LanConnectConfig.TryGetSaveRoomBinding,
         PersistCurrentSaveBinding);
     private JoinedClientSession? _activeClientSession;
     private bool _heartbeatInFlight;
@@ -2015,14 +2016,14 @@ internal sealed partial class LanConnectLobbyRuntime :
                     session.Metadata.RoomName,
                     session.Metadata.Password,
                     session.Metadata.GameMode,
-                    LanConnectHostChannels.Lobby),
+                    LanConnectHostChannels.Lobby,
+                    saveKey =>
+                    {
+                        session.BoundSaveKey = saveKey;
+                        _pendingSaveBindingCoordinator.CompleteActivePersist(saveKey);
+                    }),
                 source);
             LogCurrentSaveBindingOutcome(outcome, session.BoundSaveKey, source, "hosted_room");
-            if (outcome.Result == LanConnectCurrentSaveBindingWriter.PersistResult.Persisted && outcome.SaveKey != null)
-            {
-                session.BoundSaveKey = outcome.SaveKey;
-                _pendingSaveBindingCoordinator.CompleteActivePersist(outcome.SaveKey);
-            }
             return;
         }
 
@@ -2074,14 +2075,14 @@ internal sealed partial class LanConnectLobbyRuntime :
                 roomName,
                 origin.Password,
                 origin.GameMode,
-                origin.HostChannel),
+                origin.HostChannel,
+                saveKey =>
+                {
+                    origin.SaveKey = saveKey;
+                    origin.HasPersisted = true;
+                }),
             source);
         LogCurrentSaveBindingOutcome(originOutcome, origin.SaveKey, source, "host_origin");
-        if (originOutcome.Result == LanConnectCurrentSaveBindingWriter.PersistResult.Persisted)
-        {
-            origin.SaveKey = originOutcome.SaveKey;
-            origin.HasPersisted = true;
-        }
     }
 
     private static void LogCurrentSaveBindingOutcome(
@@ -2113,6 +2114,10 @@ internal sealed partial class LanConnectLobbyRuntime :
             case LanConnectCurrentSaveBindingWriter.PersistResult.RefusedDifferentNetService:
                 GD.Print(
                     $"sts2_lan_connect lobby runtime: refuse save binding persist source={source}, target={target}, reason=net_service_mismatch, actualSaveKey={outcome.SaveKey}");
+                return;
+            case LanConnectCurrentSaveBindingWriter.PersistResult.RefusedExplicitLanBinding:
+                GD.Print(
+                    $"sts2_lan_connect lobby runtime: refuse keyless save binding persist source={source}, target={target}, reason=explicit_lan_binding, actualSaveKey={outcome.SaveKey}");
                 return;
         }
     }

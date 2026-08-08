@@ -84,6 +84,30 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
     }
 
     [Fact]
+    public void Keyless_host_origin_refuses_current_schema_explicit_lan_binding()
+    {
+        object netService = new();
+        WriterHarness harness = new("save-lan", netService)
+        {
+            ExistingBinding = new LanConnectSavedRoomBinding
+            {
+                SaveKey = "save-lan",
+                SchemaVersion = LanConnectSavedRoomBinding.CurrentSchemaVersion,
+                HostChannel = LanConnectHostChannels.Lan
+            }
+        };
+
+        LanConnectCurrentSaveBindingWriter.PersistOutcome outcome = harness.Writer.Persist(
+            Target(netService, expectedSaveKey: null),
+            "save_event");
+
+        Assert.Equal(
+            LanConnectCurrentSaveBindingWriter.PersistResult.RefusedExplicitLanBinding,
+            outcome.Result);
+        Assert.Empty(harness.Writes);
+    }
+
+    [Fact]
     public void Matching_session_key_writes_lobby_binding_once()
     {
         object netService = new();
@@ -128,14 +152,14 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
         string? boundSaveKey = null;
 
         LanConnectCurrentSaveBindingWriter.PersistOutcome first = harness.Writer.Persist(
-            Target(netService, boundSaveKey),
+            Target(netService, boundSaveKey, recordPersistedSaveKey: saveKey => boundSaveKey = saveKey),
             "first_save_event");
         Assert.Equal(LanConnectCurrentSaveBindingWriter.PersistResult.Persisted, first.Result);
-        boundSaveKey = first.SaveKey;
+        Assert.Equal("save-a", boundSaveKey);
 
         harness.CurrentSaveKey = "save-b";
         LanConnectCurrentSaveBindingWriter.PersistOutcome second = harness.Writer.Persist(
-            Target(netService, boundSaveKey),
+            Target(netService, boundSaveKey, recordPersistedSaveKey: saveKey => boundSaveKey = saveKey),
             "second_save_event");
 
         Assert.Equal("save-a", boundSaveKey);
@@ -148,7 +172,8 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
     private static LanConnectCurrentSaveBindingWriter.BindingTarget Target(
         object netService,
         string? expectedSaveKey,
-        bool isClosing = false) =>
+        bool isClosing = false,
+        Action<string>? recordPersistedSaveKey = null) =>
         new(
             netService,
             isClosing,
@@ -156,7 +181,8 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
             "大厅续局",
             null,
             "standard",
-            LanConnectHostChannels.Lobby);
+            LanConnectHostChannels.Lobby,
+            recordPersistedSaveKey ?? (_ => { }));
 
     private sealed class WriterHarness
     {
@@ -170,6 +196,7 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
                     CurrentSaveKey,
                     string.Empty),
                 () => currentNetService,
+                _ => ExistingBinding,
                 (save, request) =>
                 {
                     Writes.Add((save, request));
@@ -182,6 +209,8 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
         public string CurrentSaveKey { get; set; }
 
         public bool PersistResult { get; set; } = true;
+
+        public LanConnectSavedRoomBinding? ExistingBinding { get; set; }
 
         public List<(LanConnectCurrentSaveBindingWriter.LoadedSave Save,
             LanConnectCurrentSaveBindingWriter.PersistenceRequest Request)> Writes { get; } = new();
