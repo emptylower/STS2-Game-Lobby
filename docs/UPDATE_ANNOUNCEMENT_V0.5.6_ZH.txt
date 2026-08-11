@@ -1,9 +1,11 @@
-游戏大厅客户端 0.5.6-rc2 测试候选已准备好。
+游戏大厅客户端 0.5.6-rc3 测试候选已准备好。
 
-本次针对安装 RitsuLib 后仍出现的“房主黑屏、客机等待”继续修复。LAN 大厅连接在开局前不属于 RunManager，RitsuLib 的 sidecar 握手回执因此没有真正发出；客户端现在会在大厅等待期间持续完成握手，并使用当前真实连接发送回执。
+本次继续修复安装 RitsuLib 后仍出现的“房主黑屏、客机等待”。RC2 现场日志已经确认 sidecar opcode 16/17 握手完整交换；新的双方日志显示房主已经开始运行并等待战斗同步，而客机仍在大厅发送准备和角色变更消息。
+
+根因是 RitsuLib 抢先编译开始游戏消息后保留了原版 3-bit 玩家列表编码，而 LAN 扩容接收端按 5-bit 解码。RC3 会在消息总线边界按当前位宽发送开始游戏消息，同时保留 RitsuLib 的运行数据尾部。
 
 客户端现在使用 WireCacheSignatureV1 在 lobby-service 签发 ticket 前和游戏握手发出 join request 前比较线上编码。真实不一致会明确拒绝；签名缺失或读取失败仍允许加入。默认兼容配置也已恢复为 strict。
 
-这是测试候选，不是正式版。所有同房玩家请统一升级客户端到 0.5.6-rc2；lobby-service 继续使用 0.5.6-rc1，无需重复部署。两台机器的内容 MOD 不同并改变线上编码时，拒绝加入仍是预期行为。
+这是测试候选，不是正式版。所有同房玩家请统一升级客户端到 0.5.6-rc3；lobby-service 继续使用 0.5.6-rc1，无需重复部署。两台机器的内容 MOD 不同并改变线上编码时，拒绝加入仍是预期行为。
 
-遇到加入失败、黑屏或等待页卡住，请同时提交两台机器的完整 godot.log。正常情况下 RitsuLib 会在开局前记录 Handshake ack received，且不再出现 handshake_ack_timeout。下载地址与 SHA-256 校验值以 GitHub Release v0.5.6-rc2 页面为准。
+遇到加入失败、黑屏或等待页卡住，请同时提交两台机器的完整 godot.log。正常情况下会记录 Handshake ack received、lobby begin-run forced at message-bus boundary 和 lobbyListBits=5，随后双方都进入战斗状态同步。下载地址与 SHA-256 校验值以 GitHub Release v0.5.6-rc3 页面为准。

@@ -1,3 +1,4 @@
+using System.Reflection;
 using Sts2LanConnect.Scripts;
 
 namespace Sts2LanConnect.Tests.Patches;
@@ -44,6 +45,27 @@ public sealed class LanConnectSerializationPatchesCompatibilityTests
                 typeof(PlayerListMessage<PlayerWithoutSlotId>)));
     }
 
+    [Fact]
+    public void Resolves_closed_generic_message_bus_serializer()
+    {
+        MethodInfo result = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
+            typeof(CompatibleMessageBus),
+            typeof(PlayerListMessage<StartRunLobbyPlayer>));
+
+        Assert.True(result.IsGenericMethod);
+        Assert.False(result.ContainsGenericParameters);
+        Assert.Equal(typeof(PlayerListMessage<StartRunLobbyPlayer>), result.GetGenericArguments()[0]);
+    }
+
+    [Fact]
+    public void Rejects_message_bus_without_expected_generic_serializer_shape()
+    {
+        Assert.Throws<MissingMethodException>(() =>
+            LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
+                typeof(IncompatibleMessageBus),
+                typeof(PlayerListMessage<StartRunLobbyPlayer>)));
+    }
+
     private struct PlayerListMessage<TPlayer>
     {
 #pragma warning disable CS0649
@@ -67,5 +89,23 @@ public sealed class LanConnectSerializationPatchesCompatibilityTests
 
     private struct PlayerWithoutSlotId
     {
+    }
+
+    private sealed class IncompatibleMessageBus
+    {
+        public byte[] SerializeMessage(ulong senderId, object message, out int length)
+        {
+            length = 0;
+            return [];
+        }
+    }
+
+    private sealed class CompatibleMessageBus
+    {
+        public byte[] SerializeMessage<T>(ulong senderId, T message, out int length)
+        {
+            length = 0;
+            return [];
+        }
     }
 }

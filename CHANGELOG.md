@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.5.6-rc3] - 2026-08-11
+
+客户端 `0.5.6-rc3` 测试候选发布；lobby-service 继续使用 `0.5.6-rc1`，本次不改变服务端 API、中继或控制协议。
+
+### Fixed
+
+- （客户端）RC2 已让 RitsuLib opcode `16/17` sidecar 握手完整交换，但现场日志仍显示房主开始运行后等待战斗同步、客机继续停留在大厅。根因是 RitsuLib 先补丁并编译了闭合泛型 `NetMessageBus.SerializeMessage<LobbyBeginRunMessage>`，使开始游戏消息继续使用原版 3-bit 玩家列表，而扩容后的接收端按 5-bit 解码。
+- （客户端）在消息总线边界按当前协议位宽序列化 `LobbyBeginRunMessage`，同时保留 RitsuLib postfix 追加的运行数据尾部，避免一方黑屏、另一方停在等待页。
+
+### Compatibility
+
+- 开始游戏消息兼容补丁只在运行时结构与预期 schema 完全一致时启用；结构变化时会拒绝安装补丁并记录错误，避免静默发送损坏的数据。
+- 所有同房玩家应统一使用客户端 `0.5.6-rc3`。lobby-service 继续使用 `0.5.6-rc1`，无需重复部署。
+
 ## [0.5.6-rc2] - 2026-08-11
 
 客户端 `0.5.6-rc2` 测试候选发布；lobby-service 继续使用 `0.5.6-rc1`，本次不改变服务端 API、中继或控制协议。

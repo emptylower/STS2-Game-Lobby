@@ -5,6 +5,8 @@ using System.Reflection;
 using System.Reflection.Emit;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Logging;
+using MegaCrit.Sts2.Core.Multiplayer;
+using MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
 
 namespace Sts2LanConnect.Scripts;
@@ -16,7 +18,8 @@ internal static class LanConnectSerializationPatches
     private const string LobbyBeginRunTypeName =
         "MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.LobbyBeginRunMessage";
     private const string PlayersInLobbyFieldName = "playersInLobby";
-    private const int RequiredWirePatchCount = 6;
+    private const int RequiredWirePatchCount = 7;
+    private const int ByteBits = 8;
 
     private static readonly Harmony HarmonyInstance = new("sts2_lan_connect.serialization");
     private static bool _applied;
@@ -48,6 +51,9 @@ internal static class LanConnectSerializationPatches
 
     private static readonly MethodInfo? GetActiveLobbyListBitWidth =
         AccessTools.Method(typeof(LanConnectProtocolProfiles), nameof(LanConnectProtocolProfiles.GetActiveLobbyListBitWidth));
+
+    private static readonly FieldInfo? NetMessageBusWriter =
+        AccessTools.Field(typeof(NetMessageBus), "_writer");
 
     public static void Apply()
     {
@@ -86,6 +92,11 @@ internal static class LanConnectSerializationPatches
             TrySafePatch(target);
         }
 
+        TrySafePrefixPatch(
+            patchPlan.BeginRunMessageBusSerialize,
+            nameof(SerializeBeginRunAtMessageBusPrefix),
+            $"NetMessageBus.SerializeMessage<{patchPlan.BeginRunMessageType.Name}>");
+
         if (_patchedCount != RequiredWirePatchCount || _failedCount != 0)
         {
             RollBackIncompletePatches();
@@ -120,12 +131,33 @@ internal static class LanConnectSerializationPatches
         }
     }
 
+    private static void TrySafePrefixPatch(MethodInfo method, string prefixName, string label)
+    {
+        try
+        {
+            HarmonyInstance.Patch(method, prefix: new HarmonyMethod(
+                typeof(LanConnectSerializationPatches), prefixName));
+            _patchedCount++;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"sts2_lan_connect serialization: failed to patch {label}: {ex}");
+            _failedCount++;
+        }
+    }
+
     private static WirePatchPlan ResolveRequiredPatchPlan(Assembly sts2Assembly)
     {
         Type joinResponseType = RequireType(sts2Assembly, ClientLobbyJoinResponseTypeName);
         Type beginRunType = RequireType(sts2Assembly, LobbyBeginRunTypeName);
         Type slotIdCarrierType = ResolveSlotIdCarrierType(joinResponseType, beginRunType);
         string slotIdCarrierName = slotIdCarrierType.FullName ?? slotIdCarrierType.Name;
+        ValidateBeginRunWireSchema(beginRunType);
+        _ = NetMessageBusWriter
+            ?? throw new MissingFieldException(typeof(NetMessageBus).FullName, "_writer");
+        MethodInfo beginRunMessageBusSerialize = ResolveGenericSerializeMessageMethod(
+            typeof(NetMessageBus),
+            beginRunType);
 
         WirePatchTarget[] targets =
         {
@@ -155,8 +187,60 @@ internal static class LanConnectSerializationPatches
                 $"{LobbyBeginRunTypeName}.Deserialize")
         };
 
-        return new WirePatchPlan(slotIdCarrierType, targets);
+        return new WirePatchPlan(
+            slotIdCarrierType,
+            beginRunType,
+            beginRunMessageBusSerialize,
+            targets);
     }
+
+    internal static MethodInfo ResolveGenericSerializeMessageMethod(Type messageBusType, Type messageType)
+    {
+        MethodInfo[] matches = messageBusType
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Where(static method => method.Name == nameof(NetMessageBus.SerializeMessage))
+            .Where(static method => method.IsGenericMethodDefinition)
+            .Where(static method => method.ReturnType == typeof(byte[]))
+            .Where(static method =>
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                return parameters.Length == 3
+                    && parameters[0].ParameterType == typeof(ulong)
+                    && parameters[1].ParameterType.IsGenericParameter
+                    && parameters[2].ParameterType == typeof(int).MakeByRefType();
+            })
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            throw new MissingMethodException(
+                messageBusType.FullName,
+                $"SerializeMessage<T>(UInt64, T, out Int32) unique overload; found={matches.Length}");
+        }
+
+        return matches[0].MakeGenericMethod(messageType);
+    }
+
+    private static void ValidateBeginRunWireSchema(Type beginRunType)
+    {
+        RequireField(beginRunType, PlayersInLobbyFieldName, static type => IsList(type));
+        RequireField(beginRunType, "seed", static type => type == typeof(string));
+        RequireField(beginRunType, "modifiers", static type => IsList(type));
+        RequireField(beginRunType, "act1", static type => type == typeof(string));
+    }
+
+    private static void RequireField(Type declaringType, string fieldName, Func<Type, bool> isExpectedType)
+    {
+        FieldInfo? field = declaringType.GetField(
+            fieldName,
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (field == null || !isExpectedType(field.FieldType))
+        {
+            throw new MissingFieldException(declaringType.FullName, fieldName);
+        }
+    }
+
+    private static bool IsList(Type type) =>
+        type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>);
 
     internal static Type ResolveSlotIdCarrierType(Type joinResponseType, Type beginRunType)
     {
@@ -227,6 +311,50 @@ internal static class LanConnectSerializationPatches
     }
 
     // ReSharper disable UnusedMember.Local — invoked by Harmony via reflection
+
+    [HarmonyPriority(Priority.First)]
+    private static bool SerializeBeginRunAtMessageBusPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        LobbyBeginRunMessage message,
+        ref int length,
+        ref byte[] __result)
+    {
+        // RitsuLib patches this closed generic before LAN Connect loads, which can inline the vanilla 3-bit body.
+        FieldInfo writerField = NetMessageBusWriter
+            ?? throw new MissingFieldException(typeof(NetMessageBus).FullName, "_writer");
+        PacketWriter writer = writerField.GetValue(__instance) as PacketWriter
+            ?? throw new InvalidOperationException("NetMessageBus._writer is unavailable.");
+
+        writer.Reset();
+        writer.WriteByte(checked((byte)message.ToId()));
+        writer.WriteULong(senderId);
+        int listBitWidth = LanConnectProtocolProfiles.GetActiveLobbyListBitWidth();
+        SerializeBeginRunBody(writer, message, listBitWidth);
+        length = checked((int)(((long)writer.BitPosition + ByteBits - 1) / ByteBits));
+        __result = writer.Buffer;
+        Log.Info(
+            $"sts2_lan_connect serialization: lobby begin-run forced at message-bus boundary " +
+            $"players={message.playersInLobby?.Count ?? 0}, lobbyListBits={listBitWidth}, bodyBytes={length}");
+        return false;
+    }
+
+    internal static void SerializeBeginRunBody(
+        PacketWriter writer,
+        LobbyBeginRunMessage message,
+        int lobbyListBitWidth)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        if (message.playersInLobby == null)
+        {
+            throw new InvalidOperationException("Tried to serialize LobbyBeginRunMessage with null player list.");
+        }
+
+        writer.WriteList(message.playersInLobby, lobbyListBitWidth);
+        writer.WriteString(message.seed);
+        writer.WriteList(message.modifiers);
+        writer.WriteString(message.act1);
+    }
 
     private static IEnumerable<CodeInstruction> TranspileSlotIdCarrierSerialize(IEnumerable<CodeInstruction> instructions)
         => ReplaceRequiredBitWidth(instructions,
@@ -306,5 +434,9 @@ internal static class LanConnectSerializationPatches
 
     private readonly record struct WirePatchTarget(MethodInfo Method, string TranspilerName, string Label);
 
-    private readonly record struct WirePatchPlan(Type SlotIdCarrierType, IReadOnlyList<WirePatchTarget> Targets);
+    private readonly record struct WirePatchPlan(
+        Type SlotIdCarrierType,
+        Type BeginRunMessageType,
+        MethodInfo BeginRunMessageBusSerialize,
+        IReadOnlyList<WirePatchTarget> Targets);
 }

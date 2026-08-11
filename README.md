@@ -3,7 +3,7 @@
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-![Client](https://img.shields.io/badge/client-v0.5.6--rc2-orange)
+![Client](https://img.shields.io/badge/client-v0.5.6--rc3-orange)
 ![Service](https://img.shields.io/badge/service-v0.5.6--rc1-orange)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
@@ -17,7 +17,7 @@
 
 ## 中文
 
-**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端测试候选为 **v0.5.6-rc2**，大厅服务继续使用 **v0.5.6-rc1**；最新正式客户端为 **v0.5.5**。本候选版主要服务对象是：
+**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端测试候选为 **v0.5.6-rc3**，大厅服务继续使用 **v0.5.6-rc1**；最新正式客户端为 **v0.5.5**。本候选版主要服务对象是：
 
 - 想自行部署大厅服务的服主 / 运维
 - 想构建或分发客户端 MOD 的维护者
@@ -41,23 +41,24 @@
 - 客户端通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）拿到聚合节点列表
 - 不再有任何"母面板"或中心化审核后台；`SERVER_REGISTRY_*` 一组环境变量自 v0.4.0 起已从 lobby-service 中完全移除
 
-### v0.5.6-rc2 客户端测试候选
+### v0.5.6-rc3 客户端测试候选
 
-- 修复 RitsuLib sidecar 在 LAN 大厅阶段无法通过真实大厅连接发送握手回执，导致房主黑屏而客机停在等待页的问题
+- RC2 已完成 RitsuLib sidecar opcode `16/17` 握手；RC3 继续修复握手完成后房主黑屏、客机停在等待页的问题
+- RitsuLib 抢先编译开始游戏消息时会保留原版 3-bit 玩家列表编码，而 LAN 扩容接收端使用 5-bit；RC3 在消息总线边界强制使用当前位宽，并保留 RitsuLib 的运行数据尾部
 - 新增 `WireCacheSignatureV1`，在服务端签发 join ticket 前与游戏 join request 前比较四张 ModelId net-id 表和四个位宽
 - 内容 MOD 改变线上编码时会明确拒绝加入，不再先连接后黑屏或卡在等待页；签名缺失或读取失败仍 fail-open
 - 发布默认兼容配置由 `test_relaxed` 恢复为 `strict`，不再吞掉原版 gameplay MOD / ID 数据库不一致检查
 - safe-load 与存档修复不再误写或删除续局绑定；未知来源只询问一次，旧版本污染过的存档会重新确认 LAN / 大厅通道
 - 房主重开后使用当前存档重新发布房间，队友可再次看到并加入
 - 踢出身份与存档槽位分离，binding handle 锁定列表绘制时的占用者，避免误封原槽位主人或误发通知
-- 所有同房玩家必须统一使用客户端 `0.5.6-rc2`；lobby-service 继续使用 `0.5.6-rc1`，本次没有服务端协议变更
+- 所有同房玩家必须统一使用客户端 `0.5.6-rc3`；lobby-service 继续使用 `0.5.6-rc1`，本次没有服务端协议变更
 - 同一客户端构建继续面向游戏 `0.107.1`、`0.109.0`、`0.109.1` 与 `0.110.x`；同一房间内仍要求完全相同的游戏版本
 
 ### 当前版本
 
-- 客户端源码 / 构建版本：`0.5.6-rc2`（测试候选）
+- 客户端源码 / 构建版本：`0.5.6-rc3`（测试候选）
 - 大厅服务源码 / 构建版本：`0.5.6-rc1`（测试候选）
-- 当前测试候选：[`v0.5.6-rc2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc2)
+- 当前测试候选：[`v0.5.6-rc3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc3)
 - 最新 GitHub 稳定版：[`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
 - Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（候选版测试公告见 `docs/STEAM_WORKSHOP_UPDATE_V0.5.6_ZH.txt`）
 
@@ -178,7 +179,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 | 文档 | 说明 |
 |------|------|
 | [`CHANGELOG.md`](./CHANGELOG.md) | 客户端与服务端版本更新日志 |
-| [`docs/RELEASE_NOTES_V0.5.6_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.6_CLIENT_ZH.md) | v0.5.6-rc2 客户端测试候选说明：RitsuLib 大厅握手、线上编码签名与已知限制 |
+| [`docs/RELEASE_NOTES_V0.5.6_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.6_CLIENT_ZH.md) | v0.5.6-rc3 客户端测试候选说明：RitsuLib 开始游戏消息、线上编码签名与已知限制 |
 | [`docs/RELEASE_NOTES_V0.5.5_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.5_CLIENT_ZH.md) | v0.5.5 客户端正式说明：游戏 0.110.x ABI 兼容、验证范围与回滚步骤 |
 | [`docs/RELEASE_NOTES_V0.5.4_ZH.md`](./docs/RELEASE_NOTES_V0.5.4_ZH.md) | v0.5.4 lobby-service 正式说明：AI 审核、安全缓存、复审及永久规则 |
 | [`docs/RELEASE_NOTES_V0.5.4_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.4_CLIENT_ZH.md) | v0.5.4 客户端正式说明：待审状态、敏感词提示与跨消息撤回 |
@@ -205,7 +206,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 ## English
 
-**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current client release candidate is **v0.5.6-rc2**, while lobby-service remains on **v0.5.6-rc1**; the latest stable client remains **v0.5.5**.
+**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current client release candidate is **v0.5.6-rc3**, while lobby-service remains on **v0.5.6-rc1**; the latest stable client remains **v0.5.5**.
 
 ### What is in this repository
 
@@ -221,23 +222,24 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 Each `lobby-service` node advertises itself to peers via the built-in peer-announce protocol. Clients aggregate the public node list through a Cloudflare discovery worker (`https://sts2-gamelobby-register.xyz`). There is no master panel and no central review backend; the `SERVER_REGISTRY_*` env vars from v0.3.x have been removed from `lobby-service` and have been inert since v0.4.0.
 
-### v0.5.6-rc2 client candidate highlights
+### v0.5.6-rc3 client candidate highlights
 
-- Fixes RitsuLib sidecar acknowledgements using an unbound run service during the LAN lobby, which could leave the host black and the client waiting.
+- RC2 completed the RitsuLib sidecar opcode `16/17` handshake; RC3 fixes the remaining host-black/client-waiting failure after that handshake succeeds.
+- RitsuLib could precompile the begin-run message with vanilla 3-bit player-list encoding while the expanded LAN receiver used 5 bits. RC3 forces the active width at the message-bus boundary while preserving RitsuLib's run-data tail.
 - `WireCacheSignatureV1` compares the four ModelId net-id tables and bit widths before ticket issuance and again before the game join request.
 - A genuine wire mismatch is rejected before a black screen or stuck waiting room; missing or unreadable signatures remain fail-open.
 - The shipped compatibility profile is `strict` again, preserving vanilla gameplay-MOD and ID-database mismatch checks.
 - Safe load and save repair no longer stamp or delete continue-run bindings; ambiguous legacy saves ask once whether they originated from LAN or the lobby.
 - Restarted hosts republish the room against the active save so teammates can find it again.
 - Installation identity and game slots are separate, while binding handles pin kick actions to the occupant rendered by the host.
-- Every player in a room must use client `0.5.6-rc2`; lobby-service remains on `0.5.6-rc1` because this release does not change the service protocol.
+- Every player in a room must use client `0.5.6-rc3`; lobby-service remains on `0.5.6-rc1` because this release does not change the service protocol.
 - One client build still targets game versions `0.107.1`, `0.109.0`, `0.109.1`, and `0.110.x`; every player in a room must use the exact same game version.
 
 ### Current versions
 
-- Client source/build version: `0.5.6-rc2` (release candidate)
+- Client source/build version: `0.5.6-rc3` (release candidate)
 - Lobby service source/build version: `0.5.6-rc1` (release candidate)
-- Current release candidate: [`v0.5.6-rc2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc2)
+- Current release candidate: [`v0.5.6-rc3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc3)
 - Latest stable GitHub release: [`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
 - Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 
