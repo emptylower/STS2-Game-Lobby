@@ -10,12 +10,12 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端测试候选为 [`0.5.6-rc2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc2)，lobby-service 继续使用 `0.5.6-rc1`；这不是正式版，最新正式客户端仍为 [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)。同房玩家必须统一客户端版本，安装或更新后必须完整重启游戏。
+当前客户端测试候选为 [`0.5.6-rc3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc3)，lobby-service 继续使用 `0.5.6-rc1`；这不是正式版，最新正式客户端仍为 [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)。同房玩家必须统一客户端版本，安装或更新后必须完整重启游戏。
 
-## v0.5.6-rc2 RitsuLib 大厅握手修复测试
+## v0.5.6-rc3 RitsuLib 开始游戏消息修复测试
 
-- 安装 RitsuLib 后，客户端会在加入和大厅等待期间持续完成 sidecar 握手，并使用当前 LAN 大厅连接发送回执，避免房主开局黑屏而客机继续等待。
-- 正常日志应在双方准备和开局前出现 `Handshake ack received`，且不再出现 `handshake_ack_timeout`。未安装 RitsuLib 时该兼容桥不会启用。
+- RC2 已让 RitsuLib sidecar opcode `16/17` 握手完整交换；RC3 修复握手完成后，开始游戏消息仍以原版 3-bit 玩家列表发送、而 LAN 扩容接收端按 5-bit 解码的问题。
+- 正常日志应出现 `Handshake ack received`、`lobby begin-run forced at message-bus boundary` 和 `lobbyListBits=5`，双方随后都能进入战斗状态同步。未安装 RitsuLib 时该兼容桥不会启用。
 - 加入前会比较双方实际使用的 ModelId 线上编码。内容 MOD 组合不同并改变 net-id 表或位宽时，现在会明确提示不一致并拒绝加入，而不是进入后黑屏或一方卡在等待页；这是预期行为。
 - `affects_gameplay: false` 只表示该 MOD 不进入原版 `idDatabaseHash`，不保证它不会占用 ModelId。新签名会补上这层检查；签名缺失或读取失败时仍允许加入。
 - 默认兼容配置已从测试用 relaxed 恢复为 strict。普通 MOD 差异的显式 relaxed 入口不能跳过真实线上编码或游戏版本不一致。
@@ -278,12 +278,12 @@
 
 # STS2 LAN Connect User Guide
 
-The current client test candidate is [`0.5.6-rc2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc2), while lobby-service remains on `0.5.6-rc1`. This is not a final release; the latest stable client remains [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5). Every player in a room must use the same client version and fully restart the game after updating.
+The current client test candidate is [`0.5.6-rc3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc3), while lobby-service remains on `0.5.6-rc1`. This is not a final release; the latest stable client remains [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5). Every player in a room must use the same client version and fully restart the game after updating.
 
-## v0.5.6-rc2 RitsuLib Lobby-Handshake Testing
+## v0.5.6-rc3 RitsuLib Begin-Run Message Testing
 
-- With RitsuLib installed, the client now drives the sidecar handshake during join and lobby wait and sends acknowledgements through the active LAN lobby service, preventing a host black screen while the client keeps waiting.
-- Healthy logs show `Handshake ack received` before both players start and no `handshake_ack_timeout`. The compatibility bridge stays inactive when RitsuLib is absent.
+- RC2 completed the RitsuLib sidecar opcode `16/17` exchange. RC3 fixes the begin-run message still using vanilla 3-bit player-list encoding while the expanded LAN receiver reads 5 bits.
+- Healthy logs show `Handshake ack received`, `lobby begin-run forced at message-bus boundary`, and `lobbyListBits=5`, after which both players enter combat-state synchronization. The compatibility bridge stays inactive when RitsuLib is absent.
 - The join flow now compares the actual ModelId wire encoding. Content-MOD sets that change net-id tables or bit widths are intentionally rejected before a black screen or stuck waiting room.
 - `affects_gameplay: false` only excludes a MOD from vanilla `idDatabaseHash`; it does not guarantee that the MOD takes no ModelIds. The new signature covers that gap and remains fail-open when unavailable.
 - The shipped profile is `strict` again. Explicit relaxed handling for ordinary MOD differences cannot bypass a genuine wire-signature or game-version mismatch.
