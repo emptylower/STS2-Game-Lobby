@@ -57,6 +57,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
 
         _logger.Info($"Beginning managed join with initializer {initializer} relaxedCompatibility={_relaxedCompatibility}");
         NetService = new NetClientGameService();
+        LanConnectRitsuLibLobbyCompatibility.TrackLobbyNetService(NetService);
         CancelToken.Token.Register(Cancel);
 
         CancellationTokenSource updateLoopCancelSource = new();
@@ -117,6 +118,11 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             {
                 NetError reason = CancelToken.IsCancellationRequested ? NetError.CancelledJoin : NetError.InternalError;
                 NetService.Disconnect(reason);
+            }
+
+            if (NetService != null)
+            {
+                LanConnectRitsuLibLobbyCompatibility.ReleaseLobbyNetService(NetService);
             }
 
             throw;
@@ -363,6 +369,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             try
             {
                 NetService?.Update();
+                LanConnectRitsuLibLobbyCompatibility.Tick(NetService);
             }
             catch (Exception ex)
             {

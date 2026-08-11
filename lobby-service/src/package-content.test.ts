@@ -307,7 +307,7 @@ test("service package rejects malformed protected traversal and symlink outputs"
   }
 });
 
-test("release sources pin service and client v0.5.6-rc1 while preserving older fixtures", () => {
+test("release sources pin service v0.5.6-rc1 and client v0.5.6-rc2 while preserving older fixtures", () => {
   const servicePackage = JSON.parse(readFileSync(join(repositoryRoot, "lobby-service/package.json"), "utf8")) as {
     version?: unknown;
   };
@@ -322,8 +322,8 @@ test("release sources pin service and client v0.5.6-rc1 while preserving older f
   assert.equal(servicePackage.version, "0.5.6-rc1");
   assert.equal(serviceLock.version, "0.5.6-rc1");
   assert.equal(serviceLock.packages?.[""]?.version, "0.5.6-rc1");
-  assert.equal(clientManifest.version, "0.5.6-rc1");
-  assert.match(clientProject, /<Version>0\.5\.6-rc1<\/Version>/);
+  assert.equal(clientManifest.version, "0.5.6-rc2");
+  assert.match(clientProject, /<Version>0\.5\.6-rc2<\/Version>/);
   assert.match(clientProject, /<AssemblyVersion>0\.5\.6\.0<\/AssemblyVersion>/);
 
   const serviceFixture = readFileSync(

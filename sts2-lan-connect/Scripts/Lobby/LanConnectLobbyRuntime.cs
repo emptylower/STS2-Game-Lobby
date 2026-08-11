@@ -521,6 +521,10 @@ internal sealed partial class LanConnectLobbyRuntime :
     {
         DrivePendingRestartNavigation(delta);
         SynchronizeReferenceMode();
+        LanConnectRitsuLibLobbyCompatibility.Tick(
+            _activeSession != null
+                ? _activeSession.NetService
+                : _activeClientSession?.NetService);
         if (_activeSession == null)
         {
             return;
@@ -937,6 +941,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     public void AttachHostedRoom(NetHostGameService netService, LobbyApiClient apiClient, LobbyCreateRoomResponse registration, LanConnectHostedRoomMetadata metadata)
     {
+        LanConnectRitsuLibLobbyCompatibility.TrackLobbyNetService(netService);
         _pendingSaveBindingCoordinator.DifferentHostedRoomWillAttach();
         HostedRoomSession? previousHostedSession = null;
         JoinedClientSession? previousClientSession = null;
@@ -1078,6 +1083,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     public void AttachJoinedClient(NetClientGameService netService, LobbyJoinRoomResponse joinResponse)
     {
+        LanConnectRitsuLibLobbyCompatibility.TrackLobbyNetService(netService);
         _pendingSaveBindingCoordinator.AttachJoinedClient();
         string? controlChannelId = joinResponse.ConnectionPlan.ControlChannelId;
         if (string.IsNullOrWhiteSpace(controlChannelId))
@@ -1361,6 +1367,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             {
                 _pendingSaveBindingCoordinator.HostedFlowEnded();
                 _activeSession = null;
+                LanConnectRitsuLibLobbyCompatibility.ReleaseLobbyNetService(session.NetService);
                 _joinedRoomPeerIds = new HashSet<ulong>();
                 LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
                 LeaveChatRoomIfIdle();
@@ -1418,6 +1425,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             () =>
             {
                 _activeClientSession = null;
+                LanConnectRitsuLibLobbyCompatibility.ReleaseLobbyNetService(session.NetService);
                 _joinedRoomPeerIds = new HashSet<ulong>();
                 LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
                 LeaveChatRoomIfIdle();

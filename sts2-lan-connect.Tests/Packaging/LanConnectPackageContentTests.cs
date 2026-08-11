@@ -47,11 +47,11 @@ public sealed class LanConnectPackageContentTests
 
         using JsonDocument manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
-        Assert.Equal("0.5.6-rc1", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("0.5.6-rc2", manifest.RootElement.GetProperty("version").GetString());
         FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
             Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
         Assert.Equal("0.5.6.0", assemblyVersion.FileVersion);
-        Assert.StartsWith("0.5.6-rc1", assemblyVersion.ProductVersion, StringComparison.Ordinal);
+        Assert.StartsWith("0.5.6-rc2", assemblyVersion.ProductVersion, StringComparison.Ordinal);
 
         foreach (string packagePath in ExpectedFiles)
         {
@@ -101,8 +101,8 @@ public sealed class LanConnectPackageContentTests
             Assert.Contains("0.5.3", text, StringComparison.Ordinal);
             Assert.Contains("续局", text, StringComparison.Ordinal);
         }
-        Assert.Contains("0.5.6-rc1", workshop, StringComparison.Ordinal);
-        Assert.Contains("当前版本：0.5.6-rc1", workshop, StringComparison.Ordinal);
+        Assert.Contains("0.5.6-rc2", workshop, StringComparison.Ordinal);
+        Assert.Contains("当前版本：0.5.6-rc2", workshop, StringComparison.Ordinal);
         Assert.Contains("STS2LANRESUME:", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("HostChannel", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("Android", releaseNotes, StringComparison.Ordinal);
@@ -111,7 +111,7 @@ public sealed class LanConnectPackageContentTests
     }
 
     [Fact]
-    public void Client_v056_rc1_release_documents_field_report_fixes_and_candidate_state()
+    public void Client_v056_rc2_release_documents_field_report_fixes_and_candidate_state()
     {
         using Fixture fixture = new();
         string releaseNotes = File.ReadAllText(Path.Combine(
@@ -126,10 +126,11 @@ public sealed class LanConnectPackageContentTests
 
         foreach (string text in new[] { releaseNotes, changelog, clientReadme })
         {
-            Assert.Contains("0.5.6-rc1", text, StringComparison.Ordinal);
+            Assert.Contains("0.5.6-rc2", text, StringComparison.Ordinal);
             Assert.Contains("候选", text, StringComparison.Ordinal);
         }
         Assert.Contains("WireCacheSignatureV1", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("RitsuLib", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("godot.log", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("0.110.x", clientReadme, StringComparison.Ordinal);
     }
