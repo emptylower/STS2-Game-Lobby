@@ -1,9 +1,10 @@
-[h1]v0.5.6-rc3 客户端测试候选：修复 RitsuLib 开始游戏消息[/h1]
+[h1]v0.5.6-rc4 客户端测试候选：修复 RitsuLib Harmony 补丁冲突[/h1]
 
 [list]
-[*]RC2 已让 RitsuLib sidecar opcode 16/17 握手完整交换；RC3 继续修复握手完成后房主黑屏、客机停在等待页的问题
-[*]修复开始游戏消息仍使用原版 3-bit 玩家列表、而 LAN 扩容接收端按 5-bit 解码的问题，并保留 RitsuLib 的运行数据尾部
-[*]正常日志会出现 Handshake ack received、lobby begin-run forced at message-bus boundary 和 lobbyListBits=5
+[*]RC3 用户日志确认客户端在启动时组合 RitsuLib 闭合泛型 postfix 与 LAN prefix 会触发 InvalidProgramException，7 个必需补丁只完成 6 个后全部回滚
+[*]RC4 先卸载冲突 postfix，再安装 LAN prefix；5-bit 开始游戏消息体完成后通过兼容桥继续写入 RitsuLib 运行数据尾部
+[*]初始化失败时恢复 RitsuLib 原补丁及排序信息，避免留下半补丁状态
+[*]正常启动会出现 patches applied=7, failed=0 和 ritsuTailBridge=True；开局时出现 lobbyListBits=5 和 ritsuTail=True
 [*]新增 WireCacheSignatureV1：加入前比较实际 ModelId net-id 表和编码位宽；内容 MOD 不一致时明确拒绝，不再连接后黑屏或卡在等待页
 [*]默认兼容配置改为 strict；签名缺失或读取失败仍允许加入，避免诊断故障误伤兼容玩家
 [*]修复续局绑定被误写成 LAN、修复后绑定被删除，导致回主菜单或房主重开后房间无法重新发布的问题
@@ -11,4 +12,4 @@
 [*]踢出改为安装身份与槽位身份分离，并锁定列表绘制时的占用者，避免误封槽位原主人或把通知发给错误玩家
 [/list]
 
-[b]测试候选，不是正式版[/b]：所有同房玩家必须使用客户端 0.5.6-rc3；lobby-service 继续使用 0.5.6-rc1。两台机器内容 MOD 不同并改变线上编码时，被拒绝是预期行为。遇到失败请提交双方完整 godot.log；安装或更新后请完整重启游戏。
+[b]测试候选，不是正式版[/b]：所有同房玩家必须使用客户端 0.5.6-rc4；lobby-service 继续使用 0.5.6-rc1。两台机器内容 MOD 不同并改变线上编码时，被拒绝是预期行为。遇到失败请提交双方完整 godot.log；安装或更新后请完整重启游戏。

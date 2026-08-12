@@ -14,26 +14,27 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.5.6-rc3`（测试候选） |
+| 客户端版本 | `0.5.6-rc4`（测试候选） |
 | 默认大厅 | `sts2-test.43.133.192.249.nip.io`（可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `strict + relay-only` |
 
-`0.5.6-rc3` 是用于现场验证的客户端测试候选，不是正式版。lobby-service 继续使用 `0.5.6-rc1`；本次只修复客户端与 RitsuLib 的开始游戏消息兼容，不改变服务端协议。
+`0.5.6-rc4` 是用于现场验证的客户端测试候选，不是正式版。lobby-service 继续使用 `0.5.6-rc1`；本次只修复客户端与 RitsuLib 的开始游戏消息兼容，不改变服务端协议。
 
 本版会比较四张 ModelId net-id 表和四个位宽。`affects_gameplay: false` 的 MOD 仍可能改变线上编码；双方真实签名不一致时会在 ticket 签发或游戏 join request 之前拒绝，缺失/不可读签名则允许加入。发布默认配置已由 `test_relaxed` 改为 `strict`。
 
-RC2 已让 RitsuLib sidecar opcode `16/17` 握手通过当前 LAN 大厅连接完整交换。RC3 进一步修复 RitsuLib 抢先编译开始游戏消息后仍使用原版 3-bit 玩家列表、而 LAN 扩容接收端按 5-bit 解码的问题；客户端会在消息总线边界使用当前位宽，同时保留 RitsuLib 的运行数据尾部。未安装 RitsuLib 时兼容桥不会启用。
+RC3 现场日志确认客户端尚未进入联机流程：RitsuLib 先给闭合泛型 `NetMessageBus.SerializeMessage<LobbyBeginRunMessage>` 安装 postfix，LAN 再安装 prefix 时 Harmony 抛出 `InvalidProgramException`，7 个必需补丁只完成 6 个后全部回滚。RC4 会先精确卸载该 postfix，安装 LAN prefix 后由兼容桥直接调用 RitsuLib 尾数据写入函数；初始化失败时恢复 RitsuLib 原补丁。未安装 RitsuLib 时兼容桥不会启用。
 
 续局来源现在按 `lan` / `lobby` / 未知三态处理，未知存档只询问一次；safe-load 和修复不会再误写或删除绑定。踢出使用与存档槽位分离的安装 credential 和当前占用者 binding handle，避免槽位接管后误封原主人。
 
-同一客户端包继续以游戏 `0.107.1`、`0.109.0`、`0.109.1` 与 `0.110.x` 为加载目标。同一房间内所有玩家必须使用完全相同的游戏版本，并在本轮测试中统一使用客户端 `0.5.6-rc3`；lobby-service 使用 `0.5.6-rc1`。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。
+同一客户端包继续以游戏 `0.107.1`、`0.109.0`、`0.109.1` 与 `0.110.x` 为加载目标。同一房间内所有玩家必须使用完全相同的游戏版本，并在本轮测试中统一使用客户端 `0.5.6-rc4`；lobby-service 使用 `0.5.6-rc1`。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。
 
 本候选版是在既有功能之上叠加的，先前版本的能力全部保留：`0.5.5` 的游戏 ABI 向下兼容（运行时识别旧版平铺握手与 `0.110.x` 的 `PeerVersionInfo` 结构，并按运行时类型选择 `LobbyPlayer` 或 `StartRunLobbyPlayer` 的扩容序列化补丁）、`0.5.4` 的 AI 审核交互，以及 `0.5.3` 的 LAN/大厅续局通道拆分、续局身份码、存档保护和聊天 HUD。
 
-### v0.5.6-rc3 测试重点
+### v0.5.6-rc4 测试重点
 
-- 安装 RitsuLib 后完成建房、加入和双方准备，确认正常进入游戏；日志应出现 `Handshake ack received`、`lobby begin-run forced at message-bus boundary` 与 `lobbyListBits=5`，且不再出现 `handshake_ack_timeout`。
+- 安装 RitsuLib 后完整重启游戏，确认启动日志出现 `patches applied=7, failed=0` 与 `ritsuTailBridge=True`，且不再出现 `InvalidProgramException`。
+- 完成建房、加入和双方准备，确认正常进入游戏；房主发送开始游戏消息时应记录 `lobby begin-run forced at message-bus boundary`、`lobbyListBits=5` 与 `ritsuTail=True`。
 - 使用不同内容 MOD 组合加入同一房间，确认编码不一致时在黑屏前收到明确拒绝；该拒绝是预期行为。
 - 从主菜单继续大厅存档、由房主执行重开，确认房间重新发布且队友可见。
 - 测试槽位接管后踢出，确认原槽位主人没有被封禁，列表刷新后的 stale 操作不会转向新人。
@@ -191,26 +192,27 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.5.6-rc3` (release candidate) |
+| Client version | `0.5.6-rc4` (release candidate) |
 | Default lobby | `sts2-test.43.133.192.249.nip.io` |
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `strict + relay-only` |
 
-`0.5.6-rc3` is a client field-test candidate, not a final release. The lobby service remains on `0.5.6-rc1`; this build only fixes client-side RitsuLib begin-run message compatibility and does not change the service protocol.
+`0.5.6-rc4` is a client field-test candidate, not a final release. The lobby service remains on `0.5.6-rc1`; this build only fixes client-side RitsuLib begin-run message compatibility and does not change the service protocol.
 
 The candidate fingerprints the four ModelId net-id tables and bit widths. A genuine peer mismatch is rejected before ticket issuance or the game join request, while missing or unreadable signatures remain fail-open. The shipped compatibility profile is now `strict`.
 
-RC2 completed the RitsuLib sidecar opcode `16/17` exchange through the active LAN lobby service. RC3 additionally fixes RitsuLib precompiling the begin-run message with vanilla 3-bit player-list encoding while the expanded LAN receiver reads 5 bits. The message-bus boundary now uses the active width and preserves RitsuLib's run-data tail. The bridge stays inactive when RitsuLib is absent.
+RC3 field logs showed that the client never reached the lobby flow: after RitsuLib installed a postfix on closed-generic `NetMessageBus.SerializeMessage<LobbyBeginRunMessage>`, Harmony threw `InvalidProgramException` when LAN added its prefix, then rolled back all wire patches at 6 of 7. RC4 detaches that postfix first and invokes its validated tail writer through a compatibility bridge after the LAN prefix writes the begin-run body. A failed initialization restores the original RitsuLib patch. The bridge stays inactive when RitsuLib is absent.
 
 Continue-run origin is an explicit LAN/lobby/unknown choice, with a one-time prompt for ambiguous legacy saves. Safe load and repair preserve bindings. Kick identity is separate from save slots and uses the rendered occupant's binding handle.
 
-One client package continues to target game versions `0.107.1`, `0.109.0`, `0.109.1`, and `0.110.x`. Every participant must use the exact same game version and client `0.5.6-rc3`; the lobby service remains on `0.5.6-rc1`.
+One client package continues to target game versions `0.107.1`, `0.109.0`, `0.109.1`, and `0.110.x`. Every participant must use the exact same game version and client `0.5.6-rc4`; the lobby service remains on `0.5.6-rc1`.
 
 This candidate builds on top of the existing feature set; nothing from earlier versions was removed. It still carries `0.5.5`'s backward-compatible game ABI handling (detecting the legacy flat handshake or the `0.110.x` `PeerVersionInfo` handshake at runtime and selecting the old `LobbyPlayer` or new `StartRunLobbyPlayer` serialization carrier), `0.5.4`'s AI moderation flow, and `0.5.3`'s LAN/lobby continue-run channel split, resume identity code, save protection, and chat HUD.
 
-### v0.5.6-rc3 Test Focus
+### v0.5.6-rc4 Test Focus
 
-- With RitsuLib installed, create and join a room, ready both players, and verify the run starts. Logs should show `Handshake ack received`, `lobby begin-run forced at message-bus boundary`, and `lobbyListBits=5`, with no `handshake_ack_timeout`.
+- With RitsuLib installed, fully restart the game and verify startup logs contain `patches applied=7, failed=0` and `ritsuTailBridge=True`, with no `InvalidProgramException`.
+- Create and join a room, ready both players, and verify the run starts. The host should log `lobby begin-run forced at message-bus boundary`, `lobbyListBits=5`, and `ritsuTail=True`.
 - Verify mismatched content-MOD wire tables are rejected before a black screen; this refusal is intentional.
 - Resume a lobby save and restart as host, then verify the room is republished and visible to teammates.
 - Exercise slot takeover followed by kick, confirming the original slot owner is not banned and stale actions do not retarget a replacement.

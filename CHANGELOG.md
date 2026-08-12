@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.5.6-rc4] - 2026-08-12
+
+客户端 `0.5.6-rc4` 测试候选发布；lobby-service 继续使用 `0.5.6-rc1`，本次不改变服务端 API、中继或控制协议。
+
+### Fixed
+
+- （客户端）修复 RC3 在安装 RitsuLib 时启动失败的问题。现场日志确认 LAN Connect 在同一个闭合泛型 `NetMessageBus.SerializeMessage<LobbyBeginRunMessage>` 上叠加 Harmony prefix 时触发 `InvalidProgramException`，导致 7 个必需线协议补丁只安装 6 个后全部回滚，客户端从未进入大厅联机流程。
+- （客户端）安装 LAN begin-run prefix 前精确卸载 RitsuLib 的对应 postfix，并在 LAN 按 5-bit 玩家列表完成消息体后直接调用已验证的 RitsuLib 尾数据写入函数。这样保留运行数据尾部，同时避免 Harmony 重新组合两个闭合泛型补丁。
+- （客户端）兼容初始化失败时恢复 RitsuLib 原 postfix 及其 owner、优先级和排序约束，避免客户端停留在半补丁状态。
+
+### Verification
+
+- 新增真实 Harmony 闭合泛型补丁组合、精确卸载、无关 postfix 保留与回滚恢复测试。
+- 使用实际 RitsuLib `SerializePatch<LobbyBeginRunMessage>.Postfix` 验证跨程序集私有方法可绑定到兼容桥。
+- 正常启动日志应包含 `patches applied=7, failed=0` 和 `ritsuTailBridge=True`；开局发送时应包含 `ritsuTail=True`，且不再出现 `InvalidProgramException`。
+
+### Compatibility
+
+- 所有同房玩家应统一使用客户端 `0.5.6-rc4` 并完整重启游戏。lobby-service 继续使用 `0.5.6-rc1`，无需重复部署。
+
 ## [0.5.6-rc3] - 2026-08-11
 
 客户端 `0.5.6-rc3` 测试候选发布；lobby-service 继续使用 `0.5.6-rc1`，本次不改变服务端 API、中继或控制协议。

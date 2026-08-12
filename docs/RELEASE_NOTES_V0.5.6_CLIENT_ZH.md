@@ -1,16 +1,22 @@
-# STS2 LAN Connect v0.5.6-rc3 客户端测试候选说明
+# STS2 LAN Connect v0.5.6-rc4 客户端测试候选说明
 
-> 状态：客户端 `0.5.6-rc3` 测试候选，不是正式版。lobby-service 继续使用 `0.5.6-rc1`；本次仅修复客户端与 RitsuLib 的开始游戏消息兼容，不改变服务端协议。
+> 状态：客户端 `0.5.6-rc4` 测试候选，不是正式版。lobby-service 继续使用 `0.5.6-rc1`；本次仅修复客户端与 RitsuLib 的开始游戏消息兼容，不改变服务端协议。
 
-本候选版继续处理安装 RitsuLib 后出现的“房主黑屏、客机等待”问题。RC2 已让 sidecar 握手完整交换；新的双方现场日志把故障进一步定位到开始游戏消息的玩家列表位宽。请优先在可回滚的测试存档上验证。
+本候选版继续处理安装 RitsuLib 后出现的“房主黑屏、客机等待”问题。RC3 用户日志确认客户端实际在启动阶段失败，尚未进入联机流程；RC4 修复这一确定性 Harmony 补丁冲突。请优先在可回滚的测试存档上验证。
 
-## RitsuLib 开始游戏消息兼容
+## RC3 启动失败根因
 
-- RC2 现场日志已确认双方完整交换 RitsuLib opcode `16/17`，不再出现 `handshake_ack_timeout`。随后房主开始运行并等待战斗状态同步，客机却仍在大厅发送准备与角色变更消息，说明故障发生在开始游戏消息的接收阶段。
-- RitsuLib `0.5.8` 会在 LAN 扩容补丁安装前补丁并编译闭合泛型 `NetMessageBus.SerializeMessage<LobbyBeginRunMessage>`。该编译结果保留原版 3-bit 玩家列表编码，而 LAN 接收端按扩容后的 5-bit 解码，后续字段因此错位。
-- RC3 在消息总线边界按当前协议位宽重新序列化 `LobbyBeginRunMessage`，再让 RitsuLib 原有 postfix 继续追加运行数据尾部，不移除或替代 RitsuLib 功能。
-- 补丁会校验消息 schema 和底层 writer 字段；结构不符合预期时拒绝启用并记录错误，避免静默发送损坏的数据。未安装 RitsuLib 时保持原行为。
-- 所有同房玩家应统一使用客户端 `0.5.6-rc3`。
+- 三次 RC3 启动都在给 `NetMessageBus.SerializeMessage<LobbyBeginRunMessage>` 安装第 7 个必需补丁时抛出 `InvalidProgramException`。
+- RitsuLib `0.5.8` 已先在这个闭合泛型方法上安装 postfix；RC3 再增加 LAN prefix 时，Harmony 2.4.2 重建组合 wrapper 失败。
+- RC3 随即记录 `applied=6/7, failed=1`，回滚全部 6 个已安装线协议补丁并中止客户端初始化。日志中没有成功初始化、加入大厅或开局记录，因此 RC3 实际无法验证原计划中的联机修复。
+
+## RC4 RitsuLib 补丁桥
+
+- RC4 在安装 LAN begin-run prefix 前，精确识别并卸载 RitsuLib 的对应 postfix；其他 Mod 的无关 postfix 保持不变。
+- LAN prefix 在消息总线边界按当前协议位宽写入 `LobbyBeginRunMessage`。5-bit 玩家列表消息体完成后，客户端直接调用已经验证的 RitsuLib postfix 委托，继续追加运行数据尾部并更新长度。
+- 该方式保留 RitsuLib 功能，但不再要求 Harmony 把冲突的闭合泛型 prefix/postfix 组合进同一个 wrapper。
+- 如果任何必需补丁安装失败，客户端会先移除 LAN 补丁，再按原 owner、优先级及排序约束恢复 RitsuLib postfix，避免留下半补丁状态。
+- 未安装 RitsuLib 时桥接保持关闭，LAN begin-run prefix 单独工作。所有同房玩家应统一使用客户端 `0.5.6-rc4`。
 
 ## 加入前线协议签名
 
@@ -36,8 +42,10 @@
 
 ## 测试与日志
 
-- 先确认所有玩家客户端均显示 `0.5.6-rc3`、lobby-service 显示 `0.5.6-rc1`，再测试安装 RitsuLib 后的建房、加入、双方准备和正式开局。
-- 正常情况下双方应在开局前记录 RitsuLib `Handshake ack received`，房主还应记录 `lobby begin-run forced at message-bus boundary` 和 `lobbyListBits=5`；双方随后都应进入战斗状态同步，不再一边黑屏、一边停留在大厅。
+- 先确认所有玩家客户端均显示 `0.5.6-rc4`、lobby-service 显示 `0.5.6-rc1`，再测试安装 RitsuLib 后的建房、加入、双方准备和正式开局。
+- 正常启动应记录 `patches applied=7, failed=0` 与 `ritsuTailBridge=True`，不再出现 `InvalidProgramException` 或 `required wire patches incomplete`。
+- 房主发送开始游戏消息时应记录 `lobby begin-run forced at message-bus boundary`、`lobbyListBits=5` 与 `ritsuTail=True`；双方随后都应进入战斗状态同步。
+- 回归测试覆盖真实 Harmony 闭合泛型组合、精确卸载、无关 postfix 保留和失败恢复；另使用实际 RitsuLib 私有 `SerializePatch<LobbyBeginRunMessage>.Postfix` 完成跨程序集绑定验证。
 - 早先“同一存档在不同 MOD 组合下线上编码不同”的证据来自玩家自己的日志。本版会把签名、四个位宽、四张表的条目数以及每个 MOD 的 `affects_gameplay` 标记写入调试报告和 `godot.log`。
 - 遇到加入失败、黑屏、等待页卡住或误判 MOD 时，请提交两台机器各自的完整 `godot.log`；只提供单边日志无法可靠比较线上编码。
 
@@ -53,7 +61,7 @@
 1. 完整退出游戏，并备份重要多人存档。
 2. 客户端使用候选包覆盖安装完整 `sts2_lan_connect` 目录，不能混用旧 DLL、PCK 或 manifest。
 3. lobby-service 保持 `0.5.6-rc1`，无需因本次客户端修复重复部署。
-4. 通过 Steam 启动游戏，确认模组列表显示 `0.5.6-rc3`。
+4. 通过 Steam 启动游戏，确认模组列表显示 `0.5.6-rc4`。
 5. 回滚时完整移除候选客户端目录并恢复上一正式版，同时把 lobby-service 回滚到配套的正式部署。
 
-本文件对应发布候选准备阶段；下载地址与 SHA-256 校验值以 GitHub Release `v0.5.6-rc3` 页面为准。
+本文件对应发布候选准备阶段；下载地址与 SHA-256 校验值以 GitHub Release `v0.5.6-rc4` 页面为准。

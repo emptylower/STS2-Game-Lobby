@@ -10,12 +10,13 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端测试候选为 [`0.5.6-rc3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc3)，lobby-service 继续使用 `0.5.6-rc1`；这不是正式版，最新正式客户端仍为 [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)。同房玩家必须统一客户端版本，安装或更新后必须完整重启游戏。
+当前客户端测试候选为 [`0.5.6-rc4`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc4)，lobby-service 继续使用 `0.5.6-rc1`；这不是正式版，最新正式客户端仍为 [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)。同房玩家必须统一客户端版本，安装或更新后必须完整重启游戏。
 
-## v0.5.6-rc3 RitsuLib 开始游戏消息修复测试
+## v0.5.6-rc4 RitsuLib Harmony 补丁桥测试
 
-- RC2 已让 RitsuLib sidecar opcode `16/17` 握手完整交换；RC3 修复握手完成后，开始游戏消息仍以原版 3-bit 玩家列表发送、而 LAN 扩容接收端按 5-bit 解码的问题。
-- 正常日志应出现 `Handshake ack received`、`lobby begin-run forced at message-bus boundary` 和 `lobbyListBits=5`，双方随后都能进入战斗状态同步。未安装 RitsuLib 时该兼容桥不会启用。
+- RC3 用户日志确认客户端在启动时组合 RitsuLib postfix 与 LAN prefix 会触发 `InvalidProgramException`，7 个必需补丁只安装 6 个后全部回滚，实际未进入大厅联机流程。
+- RC4 会先卸载冲突的 RitsuLib postfix，再安装 LAN prefix；开局消息按 5-bit 玩家列表写完后，通过兼容桥继续追加 RitsuLib 运行数据尾部。失败时恢复 RitsuLib 原补丁。
+- 正常启动日志应出现 `patches applied=7, failed=0` 和 `ritsuTailBridge=True`。开局时房主应记录 `lobby begin-run forced at message-bus boundary`、`lobbyListBits=5` 与 `ritsuTail=True`。
 - 加入前会比较双方实际使用的 ModelId 线上编码。内容 MOD 组合不同并改变 net-id 表或位宽时，现在会明确提示不一致并拒绝加入，而不是进入后黑屏或一方卡在等待页；这是预期行为。
 - `affects_gameplay: false` 只表示该 MOD 不进入原版 `idDatabaseHash`，不保证它不会占用 ModelId。新签名会补上这层检查；签名缺失或读取失败时仍允许加入。
 - 默认兼容配置已从测试用 relaxed 恢复为 strict。普通 MOD 差异的显式 relaxed 入口不能跳过真实线上编码或游戏版本不一致。
@@ -278,12 +279,13 @@
 
 # STS2 LAN Connect User Guide
 
-The current client test candidate is [`0.5.6-rc3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc3), while lobby-service remains on `0.5.6-rc1`. This is not a final release; the latest stable client remains [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5). Every player in a room must use the same client version and fully restart the game after updating.
+The current client test candidate is [`0.5.6-rc4`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc4), while lobby-service remains on `0.5.6-rc1`. This is not a final release; the latest stable client remains [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5). Every player in a room must use the same client version and fully restart the game after updating.
 
-## v0.5.6-rc3 RitsuLib Begin-Run Message Testing
+## v0.5.6-rc4 RitsuLib Harmony Patch Bridge Testing
 
-- RC2 completed the RitsuLib sidecar opcode `16/17` exchange. RC3 fixes the begin-run message still using vanilla 3-bit player-list encoding while the expanded LAN receiver reads 5 bits.
-- Healthy logs show `Handshake ack received`, `lobby begin-run forced at message-bus boundary`, and `lobbyListBits=5`, after which both players enter combat-state synchronization. The compatibility bridge stays inactive when RitsuLib is absent.
+- RC3 user logs confirmed that composing the RitsuLib postfix with the LAN prefix throws `InvalidProgramException` during startup. Only 6 of 7 required patches were installed before the entire set was rolled back, so the client never entered the lobby flow.
+- RC4 detaches the conflicting RitsuLib postfix before installing the LAN prefix. After writing the 5-bit begin-run body, the compatibility bridge invokes the RitsuLib run-data tail writer directly. A failed initialization restores the original RitsuLib patch.
+- Healthy startup logs show `patches applied=7, failed=0` and `ritsuTailBridge=True`. When the host starts the run, logs show `lobby begin-run forced at message-bus boundary`, `lobbyListBits=5`, and `ritsuTail=True`.
 - The join flow now compares the actual ModelId wire encoding. Content-MOD sets that change net-id tables or bit widths are intentionally rejected before a black screen or stuck waiting room.
 - `affects_gameplay: false` only excludes a MOD from vanilla `idDatabaseHash`; it does not guarantee that the MOD takes no ModelIds. The new signature covers that gap and remains fail-open when unavailable.
 - The shipped profile is `strict` again. Explicit relaxed handling for ordinary MOD differences cannot bypass a genuine wire-signature or game-version mismatch.
