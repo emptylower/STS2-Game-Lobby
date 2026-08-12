@@ -17,6 +17,7 @@ internal static class LanConnectSerializationPatches
         "MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.ClientLobbyJoinResponseMessage";
     private const string LobbyBeginRunTypeName =
         "MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.LobbyBeginRunMessage";
+    private const string RitsuLibAssemblyName = "STS2-RitsuLib";
     private const string PlayersInLobbyFieldName = "playersInLobby";
     private const int RequiredWirePatchCount = 7;
     private const int ByteBits = 8;
@@ -25,6 +26,7 @@ internal static class LanConnectSerializationPatches
     private static bool _applied;
     private static int _patchedCount;
     private static int _failedCount;
+    private static DetachedBeginRunPostfix? _detachedRitsuBeginRunPostfix;
 
     private static readonly MethodInfo? WriteIntWithBits =
         AccessTools.Method(typeof(PacketWriter), nameof(PacketWriter.WriteInt), new[] { typeof(int), typeof(int) });
@@ -92,7 +94,7 @@ internal static class LanConnectSerializationPatches
             TrySafePatch(target);
         }
 
-        TrySafePrefixPatch(
+        TrySafeBeginRunPrefixPatch(
             patchPlan.BeginRunMessageBusSerialize,
             nameof(SerializeBeginRunAtMessageBusPrefix),
             $"NetMessageBus.SerializeMessage<{patchPlan.BeginRunMessageType.Name}>");
@@ -113,7 +115,8 @@ internal static class LanConnectSerializationPatches
         Log.Info(
             $"sts2_lan_connect serialization: patches applied={_patchedCount}, failed={_failedCount}. " +
             $"runtimePlayerType={patchPlan.SlotIdCarrierType.FullName}, " +
-            $"activeProfile={LanConnectProtocolProfiles.GetActiveProfile()}, slotId=dynamic, lobbyList=dynamic");
+            $"activeProfile={LanConnectProtocolProfiles.GetActiveProfile()}, slotId=dynamic, lobbyList=dynamic, " +
+            $"ritsuTailBridge={_detachedRitsuBeginRunPostfix != null}");
     }
 
     private static void TrySafePatch(WirePatchTarget target)
@@ -131,10 +134,11 @@ internal static class LanConnectSerializationPatches
         }
     }
 
-    private static void TrySafePrefixPatch(MethodInfo method, string prefixName, string label)
+    private static void TrySafeBeginRunPrefixPatch(MethodInfo method, string prefixName, string label)
     {
         try
         {
+            _detachedRitsuBeginRunPostfix = DetachRitsuBeginRunPostfix(method);
             HarmonyInstance.Patch(method, prefix: new HarmonyMethod(
                 typeof(LanConnectSerializationPatches), prefixName));
             _patchedCount++;
@@ -144,6 +148,105 @@ internal static class LanConnectSerializationPatches
             Log.Error($"sts2_lan_connect serialization: failed to patch {label}: {ex}");
             _failedCount++;
         }
+    }
+
+    private static DetachedBeginRunPostfix? DetachRitsuBeginRunPostfix(MethodInfo target)
+    {
+        Patch[] ritsuPostfixes = Harmony.GetPatchInfo(target)?.Postfixes
+            .Where(static patch => string.Equals(
+                patch.PatchMethod.DeclaringType?.Assembly.GetName().Name,
+                RitsuLibAssemblyName,
+                StringComparison.Ordinal))
+            .ToArray() ?? [];
+        if (ritsuPostfixes.Length == 0)
+        {
+            return null;
+        }
+
+        if (ritsuPostfixes.Length != 1)
+        {
+            throw new InvalidOperationException(
+                $"Expected one RitsuLib begin-run postfix, found {ritsuPostfixes.Length}.");
+        }
+
+        Patch patch = ritsuPostfixes[0];
+        MethodInfo patchMethod = patch.PatchMethod;
+        BeginRunSerializePostfix invoker = CreateBeginRunPostfixInvoker(patchMethod);
+        DetachedBeginRunPostfix detached = new(
+            target,
+            patchMethod,
+            patch.owner,
+            patch.priority,
+            patch.before,
+            patch.after,
+            patch.debug,
+            invoker);
+
+        _detachedRitsuBeginRunPostfix = detached;
+        DetachPostfixForCompatibleComposition(HarmonyInstance, target, patchMethod);
+        if (IsPostfixApplied(target, patchMethod, patch.owner))
+        {
+            throw new InvalidOperationException(
+                $"RitsuLib begin-run postfix remained installed after detach: {patchMethod.FullDescription()}.");
+        }
+
+        Log.Info(
+            $"sts2_lan_connect serialization: detached RitsuLib begin-run postfix for compatible composition " +
+            $"owner={patch.owner}, method={patchMethod.FullDescription()}");
+        return detached;
+    }
+
+    internal static void DetachPostfixForCompatibleComposition(
+        Harmony harmony,
+        MethodInfo target,
+        MethodInfo postfix)
+    {
+        ArgumentNullException.ThrowIfNull(harmony);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(postfix);
+        harmony.Unpatch(target, postfix);
+    }
+
+    internal static void RestorePostfixAfterCompatibleCompositionRollback(
+        Harmony harmony,
+        MethodInfo target,
+        MethodInfo postfix,
+        int priority,
+        string[] before,
+        string[] after,
+        bool debug)
+    {
+        ArgumentNullException.ThrowIfNull(harmony);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(postfix);
+        HarmonyMethod harmonyPostfix = new(postfix, priority, before, after, debug);
+        harmony.Patch(target, postfix: harmonyPostfix);
+    }
+
+    private static BeginRunSerializePostfix CreateBeginRunPostfixInvoker(MethodInfo postfix)
+    {
+        ArgumentNullException.ThrowIfNull(postfix);
+        ParameterInfo[] parameters = postfix.GetParameters();
+        bool compatible = postfix.IsStatic
+            && postfix.ReturnType == typeof(void)
+            && parameters.Length == 4
+            && parameters[0].ParameterType == typeof(NetMessageBus)
+            && parameters[1].ParameterType == typeof(LobbyBeginRunMessage)
+            && parameters[2].ParameterType == typeof(int).MakeByRefType()
+            && parameters[3].ParameterType == typeof(byte[]).MakeByRefType();
+        if (!compatible)
+        {
+            throw new InvalidOperationException(
+                $"Incompatible RitsuLib begin-run postfix signature: {postfix.FullDescription()}.");
+        }
+
+        return (BeginRunSerializePostfix)postfix.CreateDelegate(typeof(BeginRunSerializePostfix));
+    }
+
+    private static bool IsPostfixApplied(MethodInfo target, MethodInfo postfix, string owner)
+    {
+        return Harmony.GetPatchInfo(target)?.Postfixes.Any(patch =>
+            patch.PatchMethod == postfix && string.Equals(patch.owner, owner, StringComparison.Ordinal)) == true;
     }
 
     private static WirePatchPlan ResolveRequiredPatchPlan(Assembly sts2Assembly)
@@ -308,6 +411,39 @@ internal static class LanConnectSerializationPatches
         {
             Log.Error($"sts2_lan_connect serialization: failed to roll back incomplete wire patches: {ex}");
         }
+
+        RestoreDetachedRitsuBeginRunPostfix();
+    }
+
+    private static void RestoreDetachedRitsuBeginRunPostfix()
+    {
+        DetachedBeginRunPostfix? detached = _detachedRitsuBeginRunPostfix;
+        if (detached == null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!IsPostfixApplied(detached.Target, detached.Method, detached.Owner))
+            {
+                RestorePostfixAfterCompatibleCompositionRollback(
+                    new Harmony(detached.Owner),
+                    detached.Target,
+                    detached.Method,
+                    detached.Priority,
+                    detached.Before,
+                    detached.After,
+                    detached.Debug);
+            }
+
+            _detachedRitsuBeginRunPostfix = null;
+            Log.Warn("sts2_lan_connect serialization: restored detached RitsuLib begin-run postfix after rollback.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"sts2_lan_connect serialization: failed to restore RitsuLib begin-run postfix: {ex}");
+        }
     }
 
     // ReSharper disable UnusedMember.Local — invoked by Harmony via reflection
@@ -333,9 +469,12 @@ internal static class LanConnectSerializationPatches
         SerializeBeginRunBody(writer, message, listBitWidth);
         length = checked((int)(((long)writer.BitPosition + ByteBits - 1) / ByteBits));
         __result = writer.Buffer;
+        DetachedBeginRunPostfix? ritsuPostfix = _detachedRitsuBeginRunPostfix;
+        ritsuPostfix?.Invoker(__instance, message, ref length, ref __result);
         Log.Info(
             $"sts2_lan_connect serialization: lobby begin-run forced at message-bus boundary " +
-            $"players={message.playersInLobby?.Count ?? 0}, lobbyListBits={listBitWidth}, bodyBytes={length}");
+            $"players={message.playersInLobby?.Count ?? 0}, lobbyListBits={listBitWidth}, " +
+            $"bodyBytes={length}, ritsuTail={ritsuPostfix != null}");
         return false;
     }
 
@@ -433,6 +572,22 @@ internal static class LanConnectSerializationPatches
     // ReSharper restore UnusedMember.Local
 
     private readonly record struct WirePatchTarget(MethodInfo Method, string TranspilerName, string Label);
+
+    private delegate void BeginRunSerializePostfix(
+        NetMessageBus instance,
+        LobbyBeginRunMessage message,
+        ref int length,
+        ref byte[] result);
+
+    private sealed record DetachedBeginRunPostfix(
+        MethodInfo Target,
+        MethodInfo Method,
+        string Owner,
+        int Priority,
+        string[] Before,
+        string[] After,
+        bool Debug,
+        BeginRunSerializePostfix Invoker);
 
     private readonly record struct WirePatchPlan(
         Type SlotIdCarrierType,

@@ -1,4 +1,5 @@
 using System.Reflection;
+using HarmonyLib;
 using Sts2LanConnect.Scripts;
 
 namespace Sts2LanConnect.Tests.Patches;
@@ -64,6 +65,118 @@ public sealed class LanConnectSerializationPatchesCompatibilityTests
             LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
                 typeof(IncompatibleMessageBus),
                 typeof(PlayerListMessage<StartRunLobbyPlayer>)));
+    }
+
+    [Fact]
+    public void Detaches_existing_begin_run_postfix_before_installing_message_bus_prefix()
+    {
+        string ritsuHarmonyId = $"sts2_lan_connect.tests.ritsu.{Guid.NewGuid():N}";
+        string lanHarmonyId = $"sts2_lan_connect.tests.lan.{Guid.NewGuid():N}";
+        Harmony ritsuHarmony = new(ritsuHarmonyId);
+        Harmony lanHarmony = new(lanHarmonyId);
+        MethodInfo target = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
+            typeof(CompatibleMessageBus),
+            typeof(PlayerListMessage<StartRunLobbyPlayer>));
+        MethodInfo postfix = typeof(LanConnectSerializationPatchesCompatibilityTests).GetMethod(
+            nameof(FakeRitsuBeginRunPostfix),
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        MethodInfo prefix = typeof(LanConnectSerializationPatchesCompatibilityTests).GetMethod(
+            nameof(FakeLanBeginRunPrefix),
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        try
+        {
+            ritsuHarmony.Patch(target, postfix: new HarmonyMethod(postfix));
+            Assert.Contains(Harmony.GetPatchInfo(target)!.Postfixes,
+                patch => patch.owner == ritsuHarmonyId && patch.PatchMethod == postfix);
+
+            LanConnectSerializationPatches.DetachPostfixForCompatibleComposition(
+                lanHarmony,
+                target,
+                postfix);
+            Assert.DoesNotContain(Harmony.GetPatchInfo(target)!.Postfixes,
+                patch => patch.owner == ritsuHarmonyId && patch.PatchMethod == postfix);
+
+            lanHarmony.Patch(target, prefix: new HarmonyMethod(prefix));
+            Assert.Contains(Harmony.GetPatchInfo(target)!.Prefixes,
+                patch => patch.owner == lanHarmonyId && patch.PatchMethod == prefix);
+
+            lanHarmony.UnpatchAll(lanHarmonyId);
+            LanConnectSerializationPatches.RestorePostfixAfterCompatibleCompositionRollback(
+                ritsuHarmony,
+                target,
+                postfix,
+                Priority.Last,
+                [],
+                [],
+                false);
+            Patch restored = Assert.Single(Harmony.GetPatchInfo(target)!.Postfixes,
+                patch => patch.owner == ritsuHarmonyId && patch.PatchMethod == postfix);
+            Assert.Equal(Priority.Last, restored.priority);
+        }
+        finally
+        {
+            lanHarmony.UnpatchAll(lanHarmonyId);
+            ritsuHarmony.UnpatchAll(ritsuHarmonyId);
+        }
+    }
+
+    [Fact]
+    public void Detaching_selected_postfix_keeps_unrelated_postfix_installed()
+    {
+        string ritsuHarmonyId = $"sts2_lan_connect.tests.ritsu.selected.{Guid.NewGuid():N}";
+        string unrelatedHarmonyId = $"sts2_lan_connect.tests.unrelated.{Guid.NewGuid():N}";
+        Harmony ritsuHarmony = new(ritsuHarmonyId);
+        Harmony unrelatedHarmony = new(unrelatedHarmonyId);
+        Harmony lanHarmony = new($"sts2_lan_connect.tests.lan.selected.{Guid.NewGuid():N}");
+        MethodInfo target = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
+            typeof(CompatibleMessageBus),
+            typeof(PlayerListMessage<StartRunLobbyPlayer>));
+        MethodInfo postfix = typeof(LanConnectSerializationPatchesCompatibilityTests).GetMethod(
+            nameof(FakeRitsuBeginRunPostfix),
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        MethodInfo unrelatedPostfix = typeof(LanConnectSerializationPatchesCompatibilityTests).GetMethod(
+            nameof(FakeUnrelatedBeginRunPostfix),
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        try
+        {
+            ritsuHarmony.Patch(target, postfix: new HarmonyMethod(postfix));
+            unrelatedHarmony.Patch(target, postfix: new HarmonyMethod(unrelatedPostfix));
+
+            LanConnectSerializationPatches.DetachPostfixForCompatibleComposition(
+                lanHarmony,
+                target,
+                postfix);
+
+            Assert.DoesNotContain(Harmony.GetPatchInfo(target)!.Postfixes,
+                patch => patch.owner == ritsuHarmonyId);
+            Assert.Contains(Harmony.GetPatchInfo(target)!.Postfixes,
+                patch => patch.owner == unrelatedHarmonyId && patch.PatchMethod == unrelatedPostfix);
+        }
+        finally
+        {
+            lanHarmony.UnpatchAll(lanHarmony.Id);
+            unrelatedHarmony.UnpatchAll(unrelatedHarmonyId);
+            ritsuHarmony.UnpatchAll(ritsuHarmonyId);
+        }
+    }
+
+    private static void FakeRitsuBeginRunPostfix(
+        ref int length,
+        ref byte[] __result)
+    {
+    }
+
+    private static void FakeUnrelatedBeginRunPostfix(ref int length, ref byte[] __result)
+    {
+    }
+
+    private static bool FakeLanBeginRunPrefix(ref int length, ref byte[] __result)
+    {
+        length = 0;
+        __result = [];
+        return false;
     }
 
     private struct PlayerListMessage<TPlayer>
