@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>sts2_lan_v06_probe</AssemblyName>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="sts2" HintPath="$(Sts2DataDir)/sts2.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="$(Sts2DataDir)/0Harmony.dll" Private="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="PublicContractInspectionTests.cs" />
+    <Compile Remove="PublicRitsuContract.cs" />
+    <Compile Remove="RitsuInteropHarness.cs" />
+    <Compile Remove="RitsuInteropMatrixTests.cs" />
+  </ItemGroup>
+  <Target Name="StageAndroidProbe" AfterTargets="Build" Condition="'$(BuildAndroidProbe)' == 'true'">
+    <PropertyGroup>
+      <AndroidProbeOutput>$(MSBuildProjectDirectory)/artifacts/android-probe</AndroidProbeOutput>
+    </PropertyGroup>
+    <RemoveDir Directories="$(AndroidProbeOutput)" />
+    <MakeDir Directories="$(AndroidProbeOutput)" />
+    <Copy SourceFiles="$(TargetPath);$(MSBuildProjectDirectory)/sts2_lan_v06_probe.json"
+          DestinationFolder="$(AndroidProbeOutput)" />
+  </Target>
+</Project>

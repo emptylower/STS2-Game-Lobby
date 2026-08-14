@@ -33,3 +33,8 @@ releases/sts2_peer_sidecar/
 .playwright-mcp/
 .superpowers/
 docs/.local-archive/
+
+# Task 0 feasibility probe outputs and locally supplied game/mod assemblies.
+research/prototypes/v0.6-tail-ritsulib/bin/
+research/prototypes/v0.6-tail-ritsulib/obj/
+research/prototypes/v0.6-tail-ritsulib/artifacts/

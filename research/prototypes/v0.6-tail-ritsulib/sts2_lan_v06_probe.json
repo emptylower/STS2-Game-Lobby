@@ -1,0 +1,10 @@
+{
+  "id": "sts2_lan_v06_probe",
+  "name": "STS2 LAN v0.6 Protocol Probe",
+  "author": "STS2 LAN Connect",
+  "version": "0.0.0-probe",
+  "description": "Test-only Android protocol feasibility probe.",
+  "has_dll": true,
+  "has_pck": false,
+  "affects_gameplay": false
+}
