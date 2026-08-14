@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship client and lobby-service `0.6.0-alpha.1` with a default `0.3.x-0.5.x` compatible `4/5-bit` room mode and an opt-in `tail_v1` room mode that keeps the STS2 body at vanilla `2/3-bit`, supports 2-8 players, and coexists with RitsuLib only through proven public contracts.
+**Goal:** Ship client and lobby-service `0.6.0-alpha.1` with a default `0.3.x-0.5.x` compatible `4/5-bit` room mode and an opt-in `tail_v1` room mode that keeps the STS2 body at vanilla `2/3-bit`, supports 2-8 players, and permits RitsuLib only when every peer has the same frozen RitsuLib presence.
 
-**Architecture:** Install one atomic client protocol dispatcher at startup, freeze one immutable room selection before the game transport starts, and route each message through either the historical compat codec or the new vanilla-body-plus-LAN-Tail codec. The lobby service owns canonical profile/version selection and rejects incompatible clients before issuing tickets; the game handshake repeats `tail_v1` validation. RitsuLib integration is gated by a real-assembly prototype and may not fall back to RC4 private postfix composition.
+**Architecture:** Install one atomic client protocol dispatcher at startup and freeze one immutable room profile/carrier before transport. Compat uses the historical codec. Tail rooms keep the vanilla `2/3-bit` body and use one carrier-neutral LAN protocol container: Ritsu-absent rooms append it as a standalone Tail; all-Ritsu rooms carry the exact container through RitsuLib's public typed-sidecar API and pair it with the vanilla message before any handler runs. The lobby service rejects presence/carrier mismatch before tickets. Pure direct-IP remains compat-only in alpha. LAN Connect never owns or reorders RitsuLib message-tail patches.
 
 **Tech Stack:** Godot 4.5.1, .NET 9/C#, Harmony 2.4.x, xUnit 2.9, GdUnit4 5.0, Node 20, strict ESM TypeScript, Node `node:test`.
 
@@ -14,12 +14,13 @@
 - Client and lobby-service target version: `0.6.0-alpha.1`; keep `0.5.5` documented as the stable client.
 - Default create mode: `compat_4_5_v1`; opt-in mode: `tail_v1`.
 - `compat_4_5_v1` supports LAN Connect `0.3.x-0.6.x`, uses slot/list widths `4/5`, supports 2-8 players, and rejects any RitsuLib presence.
-- `tail_v1` requires client capability >=0.6, keeps the STS2 body at slot/list widths `2/3`, carries the authoritative 2-8 player roster in LAN Tail v1, and never uses the legacy `8/3` path.
+- `tail_v1` requires client capability >=0.6, keeps the STS2 body at slot/list widths `2/3`, carries the authoritative 2-8 player roster in LAN protocol container v1, and never uses the legacy `8/3` path.
 - `legacy_4p` is fixture-only; production create/join/control requests from `<0.3.0` return `client_update_required` before a room or ticket is allocated.
-- Room profile and selected protocol/critical-extension versions are frozen at create time and never renegotiated during the room lifetime.
-- RitsuLib coexistence may use only public, versioned APIs. Never reflect private `SerializePatch<T>`, invoke private postfixes, infer owner priority, or unpatch another owner.
-- If the Ritsu ordering/cursor/inventory feasibility gate fails, stop the Ritsu task and return to design review. Do not restore the RC4 bridge.
-- Tail v1 binary layout, limits, canonical entry ordering, reserved IDs, authority checks, and rejection codes are copied exactly from the approved design.
+- Room profile, selected protocol, carrier, and RitsuLib presence are frozen at create time and never renegotiated during the room lifetime.
+- Ritsu-absent Tail uses `standalone_tail_v1`; Ritsu-present Tail uses `ritsulib_sidecar_v1`. The latter may call only public typed-sidecar/session/direct-`INetGameService` APIs. Never call `RitsuNetMessageTailExtensions.Write/Read`, enumerate private registries, reflect private patches, infer owner priority, or unpatch another owner.
+- If real sidecar reachability, paired-message barrier, Android, or pre-ticket mismatch gates fail, stop the Ritsu task and return to design review. Complete extension inventory/classification is explicitly not required. Do not restore the RC4 bridge or independent double-Tail ordering.
+- Pure direct-IP create/join exposes compat only in `alpha.1`; Tail must fail locally before transport and must not auto-switch profiles.
+- LAN container and sidecar carrier layouts, limits, canonical entry ordering, reserved IDs, authority checks, and rejection codes are copied exactly from the approved design.
 - Cross-runtime DTO changes must be mirrored between `sts2-lan-connect/Scripts/Lobby/LanConnectLobbyModels.cs` and `lobby-service/src/*.ts`.
 - New TypeScript production files must be added to `scripts/package-lobby-service.sh`, `scripts/verify-release.sh`, and `lobby-service/src/package-content.test.ts`.
 - Do not edit `releases/` manually; use source and package scripts only.
@@ -46,7 +47,7 @@
 
 - Create `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectTailEntry.cs`: canonical entry value and UTF-8 ID ordering.
 - Create `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectTailEnvelope.cs`: decoded immutable envelope.
-- Create `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectTailCodec.cs`: bounded envelope read/write.
+- Create `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectTailCodec.cs`: bounded carrier-neutral container encode/decode; no PacketWriter alignment ownership.
 - Create `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectCapabilitiesCodec.cs`: peer offer/session selection payloads.
 - Create `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectRosterCodec.cs`: authoritative roster payload and vanilla player sub-payloads.
 - Create `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectRejectionCodec.cs`: rejection payload and codes 1-10.
@@ -59,14 +60,14 @@
 - Create `sts2-lan-connect/Scripts/Protocol/Patches/LanConnectCompatWirePatches.cs`: isolated historical `4/5` path.
 - Create `sts2-lan-connect/Scripts/Protocol/Patches/LanConnectTailMessagePatches.cs`: ten-message-type matrix, `ClientConnectionFailedMessage` rejection Tail, and restoration.
 - Create `sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectExternalCapabilityCollector.cs`: local offer collection.
-- Create `sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectRitsuLibPublicApiAdapter.cs`: public-contract-only Ritsu integration.
+- Create `sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectRitsuLibSidecarCarrier.cs`: public-contract-only Ritsu carrier, pairing cache, and handler barrier.
 - Create `sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectCapabilityDigest.cs`: canonical selection digest.
 
 ### Lobby service protocol domain
 
 - Create `lobby-service/src/client-version.ts`: client version signal parsing/classification.
 - Create `lobby-service/src/protocol-profile.ts`: canonical profile parsing and legacy DTO projection.
-- Create `lobby-service/src/protocol-capabilities.ts`: deterministic selection, critical-extension whitelist, digest.
+- Create `lobby-service/src/protocol-capabilities.ts`: deterministic protocol/RitsuLib-presence selection and digest.
 - Create `lobby-service/src/protocol-errors.ts`: typed error codes/details.
 - Create `lobby-service/src/room-api-view.ts`: canonical internal room to legacy/canonical API views.
 
@@ -79,7 +80,7 @@
 
 ---
 
-### Task 0: Prove Tail and RitsuLib Feasibility Before Production Changes
+### Task 0: Prove Standalone and Ritsu Sidecar Carriers Before Production Changes
 
 **Files:**
 - Create: `research/prototypes/v0.6-tail-ritsulib/Sts2TailPrototype.csproj`
@@ -87,6 +88,7 @@
 - Create: `research/prototypes/v0.6-tail-ritsulib/PublicContractInspectionTests.cs`
 - Create: `research/prototypes/v0.6-tail-ritsulib/RitsuInteropHarness.cs`
 - Create: `research/prototypes/v0.6-tail-ritsulib/PublicRitsuContract.cs`
+- Create: `research/prototypes/v0.6-tail-ritsulib/SidecarCarrierProbe.cs`
 - Create: `research/prototypes/v0.6-tail-ritsulib/AndroidProtocolProbe.cs`
 - Create: `research/prototypes/v0.6-tail-ritsulib/Sts2TailAndroidProbe.csproj`
 - Create: `research/prototypes/v0.6-tail-ritsulib/sts2_lan_v06_probe.json`
@@ -100,7 +102,7 @@
 
 **Interfaces:**
 - Consumes: real target-version `sts2.dll`, `0Harmony.dll`, and a real built/released `STS2-RitsuLib.dll`, supplied through MSBuild properties.
-- Produces: a documented `PASS` or `BLOCKED` verdict for ordering, cursor ownership, four installation combinations, complete extension enumeration/classification, Android dynamic-generic behavior, and the existing Ritsu sidecar bridge.
+- Produces: a documented `PASS` or `BLOCKED` verdict for the standalone carrier, real two-process Ritsu typed-sidecar reachability and paired-message handler barrier, Android runtime behavior, and replacement of the old private resolver bridge. Production pre-ticket mismatch side effects are proved in Task 2 after the real store/app selection exists. Extension inventory/classification and independent double-Tail ordering are outside the revised design.
 
 - [ ] **Step 1: Create a property-driven prototype project that never packages third-party DLLs**
 
@@ -122,52 +124,77 @@
 </Project>
 ```
 
-- [ ] **Step 2: Write the four-combination red tests around raw bytes and cursor positions**
+- [ ] **Step 2: Write carrier and side-effect red tests**
 
 ```csharp
-[Theory]
-[InlineData(false, false)]
-[InlineData(true, false)]
-[InlineData(false, true)]
-[InlineData(true, true)]
-public void Lan_tail_bytes_and_cursor_are_stable(bool senderHasRitsu, bool receiverHasRitsu)
+[Fact]
+public void Standalone_carrier_round_trips_the_frozen_container()
 {
-    InteropResult result = RitsuInteropHarness.RoundTrip(senderHasRitsu, receiverHasRitsu);
-    Assert.Equal(InteropFixtures.ExpectedLanTail, result.LanTailBytes);
-    Assert.Equal(result.LanTailEndBit, result.RitsuReadStartBit);
-    Assert.Equal(InteropFixtures.ExpectedMessage, result.Message);
+    CarrierResult result = RitsuInteropHarness.RoundTripStandalone();
+    Assert.Equal(InteropFixtures.ExpectedContainer, result.ContainerBytes);
+    Assert.InRange(result.ContainerStartBit - result.VanillaBodyEndBit, 0, 7);
+    Assert.Equal(0, result.ContainerStartBit % 8);
+    Assert.Equal(288, result.ContainerEndBit - result.ContainerStartBit);
+    Assert.True(result.AlignmentPaddingWasZero);
 }
+
+[Fact]
+public async Task Ritsu_sidecar_pairs_before_vanilla_handler()
+{
+    SidecarCarrierResult result = await RitsuInteropHarness.RunRealTwoProcessSidecarAsync();
+    Assert.Equal(InteropFixtures.ExpectedContainer, result.ContainerBytes);
+    Assert.True(result.TrustedTicketHintBootstrappedReachability);
+    Assert.True(result.SidecarReachableBeforeFirstLanFlow);
+    Assert.True(result.HandlerBlockedUntilPairValidated);
+    Assert.True(result.VanillaBytesMatchFixture);
+    Assert.False(result.StandaloneTailPresent);
+    Assert.True(result.HintClearedOnTeardown);
+    Assert.True(result.ReusedPeerIdStartsUnknown);
+}
+
 ```
 
 Define the prototype-only contracts in `RitsuInteropHarness.cs`:
 
 ```csharp
-internal sealed record InteropResult(
-    byte[] LanTailBytes,
-    long LanTailEndBit,
-    long RitsuReadStartBit,
-    string Message);
+internal sealed record CarrierResult(
+    byte[] ContainerBytes,
+    long VanillaBodyEndBit,
+    long ContainerStartBit,
+    long ContainerEndBit,
+    bool AlignmentPaddingWasZero);
+
+internal sealed record SidecarCarrierResult(
+    byte[] ContainerBytes,
+    bool TrustedTicketHintBootstrappedReachability,
+    bool SidecarReachableBeforeFirstLanFlow,
+    bool HandlerBlockedUntilPairValidated,
+    bool VanillaBytesMatchFixture,
+    bool StandaloneTailPresent,
+    bool HintClearedOnTeardown,
+    bool ReusedPeerIdStartsUnknown);
 
 internal static class InteropFixtures
 {
     // A complete valid Tail v1 container, not just the magic. The byte table
     // and every offset are independently reviewed in the adjacent fixture JSON.
-    internal static readonly byte[] ExpectedLanTail = FixtureFiles.ReadBytes(
+    internal static readonly byte[] ExpectedContainer = FixtureFiles.ReadBytes(
         "tail-probe-complete-v1.bin");
-    internal const string ExpectedMessage = "round-trip-ok";
 }
 
 internal static class RitsuInteropHarness
 {
-    internal static InteropResult RoundTrip(bool senderHasRitsu, bool receiverHasRitsu)
-    {
-        throw new NotSupportedException(
-            "The feasibility harness must be completed against the real public RitsuLib contract.");
-    }
+    internal static CarrierResult RoundTripStandalone() =>
+        throw new NotSupportedException("Implement the real standalone carrier.");
+
+    internal static Task<SidecarCarrierResult> RunRealTwoProcessSidecarAsync() =>
+        throw new NotSupportedException("Run two real game processes through the public sidecar API.");
 }
 ```
 
-The intentional `NotSupportedException` is the initial red state. Replace it only with calls available on public RitsuLib types discovered by `PublicContractInspectionTests`; do not use non-public binding flags.
+The standalone test additionally asserts `ContainerStartBit >= VanillaBodyEndBit`, `ContainerStartBit - VanillaBodyEndBit <= 7`, `ContainerStartBit % 8 == 0`, `ContainerEndBit - ContainerStartBit == 288`, and `AlignmentPaddingWasZero`. The 36 fixture bytes begin at `ContainerStartBit`; alignment bits are carrier metadata and are never included in the sidecar payload.
+
+The intentional `NotSupportedException` is the initial red state. A single-process manual `RegisterBytes/Write/Read` sequence cannot make this test green. The Ritsu case must launch two real game processes, create an explicit prototype-only trusted ticket/peer/flow binding, bootstrap first-message reachability with public `SetPeerReachabilityHint`, send the frozen container as a required typed message, pair it with a real vanilla message, and prove the production handler did not run early. Clear the hint back to `Unknown` during teardown and prove a later session epoch cannot reuse it. Do not use non-public binding flags.
 
 Freeze `tail-probe-complete-v1.bin` to exactly these 36 bytes:
 
@@ -178,9 +205,9 @@ Freeze `tail-probe-complete-v1.bin` to exactly these 36 bytes:
 00 01 01 00 00 00 01 01
 ```
 
-This is `STSLAN01`, container v1, flags 0, 28-byte container body, session protocol 1, one critical `lan.probe` v1 entry with payload `01`. Total length is 36 bytes, LAN end/Ritsu start are both bit 288, and SHA-256 is `cfc9097350801026775fd333fb19c6758becbffd4142f58bab0884f4231f5cfa`. The adjacent JSON fixes every field offset/value. Neither file may be generated by the prototype codec.
+This is `STSLAN01`, container v1, flags 0, 28-byte container body, session protocol 1, one critical `lan.probe` v1 entry with payload `01`. Total length is 36 bytes and SHA-256 is `cfc9097350801026775fd333fb19c6758becbffd4142f58bab0884f4231f5cfa`. The exact same 36 bytes must appear directly in standalone mode and inside the Ritsu sidecar frame. The adjacent JSON fixes every field offset/value. Neither file may be generated by the prototype codec.
 
-- [ ] **Step 3: Run the prototype and verify that it initially fails until a public ordering contract is found**
+- [ ] **Step 3: Run the prototype and verify red until a real sidecar carrier exists**
 
 Run:
 
@@ -198,15 +225,16 @@ DOTNET_ROOT="/Users/mac/.dotnet" PATH="/Users/mac/.dotnet:$PATH" \
   -p:RitsuLibAssembly="$RITSULIB_ASSEMBLY"
 ```
 
-Expected: at least one ordering/public-contract assertion fails until the real API proves `vanilla -> LAN -> optional Ritsu` and cursor handoff without private patch access.
+Expected: the standalone test may pass; the two-process sidecar/barrier test fails until implemented. Method existence or manual cursor composition is not acceptable evidence. Do not claim lobby allocation behavior here; Task 2 owns that production integration gate.
 
-- [ ] **Step 4: Inspect only public RitsuLib types and assert complete inventory/classification support**
+- [ ] **Step 4: Assert the exact public sidecar contract without inventory or Tail-owner access**
 
 ```csharp
 internal sealed record PublicRitsuContract(
-    bool CanEnumerateAllNetworkExtensions,
-    bool CanClassifyCriticality,
-    bool CanCoordinateTailOrder,
+    bool HasTypedRequiredDescriptor,
+    bool HasDirectNetServiceSend,
+    bool HasPublicReachabilityHint,
+    bool HasSessionReachability,
     IReadOnlyList<string> ReferencedMembers)
 {
     internal static PublicRitsuContract Load(Assembly assembly)
@@ -228,26 +256,23 @@ internal static class PublicContractRules
     {
         ArgumentNullException.ThrowIfNull(publicTypes);
         ArgumentNullException.ThrowIfNull(publicMembers);
-        return new PublicRitsuContract(
-            CanEnumerateAllNetworkExtensions: false,
-            CanClassifyCriticality: false,
-            CanCoordinateTailOrder: false,
-            ReferencedMembers: publicMembers);
+        return new PublicRitsuContract(false, false, false, false, publicMembers);
     }
 }
 
 [Fact]
-public void Public_api_exposes_complete_network_extension_inventory()
+public void Public_api_exposes_required_typed_sidecar_contract_without_private_access()
 {
     PublicRitsuContract contract = PublicRitsuContract.Load(typeof(RitsuLibFramework).Assembly);
-    Assert.True(contract.CanEnumerateAllNetworkExtensions);
-    Assert.True(contract.CanClassifyCriticality);
-    Assert.True(contract.CanCoordinateTailOrder);
+    Assert.True(contract.HasTypedRequiredDescriptor);
+    Assert.True(contract.HasDirectNetServiceSend);
+    Assert.True(contract.HasPublicReachabilityHint);
+    Assert.True(contract.HasSessionReachability);
     Assert.DoesNotContain(contract.ReferencedMembers, name => name.Contains("SerializePatch", StringComparison.Ordinal));
 }
 ```
 
-The all-false implementation is the initial red state. Change `PublicContractRules.Evaluate` to return `true` only when exported API members explicitly provide complete enumeration, critical classification, and Tail-order/cursor coordination. Naming similarity is not evidence: each accepted member must be invoked by another prototype test against a real registration.
+The false implementation is the initial red state. Set each flag only for the exact exported typed-message descriptor/registry, direct `INetGameService` send, public `SetPeerReachabilityHint`/`ObserveNetService`/`CanSendToPeer`, and session subscription APIs. Every accepted member must also be exercised in the two-process probe, including trusted-binding bootstrap and hint cleanup on disconnect/epoch change. Do not call or inspect `RitsuNetMessageTailExtensions`, extension inventories, private registrations, patch owners, or private resolver methods.
 
 - [ ] **Step 5: Add a game-loadable Android probe entrypoint**
 
@@ -282,15 +307,15 @@ The checked-in probe manifest is:
 }
 ```
 
-The probe DLL contains `[ModInitializer(nameof(Init))]`; the loader discovers the initializer from the DLL, not from a manifest `entrypoint`. The probe reads `sts2_lan_v06_probe_runtime.json` beside its DLL. In encode mode it writes one Android-runtime sender fixture. In decode mode it reads both sender fixtures. Fixed marker schemas:
+The probe DLL contains `[ModInitializer(nameof(Init))]`; the loader discovers the initializer from the DLL, not from a manifest `entrypoint`. The probe reads `sts2_lan_v06_probe_runtime.json` beside its DLL. Standalone mode writes and reads the frozen container through a real message-tail path. Ritsu mode starts two real game processes, establishes public sidecar reachability, sends the same container in a required typed message, pairs it with a vanilla message, and records whether the handler stayed blocked until validation. Fixed terminal marker schemas:
 
 ```text
-encode: {"phase":"encode","ritsuPresent":false,"passed":true,"sts2Version":"...","fixtureSha256":"...","fixtureLength":36,"lanTailSha256":"cfc909...","lanEndBit":288,"ritsuStartBit":288,"containsOpenGeneric":false,"invalidProgram":false,"ritsuManifestId":null,"ritsuManifestVersion":null,"ritsuSelectedAssembly":null,"ritsuPatchOwners":[]}
+standalone: {"phase":"standalone","carrier":"standalone_tail_v1","ritsuPresent":false,"passed":true,"sts2Version":"...","containerSha256":"cfc909...","containerLength":36,"vanillaBodyEndBit":123,"containerStartBit":128,"containerEndBit":416,"alignmentPaddingWasZero":true,"invalidProgram":false}
 
-decode: {"phase":"decode","ritsuPresent":true,"passed":true,"sts2Version":"...","containsOpenGeneric":false,"invalidProgram":false,"ritsuManifestId":"STS2-RitsuLib","ritsuManifestVersion":"...","ritsuSelectedAssembly":"lib/<api>/STS2-RitsuLib.dll","ritsuPatchOwners":["..."],"results":[{"senderRitsu":false,"messageOk":true,"lanTailSha256":"cfc909...","lanEndBit":288,"ritsuStartBit":288},{"senderRitsu":true,"messageOk":true,"lanTailSha256":"cfc909...","lanEndBit":288,"ritsuStartBit":288}]}
+sidecar: {"phase":"sidecar","carrier":"ritsulib_sidecar_v1","ritsuPresent":true,"passed":true,"sts2Version":"...","ritsuManifestId":"STS2-RitsuLib","ritsuManifestVersion":"...","ritsuSelectedAssembly":"lib/<api>/STS2-RitsuLib.dll","containerSha256":"cfc909...","containerLength":36,"trustedTicketHintBootstrappedReachability":true,"sidecarReachableBeforeFirstLanFlow":true,"handlerBlockedUntilPairValidated":true,"vanillaBytesMatchFixture":true,"standaloneTailPresent":false,"hintClearedOnTeardown":true,"reusedPeerIdStartsUnknown":true,"invalidProgram":false}
 ```
 
-Prefix each JSON with `STS2_LAN_V06_ANDROID_PROBE `. Two encode markers plus two decode markers yield four distinct sender/receiver combinations. The verifier checks every required field/type and uniqueness.
+Prefix each JSON with `STS2_LAN_V06_ANDROID_PROBE `. One clean terminal marker per fresh process is required. The verifier checks every required field/type and uniqueness. Mismatched presence is validated by Task 2's real service integration tests and must never enter either carrier.
 
 On exception it must emit `passed:false`, exception type/message/inner type, and exit initialization without applying production patches.
 
@@ -311,115 +336,55 @@ DOTNET_ROOT="/Users/mac/.dotnet" PATH="/Users/mac/.dotnet:$PATH" \
   -p:BuildAndroidProbe=true
 ```
 
-`run_android_probe.sh` requires and validates these environment variables:
+`run_android_probe.sh` requires explicit device/package/MOD/log paths, the verified official Android Ritsu package tree/hash, the probe DLL/manifest, and a desktop peer command/address for the all-Ritsu sidecar case. It must validate every path before mutation. Each case must force-stop the app, remove the previous probe log, clear logcat, write a fresh runtime config beside the probe DLL, launch once, wait with a bounded poll for one terminal marker, force-stop again, and pull one uniquely named log. It must never reuse an append-only game log.
+
+Run exactly three cases:
 
 ```text
-ADB_BIN
-ANDROID_SERIAL
-ANDROID_STS2_PACKAGE
-ANDROID_MOD_DIR
-ANDROID_STS2_LOG_PATH
-ANDROID_STS2_LOG
-ANDROID_PROBE_DLL
-ANDROID_PROBE_MANIFEST
-ANDROID_RITSULIB_PACKAGE_DIR
-RITSULIB_PACKAGE_TREE_SHA256
-ANDROID_PROBE_FIXTURE_PATH
-ANDROID_PROBE_INPUT_DIR
-ANDROID_PROBE_RUNTIME_CONFIG
+android-standalone-write-read:
+  Android without Ritsu; one real message path writes and reads the frozen container.
+
+android-ritsu-sidecar-host:
+  Android with verified Ritsu package; desktop with matching Ritsu is the client.
+  Prove public sidecar reachability, frame-before-vanilla send, and host handler barrier.
+
+android-ritsu-sidecar-client:
+  Desktop with matching Ritsu is the host; Android with Ritsu is the client.
+  Prove the same barrier in the reverse platform direction.
 ```
 
-Its executable flow is:
+`run_android_probe.sh` must start/stop the paired desktop probe itself and record both endpoint logs. The desktop command and Android config share an explicit `flowNonce`; no implicit fixed port, directory, or `sender.bin` path is allowed. If the MOD directory/log requires emulator root, the configured bridge must already expose it. Missing device, peer launcher, paths, or official package evidence is `BLOCKED`, not permission to skip.
 
-```bash
-run_case() {
-  case_name="$1"
-  ritsu_enabled="$2"
-  mode="$3"
-  "$ADB_BIN" -s "$ANDROID_SERIAL" push "$ANDROID_PROBE_DLL" "$ANDROID_MOD_DIR/"
-  "$ADB_BIN" -s "$ANDROID_SERIAL" push "$ANDROID_PROBE_MANIFEST" "$ANDROID_MOD_DIR/"
-  if [ "$ritsu_enabled" = true ]; then
-    test -d "$ANDROID_RITSULIB_PACKAGE_DIR"
-    test -f "$ANDROID_RITSULIB_PACKAGE_DIR/mod_manifest.json"
-    test -f "$ANDROID_RITSULIB_PACKAGE_DIR/STS2-RitsuLib.dll"
-    test "$(python3 research/prototypes/v0.6-tail-ritsulib/package_tree_hash.py "$ANDROID_RITSULIB_PACKAGE_DIR")" = "$RITSULIB_PACKAGE_TREE_SHA256"
-    "$ADB_BIN" -s "$ANDROID_SERIAL" shell rm -rf "$ANDROID_MOD_DIR/STS2-RitsuLib"
-    "$ADB_BIN" -s "$ANDROID_SERIAL" push "$ANDROID_RITSULIB_PACKAGE_DIR" "$ANDROID_MOD_DIR/STS2-RitsuLib"
-  else
-    "$ADB_BIN" -s "$ANDROID_SERIAL" shell rm -rf "$ANDROID_MOD_DIR/STS2-RitsuLib"
-  fi
-  python3 -c \
-    'import json,sys; json.dump({"mode":sys.argv[1],"fixturePath":sys.argv[2],"inputDir":sys.argv[3]}, open(sys.argv[4], "w"), separators=(",", ":"))' \
-    "$mode" "$ANDROID_PROBE_FIXTURE_PATH" "$ANDROID_PROBE_INPUT_DIR" "$ANDROID_PROBE_RUNTIME_CONFIG"
-  "$ADB_BIN" -s "$ANDROID_SERIAL" push "$ANDROID_PROBE_RUNTIME_CONFIG" "$ANDROID_MOD_DIR/sts2_lan_v06_probe_runtime.json"
-  "$ADB_BIN" -s "$ANDROID_SERIAL" shell am force-stop "$ANDROID_STS2_PACKAGE"
-  "$ADB_BIN" -s "$ANDROID_SERIAL" logcat -c
-  "$ADB_BIN" -s "$ANDROID_SERIAL" shell monkey -p "$ANDROID_STS2_PACKAGE" -c android.intent.category.LAUNCHER 1
-  sleep 30
-  "$ADB_BIN" -s "$ANDROID_SERIAL" pull "$ANDROID_STS2_LOG_PATH" "$ANDROID_STS2_LOG.$case_name"
-}
+Verify all five fresh logs (standalone Android plus two Android/desktop pairs) with one deterministic parser invocation. The parser rejects missing/duplicate terminal markers, reused timestamps/flow nonces, carrier/presence drift, unexpected file locations, or unpaired endpoints.
 
-# Produce both sender fixtures in real Android game processes.
-run_case encode-without-ritsu false encode
-"$ADB_BIN" -s "$ANDROID_SERIAL" pull "$ANDROID_PROBE_FIXTURE_PATH" "$ANDROID_STS2_LOG.sender-without.bin"
-run_case encode-with-ritsu true encode
-"$ADB_BIN" -s "$ANDROID_SERIAL" pull "$ANDROID_PROBE_FIXTURE_PATH" "$ANDROID_STS2_LOG.sender-with.bin"
+`verify_android_probe.py` exits 0 only when exactly one terminal marker exists per freshly truncated process log, carrier/presence match, the inner container bytes match the reviewed fixture, standalone round-trip succeeds, a trusted test-ticket hint bootstraps reachability before the first LAN flow, the handler barrier holds, vanilla bytes stay unchanged, no standalone Tail appears in the Ritsu process, teardown clears the hint, reused peer IDs start `Unknown`, and every required Boolean is true. It exits nonzero for missing/duplicate markers, wrong STS2/Ritsu versions, presence drift, barrier leakage, stale hint state, byte drift, or any exception.
 
-# Decode both fixtures in each real receiver configuration.
-"$ADB_BIN" -s "$ANDROID_SERIAL" push "$ANDROID_STS2_LOG.sender-without.bin" "$ANDROID_MOD_DIR/sender-without.bin"
-"$ADB_BIN" -s "$ANDROID_SERIAL" push "$ANDROID_STS2_LOG.sender-with.bin" "$ANDROID_MOD_DIR/sender-with.bin"
-run_case decode-without-ritsu false decode
-run_case decode-with-ritsu true decode
+Before accepting each Ritsu marker, require it to report the loaded manifest ID/version, selected API assembly, `RitsuLibFramework.IsInitialized`, the registered descriptor opcode, and observed sidecar session/peer reachability. A copied but uninitialized DLL is `BLOCKED`, not “Ritsu present.”
 
-python3 research/prototypes/v0.6-tail-ritsulib/verify_android_probe.py \
-  "$ANDROID_STS2_LOG.encode-without-ritsu" \
-  "$ANDROID_STS2_LOG.encode-with-ritsu" \
-  "$ANDROID_STS2_LOG.decode-without-ritsu" \
-  "$ANDROID_STS2_LOG.decode-with-ritsu"
-```
+`ANDROID_RITSULIB_PACKAGE_DIR` must be an unpacked official matching release asset or variant-pack `mods/STS2-RitsuLib/` directory, copied recursively without flattening. `package_tree_hash.py` hashes sorted relative paths plus every file SHA-256; compare it with `RITSULIB_PACKAGE_TREE_SHA256` recorded from the separately downloaded release asset. Preserve `mod_manifest.json`, root loader, `lib/<api-version>/`, variant manifest, and dependencies. The marker must report manifest ID/version, selected API assembly path/version, initialized framework, descriptor opcode and sidecar reachability; otherwise the gate is `BLOCKED`.
 
-If the MOD directory or game log requires emulator root, the configured `ADB_BIN`/MuMu bridge must already expose those paths; inability to push/pull is a `BLOCKED` Android gate, not permission to skip it. Record the concrete environment values, STS2 package/build, ABI, Ritsu assembly version, and script output in feasibility evidence.
-
-The four separate game processes prove real Android sender and receiver behavior with Ritsu absent and present. Verify with a deterministic local parser:
-
-```bash
-test -f "$ANDROID_STS2_LOG.encode-without-ritsu"
-test -f "$ANDROID_STS2_LOG.encode-with-ritsu"
-test -f "$ANDROID_STS2_LOG.decode-without-ritsu"
-test -f "$ANDROID_STS2_LOG.decode-with-ritsu"
-python3 research/prototypes/v0.6-tail-ritsulib/verify_android_probe.py \
-  "$ANDROID_STS2_LOG.encode-without-ritsu" \
-  "$ANDROID_STS2_LOG.encode-with-ritsu" \
-  "$ANDROID_STS2_LOG.decode-without-ritsu" \
-  "$ANDROID_STS2_LOG.decode-with-ritsu"
-```
-
-`verify_android_probe.py` exits 0 only when exactly one terminal marker exists per process, Ritsu presence matches each process, both sender fixtures are complete valid Tail containers, four distinct sender/receiver results exist, and every required Boolean is true. It exits nonzero for missing/duplicate markers, wrong STS2/Ritsu versions, fewer than four combinations, open generics, cursor drift, or any exception.
-
-Before accepting each `with-ritsu` marker, require it to report the loaded Ritsu manifest ID/version and at least one expected Ritsu Harmony owner/target. A copied but uninitialized DLL is `BLOCKED`, not “Ritsu present.”
-
-`ANDROID_RITSULIB_PACKAGE_DIR` must be an unpacked official matching release asset or variant-pack `mods/STS2-RitsuLib/` directory, copied recursively without flattening. `package_tree_hash.py` hashes sorted relative paths plus every file SHA-256; compare it with `RITSULIB_PACKAGE_TREE_SHA256` recorded from the separately downloaded release asset. Preserve `mod_manifest.json`, root loader, `lib/<api-version>/`, variant manifest, and dependencies. The marker must report manifest ID/version, selected API assembly path/version, and at least one expected Ritsu Harmony owner/target; otherwise the gate is `BLOCKED`.
-
-- [ ] **Step 7: Record Android reflection and Harmony evidence**
+- [ ] **Step 7: Record Android carrier and handler-barrier evidence**
 
 The probe payload/evidence must include:
 
 ```text
-IsGenericMethod
-IsGenericMethodDefinition
-ContainsGenericParameters
-closed target FullDescription
-Harmony owner/target count
-LAN start/end bit positions
-Ritsu start/end bit positions
+carrier and flow nonce
+container SHA-256/length
+sidecar descriptor opcode
+trusted ticket/peer binding and public hint bootstrap timestamp
+sidecar session/peer reachability timestamps
+paired vanilla message kind/sequence
+handler entered timestamp
+standalone Tail present/absent
+hint cleanup and reused-peer initial reachability
 exception and inner exception, if any
 ```
 
-Expected: no `InvalidProgramException`, no open generic target passed to Harmony, and identical LAN bytes/cursors.
+Expected: identical inner LAN container bytes, sidecar reachability before the first frame, validated pair before handler entry, vanilla bytes unchanged, no standalone Tail in Ritsu cases, and no `InvalidProgramException`.
 
-- [ ] **Step 8: Evaluate the existing sidecar bridge independently**
+- [ ] **Step 8: Prove the public sidecar carrier replaces the private resolver bridge**
 
-Read and test the public methods currently used by `LanConnectRitsuLibLobbyCompatibility`. Record whether its NetService/handshake behavior can be preserved through public APIs without transpiling RitsuLib methods. Mark the sidecar gate separately from message-tail coexistence.
+Use only public APIs that accept the actual `INetGameService`: observe the service, drive/await session reachability, register the required typed descriptor, send/receive the carrier frame, and dispose the subscription. Prove the old `RunManager` resolver transpiler is unnecessary and can be deleted. No message-tail coexistence test is allowed to substitute for this gate.
 
 - [ ] **Step 9: Write the gate verdict**
 
@@ -428,20 +393,18 @@ The evidence document must contain this exact decision table:
 ```markdown
 | Gate | Verdict | Evidence |
 |---|---|---|
-| Tail order/cursor | PASS/BLOCKED | command + raw offsets |
-| Four install combinations | PASS/BLOCKED | test cases |
-| Complete extension inventory | PASS/BLOCKED | public API members |
-| Critical classification | PASS/BLOCKED | public API members |
-| Android generic/Harmony | PASS/BLOCKED | device/build/log |
-| Sidecar public replacement | PASS/BLOCKED | API + runtime result |
+| Standalone carrier bytes/cursor | PASS/BLOCKED | real message path + raw offsets |
+| All-Ritsu sidecar reachability/barrier | PASS/BLOCKED | two processes + public API + handler evidence |
+| Android standalone/sidecar runtime | PASS/BLOCKED | device/build/fresh logs |
+| Private resolver bridge removal | PASS/BLOCKED | direct `INetGameService` runtime result |
 ```
 
-If any of the first five gates is `BLOCKED`, explicitly state: “RitsuLib free mixing is removed from the executable alpha scope pending design review; the RC4 private bridge remains prohibited.”
+If the all-Ritsu sidecar/barrier, Android, or bridge-removal gate is `BLOCKED`, explicitly state: “RitsuLib homogeneous-room support is removed from the executable alpha scope pending design review; the RC4 private bridge and independent double-Tail remain prohibited.” Record Task 2's pre-ticket mismatch gate as a required downstream gate, not Task 0 PASS evidence. Extension inventory/classification is not a gate and must not be inspected.
 
 - [ ] **Step 10: Commit prototype source and evidence only**
 
 ```bash
-git add research/prototypes/v0.6-tail-ritsulib/Sts2TailPrototype.csproj research/prototypes/v0.6-tail-ritsulib/RitsuInteropMatrixTests.cs research/prototypes/v0.6-tail-ritsulib/PublicContractInspectionTests.cs research/prototypes/v0.6-tail-ritsulib/RitsuInteropHarness.cs research/prototypes/v0.6-tail-ritsulib/PublicRitsuContract.cs research/prototypes/v0.6-tail-ritsulib/AndroidProtocolProbe.cs research/prototypes/v0.6-tail-ritsulib/Sts2TailAndroidProbe.csproj research/prototypes/v0.6-tail-ritsulib/sts2_lan_v06_probe.json research/prototypes/v0.6-tail-ritsulib/tail-probe-complete-v1.bin research/prototypes/v0.6-tail-ritsulib/tail-probe-complete-v1.json research/prototypes/v0.6-tail-ritsulib/verify_android_probe.py research/prototypes/v0.6-tail-ritsulib/package_tree_hash.py research/prototypes/v0.6-tail-ritsulib/run_android_probe.sh research/prototypes/v0.6-tail-ritsulib/README.md docs/testing/STS2_LAN_CONNECT_V0.6_ALPHA1_FEASIBILITY_ZH.md
+git add research/prototypes/v0.6-tail-ritsulib/Sts2TailPrototype.csproj research/prototypes/v0.6-tail-ritsulib/RitsuInteropMatrixTests.cs research/prototypes/v0.6-tail-ritsulib/PublicContractInspectionTests.cs research/prototypes/v0.6-tail-ritsulib/RitsuInteropHarness.cs research/prototypes/v0.6-tail-ritsulib/PublicRitsuContract.cs research/prototypes/v0.6-tail-ritsulib/SidecarCarrierProbe.cs research/prototypes/v0.6-tail-ritsulib/AndroidProtocolProbe.cs research/prototypes/v0.6-tail-ritsulib/Sts2TailAndroidProbe.csproj research/prototypes/v0.6-tail-ritsulib/sts2_lan_v06_probe.json research/prototypes/v0.6-tail-ritsulib/tail-probe-complete-v1.bin research/prototypes/v0.6-tail-ritsulib/tail-probe-complete-v1.json research/prototypes/v0.6-tail-ritsulib/verify_android_probe.py research/prototypes/v0.6-tail-ritsulib/package_tree_hash.py research/prototypes/v0.6-tail-ritsulib/run_android_probe.sh research/prototypes/v0.6-tail-ritsulib/README.md docs/testing/STS2_LAN_CONNECT_V0.6_ALPHA1_FEASIBILITY_ZH.md
 git commit -m "test: establish v0.6 protocol feasibility gates"
 ```
 
@@ -548,16 +511,17 @@ git commit -m "test: capture v0.5.5 lobby protocol fixtures"
 - Modify: `scripts/package-lobby-service.sh`
 - Modify: `scripts/verify-release.sh`
 - Modify: `lobby-service/src/package-content.test.ts`
+- Modify: `scripts/verify-release.sh`
 
 **Interfaces:**
 - Consumes: Task 1’s real `0.5.5` fixtures.
 - Produces:
   - `classifyClientVersion(clientVersion?: string, modVersion?: string): ClientApiGeneration`
   - `parseRequestedProfile(input): ProtocolProfile`
-  - `selectRoomProtocol(hostOffer, verifiedExtensions): RoomProtocolSelection`
+  - `selectRoomProtocol(hostOffer, serverPolicy): RoomProtocolSelection`
   - `validateJoinOffer(selection, joinerOffer): void`
   - `toRoomApiView(room, generation): RoomApiView`
-  - immutable `RoomProtocolSelection` and `capabilityDigest` stored on each room and ticket.
+  - immutable `RoomProtocolSelection` and `capabilityDigest` stored on each room and ticket; each ticket also receives an independent 16-byte `protocolFlowNonce` projected as 32 lowercase hex.
   - `/probe.capabilities.dualProtocolApiVersion = 1` plus supported profile and version fields.
 
 - [ ] **Step 1: Write failing client-version tests**
@@ -605,29 +569,36 @@ export type LegacyProtocolProfile = "legacy_4p" | "extended_8p";
 
 `legacy_4p` must never be returned as a runtime profile.
 
-- [ ] **Step 6: Write selection and critical-extension tests**
+- [ ] **Step 6: Write protocol selection and RitsuLib presence-parity tests**
 
 ```ts
-test("selects the highest server-verified common versions deterministically", () => {
+test("freezes host RitsuLib presence and rejects a mismatched joiner", () => {
   const result = selectRoomProtocol(
-    offer({ lan: [1, 2], critical: [{ id: "run.data", min: 1, max: 3 }] }),
-    whitelist({ lan: [1, 1], critical: [{ id: "run.data", min: 1, max: 2 }] }),
+    offer({ lan: [1, 2], ritsuLibPresent: true, ritsuLibSidecarAvailable: true }),
+    serverPolicy({ lan: [1, 1] }),
   );
   assert.equal(result.selectedLanProtocolVersion, 1);
-  assert.deepEqual(result.criticalExtensions, [{ id: "run.data", selectedVersion: 2 }]);
+  assert.equal(result.ritsuLibPresent, true);
+  assert.equal(result.carrier, "ritsulib_sidecar_v1");
+  assert.throws(
+    () => assertJoinerCompatible(result, offer({ lan: [1, 1], ritsuLibPresent: false })),
+    hasCode("ritsulib_presence_mismatch"),
+  );
   assert.match(result.capabilityDigest, /^[0-9a-f]{64}$/);
 });
 ```
 
-Also test duplicate IDs, unknown critical IDs, empty intersections, canonical UTF-8 ordering, extra/missing joiner critical extensions, and compat+Ritsu rejection.
+Also test both presence-mismatch directions, both matching-presence directions, Ritsu present with sidecar unavailable for host and joiner, empty LAN intersections, compat+Ritsu rejection, and mutation attempts after selection freeze. Do not add an extension whitelist or inspect RitsuLib registrations.
+
+Add real `store.test.ts`/`app.integration.test.ts` cases with injected counters around room ID, slot, ticket, control binding, and transport/relay initializer creation. Both presence mismatch directions and both sidecar-unavailable roles must return their structured codes with every counter at zero. A pure `assertJoinerCompatible` unit test is necessary but not sufficient for this downstream gate.
 
 - [ ] **Step 7: Implement immutable selection and digest**
 
-For `compat_4_5_v1`, selection is protocol version `0`, minimum client `0.3.0`, no Ritsu, and no critical extensions. For `tail_v1`, select LAN version 1 and the server-verified critical versions. Encode canonical digest bytes exactly as design §4.3 (`LANSEL01`, schema/profile/version/max players, length-prefixed normalized versions/signature, sorted extensions in network byte order), then SHA-256 lowercase hex. Add reviewed empty-extension and multibyte-ID cases to `capability-digest-v1.json`; both TypeScript and Task 3 C# tests must consume the same fixture.
+For `compat_4_5_v1`, selection is protocol version `0`, carrier `none`, minimum client `0.3.0`, and RitsuLib absent. For `tail_v1`, select LAN version 1, freeze host presence, and deterministically select `standalone_tail_v1` or `ritsulib_sidecar_v1`; Ritsu present without sidecar readiness returns `ritsulib_sidecar_unavailable`. Encode canonical digest bytes exactly as revised design §4.3 (`LANSEL01`, schema/profile/version/carrier/max players, length-prefixed normalized versions/signature, then presence flags), then SHA-256 lowercase hex. Add reviewed compat, standalone, and Ritsu-sidecar cases to `capability-digest-v1.json`; TypeScript and Task 3 C# tests consume the same fixture.
 
 - [ ] **Step 8: Refactor store internal types to canonical state**
 
-Add `clientVersion`, `clientApiGeneration`, and `protocolSelection` to `Room`; copy generation, profile, selection, and joiner digest into `JoinTicket`. Move profile/version/capability validation before room/ticket ID allocation. Remove `resolveRoomProtocolProfile()` from `toRoomSummary()`; summaries copy frozen state only.
+Add `clientVersion`, `clientApiGeneration`, and `protocolSelection` to `Room`; copy generation, profile, selection, and joiner digest into `JoinTicket`. After every validation passes, generate a cryptographically random 16-byte `protocolFlowNonce`; expose its 32 lowercase hex form only to the join response and matching host control binding, never room lists or JavaScript numeric fields. Move validation before room/ticket/nonce allocation. Remove `resolveRoomProtocolProfile()` from `toRoomSummary()`; summaries copy frozen state only.
 
 - [ ] **Step 9: Split public list/create/join views from store state**
 
@@ -771,9 +742,9 @@ DOTNET_ROOT="/Users/mac/.dotnet" /Users/mac/.dotnet/dotnet test \
 
 - [ ] **Step 3: Implement immutable profile/version/offer/selection values**
 
-Use records and read-only collections. Compat has LAN protocol `0`; Tail v1 has selected protocol `1`. Include profile, max players 2-8, minimum client, game version, wire-cache signature, sorted critical extensions, and digest.
+Use records and immutable values. Compat has LAN protocol `0` and carrier `None`; Tail v1 has selected protocol `1` and carrier `StandaloneTailV1` or `RitsuLibSidecarV1`, derived from frozen presence/readiness. Include profile, carrier, max players 2-8, minimum client, game version, wire-cache signature, frozen RitsuLib presence, and digest.
 
-Define `LanConnectProtocolException` as an unretryable exception carrying a required non-null `LanConnectProtocolFailure Failure`. Define `LanConnectProtocolFailureMapper` as the only conversion seam for HTTP `LobbyServiceException`, Tail rejection codes 1-10, and local selection/codec failures; unknown codes retain their raw code. Change `LobbyJoinAttemptResult` to carry `ProtocolFailure`, add `LanConnectHostAttemptResult`, and add `ProtocolFailure` to `LanConnectModPreflightJoinResult`. `StartLobbyHostAsync`, `PublishExistingHostToLobbyAsync`, lobby join, and direct-IP join return these values instead of erasing them into `bool`/text. Lobby/direct join catches `LanConnectProtocolException` before candidate/broad catches, aborts all remaining candidates, preserves `Failure`, disconnects any current transport, and releases the tentative lease. Auto-rejoin clears `_pendingClientReconnect` and presents one structured message on protocol failure; it continues polling only for room-not-found or retryable transport failures. Cancellation remains cancellation, while unrelated exceptions retain existing internal-error behavior.
+Define `LanConnectProtocolException` as an unretryable exception carrying a required non-null `LanConnectProtocolFailure Failure`. Define `LanConnectProtocolFailureMapper` as the only conversion seam for HTTP `LobbyServiceException`, Tail rejection codes 1-10 (including code 10 `ritsulib_sidecar_unavailable`), and local selection/codec failures; unknown codes retain their raw code. Change `LobbyJoinAttemptResult` to carry `ProtocolFailure`, add `LanConnectHostAttemptResult`, and add `ProtocolFailure` to `LanConnectModPreflightJoinResult`. `StartLobbyHostAsync`, `PublishExistingHostToLobbyAsync`, lobby join, and direct-IP join return these values instead of erasing them into `bool`/text. Lobby/direct join catches `LanConnectProtocolException` before candidate/broad catches, aborts all remaining candidates, preserves `Failure`, disconnects any current transport, and releases the tentative lease. Auto-rejoin clears `_pendingClientReconnect` and presents one structured message on protocol failure; it continues polling only for room-not-found or retryable transport failures. Cancellation remains cancellation, while unrelated exceptions retain existing internal-error behavior.
 
 Add tests with these exact assertions:
 
@@ -791,7 +762,7 @@ public async Task Direct_join_preserves_protocol_failure_and_does_not_retry()
 [Fact]
 public async Task Restart_rejoin_stops_polling_after_protocol_failure()
 {
-    RestartHarness harness = RestartHarness.WithProtocolFailure(Failure.CriticalExtensionMismatch("run.data", 2));
+    RestartHarness harness = RestartHarness.WithProtocolFailure(Failure.RitsuLibPresenceMismatch(requiredPresent: true));
     await harness.RunAsync();
     Assert.Null(harness.PendingReconnect);
     Assert.Equal(1, harness.JoinAttempts);
@@ -801,7 +772,7 @@ public async Task Restart_rejoin_stops_polling_after_protocol_failure()
 
 - [ ] **Step 4: Write and pass the cross-runtime capability digest vectors**
 
-Read `test-fixtures/protocol/v0.6/capability-digest-v1.json`, encode the exact design §4.3 layout, and assert the same expected SHA-256 hex as the TypeScript test. Include empty extensions and at least two UTF-8 IDs supplied in reverse input order.
+Read `test-fixtures/protocol/v0.6/capability-digest-v1.json`, encode the exact revised design §4.3 layout, and assert the same expected SHA-256 hex as the TypeScript test. Include compat/none, Ritsu-absent/standalone, and Ritsu-present/sidecar vectors; prove carrier changes the digest.
 
 - [ ] **Step 5: Write the session freeze state-machine tests**
 
@@ -827,35 +798,35 @@ Remove profile selection by player count and all `0.2.2` inference. Keep `LanCon
 Mirror these exact wire shapes in TypeScript and C# (C# uses PascalCase properties with the listed camelCase JSON names):
 
 ```ts
-type ProtocolExtensionRangeDto = { id: string; minVersion: number; maxVersion: number };
-type ProtocolExtensionSelectionDto = { id: string; selectedVersion: number };
 type ProtocolOfferDto = {
   lanProtocolMin: number;
   lanProtocolMax: number;
   clientVersion: string;
   ritsuLibPresent: boolean;
-  criticalExtensions: ProtocolExtensionRangeDto[];
+  ritsuLibSidecarAvailable: boolean;
 };
 type ProtocolSelectionDto = {
   profile: "compat_4_5_v1" | "tail_v1";
   selectedLanProtocolVersion: number;
+  carrier: "none" | "standalone_tail_v1" | "ritsulib_sidecar_v1";
   minimumClientVersion: string;
   maxPlayers: number;
   gameVersion: string;
   wireCacheSignature: string | null;
   ritsuLibPresent: boolean;
-  criticalExtensions: ProtocolExtensionSelectionDto[];
   capabilityDigest: string;
 };
 type ProtocolErrorDetailsDto = {
   requiredClientVersion?: string;
-  relatedExtensionId?: string;
-  requiredExtensionVersion?: number;
+  requiredRitsuLibPresent?: boolean;
   detail?: string;
+};
+type JoinProtocolBindingDto = {
+  protocolFlowNonce: string; // exactly 32 lowercase hex characters
 };
 ```
 
-Placement is fixed: create request adds `clientVersion`, `protocolProfileV2`, and `protocolOffer`; create response adds `protocolSelection`; room-list item adds `protocolProfileV2` and `protocolSelection`; join/preflight request adds `clientVersion` and `protocolOffer`; join response adds `protocolSelection`; control hello adds `clientVersion` and `capabilityDigest`; `LobbyErrorDetails` adds the four `ProtocolErrorDetailsDto` fields. Legacy `protocolProfile` stays where Task 1 fixtures require it. Add `DualProtocolApiVersion`, `SupportedProtocolProfiles`, `LanProtocolMin/Max`, `MinimumClientVersion`, and `TailV1MinimumClientVersion` to `LobbyProbeCapabilities`. 0.6 clients prefer canonical optional fields; only `extended_8p` is accepted as a legacy projection for compat. `legacy_4p` and unknown strings produce structured local failures. Enforce 32-byte client version, 64-byte extension ID, 512-byte detail, and `1..65535` extension version bounds in both runtimes.
+Placement is fixed: create request adds `clientVersion`, `protocolProfileV2`, and `protocolOffer`; create response adds `protocolSelection`; room-list item adds `protocolProfileV2` and `protocolSelection`; join/preflight request adds `clientVersion` and `protocolOffer`; join response and matching host control event add the same `protocolFlowNonce`; control hello adds `clientVersion` and `capabilityDigest`; `LobbyErrorDetails` adds the three error-detail fields. Validate nonce as exactly 32 lowercase hex and decode to 16 bytes without numeric conversion. Legacy fields stay where Task 1 fixtures require them. Add the listed probe capabilities. Enforce all string bounds in both runtimes.
 
 - [ ] **Step 8: Reorder host creation around server selection**
 
@@ -878,11 +849,11 @@ Migrate the existing overlay caller in the same step. Until Task 11 adds the vis
 
 Replace the lobby candidate loop's implicit broad retry with `LanConnectJoinRetryPolicy.IsRetryable(Exception)`. It returns true only for `ClientConnectionFailedException` whose reason name is `Timeout`, `HandshakeTimeout`, or `UnknownNetworkError`; it returns false for protocol/authority/codec failures, game or MOD mismatch, run-state rejection, cancellation, and every unexpected/internal exception. Use the same classifier in direct-IP flow except that its existing maximum remains two attempts. Add table-driven tests proving timeout/unknown-network advance to the next candidate and all other categories stop after one attempt.
 
-Pure direct-IP joins have no service selection in alpha. Freeze the local `compat_4_5_v1` selection before constructing `LanConnectLobbyManagedJoinFlow`; Tail direct-IP rooms are not exposed until a separate out-of-band selection exchange is designed. Change `LanConnectDirectJoinFlow.JoinAsync` from `Task<bool>` to `Task<LobbyJoinAttemptResult>` and update `Patches.JoinFriendScreen` to present `ProtocolFailure` through `LanConnectProtocolUiMessages`; do not create a generic `NErrorPopup` for a known protocol failure.
+Pure direct-IP joins have no service ticket or carrier-neutral presence preflight. Keep them `compat_4_5_v1` only in `alpha.1`; do not expose a Tail intent. Local Ritsu presence returns `ritsulib_not_allowed_in_compat_mode` before creating any initializer. Change `LanConnectDirectJoinFlow.JoinAsync` from `Task<bool>` to `Task<LobbyJoinAttemptResult>` and update `Patches.JoinFriendScreen` to present `ProtocolFailure` through `LanConnectProtocolUiMessages`; do not create a generic popup for a known protocol failure. Add tests proving zero transport attempts for local Ritsu and that no code path parses Tail selection from direct-IP `InitialGameInfoMessage`.
 
 - [ ] **Step 10: Persist the selection for continue-run**
 
-Increment the saved-room binding schema and persist canonical profile, selected LAN version, selected critical extensions, and digest. Continue-run publication reuses this selection; it cannot call a profile-by-player-count helper.
+Increment the saved-room binding schema and persist canonical profile, selected LAN version, carrier, frozen RitsuLib presence, and digest. Continue-run publication reuses this selection; it cannot call a profile-by-player-count helper.
 
 Also migrate both non-lobby host entries in this task:
 
@@ -949,7 +920,7 @@ Stage only files changed by this task.
 
 ---
 
-### Task 4: Implement the Minimal LAN Tail v1 Envelope Primitive
+### Task 4: Implement the Carrier-Neutral LAN Protocol Container v1
 
 **Files:**
 - Create: `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectTailEntry.cs`
@@ -960,13 +931,11 @@ Stage only files changed by this task.
 - Create: `test-fixtures/protocol/v0.6/*.json`
 
 **Interfaces:**
-- Consumes: only PacketReader/PacketWriter and the approved envelope schema.
+- Consumes: only byte spans and the approved container schema; it has no PacketReader/PacketWriter or Ritsu dependency.
 - Produces:
   - `LanConnectTailCodec.Encode(ushort sessionProtocolVersion, IReadOnlyList<LanConnectTailEntry>): byte[]`
   - `LanConnectTailCodec.Decode(ReadOnlySpan<byte>): LanConnectTailEnvelope`
-  - `LanConnectTailCodec.Write(PacketWriter, ushort, IReadOnlyList<LanConnectTailEntry>): void`
-  - `LanConnectTailCodec.Read(PacketReader): LanConnectTailEnvelope`
-  - exact cursor ownership for later message slices.
+  - exact container-byte ownership for both carriers; it neither reads nor writes standalone alignment padding.
 
 - [ ] **Step 1: Hand-author the smallest envelope golden vector before implementing the codec**
 
@@ -994,11 +963,11 @@ DOTNET_ROOT="/Users/mac/.dotnet" /Users/mac/.dotnet/dotnet test \
 
 - [ ] **Step 4: Implement the bounded envelope exactly as specified**
 
-Enforce `STSLAN01`, version 1, flags 0, network byte order, 256 KiB total, 32 entries, 64 KiB each, 64-byte nonempty IDs, critical flag bit only, UTF-8 ordinal entry ordering, duplicate rejection, zero alignment padding, checked lengths, and exact container consumption. Keep optional following bytes untouched for Ritsu.
+Enforce `STSLAN01`, version 1, flags 0, network byte order, 256 KiB total, 32 entries, 64 KiB each, 64-byte nonempty IDs, critical flag bit only, UTF-8 ordinal entry ordering, duplicate rejection, checked lengths, and exact container consumption. The codec starts at magic and knows nothing about PacketWriter alignment. Standalone placement/padding and Ritsu sidecar framing belong to Tasks 5 and 9 respectively.
 
 - [ ] **Step 5: Add adversarial envelope tests**
 
-Cover bad magic/version/flags, nonzero padding, duplicate IDs, out-of-order input canonicalization, oversized count/ID/payload/container, integer overflow, truncation at every header boundary, unknown critical entry, unknown noncritical skip, and illegal LAN trailing bytes.
+Cover bad magic/version/flags, duplicate IDs, out-of-order input canonicalization, oversized count/ID/payload/container, integer overflow, truncation at every header boundary, unknown critical entry, unknown noncritical skip, and illegal LAN trailing bytes. Nonzero standalone alignment padding is a Task 5 carrier test, not a container-codec case.
 
 - [ ] **Step 6: Run the envelope tests**
 
@@ -1025,12 +994,14 @@ git commit -m "feat(protocol): add bounded LAN Tail v1 envelope"
 - Create: `sts2-lan-connect/Scripts/Protocol/Patches/LanConnectProtocolPatchDispatcher.cs`
 - Create: `sts2-lan-connect/Scripts/Protocol/Patches/LanConnectCompatWirePatches.cs`
 - Create: `sts2-lan-connect/Scripts/Protocol/Patches/LanConnectTailMessagePatches.cs`
+- Create: `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectStandaloneTailCarrier.cs`
 - Create: `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectCapabilitiesCodec.cs`
 - Create: `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectRosterCodec.cs`
 - Create: `sts2-lan-connect/Scripts/Protocol/Tail/LanConnectRejectionCodec.cs`
 - Create: `sts2-lan-connect/Scripts/Protocol/LanConnectRosterProjection.cs`
 - Create: `sts2-lan-connect/Scripts/Protocol/LanConnectRosterAuthorityState.cs`
 - Create: `sts2-lan-connect.Tests/Protocol/LanConnectAtomicPatchDispatcherTests.cs`
+- Create: `sts2-lan-connect.Tests/Protocol/LanConnectStandaloneTailCarrierTests.cs`
 - Create: `sts2-lan-connect.Tests/Protocol/LanConnectInitialGameInfoTailTests.cs`
 - Create: `sts2-lan-connect.Tests/Protocol/LanConnectJoinRequestTailTests.cs`
 - Create: `sts2-lan-connect.Tests/Protocol/LanConnectJoinResponseTailTests.cs`
@@ -1050,7 +1021,7 @@ git commit -m "feat(protocol): add bounded LAN Tail v1 envelope"
 
 **Interfaces:**
 - Consumes: Task 3 frozen session snapshot and Task 4 codecs.
-- Produces: one Harmony owner installed once; compat `4/5` dispatch; Tail outer serialize/deserialize hooks; InitialGameInfo selection, normal join-request offer, successful normal join-response validation, and request-stage rejection through built-in `ClientConnectionFailedMessage` before the original flow observes any response.
+- Produces: one Harmony owner installed once; compat `4/5` dispatch; Ritsu-absent standalone Tail outer hooks; carrier-neutral capability/roster/rejection semantics; and normal join validation before the original handler. Until Task 9 installs the sidecar carrier, any Ritsu-present selection fails closed with `ritsulib_sidecar_unavailable`.
 
 - [ ] **Step 1: Write failing atomic-install tests**
 
@@ -1072,11 +1043,13 @@ Reuse the surgical `LanConnectTranspilerUtils` matching, but providers return `4
 
 - [ ] **Step 3: Resolve stable outer boundaries for all ten message types**
 
-Use the pinned target STS2 assembly to identify closed `NetMessageBus.SerializeMessage<T>` and the outer `TryDeserializeMessage` path for `InitialGameInfoMessage`, all three request/response pairs, built-in `ClientConnectionFailedMessage`, `PlayerJoinedMessage`, and begin-run. Record the verified assembly facts: all three response structs have no success/failure discriminator; LoadJoin/Rejoin deserialize `SerializableRun` before any tail; `ClientConnectionFailedMessage` is built-in ID 34 with bounded vanilla fields `disconnectionReason` and `versionInfo`. Treat all three response types as success-only and use failure message + LAN Tail as the sole protocol rejection path. Register its managed-flow handler before connection starts, unregister it in `finally`, and validate every required target/handler before applying any patch.
+Use the pinned target STS2 assembly to identify closed `NetMessageBus.SerializeMessage<T>` and the outer `TryDeserializeMessage` path for `InitialGameInfoMessage`, all three request/response pairs, built-in `ClientConnectionFailedMessage`, `PlayerJoinedMessage`, and begin-run. Record the verified assembly facts: all three response structs have no success/failure discriminator; LoadJoin/Rejoin deserialize `SerializableRun` before any container; `ClientConnectionFailedMessage` is built-in ID 34 with bounded vanilla fields. Treat responses as success-only and use failure message + carrier-provided LAN container as the protocol rejection path. Task 5 implements only standalone placement but exposes pre-handler pairing seams used by Task 9. Register handlers before connection, unregister in `finally`, and validate every required target/handler atomically.
+
+`LanConnectStandaloneTailCarrier` alone owns PacketWriter/PacketReader byte alignment: it writes at most seven zero bits after the vanilla body, records the magic offset, appends the exact Task 4 container bytes, and rejects nonzero padding or any cursor/length mismatch. Its tests prove the extracted bytes from magic through container end equal the carrier-neutral fixture exactly.
 
 - [ ] **Step 4: Write red capabilities codec tests and run them red**
 
-Test peer offer record 1 and session selection record 2, bounds, sorted unique critical extensions, min<=max, session version 0 for join request, selected version 1 for room messages, and all duplicate version-field equality rules.
+Test peer offer record 1 and session selection record 2, presence/readiness flags, carrier enum bounds, presence-to-carrier invariants, session version 0 for join request, selected version 1 for room messages, HTTP/container selection equality, and all duplicate version-field equality rules.
 
 ```bash
 DOTNET_ROOT="/Users/mac/.dotnet" /Users/mac/.dotnet/dotnet test \
@@ -1100,7 +1073,7 @@ Patch their stable outer boundaries. Missing/malformed/forbidden Tail or identit
 
 - [ ] **Step 8: Write red roster/projection tests for successful join response and codec tests for LAN rejection**
 
-Before implementing each codec, write and run its failing tests. Roster vectors cover 2-8 player metadata/child bit payloads, canonical projection, identity/slot uniqueness, authority/revision, limits, bootstrap baseline, and exact child consumption. Rejection vectors cover codes 1-10 and bounds. Full-message rejection vectors contain built-in ID 34 + sender + vanilla `ClientConnectionFailedMessage` body + LAN Tail selection/rejection; they forbid roster/other LAN entries, non-host sender, wrong waiting phase, and duplicate delivery. Ritsu ordering/cursor follows Task 0's generic message-tail contract.
+Before implementing each codec, write and run its failing tests. Roster vectors cover 2-8 player metadata/child bit payloads, canonical projection, identity/slot uniqueness, authority/revision, limits, bootstrap baseline, and exact child consumption. Rejection vectors cover codes 1-10 and bounds. Standalone full-message rejection vectors contain built-in ID 34 + sender + vanilla failure body + LAN container selection/rejection; they forbid roster/other entries, non-host sender, wrong waiting phase, and duplicate delivery. Separately assert Ritsu-present selection cannot enter standalone serialization.
 
 - [ ] **Step 9: Implement the minimal roster/rejection/projection seam and make focused tests green**
 
@@ -1112,7 +1085,7 @@ Implement only what the normal join response needs. Keep LoadJoin/Rejoin current
 
 - [ ] **Step 11: Implement Tail join-response projection and restoration**
 
-For Tail mode, write the vanilla four-player projection with original `2/3` widths, append LAN Tail, and bootstrap/restore the authoritative roster immediately after outer deserialization but before `LanConnectLobbyManagedJoinFlow` completes its response task. Initialize the host's first committed roster at revision 1. A valid LAN rejection on `ClientConnectionFailedMessage` completes the currently pending request with `LanConnectProtocolException`, disconnects, and makes any later STS2 response ineligible to complete success. Compat mode remains current `4/5`; neither mode calls Ritsu private code.
+For `standalone_tail_v1`, write the vanilla four-player projection with original `2/3` widths, append the LAN container, and bootstrap/restore immediately after outer deserialization but before the managed response task completes. Initialize host revision at 1. A valid rejection completes the pending request with `LanConnectProtocolException`, disconnects, and makes later success ineligible. Compat remains `4/5`; Ritsu-sidecar selection fails closed here and is enabled only by Task 9.
 
 - [ ] **Step 12: Remove the RC4 private composition tests and code**
 
@@ -1123,7 +1096,7 @@ Delete `RitsuLibAssemblyName`, detached postfix state/delegate/record, `DetachRi
 ```bash
 DOTNET_ROOT="/Users/mac/.dotnet" /Users/mac/.dotnet/dotnet test \
   sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj \
-  --filter "FullyQualifiedName~LanConnectAtomicPatchDispatcherTests|FullyQualifiedName~LanConnectInitialGameInfoTailTests|FullyQualifiedName~LanConnectJoinRequestTailTests|FullyQualifiedName~LanConnectJoinResponseTailTests|FullyQualifiedName~LanConnectCapabilitiesCodecTests|FullyQualifiedName~LanConnectRoster|FullyQualifiedName~LanConnectRejection|FullyQualifiedName~LanConnectSerializationPatchesCompatibilityTests" -m:1
+  --filter "FullyQualifiedName~LanConnectAtomicPatchDispatcherTests|FullyQualifiedName~LanConnectStandaloneTailCarrierTests|FullyQualifiedName~LanConnectInitialGameInfoTailTests|FullyQualifiedName~LanConnectJoinRequestTailTests|FullyQualifiedName~LanConnectJoinResponseTailTests|FullyQualifiedName~LanConnectCapabilitiesCodecTests|FullyQualifiedName~LanConnectRoster|FullyQualifiedName~LanConnectRejection|FullyQualifiedName~LanConnectSerializationPatchesCompatibilityTests" -m:1
 
 DOTNET_ROOT="/Users/mac/.dotnet" PATH="/Users/mac/.dotnet:$PATH" \
 GODOT_BIN="/Users/mac/Applications/Godot_mono.app/Contents/MacOS/Godot" \
@@ -1145,7 +1118,7 @@ bash scripts/build-sts2-lan-connect.sh
 - [ ] **Step 15: Commit the complete handshake/join-response slice**
 
 ```bash
-git add sts2-lan-connect/Scripts/Entry.cs sts2-lan-connect/Scripts/LanConnectMultiplayerCompatibility.cs sts2-lan-connect/Scripts/LanConnectSerializationPatches.cs sts2-lan-connect/Scripts/Protocol/Patches/LanConnectProtocolPatchDispatcher.cs sts2-lan-connect/Scripts/Protocol/Patches/LanConnectCompatWirePatches.cs sts2-lan-connect/Scripts/Protocol/Patches/LanConnectTailMessagePatches.cs sts2-lan-connect/Scripts/Protocol/Tail/LanConnectCapabilitiesCodec.cs sts2-lan-connect/Scripts/Protocol/Tail/LanConnectRosterCodec.cs sts2-lan-connect/Scripts/Protocol/Tail/LanConnectRejectionCodec.cs sts2-lan-connect/Scripts/Protocol/LanConnectRosterProjection.cs sts2-lan-connect/Scripts/Protocol/LanConnectRosterAuthorityState.cs sts2-lan-connect/Scripts/Lobby/LanConnectLobbyManagedJoinFlow.cs sts2-lan-connect/Scripts/Lobby/LanConnectLobbyJoinFlow.cs sts2-lan-connect/Scripts/Lobby/LanConnectDirectJoinFlow.cs sts2-lan-connect.Tests/Patches/LanConnectSerializationPatchesCompatibilityTests.cs sts2-lan-connect.Tests/Protocol/LanConnectAtomicPatchDispatcherTests.cs sts2-lan-connect.Tests/Protocol/LanConnectInitialGameInfoTailTests.cs sts2-lan-connect.Tests/Protocol/LanConnectJoinRequestTailTests.cs sts2-lan-connect.Tests/Protocol/LanConnectJoinResponseTailTests.cs sts2-lan-connect.Tests/Protocol/LanConnectCapabilitiesCodecTests.cs sts2-lan-connect.Tests/Protocol/LanConnectRosterCodecGoldenVectorTests.cs sts2-lan-connect.Tests/Protocol/LanConnectRosterProjectionTests.cs sts2-lan-connect.Tests/Protocol/LanConnectRejectionCodecTests.cs sts2-lan-connect.GdUnitTests/Protocol/LanConnectTailMessageBusTests.cs sts2-lan-connect.GdUnitTests/Protocol/LanConnectRosterRestoreTests.cs test-fixtures/protocol/v0.6/tail-initial-game-info-v1.bin test-fixtures/protocol/v0.6/tail-initial-game-info-v1.json test-fixtures/protocol/v0.6/tail-lobby-join-request-v1.bin test-fixtures/protocol/v0.6/tail-lobby-join-request-v1.json test-fixtures/protocol/v0.6/tail-lobby-join-response-v1.bin test-fixtures/protocol/v0.6/tail-lobby-join-response-v1.json test-fixtures/protocol/v0.6/tail-protocol-rejection-v1.bin test-fixtures/protocol/v0.6/tail-protocol-rejection-v1.json
+git add sts2-lan-connect/Scripts/Entry.cs sts2-lan-connect/Scripts/LanConnectMultiplayerCompatibility.cs sts2-lan-connect/Scripts/LanConnectSerializationPatches.cs sts2-lan-connect/Scripts/Protocol/Patches/LanConnectProtocolPatchDispatcher.cs sts2-lan-connect/Scripts/Protocol/Patches/LanConnectCompatWirePatches.cs sts2-lan-connect/Scripts/Protocol/Patches/LanConnectTailMessagePatches.cs sts2-lan-connect/Scripts/Protocol/Tail/LanConnectStandaloneTailCarrier.cs sts2-lan-connect/Scripts/Protocol/Tail/LanConnectCapabilitiesCodec.cs sts2-lan-connect/Scripts/Protocol/Tail/LanConnectRosterCodec.cs sts2-lan-connect/Scripts/Protocol/Tail/LanConnectRejectionCodec.cs sts2-lan-connect/Scripts/Protocol/LanConnectRosterProjection.cs sts2-lan-connect/Scripts/Protocol/LanConnectRosterAuthorityState.cs sts2-lan-connect/Scripts/Lobby/LanConnectLobbyManagedJoinFlow.cs sts2-lan-connect/Scripts/Lobby/LanConnectLobbyJoinFlow.cs sts2-lan-connect/Scripts/Lobby/LanConnectDirectJoinFlow.cs sts2-lan-connect.Tests/Patches/LanConnectSerializationPatchesCompatibilityTests.cs sts2-lan-connect.Tests/Protocol/LanConnectAtomicPatchDispatcherTests.cs sts2-lan-connect.Tests/Protocol/LanConnectStandaloneTailCarrierTests.cs sts2-lan-connect.Tests/Protocol/LanConnectInitialGameInfoTailTests.cs sts2-lan-connect.Tests/Protocol/LanConnectJoinRequestTailTests.cs sts2-lan-connect.Tests/Protocol/LanConnectJoinResponseTailTests.cs sts2-lan-connect.Tests/Protocol/LanConnectCapabilitiesCodecTests.cs sts2-lan-connect.Tests/Protocol/LanConnectRosterCodecGoldenVectorTests.cs sts2-lan-connect.Tests/Protocol/LanConnectRosterProjectionTests.cs sts2-lan-connect.Tests/Protocol/LanConnectRejectionCodecTests.cs sts2-lan-connect.GdUnitTests/Protocol/LanConnectTailMessageBusTests.cs sts2-lan-connect.GdUnitTests/Protocol/LanConnectRosterRestoreTests.cs test-fixtures/protocol/v0.6/tail-initial-game-info-v1.bin test-fixtures/protocol/v0.6/tail-initial-game-info-v1.json test-fixtures/protocol/v0.6/tail-lobby-join-request-v1.bin test-fixtures/protocol/v0.6/tail-lobby-join-request-v1.json test-fixtures/protocol/v0.6/tail-lobby-join-response-v1.bin test-fixtures/protocol/v0.6/tail-lobby-join-response-v1.json test-fixtures/protocol/v0.6/tail-protocol-rejection-v1.bin test-fixtures/protocol/v0.6/tail-protocol-rejection-v1.json
 git commit -m "feat(protocol): route lobby handshake through LAN Tail v1"
 ```
 
@@ -1168,11 +1141,11 @@ git commit -m "feat(protocol): route lobby handshake through LAN Tail v1"
 
 - [ ] **Step 1: Hand-author complete request/response vectors before implementation**
 
-Create reviewed `.bin + .json` vectors for `ClientLoadJoinRequestMessage`, successful `ClientLoadJoinResponseMessage`, `ClientRejoinRequestMessage`, successful `ClientRejoinResponseMessage`, and built-in `ClientConnectionFailedMessage` + rejection Tail while each request phase is pending. Each success JSON fixes vanilla-body boundary, Tail offsets, selection/offer record kind, authority peer, roster revision, bootstrap carrier mapping, projection, and exact `2/3-bit` body widths. The rejection JSON fixes ID 34, vanilla failure-body boundary, LAN Tail boundary, and optional Ritsu cursor. Expected bytes may not come from production encoders.
+Create reviewed `.bin + .json` vectors for `ClientLoadJoinRequestMessage`, successful `ClientLoadJoinResponseMessage`, `ClientRejoinRequestMessage`, successful `ClientRejoinResponseMessage`, and built-in `ClientConnectionFailedMessage` + rejection container while each request phase is pending. Each success JSON fixes vanilla-body boundary, standalone container offsets, selection/offer record kind, authority peer, roster revision, bootstrap carrier mapping, projection, and exact `2/3-bit` body widths. The rejection JSON fixes ID 34, vanilla failure-body boundary, and standalone container boundary. Task 9 reuses the exact container bytes inside sidecar frames. Expected bytes may not come from production encoders.
 
 - [ ] **Step 2: Write request matrix tests red**
 
-Both requests require `sessionProtocolVersion=0` and peer offer, and forbid roster/rejection. Test transport-sender identity, ticket/selection compatibility, malformed/missing Tail, wrong record kind, and capability change after ticket. Prove invalid requests never reach `HandleClientLoadJoinRequestMessage` or `HandleClientRejoinRequestMessage`.
+Both requests require `sessionProtocolVersion=0` and peer offer, and forbid roster/rejection. Test transport-sender identity, ticket/selection/carrier compatibility, malformed/missing container, wrong record kind, and capability change after ticket. Prove invalid requests never reach the original handlers.
 
 - [ ] **Step 3: Implement LoadJoin/Rejoin request handling and make it green**
 
@@ -1250,7 +1223,7 @@ Use runtime connection events only as authority inputs. Do not infer authoritati
 
 - [ ] **Step 3: Patch outer PlayerJoined serialization/deserialization**
 
-Tail mode sends a safe vanilla player/projection plus session selection + full snapshot; compat remains `4/5`. The receiver validates host, peer, revision, and projection, then restores full state before the original `HandlePlayerJoinedMessage`. On failure, block the original handler and disconnect with a structured protocol failure.
+Tail mode sends a safe vanilla player/projection plus carrier-neutral session selection + full snapshot; standalone appends it, while Task 9 sidecar pairs it. Compat remains `4/5`. The receiver validates host, peer, revision, projection, and carrier, then restores full state before the original handler. On failure, block the handler and disconnect with a structured protocol failure.
 
 - [ ] **Step 4: Run focused xUnit/GdUnit tests**
 
@@ -1276,7 +1249,7 @@ git commit -m "feat(protocol): restore extended players from authoritative snaps
 
 ---
 
-### Task 8: Complete Begin-Run Tail Flow and Remove the RC4 Bridge
+### Task 8: Complete the Standalone Begin-Run Flow and Remove the RC4 Bridge
 
 **Files:**
 - Modify: `sts2-lan-connect/Scripts/Protocol/Patches/LanConnectTailMessagePatches.cs`
@@ -1296,7 +1269,7 @@ git commit -m "feat(protocol): restore extended players from authoritative snaps
 
 **Interfaces:**
 - Consumes: authoritative roster state from Task 7.
-- Produces: final host snapshot in `LobbyBeginRunMessage`, exact Tail restoration before the original begin-run handler, and no RC4 private Ritsu composition code.
+- Produces: final host snapshot semantics, exact standalone-container restoration before the original begin-run handler, reusable pairing seam for Task 9, and no RC4 private Ritsu composition code.
 
 - [ ] **Step 1: Write failing begin-run vectors and handler-isolation tests**
 
@@ -1322,7 +1295,7 @@ ritsuTailBridge
 restored detached RitsuLib
 ```
 
-Do not remove the separately evaluated lobby sidecar bridge in this task.
+Delete the old private resolver bridge only after Task 0 proves direct public `INetGameService` sidecar operation; Task 9 installs its replacement carrier.
 
 - [ ] **Step 5: Run focused tests and full client build**
 
@@ -1357,13 +1330,14 @@ git commit -m "feat(protocol): complete no-Ritsu Tail v1 start-run flow"
 
 ---
 
-### Task 9: Integrate RitsuLib Through Public Contracts Only
+### Task 9: Enforce Presence Parity and Implement the Public Ritsu Sidecar Carrier
 
-**Precondition:** Task 0’s Tail order/cursor, four-combination, complete inventory, critical classification, and Android gates are all `PASS`. If not, do not execute this task; return to design review before claiming the approved alpha scope is complete.
+**Precondition:** Task 0’s standalone bytes, two-process sidecar reachability/barrier, private bridge removal, and Android gates are `PASS`; Task 2's real store/app tests prove both presence mismatch directions and sidecar-unavailable host/joiner paths allocate zero slot/ticket/control/transport. If not, do not execute this task.
 
 **Files:**
-- Create: `sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectRitsuLibPublicApiAdapter.cs`
-- Create: `sts2-lan-connect.GdUnitTests/Protocol/LanConnectRitsuTailInteropTests.cs`
+- Create: `sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectRitsuLibSidecarCarrier.cs`
+- Create: `sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectSidecarPairingCache.cs`
+- Create: `sts2-lan-connect.GdUnitTests/Protocol/LanConnectRitsuSidecarCarrierTests.cs`
 - Modify: `sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj`
 - Modify: `sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectExternalCapabilityCollector.cs`
 - Modify: `sts2-lan-connect/Scripts/Protocol/Patches/LanConnectTailMessagePatches.cs`
@@ -1377,27 +1351,27 @@ git commit -m "feat(protocol): complete no-Ritsu Tail v1 start-run flow"
 
 **Interfaces:**
 - Consumes: the exact public contract proven by Task 0.
-- Produces: complete public extension inventory, critical classification/ranges, canonical offer, fixed `LAN Tail -> optional Ritsu Tail` ordering, and room-level critical version gates.
+- Produces: canonical presence/carrier offers and selections, pre-ticket mismatch/readiness rejection, the design §4.2.1 public typed-sidecar frame, bounded pairing cache, and a fail-closed handler barrier for all ten message kinds. It never appends a standalone LAN Tail in Ritsu rooms and never inventories RitsuLib extensions.
 
 - [ ] **Step 1: Add a test-only real Ritsu assembly input without packaging it**
 
-Configure the GdUnit test project to conditionally load `$(RitsuLibAssembly)` only when supplied. Do not add the DLL to package scripts, the solution output allowlist, or Git.
+Configure the GdUnit test project to require `$(RitsuLibAssembly)` for this test class. If the property is absent, the test must fail with an explicit missing-gate message, not skip. Do not add the DLL to package scripts, the solution output allowlist, or Git.
 
-- [ ] **Step 2: Write the four-combination GdUnit tests with the production adapter**
+- [ ] **Step 2: Write carrier, pairing, and barrier tests with the production adapter**
 
-Assert identical LAN roster bytes, exact LAN end/Ritsu start cursor, correct final message, and no private member references for all four combinations.
+Assert identical inner LAN container bytes for standalone and sidecar carriers. For each of the ten message kinds, cover frame-first, vanilla-first within bounds, duplicate/conflicting frame, wrong sender/recipient/flow/message kind/sequence, per-direction counters starting at 1, sequence exhaustion, timeout, cache limits, and handler release only after full validation. Allow only cross-stream interleaving; reject reordering or gaps inside either ordered stream, and prove the receiver pairs the next ordinal rather than an arbitrary same-kind message. For `PlayerJoinedMessage` and `LobbyBeginRunMessage`, use at least three peers with distinct flow nonces: submit one frame per recipient, assert identical inner containers, then send one vanilla broadcast; missing binding or one failed submission must not leak the broadcast to an unpaired handler. Assert vanilla bytes remain exact fixtures and `standaloneTailPresent=false` for Ritsu selection. Assert both mixed-presence directions fail before any carrier or transport allocation.
 
-- [ ] **Step 3: Implement the public API adapter exactly as proven**
+- [ ] **Step 3: Implement the public sidecar carrier exactly as proven**
 
-Expose explicit outcomes: framework absent, supported complete inventory, unsupported API, incomplete inventory, unknown classification, unknown critical extension, and ordering contract unavailable. Only the first two outcomes may enter Tail rooms.
+Expose explicit readiness outcomes: framework absent, framework present and required typed-sidecar ready, and framework present but sidecar unavailable. Readiness requires the exact public descriptor/registry, direct `INetGameService` send, `SetPeerReachabilityHint`/`ObserveNetService`/`CanSendToPeer`, and session subscription APIs proven in Task 0. The unavailable outcome blocks host, joiner, load join and rejoin locally with `ritsulib_sidecar_unavailable`. Do not inspect Tail registrations or private patch state.
 
-- [ ] **Step 4: Add critical extension offer/selection to client and service gates**
+- [ ] **Step 4: Enforce frozen presence in client and service gates**
 
-The client submits the complete sorted critical range set. The service intersects each with its verified whitelist and freezes the highest common version. Joiners require the identical ID set and ranges covering each selected version. Explicitly classified noncritical extensions do not enter selection.
+The host submits presence plus carrier readiness; the service freezes `standalone_tail_v1` or `ritsulib_sidecar_v1` into selection/digest. A joiner must match presence and support the carrier before slot/ticket allocation. Both mismatch directions return `ritsulib_presence_mismatch`; readiness failure returns `ritsulib_sidecar_unavailable`. Immediately before transport and before each sidecar flow, every participant rechecks detected presence/readiness against the frozen selection so post-ticket drift fails closed. LAN Connect does not compare RitsuLib versions or extensions.
 
-- [ ] **Step 5: Replace or disable the sidecar bridge according to Task 0 evidence**
+- [ ] **Step 5: Replace the private resolver bridge and install the paired-message barrier**
 
-If a public sidecar API replacement passed, use it and delete the transpiler/private method patch. If the sidecar public replacement is blocked, keep Tail message coexistence separate and mark sidecar-dependent Ritsu capability as unsupported; do not silently preserve private patching in an otherwise public adapter.
+Delete the transpiler/private resolver patch. Register the required descriptor once and pass the active `INetGameService` directly. Only after validating the lobby ticket, nonce, transport peer and frozen selection, seed public reachability with `SetPeerReachabilityHint(peer, Supported)`, observe the service, require `CanSendToPeer`, send the §4.2.1 frame before vanilla, and pair by sender/recipient/flow/message kind/per-direction sequence. Clear the hint to `Unknown` plus every pairing counter/cache on ticket cancellation, disconnect and session epoch change; prove peer-ID reuse cannot inherit it. Preserve order inside each stream and tolerate only bounded interleaving between streams. For host broadcasts, submit a recipient-specific frame for every target before the single vanilla broadcast; never share a flow nonce. Keep at most 16 pairs per peer, 256 KiB of sidecar frame/container per pair, and 5 seconds; do not copy or count the full vanilla `SerializableRun` payload against this cache. A timeout/conflict blocks the original handler and disconnects. If any public prerequisite is unavailable, fail closed; never fall back to independent double-Tail. Direct-IP must never seed a manual hint.
 
 - [ ] **Step 6: Run real-assembly tests and service gates**
 
@@ -1408,22 +1382,22 @@ GODOT_BIN="/Users/mac/Applications/Godot_mono.app/Contents/MacOS/Godot" \
   sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj \
   --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings \
   -p:RitsuLibAssembly="$RITSULIB_ASSEMBLY" \
-  --filter "FullyQualifiedName~LanConnectRitsuTailInteropTests" -m:1
+  --filter "FullyQualifiedName~LanConnectRitsuSidecarCarrierTests" -m:1
 
 cd lobby-service
 npm run build
 node --test dist/protocol-capabilities.test.js dist/store.test.js dist/app.integration.test.js
 ```
 
-- [ ] **Step 7: Repeat Windows and Android four-combination smokes**
+- [ ] **Step 7: Repeat Windows and Android homogeneous/mismatch smokes**
 
-Record startup, ticket, Tail cursor, begin-run, and synchronized state evidence. Any `InvalidProgramException`, generic shape mismatch, different LAN bytes, incomplete inventory, or wrong cursor blocks this task.
+Record startup, ticket, carrier, descriptor opcode/reachability, paired frame/vanilla sequence, handler-release time, begin-run, and synchronized state for both homogeneous combinations. Record zero slot/ticket/transport counters for both mixed-presence directions and readiness failures for unsupported host/joiner. Any early handler, standalone Tail in a Ritsu message, vanilla/container byte drift, missed rejection, or `InvalidProgramException` blocks this task.
 
 - [ ] **Step 8: Commit public Ritsu integration**
 
 ```bash
-git add sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectRitsuLibPublicApiAdapter.cs sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectExternalCapabilityCollector.cs sts2-lan-connect/Scripts/Protocol/Patches/LanConnectTailMessagePatches.cs sts2-lan-connect/Scripts/LanConnectExternalModDetection.cs sts2-lan-connect/Scripts/Lobby/LanConnectRitsuLibLobbyCompatibility.cs sts2-lan-connect/Scripts/LanConnectGameplayPatches.cs sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj sts2-lan-connect.GdUnitTests/Protocol/LanConnectRitsuTailInteropTests.cs lobby-service/src/protocol-capabilities.ts lobby-service/src/protocol-capabilities.test.ts lobby-service/src/store.ts docs/testing/STS2_LAN_CONNECT_V0.6_ALPHA1_FEASIBILITY_ZH.md
-git commit -m "feat(protocol): integrate RitsuLib through public contracts"
+git add sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectRitsuLibSidecarCarrier.cs sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectSidecarPairingCache.cs sts2-lan-connect/Scripts/Protocol/Capabilities/LanConnectExternalCapabilityCollector.cs sts2-lan-connect/Scripts/Protocol/Patches/LanConnectTailMessagePatches.cs sts2-lan-connect/Scripts/LanConnectExternalModDetection.cs sts2-lan-connect/Scripts/Lobby/LanConnectRitsuLibLobbyCompatibility.cs sts2-lan-connect/Scripts/LanConnectGameplayPatches.cs sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj sts2-lan-connect.GdUnitTests/Protocol/LanConnectRitsuSidecarCarrierTests.cs lobby-service/src/protocol-capabilities.ts lobby-service/src/protocol-capabilities.test.ts lobby-service/src/store.ts docs/testing/STS2_LAN_CONNECT_V0.6_ALPHA1_FEASIBILITY_ZH.md
+git commit -m "feat(protocol): enforce homogeneous RitsuLib rooms"
 ```
 
 ---
@@ -1509,11 +1483,11 @@ git commit -m "feat(protocol): preserve 0.3-0.5 compat rooms"
 
 **Interfaces:**
 - Consumes: completed compat/Tail/Ritsu gates and `LanConnectProtocolFailure`.
-- Produces: default compat selector, opt-in Tail selector, 2-8 player input independent of profile, pre-create local validation, room protocol display, and messages for all ten rejection codes across host, ticket/preflight, normal join, load join, rejoin, direct join, and restart auto-rejoin surfaces.
+- Produces: default compat selector and opt-in Tail selector for lobby rooms, 2-8 player input, pre-create local validation, room protocol/carrier/Ritsu requirement display, compat-only direct-IP UI, and messages for every defined rejection code across all flows.
 
 - [ ] **Step 1: Write red UI state tests**
 
-Assert default is compat, profile does not change with player count, Tail warning states “仅支持 0.6+”, compat warning states “支持 0.3-0.5，不支持 RitsuLib”, and room profile cannot change after submission.
+Assert lobby create defaults to compat, profile does not change with player count, Tail warning states “仅支持 0.6+；RitsuLib 状态必须一致”, compat warning states “支持 0.3-0.5，不支持 RitsuLib”, room cards expose carrier plus “需要 RitsuLib” or “无 RitsuLib”, direct-IP exposes compat only, and room profile/carrier/presence cannot change after submission.
 
 - [ ] **Step 2: Add the protocol selector to the existing create dialog**
 
@@ -1521,18 +1495,20 @@ Add `_protocolProfileOption`, description label, and warning label in the existi
 
 ```text
 兼容旧版客户端（默认）
-0.6 新协议（支持 RitsuLib）
+0.6 新协议（RitsuLib 状态必须一致）
 ```
 
 Max players becomes 2-8 and no longer determines profile.
 
+Keep direct-IP fixed to compat in `alpha.1`. Do not render a Tail choice or infer/retry another profile. When local Ritsu is detected, reject before `_actionInFlight` and before any transport initializer with the structured compat error.
+
 - [ ] **Step 3: Gate create locally before `_actionInFlight`**
 
-Compat+Ritsu rejects locally. Tail requires a complete current offer, supported public Ritsu outcome if present, selected profile availability, and `LobbyProbeCapabilities.DualProtocolApiVersion == 1` with `SupportedProtocolProfiles` containing `tail_v1` and LAN range containing version 1. Create passes an explicit intent to `LanConnectHostFlow`.
+Compat+Ritsu rejects locally. Tail requires a complete current offer containing detected presence and sidecar readiness, selected profile/carrier availability, and compatible lobby probe fields. Ritsu present but sidecar unavailable returns `ritsulib_sidecar_unavailable`; it must block host and joiner paths. Create passes an explicit intent to `LanConnectHostFlow`; returned selection must preserve presence and deterministically select the expected carrier.
 
 - [ ] **Step 4: Implement stable structured error messages**
 
-Map all service string codes and Tail numeric codes to one enum/value. Use structured required version/extension fields. Keep raw `detail` in logs only. Unknown codes show a generic protocol rejection and preserve the numeric/string code in diagnostics.
+Map all service string codes and Tail numeric codes to one enum/value. Use structured required client version and required RitsuLib presence fields. Keep raw `detail` in logs only. Unknown codes show a generic protocol rejection and preserve the numeric/string code in diagnostics.
 
 Assert every public flow consumes the structured field before fallback text: create/publish reads `LanConnectHostAttemptResult.ProtocolFailure`; preflight reads `LanConnectModPreflightJoinResult.ProtocolFailure`; lobby/direct join and restart auto-rejoin read `LobbyJoinAttemptResult.ProtocolFailure`. Known protocol failures use `LanConnectProtocolUiMessages` and never create `NErrorPopup(NetError.InternalError)`; unknown exceptions retain the existing popup. Cancellation produces no protocol popup.
 
@@ -1601,7 +1577,7 @@ Assert the alpha version, default compat mode, Tail v1 documentation, removal of
 
 - [ ] **Step 3: Update user/release documentation**
 
-Document the two create modes, 0.2 end of support, 0.3-0.5 compat requirement, compat Ritsu rejection, Tail 0.6 minimum, critical extension rules, update/restart steps, expected profile/digest/revision logs, and known alpha limitations.
+Document the two lobby create modes, direct-IP compat-only limitation, 0.2 end of support, 0.3-0.5 compat requirement, compat Ritsu rejection, Tail 0.6 minimum, standalone versus Ritsu-sidecar carriers, presence-parity/readiness rules, lack of Ritsu version/extension guarantees, update/restart steps, expected profile/carrier/digest/revision logs, and known alpha limitations.
 
 Update `lobby-service/README.md` with the synchronized service version, `/probe` dual-protocol fields, deployment restart requirement, 0.2 rejection, profile projection rules, and service/client co-upgrade instructions. Add a package-content assertion that the packaged service README contains `0.6.0-alpha.1`.
 
@@ -1628,19 +1604,24 @@ DOTNET_ROOT="/Users/mac/.dotnet" PATH="/Users/mac/.dotnet:$PATH" \
 GODOT_BIN="/Users/mac/Applications/Godot_mono.app/Contents/MacOS/Godot" \
 /Users/mac/.dotnet/dotnet test \
   sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj \
-  --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings -m:1
+  --settings sts2-lan-connect.GdUnitTests/gdunit4.runsettings \
+  -p:RitsuLibAssembly="$RITSULIB_ASSEMBLY" -m:1
 ```
+
+The command must fail before test discovery when `RITSULIB_ASSEMBLY` is absent or invalid; real-Ritsu carrier tests may not be conditionally skipped in the final gate.
 
 - [ ] **Step 7: Build and run the complete temporary-package release gate**
 
 ```bash
 export PATH="/Users/mac/.dotnet:$PATH" DOTNET_ROOT="/Users/mac/.dotnet"
+test -f "$RITSULIB_ASSEMBLY"
 DOTNET_BIN="/Users/mac/.dotnet/dotnet" \
 GODOT_BIN="/Users/mac/Applications/Godot_mono.app/Contents/MacOS/Godot" \
+RITSULIB_ASSEMBLY="$RITSULIB_ASSEMBLY" \
 bash scripts/verify-release.sh
 ```
 
-Expected: service checks/tests, xUnit, GdUnit, client/service package allowlists, installer dry-run, legal files, and fresh package reproducibility all pass. No Ritsu/game/prototype DLL appears in public packages.
+Expected: service checks/tests, xUnit, GdUnit including mandatory real-Ritsu sidecar carrier tests, client/service package allowlists, installer dry-run, legal files, and fresh package reproducibility all pass. No Ritsu/game/prototype DLL appears in public packages.
 
 - [ ] **Step 8: Execute and record the real platform acceptance matrix**
 
@@ -1651,7 +1632,10 @@ Windows <-> Windows
 Windows <-> Android
 Windows <-> macOS
 Android <-> macOS
-Tail: no Ritsu, one-sided Ritsu, two-sided Ritsu
+Tail success: no Ritsu/no Ritsu and Ritsu/Ritsu
+Tail rejection: Ritsu host/no-Ritsu joiner and no-Ritsu host/Ritsu joiner before ticket
+Tail readiness rejection: Ritsu host or joiner with sidecar unavailable before transport
+Direct-IP: compat only; local Ritsu and any Tail intent rejected before transport
 Tail continuation: InLoadedLobby load join and Running rejoin, including one 5+ player case
 Compat: 0.6 <-> real 0.5.5
 Compat: Ritsu host rejection and Ritsu joiner rejection
@@ -1659,16 +1643,16 @@ Player counts: 2/4/5/8 across principal smokes
 Player counts: 3/6/7 each in at least one cross-platform run
 ```
 
-Each new-lobby success requires ticket, connection, ready, begin-run, first synchronized game state, and no divergence/timeout. Each continuation success requires ticket, InitialGameInfo state branch, accepted LoadJoin/Rejoin response, full real-slot roster restoration, resumed synchronized game state, and no retry after an injected protocol rejection. Attach both endpoint logs and record profile, selected protocol, capability digest, roster revision, Tail cursor, and Ritsu inventory outcome.
+Each new-lobby success requires ticket, connection, ready, begin-run, first synchronized game state, and no divergence/timeout. Each continuation success requires ticket, accepted LoadJoin/Rejoin response, full real-slot roster restoration, resumed state, and no retry after injected protocol rejection. Each mismatch/readiness case must prove zero ticket/slot/transport allocation. Direct-IP exclusions must prove zero initializer calls. Attach both endpoint logs and record profile, carrier, selected protocol, digest, roster revision, standalone cursor or sidecar frame/handler timestamps, and frozen/detected presence/readiness.
 
 - [ ] **Step 9: Record the go/no-go verdict**
 
-`GO` requires every approved design acceptance criterion, including Task 0 Ritsu gates. A failed Ritsu gate means the approved `0.6.0-alpha.1` scope is not complete and requires design review; do not quietly ship “Ritsu unsupported” under the approved release notes.
+`GO` requires every revised acceptance criterion, including Task 0 sidecar/barrier gates, both mismatch directions, readiness failures, and Android evidence. A failed all-Ritsu sidecar/barrier or Android gate means `0.6.0-alpha.1` is incomplete and requires design review; do not quietly ship “Ritsu unsupported” under the revised release notes.
 
 - [ ] **Step 10: Commit version, docs, and verification evidence**
 
 ```bash
-git add sts2-lan-connect/sts2_lan_connect.csproj sts2-lan-connect/sts2_lan_connect.json lobby-service/package.json lobby-service/package-lock.json lobby-service/README.md sts2-lan-connect.Tests/Packaging/LanConnectPackageContentTests.cs lobby-service/src/package-content.test.ts README.md CHANGELOG.md docs/CLIENT_RELEASE_README_ZH.md docs/STS2_LAN_CONNECT_USER_GUIDE_ZH.md docs/STEAM_WORKSHOP_DESCRIPTION_ZH.txt docs/RELEASE_NOTES_V0.6.0_ALPHA1_ZH.md docs/testing/STS2_LAN_CONNECT_V0.6_ALPHA1_ACCEPTANCE_ZH.md
+git add sts2-lan-connect/sts2_lan_connect.csproj sts2-lan-connect/sts2_lan_connect.json lobby-service/package.json lobby-service/package-lock.json lobby-service/README.md sts2-lan-connect.Tests/Packaging/LanConnectPackageContentTests.cs lobby-service/src/package-content.test.ts scripts/verify-release.sh README.md CHANGELOG.md docs/CLIENT_RELEASE_README_ZH.md docs/STS2_LAN_CONNECT_USER_GUIDE_ZH.md docs/STEAM_WORKSHOP_DESCRIPTION_ZH.txt docs/RELEASE_NOTES_V0.6.0_ALPHA1_ZH.md docs/testing/STS2_LAN_CONNECT_V0.6_ALPHA1_ACCEPTANCE_ZH.md
 git commit -m "release: prepare v0.6.0-alpha.1 candidate"
 ```
 
