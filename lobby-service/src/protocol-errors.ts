@@ -9,9 +9,8 @@ export type ProtocolErrorCode =
 
 export interface ProtocolErrorDetails {
   requiredClientVersion?: string | undefined;
-  requiredProtocolProfile?: string | undefined;
   requiredRitsuLibPresent?: boolean | undefined;
-  [key: string]: unknown;
+  detail?: string | undefined;
 }
 
 export class ProtocolContractError extends Error {

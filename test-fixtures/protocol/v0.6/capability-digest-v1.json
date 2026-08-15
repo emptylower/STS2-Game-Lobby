@@ -5,6 +5,7 @@
     "offer": {
       "lanProtocolMin": 1,
       "lanProtocolMax": 1,
+      "clientVersion": "0.6.0-alpha.1",
       "ritsuLibPresent": false,
       "ritsuLibSidecarAvailable": false
     },
@@ -24,6 +25,7 @@
     "offer": {
       "lanProtocolMin": 1,
       "lanProtocolMax": 1,
+      "clientVersion": "0.6.0-alpha.1",
       "ritsuLibPresent": false,
       "ritsuLibSidecarAvailable": false
     },
@@ -43,6 +45,7 @@
     "offer": {
       "lanProtocolMin": 1,
       "lanProtocolMax": 1,
+      "clientVersion": "0.6.0-alpha.1",
       "ritsuLibPresent": true,
       "ritsuLibSidecarAvailable": true
     },

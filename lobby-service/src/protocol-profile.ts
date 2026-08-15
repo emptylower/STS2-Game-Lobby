@@ -37,7 +37,5 @@ export function projectProfile(profile: ProtocolProfile, generation: ClientApiGe
 }
 
 function unsupported(): ProtocolContractError {
-  return new ProtocolContractError(409, "protocol_profile_unsupported", "请求的多人协议不受支持。", {
-    requiredProtocolProfile: "compat_4_5_v1",
-  });
+  return new ProtocolContractError(409, "protocol_profile_unsupported", "请求的多人协议不受支持。");
 }

@@ -460,6 +460,7 @@ test("HTTP protocol gates reject Ritsu mismatch and sidecar unavailability befor
           protocolOffer: {
             lanProtocolMin: 1,
             lanProtocolMax: 1,
+            clientVersion: "0.6.0-alpha.1",
             ritsuLibPresent: scenario.host,
             ritsuLibSidecarAvailable: scenario.host,
           },
@@ -480,6 +481,7 @@ test("HTTP protocol gates reject Ritsu mismatch and sidecar unavailability befor
           protocolOffer: {
             lanProtocolMin: 1,
             lanProtocolMax: 1,
+            clientVersion: "0.6.0-alpha.1",
             ritsuLibPresent: scenario.joiner,
             ritsuLibSidecarAvailable: scenario.joinerSidecar,
           },
@@ -521,6 +523,7 @@ test("HTTP create gates reject Ritsu in compat and unavailable Tail sidecar with
           protocolOffer: {
             lanProtocolMin: 1,
             lanProtocolMax: 1,
+            clientVersion: "0.6.0-alpha.1",
             ritsuLibPresent: true,
             ritsuLibSidecarAvailable: scenario.sidecar,
           },

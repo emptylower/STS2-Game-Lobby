@@ -7,6 +7,7 @@ export type ProtocolCarrier = "none" | "standalone_tail_v1" | "ritsulib_sidecar_
 export interface ProtocolOffer {
   readonly lanProtocolMin: number;
   readonly lanProtocolMax: number;
+  readonly clientVersion: string;
   readonly ritsuLibPresent: boolean;
   readonly ritsuLibSidecarAvailable: boolean;
 }
@@ -27,7 +28,7 @@ export interface RoomProtocolSelection {
   readonly maxPlayers: number;
   readonly minimumClientVersion: string;
   readonly gameVersion: string;
-  readonly wireCacheSignatureV1?: string | undefined;
+  readonly wireCacheSignature?: string | undefined;
   readonly ritsuLibPresent: boolean;
   readonly capabilityDigest: string;
 }
@@ -45,7 +46,7 @@ export function selectRoomProtocol(hostOffer: ProtocolOffer, policy: ServerProto
         409,
         "ritsulib_not_allowed_in_compat_mode",
         "兼容模式不支持 RitsuLib。",
-        { requiredRitsuLibPresent: false, requiredProtocolProfile: "compat_4_5_v1" },
+        { requiredRitsuLibPresent: false },
       );
     }
   } else {
@@ -78,7 +79,7 @@ export function selectRoomProtocol(hostOffer: ProtocolOffer, policy: ServerProto
     gameVersion: normalizeBoundedUtf8(policy.gameVersion, "gameVersion", 32),
     ...(policy.wireCacheSignatureV1 === undefined
       ? {}
-      : { wireCacheSignatureV1: normalizeSignature(policy.wireCacheSignatureV1) }),
+      : { wireCacheSignature: normalizeSignature(policy.wireCacheSignatureV1) }),
     ritsuLibPresent: hostOffer.ritsuLibPresent,
   } as const;
   return Object.freeze({
@@ -95,7 +96,7 @@ export function assertJoinerCompatible(selection: RoomProtocolSelection, joinerO
         409,
         "ritsulib_not_allowed_in_compat_mode",
         "兼容模式不支持 RitsuLib。",
-        { requiredRitsuLibPresent: false, requiredProtocolProfile: "compat_4_5_v1" },
+        { requiredRitsuLibPresent: false },
       );
     }
     return;
@@ -105,7 +106,7 @@ export function assertJoinerCompatible(selection: RoomProtocolSelection, joinerO
       409,
       "ritsulib_presence_mismatch",
       "加入者与房间的 RitsuLib 安装状态不一致。",
-      { requiredRitsuLibPresent: selection.ritsuLibPresent, requiredProtocolProfile: selection.profile },
+      { requiredRitsuLibPresent: selection.ritsuLibPresent },
     );
   }
   if (joinerOffer.ritsuLibPresent && !joinerOffer.ritsuLibSidecarAvailable) {
@@ -135,7 +136,7 @@ export function computeCapabilityDigest(selection: Omit<RoomProtocolSelection, "
   ]));
   pushLengthPrefixed(bytes, selection.minimumClientVersion, 32, "minimumClientVersion");
   pushLengthPrefixed(bytes, selection.gameVersion, 32, "gameVersion");
-  pushLengthPrefixed(bytes, selection.wireCacheSignatureV1 ?? "", 64, "wireCacheSignatureV1", "ascii");
+  pushLengthPrefixed(bytes, selection.wireCacheSignature ?? "", 64, "wireCacheSignature", "ascii");
   bytes.push(Buffer.from([selection.ritsuLibPresent ? 1 : 0]));
   return createHash("sha256").update(Buffer.concat(bytes)).digest("hex");
 }
@@ -145,13 +146,20 @@ export function parseProtocolOffer(value: unknown): ProtocolOffer {
     throw new TypeError("protocolOffer 必须是对象。");
   }
   const candidate = value as Record<string, unknown>;
-  const allowed = new Set(["lanProtocolMin", "lanProtocolMax", "ritsuLibPresent", "ritsuLibSidecarAvailable"]);
+  const allowed = new Set([
+    "lanProtocolMin",
+    "lanProtocolMax",
+    "clientVersion",
+    "ritsuLibPresent",
+    "ritsuLibSidecarAvailable",
+  ]);
   if (Object.keys(candidate).some((key) => !allowed.has(key))) {
     throw new TypeError("protocolOffer 包含不支持的字段。");
   }
   const offer: ProtocolOffer = {
     lanProtocolMin: requireUint16(candidate.lanProtocolMin, "lanProtocolMin"),
     lanProtocolMax: requireUint16(candidate.lanProtocolMax, "lanProtocolMax"),
+    clientVersion: normalizeBoundedUtf8(requireString(candidate.clientVersion, "clientVersion"), "clientVersion", 32),
     ritsuLibPresent: requireBoolean(candidate.ritsuLibPresent, "ritsuLibPresent"),
     ritsuLibSidecarAvailable: requireBoolean(candidate.ritsuLibSidecarAvailable, "ritsuLibSidecarAvailable"),
   };
@@ -162,6 +170,7 @@ export function parseProtocolOffer(value: unknown): ProtocolOffer {
 function validateOffer(offer: ProtocolOffer): void {
   requireUint16(offer.lanProtocolMin, "lanProtocolMin");
   requireUint16(offer.lanProtocolMax, "lanProtocolMax");
+  normalizeBoundedUtf8(offer.clientVersion, "clientVersion", 32);
   if (offer.lanProtocolMin > offer.lanProtocolMax) throw new TypeError("LAN 协议范围无效。");
   if (!offer.ritsuLibPresent && offer.ritsuLibSidecarAvailable) {
     throw new TypeError("未安装 RitsuLib 时不能声明 sidecar 可用。");
@@ -179,8 +188,12 @@ function validatePolicy(policy: ServerProtocolPolicy): void {
 function sidecarUnavailable(requiredPresence: boolean): ProtocolContractError {
   return new ProtocolContractError(409, "ritsulib_sidecar_unavailable", "RitsuLib 已安装，但公开 sidecar 当前不可用。", {
     requiredRitsuLibPresent: requiredPresence,
-    requiredProtocolProfile: "tail_v1",
   });
+}
+
+function requireString(value: unknown, name: string): string {
+  if (typeof value !== "string") throw new TypeError(`${name} 必须是字符串。`);
+  return value;
 }
 
 function requireUint16(value: unknown, name: string): number {
@@ -202,7 +215,7 @@ function pushLengthPrefixed(
   name: string,
   encoding: BufferEncoding = "utf8",
 ): void {
-  const normalized = name === "wireCacheSignatureV1" ? value.toLowerCase() : normalizeBoundedUtf8(value, name, maxBytes);
+  const normalized = name === "wireCacheSignature" ? value.toLowerCase() : normalizeBoundedUtf8(value, name, maxBytes);
   const encoded = Buffer.from(normalized, encoding);
   if (encoded.length > maxBytes) throw new TypeError(`${name} 超过 ${maxBytes} bytes。`);
   output.push(Buffer.from([encoded.length]), encoded);

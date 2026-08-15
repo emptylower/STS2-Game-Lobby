@@ -583,11 +583,9 @@ export class LobbyStore {
       canonicalProfile: joinerGeneration === "canonical_0_6_plus" ? room.protocolProfileV2 : undefined,
     }));
     if (joinerProfile !== room.protocolProfileV2) {
-      throw new LobbyStoreError(409, "protocol_profile_unsupported", "加入者不支持房间冻结的多人协议。", {
-        requiredProtocolProfile: room.protocolProfileV2,
-      });
+      throw new LobbyStoreError(409, "protocol_profile_unsupported", "加入者不支持房间冻结的多人协议。");
     }
-    const joinerOffer = this.resolveOffer(joinerGeneration, input.protocolOffer);
+    const joinerOffer = this.resolveOffer(joinerGeneration, joinerVersion, input.protocolOffer);
     this.runProtocolValidation(() => assertJoinerCompatible(room.protocolSelection, joinerOffer));
     if (joinerVersion.length === 0) {
       throw new LobbyStoreError(426, "client_update_required", "客户端版本无效。");
@@ -809,9 +807,7 @@ export class LobbyStore {
 
     if (ticket.protocolProfileV2 === "tail_v1") {
       if (clientVersion !== ticket.clientVersion || capabilityDigest !== ticket.joinerCapabilityDigest) {
-        throw new LobbyStoreError(409, "capability_digest_mismatch", "控制通道协议能力与加入票据不一致。", {
-          requiredProtocolProfile: ticket.protocolProfileV2,
-        });
+        throw new LobbyStoreError(409, "capability_digest_mismatch", "控制通道协议能力与加入票据不一致。");
       }
     }
 
@@ -1186,7 +1182,7 @@ export class LobbyStore {
         legacyProfile: input.protocolProfile,
         canonicalProfile: input.protocolProfileV2,
       });
-      const offer = this.resolveOffer(generation, input.protocolOffer);
+      const offer = this.resolveOffer(generation, clientVersion, input.protocolOffer);
       const selection = selectRoomProtocol(offer, {
         profile,
         lanProtocolMin: 1,
@@ -1199,14 +1195,24 @@ export class LobbyStore {
     });
   }
 
-  private resolveOffer(generation: ClientApiGeneration, offer?: ProtocolOffer): ProtocolOffer {
+  private resolveOffer(
+    generation: ClientApiGeneration,
+    clientVersion: string,
+    offer?: ProtocolOffer,
+  ): ProtocolOffer {
     if (offer !== undefined) {
+      if (offer.clientVersion !== clientVersion) {
+        throw new LobbyStoreError(400, "protocol_profile_unsupported", "protocolOffer.clientVersion 与请求客户端版本不一致。", {
+          requiredClientVersion: clientVersion,
+        });
+      }
       return offer;
     }
     if (generation === "compat_0_3_0_5") {
       return Object.freeze({
         lanProtocolMin: 0,
         lanProtocolMax: 0,
+        clientVersion,
         ritsuLibPresent: false,
         ritsuLibSidecarAvailable: false,
       });
@@ -1231,9 +1237,7 @@ export class LobbyStore {
   private assertControlProtocol(room: Room, clientVersion?: string, capabilityDigest?: string): void {
     if (room.protocolProfileV2 !== "tail_v1") return;
     if (clientVersion !== room.clientVersion || capabilityDigest !== room.protocolSelection.capabilityDigest) {
-      throw new LobbyStoreError(409, "capability_digest_mismatch", "控制通道协议能力与房间不一致。", {
-        requiredProtocolProfile: room.protocolProfileV2,
-      });
+      throw new LobbyStoreError(409, "capability_digest_mismatch", "控制通道协议能力与房间不一致。");
     }
   }
 

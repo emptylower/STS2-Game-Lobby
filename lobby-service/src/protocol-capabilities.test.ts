@@ -7,6 +7,7 @@ const hasCode = (code: string) => (error: unknown) => Boolean(error && typeof er
 const offer = (ritsuLibPresent: boolean, sidecar = ritsuLibPresent) => ({
   lanProtocolMin: 1,
   lanProtocolMax: 1,
+  clientVersion: "0.6.0-alpha.1",
   ritsuLibPresent,
   ritsuLibSidecarAvailable: sidecar,
 });
@@ -47,6 +48,7 @@ test("strictly parses bounded capability offers", () => {
   assert.deepEqual(parseProtocolOffer(offer(false)), offer(false));
   assert.throws(() => parseProtocolOffer({ ...offer(false), unexpected: true }));
   assert.throws(() => parseProtocolOffer({ ...offer(false), ritsuLibSidecarAvailable: true }));
+  assert.throws(() => parseProtocolOffer({ ...offer(false), clientVersion: "" }));
 });
 
 test("matches reviewed capability digest vectors", () => {

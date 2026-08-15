@@ -239,6 +239,7 @@ function tailCreateInput(ritsuLibPresent: boolean, ritsuLibSidecarAvailable = ri
     protocolOffer: {
       lanProtocolMin: 1,
       lanProtocolMax: 1,
+      clientVersion: "0.6.0-alpha.1",
       ritsuLibPresent,
       ritsuLibSidecarAvailable,
     },
@@ -256,6 +257,7 @@ function tailJoinInput(ritsuLibPresent: boolean, ritsuLibSidecarAvailable = rits
     protocolOffer: {
       lanProtocolMin: 1,
       lanProtocolMax: 1,
+      clientVersion: "0.6.0-alpha.1",
       ritsuLibPresent,
       ritsuLibSidecarAvailable,
     },

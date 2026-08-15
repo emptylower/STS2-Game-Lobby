@@ -4,7 +4,13 @@ import { selectRoomProtocol } from "./protocol-capabilities.js";
 import { toRoomApiView, toUnversionedRoomApiView } from "./room-api-view.js";
 
 const selection = selectRoomProtocol(
-  { lanProtocolMin: 0, lanProtocolMax: 0, ritsuLibPresent: false, ritsuLibSidecarAvailable: false },
+  {
+    lanProtocolMin: 0,
+    lanProtocolMax: 0,
+    clientVersion: "0.5.5",
+    ritsuLibPresent: false,
+    ritsuLibSidecarAvailable: false,
+  },
   { profile: "compat_4_5_v1", lanProtocolMin: 1, lanProtocolMax: 1, maxPlayers: 8, gameVersion: "0.110.1" },
 );
 const room = { roomId: "room", protocolProfileV2: "compat_4_5_v1" as const, protocolSelection: selection };
