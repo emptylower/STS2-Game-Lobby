@@ -232,6 +232,11 @@ const ReservedRelayedIdentityFields = [
   "bindingId",
   "controlBindingId",
   "identityKind",
+  "clientVersion",
+  "protocolProfileV2",
+  "protocolSelection",
+  "capabilityDigest",
+  "protocolFlowNonce",
 ] as const;
 
 export function sanitizeRelayedControlEnvelope(

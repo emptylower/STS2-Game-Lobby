@@ -136,6 +136,11 @@ test("relayed control envelopes strip reserved identity fields", () => {
     bindingId: "attacker-binding",
     controlBindingId: "attacker-control-binding",
     identityKind: "installation",
+    clientVersion: "attacker-version",
+    protocolProfileV2: "attacker-profile",
+    protocolSelection: { carrier: "attacker-carrier" },
+    capabilityDigest: "attacker-digest",
+    protocolFlowNonce: "attacker-nonce",
   });
 
   assert.deepEqual(relayed, {
