@@ -6,20 +6,20 @@ namespace Sts2LanConnect.Scripts;
 
 internal static class LanConnectRitsuLibLobbyCompatibility
 {
-    private static bool _loggedDisabled;
+    private static bool _loggedPublicCarrier;
 
     internal static void Apply(Harmony harmony)
     {
         ArgumentNullException.ThrowIfNull(harmony);
-        if (_loggedDisabled)
+        if (_loggedPublicCarrier)
         {
             return;
         }
 
-        _loggedDisabled = true;
+        _loggedPublicCarrier = true;
         Log.Info(
-            "sts2_lan_connect ritsulib_compatibility: disabled in v0.6 alpha; " +
-            "Ritsu Tail rooms remain fail-closed until the public sidecar carrier gate passes.");
+            "sts2_lan_connect ritsulib_compatibility: public typed sidecar carrier enabled; " +
+            "registration is resolved lazily when RitsuLib is present.");
     }
 
     internal static void TrackLobbyNetService(INetGameService netService) =>
