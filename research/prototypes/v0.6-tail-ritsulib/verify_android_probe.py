@@ -1,145 +1,38 @@
 #!/usr/bin/env python3
-"""Validate the four real-process Android feasibility markers."""
-
-from __future__ import annotations
-
-import hashlib
-import json
-import pathlib
-import sys
-from typing import Any
-
-
-PREFIX = "STS2_LAN_V06_ANDROID_PROBE "
-TAIL_SHA256 = "cfc9097350801026775fd333fb19c6758becbffd4142f58bab0884f4231f5cfa"
-
-
-def fail(message: str) -> None:
-    raise ValueError(message)
-
-
-def marker_from_log(path: pathlib.Path) -> dict[str, Any]:
-    candidates: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if PREFIX not in line:
-            continue
-        payload = line.split(PREFIX, 1)[1].strip()
-        try:
-            value = json.loads(payload)
-        except json.JSONDecodeError as error:
-            fail(f"{path}: malformed marker: {error}")
-        if not isinstance(value, dict):
-            fail(f"{path}: marker must be an object")
-        candidates.append(value)
-    if len(candidates) != 1:
-        fail(f"{path}: expected exactly one terminal marker, found {len(candidates)}")
-    return candidates[0]
-
-
-def require(value: dict[str, Any], name: str, expected_type: type) -> Any:
-    item = value.get(name)
-    if type(item) is not expected_type:
-        fail(f"{name}: expected {expected_type.__name__}, got {item!r}")
-    return item
-
-
-def require_ritsu(marker: dict[str, Any], expected_present: bool) -> None:
-    if require(marker, "ritsuPresent", bool) is not expected_present:
-        fail(f"ritsuPresent does not match the process configuration: {marker!r}")
-    owners = require(marker, "ritsuPatchOwners", list)
-    for owner in owners:
-        if not isinstance(owner, str):
-            fail("ritsuPatchOwners must contain strings")
-    if expected_present:
-        if marker.get("ritsuManifestId") != "STS2-RitsuLib":
-            fail("with-Ritsu marker does not report manifest id STS2-RitsuLib")
-        for field in ("ritsuManifestVersion", "ritsuSelectedAssembly"):
-            if not isinstance(marker.get(field), str) or not marker[field]:
-                fail(f"with-Ritsu marker is missing {field}")
-        if not marker["ritsuSelectedAssembly"].startswith("lib/"):
-            fail("with-Ritsu marker selected assembly is not inside lib/")
-        if not owners:
-            fail("with-Ritsu marker has no loaded Harmony owner/target evidence")
-    elif marker.get("ritsuManifestId") is not None or marker.get("ritsuManifestVersion") is not None:
-        fail("without-Ritsu marker reports a Ritsu manifest")
-
-
-def require_common(marker: dict[str, Any], phase: str, ritsu_present: bool) -> None:
-    if marker.get("phase") != phase or marker.get("passed") is not True:
-        fail(f"expected successful {phase} marker")
-    require(marker, "sts2Version", str)
-    if not marker["sts2Version"]:
-        fail("sts2Version is empty")
-    if require(marker, "containsOpenGeneric", bool):
-        fail("probe reported an open generic Harmony target")
-    if require(marker, "invalidProgram", bool):
-        fail("probe reported InvalidProgramException")
-    require_ritsu(marker, ritsu_present)
-
-
-def require_encode(marker: dict[str, Any], ritsu_present: bool) -> None:
-    require_common(marker, "encode", ritsu_present)
-    for field in ("fixtureSha256", "lanTailSha256"):
-        value = require(marker, field, str)
-        if len(value) != 64:
-            fail(f"{field} is not a sha256")
-    if require(marker, "fixtureLength", int) < 36:
-        fail("fixture is shorter than the frozen LAN Tail")
-    if marker["lanTailSha256"] != TAIL_SHA256:
-        fail("encode marker LAN Tail hash drifted")
-    for field in ("lanEndBit", "ritsuStartBit"):
-        if require(marker, field, int) != 288:
-            fail(f"encode {field} drifted from 288")
-    if not ritsu_present and (marker["fixtureLength"] != 36 or marker["fixtureSha256"] != TAIL_SHA256):
-        fail("without-Ritsu encode fixture is not exactly the frozen LAN Tail")
-
-
-def require_decode(marker: dict[str, Any], ritsu_present: bool) -> set[bool]:
-    require_common(marker, "decode", ritsu_present)
-    results = require(marker, "results", list)
-    if len(results) != 2:
-        fail("each decode process must report exactly two sender fixtures")
-    seen: set[bool] = set()
-    for result in results:
-        if not isinstance(result, dict):
-            fail("decode result is not an object")
-        sender = require(result, "senderRitsu", bool)
-        if sender in seen:
-            fail("duplicate senderRitsu result in decode marker")
-        seen.add(sender)
-        if require(result, "messageOk", bool) is not True:
-            fail("decode result messageOk is false")
-        if require(result, "lanTailSha256", str) != TAIL_SHA256:
-            fail("decode result LAN Tail hash drifted")
-        for field in ("lanEndBit", "ritsuStartBit"):
-            if require(result, field, int) != 288:
-                fail(f"decode result {field} drifted from 288")
-    return seen
-
-
-def main() -> int:
-    if len(sys.argv) != 5:
-        print("usage: verify_android_probe.py <encode-no> <encode-with> <decode-no> <decode-with>", file=sys.stderr)
-        return 2
-    try:
-        markers = [marker_from_log(pathlib.Path(argument)) for argument in sys.argv[1:]]
-        require_encode(markers[0], False)
-        require_encode(markers[1], True)
-        if require_decode(markers[2], False) != {False, True}:
-            fail("without-Ritsu receiver did not decode both senders")
-        if require_decode(markers[3], True) != {False, True}:
-            fail("with-Ritsu receiver did not decode both senders")
-        if len({marker["sts2Version"] for marker in markers}) != 1:
-            fail("STS2 version differs across Android probe processes")
-        with_ritsu = [markers[1], markers[3]]
-        if len({marker["ritsuManifestVersion"] for marker in with_ritsu}) != 1:
-            fail("Ritsu manifest version differs across with-Ritsu processes")
-        print("PASS: four Android probe markers validated")
-    except (OSError, ValueError) as error:
-        print(f"BLOCKED: {error}", file=sys.stderr)
-        return 1
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+"""Reject stale or incomplete standalone/typed-sidecar Android evidence."""
+import json, pathlib, sys
+P = "STS2_LAN_V06_ANDROID_PROBE "
+H = "cfc9097350801026775fd333fb19c6758becbffd4142f58bab0884f4231f5cfa"
+def marker(path):
+    values=[]
+    for line in pathlib.Path(path).read_text(errors="replace").splitlines():
+        if P in line: values.append(json.loads(line.split(P,1)[1].strip()))
+    if len(values)!=1: raise ValueError(f"{path}: expected one terminal marker, found {len(values)}")
+    return values[0]
+def req(value,key,typ):
+    if type(value.get(key)) is not typ: raise ValueError(f"{key}: missing/wrong type")
+    return value[key]
+def main():
+    if len(sys.argv)!=6: raise ValueError("usage: verifier standalone android-host desktop-host android-client desktop-client")
+    values=[marker(path) for path in sys.argv[1:]]
+    standalone=values[0]
+    if standalone.get("phase")!="standalone" or standalone.get("carrier")!="standalone_tail_v1": raise ValueError("standalone carrier mismatch")
+    for key in ("passed","alignmentPaddingWasZero"):
+        if req(standalone,key,bool) is not True: raise ValueError(f"standalone {key} false")
+    if req(standalone,"containerSha256",str)!=H or req(standalone,"containerLength",int)!=36: raise ValueError("standalone fixture drift")
+    nonces=set()
+    for value in values[1:]:
+        if value.get("phase")!="sidecar" or value.get("carrier")!="ritsulib_sidecar_v1": raise ValueError("sidecar carrier mismatch")
+        if req(value,"ritsuPresent",bool) is not True or req(value,"passed",bool) is not True: raise ValueError("sidecar not initialized/passed")
+        nonce=req(value,"flowNonce",str)
+        if not nonce: raise ValueError("empty flow nonce")
+        nonces.add(nonce)
+        if req(value,"containerSha256",str)!=H or req(value,"containerLength",int)!=36: raise ValueError("sidecar fixture drift")
+        for key in ("trustedTicketHintBootstrappedReachability","sidecarReachableBeforeFirstLanFlow","handlerBlockedUntilPairValidated","vanillaBytesMatchFixture","hintClearedOnTeardown","reusedPeerIdStartsUnknown"):
+            if req(value,key,bool) is not True: raise ValueError(f"{key} false")
+        if req(value,"standaloneTailPresent",bool) is not False: raise ValueError("standalone tail leaked into sidecar")
+    if len(nonces)!=2: raise ValueError("sidecar endpoint logs do not form two unique pairs")
+    print("PASS: fresh Android standalone and two typed-sidecar pairs validated")
+if __name__=="__main__":
+    try: main()
+    except (OSError,ValueError,json.JSONDecodeError) as e: print(f"BLOCKED: {e}",file=sys.stderr); sys.exit(1)

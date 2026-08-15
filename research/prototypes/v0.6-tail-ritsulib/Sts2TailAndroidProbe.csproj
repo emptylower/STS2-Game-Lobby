@@ -15,6 +15,7 @@
     <Compile Remove="PublicRitsuContract.cs" />
     <Compile Remove="RitsuInteropHarness.cs" />
     <Compile Remove="RitsuInteropMatrixTests.cs" />
+    <Compile Remove="SidecarCarrierProbe.cs" />
   </ItemGroup>
   <Target Name="StageAndroidProbe" AfterTargets="Build" Condition="'$(BuildAndroidProbe)' == 'true'">
     <PropertyGroup>

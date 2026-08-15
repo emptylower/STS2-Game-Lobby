@@ -5,114 +5,37 @@ using System.Reflection;
 
 namespace Sts2TailPrototype;
 
-internal sealed record PublicRitsuContract(
-    bool CanEnumerateAllNetworkExtensions,
-    bool CanClassifyCriticality,
-    bool CanCoordinateTailOrder,
-    IReadOnlyList<string> ReferencedMembers)
+internal sealed record PublicRitsuContract(bool HasTypedRequiredDescriptor, bool HasDirectNetServiceSend, bool HasPublicReachabilityHint, bool HasSessionReachability, IReadOnlyList<string> ReferencedMembers)
 {
     internal static PublicRitsuContract Load(Assembly assembly)
     {
         Type[] publicTypes = assembly.GetExportedTypes();
-        string[] publicMembers = publicTypes
-            .SelectMany(type => type.GetMembers(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance))
-            .Select(member => $"{member.DeclaringType?.FullName}.{member.Name}")
-            .OrderBy(value => value, StringComparer.Ordinal)
-            .ToArray();
-
+        string[] publicMembers = publicTypes.SelectMany(type => type.GetMembers(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)).Select(member => $"{member.DeclaringType?.FullName}.{member.Name}").OrderBy(value => value, StringComparer.Ordinal).ToArray();
         return PublicContractRules.Evaluate(publicTypes, publicMembers);
     }
 }
 
 internal static class PublicContractRules
 {
-    private const string MessageExtensionsNamespace = "STS2RitsuLib.Networking.MessageExtensions";
-    private const string TailExtensionsTypeName =
-        MessageExtensionsNamespace + ".RitsuNetMessageTailExtensions";
+    private const string SidecarNamespace = "STS2RitsuLib.Networking.Sidecar";
+    private const string TypedRegistry = SidecarNamespace + ".RitsuLibSidecarTypedMessageRegistry";
+    private const string SessionManager = SidecarNamespace + ".RitsuLibSidecarSessionManager";
+    private const string NetService = "MegaCrit.Sts2.Core.Multiplayer.Game.INetGameService";
 
     internal static PublicRitsuContract Evaluate(Type[] publicTypes, IReadOnlyList<string> publicMembers)
     {
         ArgumentNullException.ThrowIfNull(publicTypes);
         ArgumentNullException.ThrowIfNull(publicMembers);
-
-        // Tail-order/cursor coordination: the public RitsuNetMessageTailExtensions
-        // Write/Read contract hands the caller-owned PacketWriter/PacketReader cursor to
-        // RitsuLib immediately after the vanilla body, and RegisterBytes performs a real
-        // registration. RitsuInteropMatrixTests invokes all three members against real
-        // registrations in every install combination.
-        bool canCoordinateTailOrder =
-            publicMembers.Contains(TailExtensionsTypeName + ".RegisterBytes", StringComparer.Ordinal) &&
-            publicMembers.Contains(TailExtensionsTypeName + ".Write", StringComparer.Ordinal) &&
-            publicMembers.Contains(TailExtensionsTypeName + ".Read", StringComparer.Ordinal);
-
-        // Complete network-extension inventory requires a named, exported accessor for
-        // registrations. An arbitrary enumerable is not evidence that the full mutable
-        // extension set is available to callers.
-        bool canEnumerateAllNetworkExtensions = publicTypes
-            .Where(type => type.Namespace == MessageExtensionsNamespace)
-            .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)
-                .Cast<MemberInfo>()
-                .Concat(type.GetProperties(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)))
-            .Any(IsNamedRegistrationInventory);
-
-        // Critical classification requires a criticality indicator exposed on the public
-        // network-extension registration surface. A string match on an unrelated public
-        // type is insufficient: it must be exposed by the registration descriptor or its
-        // registration method.
-        bool canClassifyCriticality = publicTypes
-            .Where(type => type.Namespace == MessageExtensionsNamespace)
-            .Where(type => type.Name.Contains("Extension", StringComparison.Ordinal))
-            .SelectMany(type => type.GetMembers(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance))
-            .SelectMany(ExpandCriticalityIndicators)
-            .Any(indicator => indicator);
-
-        return new PublicRitsuContract(
-            CanEnumerateAllNetworkExtensions: canEnumerateAllNetworkExtensions,
-            CanClassifyCriticality: canClassifyCriticality,
-            CanCoordinateTailOrder: canCoordinateTailOrder,
-            ReferencedMembers: publicMembers);
+        Type? registry = publicTypes.SingleOrDefault(type => type.FullName == TypedRegistry);
+        Type? session = publicTypes.SingleOrDefault(type => type.FullName == SessionManager);
+        bool descriptor = publicTypes.Any(type => type.FullName == SidecarNamespace + ".RitsuLibSidecarMessageDescriptor`1") && HasGenericMethod(registry, "Register", 1);
+        bool directSend = HasMethodWithFirstParameter(registry, "SendToHost", NetService) && HasMethodWithFirstParameter(registry, "SendToPeer", NetService);
+        bool hints = HasMethodWithFirstParameter(session, "SetPeerReachabilityHint", "System.UInt64") && HasMethodWithFirstParameter(session, "ObserveNetService", NetService) && HasMethodWithFirstParameter(session, "CanSendToPeer", "System.UInt64");
+        bool sessionReachability = HasEvent(session, "SessionBound") && HasEvent(session, "SessionUnbound") && HasEvent(session, "PeerReachabilityChanged") && HasGenericMethod(registry, "Subscribe", 1);
+        return new PublicRitsuContract(descriptor, directSend, hints, sessionReachability, publicMembers);
     }
 
-    private static bool IsNamedRegistrationInventory(MemberInfo member)
-    {
-        if (!member.Name.Contains("Registration", StringComparison.Ordinal) &&
-            !member.Name.Contains("Extension", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        Type? returnType = member switch
-        {
-            MethodInfo method => method.ReturnType,
-            PropertyInfo property => property.PropertyType,
-            _ => null,
-        };
-        if (returnType == null || returnType == typeof(string) || returnType == typeof(byte[]))
-        {
-            return false;
-        }
-
-        return returnType != typeof(void) &&
-               typeof(System.Collections.IEnumerable).IsAssignableFrom(returnType) &&
-               (returnType.Name.Contains("Registration", StringComparison.Ordinal) ||
-                returnType.GenericTypeArguments.Any(argument =>
-                    argument.Name.Contains("Registration", StringComparison.Ordinal) ||
-                    argument.Name.Contains("Extension", StringComparison.Ordinal)));
-    }
-
-    private static IEnumerable<bool> ExpandCriticalityIndicators(MemberInfo member)
-    {
-        if (member.Name.Contains("Critical", StringComparison.OrdinalIgnoreCase))
-        {
-            yield return true;
-        }
-
-        if (member is MethodInfo method)
-        {
-            foreach (ParameterInfo parameter in method.GetParameters())
-            {
-                yield return parameter.Name?.Contains("critical", StringComparison.OrdinalIgnoreCase) == true;
-            }
-        }
-    }
+    private static bool HasGenericMethod(Type? type, string name, int genericArity) => type?.GetMethods(BindingFlags.Public | BindingFlags.Static).Any(method => method.Name == name && method.IsGenericMethodDefinition && method.GetGenericArguments().Length == genericArity) == true;
+    private static bool HasMethodWithFirstParameter(Type? type, string name, string firstParameter) => type?.GetMethods(BindingFlags.Public | BindingFlags.Static).Any(method => method.Name == name && method.GetParameters().FirstOrDefault()?.ParameterType.FullName == firstParameter) == true;
+    private static bool HasEvent(Type? type, string name) => type?.GetEvent(name, BindingFlags.Public | BindingFlags.Static) != null;
 }
