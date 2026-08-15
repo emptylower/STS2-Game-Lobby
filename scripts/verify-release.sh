@@ -135,6 +135,9 @@ CLIENT_OUTPUT="$TEMP_ROOT/client output"
 SERVICE_OUTPUT="$TEMP_ROOT/service output"
 
 if [[ "$ARTIFACTS_ONLY" -eq 0 ]]; then
+  [[ -n "${RITSULIB_ASSEMBLY:-}" && -f "$RITSULIB_ASSEMBLY" ]] || \
+    release_die "RITSULIB_ASSEMBLY must point to a real STS2-RitsuLib.dll for the v0.6 release gate"
+
   (
     cd "$ROOT_DIR/lobby-service"
     npm run check
@@ -148,7 +151,8 @@ if [[ "$ARTIFACTS_ONLY" -eq 0 ]]; then
   export DOTNET_BIN
   "$DOTNET_BIN" test "$ROOT_DIR/sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj" -m:1
   "$DOTNET_BIN" test "$ROOT_DIR/sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj" \
-    --settings "$ROOT_DIR/sts2-lan-connect.GdUnitTests/gdunit4.runsettings" -m:1
+    --settings "$ROOT_DIR/sts2-lan-connect.GdUnitTests/gdunit4.runsettings" \
+    -p:RitsuLibAssembly="$RITSULIB_ASSEMBLY" -m:1
 fi
 
 DOTNET_BIN="$(resolve_tool \
