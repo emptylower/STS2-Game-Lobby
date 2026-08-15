@@ -4,6 +4,7 @@ internal enum LanConnectRosterSnapshotUse
 {
     Bootstrap,
     CurrentState,
+    StateTransition,
     MembershipMutation
 }
 
@@ -71,9 +72,10 @@ internal sealed class LanConnectRosterAuthorityState
         {
             if (_current == null)
             {
-                if (use == LanConnectRosterSnapshotUse.MembershipMutation)
+                if (use is LanConnectRosterSnapshotUse.StateTransition
+                    or LanConnectRosterSnapshotUse.MembershipMutation)
                 {
-                    throw Invalid("Mutation snapshots cannot initialize roster authority state.");
+                    throw Invalid("Transition and mutation snapshots cannot initialize roster authority state.");
                 }
 
                 Store(snapshot, candidateBytes);
@@ -101,12 +103,49 @@ internal sealed class LanConnectRosterAuthorityState
                 throw Invalid("A second bootstrap snapshot is not allowed.");
             }
 
+            if (use == LanConnectRosterSnapshotUse.StateTransition)
+            {
+                ValidateSameMembershipAndSlots(snapshot, _current);
+                if (snapshot.RosterRevision == _current.RosterRevision)
+                {
+                    if (!_currentCanonicalBytes!.AsSpan().SequenceEqual(candidateBytes))
+                    {
+                        throw Invalid("An unchanged transition revision must repeat the accepted snapshot byte-for-byte.");
+                    }
+
+                    return;
+                }
+
+                if (snapshot.RosterRevision != checked(_current.RosterRevision + 1))
+                {
+                    throw Invalid("State-transition snapshot revision must increase by exactly one.");
+                }
+
+                Store(snapshot, candidateBytes);
+                return;
+            }
+
             if (snapshot.RosterRevision != checked(_current.RosterRevision + 1))
             {
                 throw Invalid("Mutation snapshot revision must increase by exactly one.");
             }
 
             Store(snapshot, candidateBytes);
+        }
+    }
+
+    private static void ValidateSameMembershipAndSlots(
+        LanConnectRosterSnapshot candidate,
+        LanConnectRosterSnapshot current)
+    {
+        Dictionary<ulong, byte> currentSlots = current.Players.ToDictionary(
+            static player => player.PlayerId,
+            static player => player.RealSlotId);
+        if (candidate.Players.Count != currentSlots.Count
+            || candidate.Players.Any(player => !currentSlots.TryGetValue(player.PlayerId, out byte slot)
+                || slot != player.RealSlotId))
+        {
+            throw Invalid("State-transition snapshot changed roster membership or real slot assignments.");
         }
     }
 

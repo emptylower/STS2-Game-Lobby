@@ -84,6 +84,40 @@ public sealed class LanConnectRosterProjectionTests
     }
 
     [Fact]
+    public void State_transition_accepts_mutable_player_state_but_not_membership_or_slot_changes()
+    {
+        LanConnectRosterAuthorityState state = new(100);
+        LanConnectRosterSnapshot initial = Snapshot() with { AuthorityPeerId = 100, RosterRevision = 4 };
+        state.Accept(100, initial, LanConnectRosterSnapshotUse.Bootstrap);
+
+        LanConnectRosterSnapshot readyState = initial with
+        {
+            RosterRevision = 5,
+            Players = [initial.Players[0], new(22, 7, 8, [0xbb])]
+        };
+        state.Accept(100, readyState, LanConnectRosterSnapshotUse.StateTransition);
+        state.Accept(100, readyState, LanConnectRosterSnapshotUse.StateTransition);
+
+        Assert.Equal(5u, state.Current!.RosterRevision);
+        Assert.Throws<InvalidDataException>(() => state.Accept(
+            100,
+            readyState with
+            {
+                RosterRevision = 6,
+                Players = [readyState.Players[0], new(22, 6, 8, [0xcc])]
+            },
+            LanConnectRosterSnapshotUse.StateTransition));
+        Assert.Throws<InvalidDataException>(() => state.Accept(
+            100,
+            readyState with
+            {
+                RosterRevision = 6,
+                Players = [readyState.Players[0], new(33, 7, 8, [0xcc])]
+            },
+            LanConnectRosterSnapshotUse.StateTransition));
+    }
+
+    [Fact]
     public void Sparse_and_high_real_slots_project_restore_and_track_revision_by_canonical_bytes()
     {
         LanConnectRosterPlayerCarrier[] sparsePlayers =

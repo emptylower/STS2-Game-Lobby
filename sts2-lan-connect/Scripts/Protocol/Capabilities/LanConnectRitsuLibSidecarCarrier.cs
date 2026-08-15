@@ -7,6 +7,8 @@ internal sealed class LanConnectRitsuLibSidecarCarrier
 {
     internal const string ModuleId = "sts2_lan_connect";
     internal const string MessageKey = "protocol_v1";
+    internal const string DeliverySemantics = "StableSync";
+    internal const bool IsRequired = true;
 
     private readonly object _sync = new();
     private RitsuBinding? _binding;
@@ -202,9 +204,9 @@ internal sealed class LanConnectRitsuLibSidecarCarrier
                 typeof(LanConnectRitsuLibSidecarCarrier).GetMethod(
                     nameof(DeserializePayload),
                     BindingFlags.Static | BindingFlags.NonPublic)!);
-            object delivery = Enum.Parse(deliveryType, "StableSync");
+            object delivery = Enum.Parse(deliveryType, DeliverySemantics);
             object descriptor = constructor.Invoke(
-                [ModuleId, MessageKey, serializer, deserializer, delivery, true]);
+                [ModuleId, MessageKey, serializer, deserializer, delivery, IsRequired]);
 
             MethodInfo register = RequireGenericMethod(registry, "Register", 1, 1).MakeGenericMethod(typeof(byte[]));
             MethodInfo subscribe = RequireGenericMethod(registry, "Subscribe", 1, 2).MakeGenericMethod(typeof(byte[]));

@@ -4,6 +4,15 @@ namespace Sts2LanConnect.Tests.Protocol;
 
 public sealed class LanConnectProtocolUiMessagesTests
 {
+    [Fact]
+    public void Ritsu_sidecar_descriptor_contract_is_stable()
+    {
+        Assert.Equal("sts2_lan_connect", LanConnectRitsuLibSidecarCarrier.ModuleId);
+        Assert.Equal("protocol_v1", LanConnectRitsuLibSidecarCarrier.MessageKey);
+        Assert.Equal("StableSync", LanConnectRitsuLibSidecarCarrier.DeliverySemantics);
+        Assert.True(LanConnectRitsuLibSidecarCarrier.IsRequired);
+    }
+
     [Theory]
     [InlineData("client_update_required")]
     [InlineData("protocol_profile_unsupported")]
@@ -88,5 +97,17 @@ public sealed class LanConnectProtocolUiMessagesTests
         Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, ritsuReady, false));
         Assert.False(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(300, ritsuReady, false));
         Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(300, noRitsu, false));
+    }
+
+    [Fact]
+    public void Create_dialog_defaults_to_the_first_protocol_supported_by_the_local_runtime()
+    {
+        LanConnectProtocolOffer noRitsu = new(1, 1, "0.6.0-alpha.1", false, false);
+        LanConnectProtocolOffer ritsuUnavailable = new(1, 1, "0.6.0-alpha.1", true, false);
+        LanConnectProtocolOffer ritsuReady = new(1, 1, "0.6.0-alpha.1", true, true);
+
+        Assert.Equal(300, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(noRitsu, true));
+        Assert.Equal(301, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(ritsuReady, false));
+        Assert.Equal(300, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(ritsuUnavailable, false));
     }
 }

@@ -11,7 +11,7 @@ namespace Sts2LanConnect.GdUnitTests.Lobby;
 public sealed class LanConnectCreateProtocolDialogTests
 {
     [TestCase]
-    public async Task Create_dialog_defaults_to_compat_and_exposes_tail_warning()
+    public async Task Create_dialog_defaults_to_compat_without_Ritsu_and_exposes_tail_warning()
     {
         using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
             new Vector2I(1280, 720),
@@ -22,7 +22,7 @@ public sealed class LanConnectCreateProtocolDialogTests
 
         AssertThat(fixture.Overlay.SelectedCreateProtocolIdForTests).IsEqual(300);
         AssertThat(fixture.Overlay.CreateProtocolOptionLabelsForTests())
-            .Contains("兼容旧版客户端（默认）")
+            .Contains("兼容旧版客户端")
             .Contains("0.6 新协议（RitsuLib 状态必须一致）");
         AssertThat(fixture.Overlay.CreateProtocolOptionDisabledStatesForTests())
             .IsEqual(new[] { false, false });

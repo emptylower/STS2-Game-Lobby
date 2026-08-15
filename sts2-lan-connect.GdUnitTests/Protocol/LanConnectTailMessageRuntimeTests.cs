@@ -182,6 +182,65 @@ public sealed class LanConnectTailMessageRuntimeTests
     }
 
     [TestCase]
+    public void Begin_run_accepts_the_next_revision_when_ready_state_changes()
+    {
+        InitializeSts2Serialization();
+        using RuntimePair pair = new();
+        List<StartRunLobbyPlayer> waitingPlayers = StartRunPlayers([0, 1]);
+        for (int index = 0; index < waitingPlayers.Count; index++)
+        {
+            StartRunLobbyPlayer player = waitingPlayers[index];
+            player.isReady = false;
+            waitingPlayers[index] = player;
+        }
+
+        LanConnectPreparedTailMessage joined = pair.Runtime.PrepareOutgoing(
+            pair.HostBus,
+            LanConnectSidecarMessageKind.LobbyJoinResponse,
+            pair.HostId,
+            new ClientLobbyJoinResponseMessage { playersInLobby = waitingPlayers, modifiers = [] },
+            pair.Selection);
+        INetMessage joinedBox = (INetMessage)joined.Message;
+        pair.Runtime.ValidateStandaloneIncoming(
+            pair.ClientBus,
+            LanConnectSidecarMessageKind.LobbyJoinResponse,
+            pair.HostId,
+            joinedBox,
+            joined.Container,
+            pair.Selection);
+
+        List<StartRunLobbyPlayer> readyPlayers = StartRunPlayers([0, 1]);
+        LanConnectPreparedTailMessage begin = pair.Runtime.PrepareOutgoing(
+            pair.HostBus,
+            LanConnectSidecarMessageKind.LobbyBeginRun,
+            pair.HostId,
+            new LobbyBeginRunMessage
+            {
+                playersInLobby = readyPlayers,
+                seed = "seed",
+                modifiers = [],
+                act1 = "act"
+            },
+            pair.Selection);
+        LanConnectRosterSnapshot beginRoster = DecodeRoster(
+            LanConnectSidecarMessageKind.LobbyBeginRun,
+            begin.Container,
+            pair);
+        AssertThat(beginRoster.RosterRevision).IsEqual(2u);
+
+        INetMessage beginBox = (INetMessage)begin.Message;
+        pair.Runtime.ValidateStandaloneIncoming(
+            pair.ClientBus,
+            LanConnectSidecarMessageKind.LobbyBeginRun,
+            pair.HostId,
+            beginBox,
+            begin.Container,
+            pair.Selection);
+        LobbyBeginRunMessage restored = (LobbyBeginRunMessage)beginBox;
+        AssertThat(restored.playersInLobby!.All(static player => player.isReady)).IsTrue();
+    }
+
+    [TestCase]
     public void Load_join_restores_the_current_roster_slots()
     {
         InitializeSts2Serialization();
@@ -305,6 +364,50 @@ public sealed class LanConnectTailMessageRuntimeTests
         AssertThat(failure != null).IsTrue();
         AssertThat(failure!.Failure.Code).IsEqual("ritsulib_sidecar_unavailable");
         AssertThat(pair.HostTransport.SentToClients.Count).IsEqual(0);
+    }
+
+    [TestCase]
+    public void Ritsu_broadcast_disconnects_all_recipients_when_a_later_send_fails()
+    {
+        _ = LoadOfficialRitsuAssembly();
+        InitializeSts2Serialization();
+        LanConnectRitsuLibSidecarCarrier.Shared.ResetForTesting();
+        using RuntimePair pair = new(ritsu: true);
+        const ulong secondPeerId = 23;
+        byte[] secondNonce = Enumerable.Repeat((byte)0x22, LanConnectSidecarFrameCodec.FlowNonceBytes).ToArray();
+        pair.Runtime.BindHostTrustedSidecarFlow(pair.Host, secondPeerId, secondNonce);
+        LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(pair.Host);
+        LanConnectRitsuLibSidecarCarrier.Shared.SetPeerSupported(pair.ClientId);
+        LanConnectRitsuLibSidecarCarrier.Shared.SetPeerSupported(secondPeerId);
+        pair.HostTransport.ThrowForPeerId = secondPeerId;
+        byte[] container = LanConnectTailCodec.Encode(1, []);
+
+        LanConnectProtocolException? failure = null;
+        using (LanConnectTailMessageRuntime.PushOutgoingSidecarRecipientsForCurrentThread(
+                   [pair.ClientId, secondPeerId]))
+        {
+            try
+            {
+                pair.Runtime.SubmitSidecarBeforeVanilla(
+                    pair.HostBus,
+                    LanConnectSidecarMessageKind.PlayerJoined,
+                    pair.HostId,
+                    new object(),
+                    container,
+                    pair.Selection);
+            }
+            catch (LanConnectProtocolException exception)
+            {
+                failure = exception;
+            }
+        }
+
+        AssertThat(failure != null).IsTrue();
+        AssertThat(failure!.Failure.Code).IsEqual("ritsulib_sidecar_unavailable");
+        AssertThat(pair.HostTransport.SentToClients.Select(static packet => packet.PeerId).ToArray())
+            .IsEqual(new[] { pair.ClientId });
+        AssertThat(pair.HostTransport.DisconnectedPeers.OrderBy(static peerId => peerId).ToArray())
+            .IsEqual(new[] { pair.ClientId, secondPeerId });
     }
 
     [TestCase]
@@ -695,6 +798,7 @@ public sealed class LanConnectTailMessageRuntimeTests
     {
         internal List<CapturedPacket> SentToClients { get; } = [];
         internal List<ulong> DisconnectedPeers { get; } = [];
+        internal ulong? ThrowForPeerId { get; set; }
         public override IEnumerable<ulong> ConnectedPeerIds => [RuntimePair.DefaultClientId];
         public override bool IsConnected => true;
         public override ulong NetId { get; } = netId;
@@ -705,8 +809,15 @@ public sealed class LanConnectTailMessageRuntimeTests
             byte[] bytes,
             int length,
             NetTransferMode mode,
-            int channel = 0) =>
+            int channel = 0)
+        {
+            if (peerId == ThrowForPeerId)
+            {
+                throw new IOException("Injected sidecar send failure.");
+            }
+
             SentToClients.Add(new CapturedPacket(peerId, bytes.AsSpan(0, length).ToArray()));
+        }
         public override void SendMessageToAll(
             byte[] bytes,
             int length,

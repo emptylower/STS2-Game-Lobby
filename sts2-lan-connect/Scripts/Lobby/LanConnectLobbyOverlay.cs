@@ -532,7 +532,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _roomNameInput.Text = GetSuggestedRoomName();
         _roomTypeOption.Select(0);
-        SelectOptionById(_protocolProfileOption, CreateProtocolCompatId);
+        SelectDefaultCreateProtocol();
         RefreshProtocolProfileOptionAvailability();
         _roomPasswordInput.Text = string.Empty;
         if (_maxPlayersSpinBox != null)
@@ -2842,7 +2842,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             FitToLongestItem = false
         };
-        _protocolProfileOption.AddItem(UiText("兼容旧版客户端（默认）"), CreateProtocolCompatId);
+        _protocolProfileOption.AddItem(UiText("兼容旧版客户端"), CreateProtocolCompatId);
         _protocolProfileOption.AddItem(UiText("0.6 新协议（RitsuLib 状态必须一致）"), CreateProtocolTailId);
         _protocolProfileOption.Select(0);
         _protocolProfileOption.Connect(
@@ -4464,7 +4464,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             ? GetSuggestedRoomName()
             : LanConnectConfig.LastRoomName;
         _roomTypeOption.Select(0);
-        SelectOptionById(_protocolProfileOption, CreateProtocolCompatId);
+        SelectDefaultCreateProtocol();
         RefreshProtocolProfileOptionAvailability();
         _roomPasswordInput.Text = string.Empty;
         if (_maxPlayersSpinBox != null)
@@ -5960,7 +5960,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         int selected = GetSelectedCreateProtocolId();
         if (!IsCreateProtocolSelectable(selected, offer, standaloneTailRuntimeAvailable))
         {
-            SelectOptionById(_protocolProfileOption, CreateProtocolCompatId);
+            SelectOptionById(
+                _protocolProfileOption,
+                GetDefaultCreateProtocolId(offer, standaloneTailRuntimeAvailable));
         }
 
         UpdateProtocolProfileHint();
@@ -6020,6 +6022,33 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return offer.RitsuLibPresent
             ? offer.RitsuLibSidecarAvailable
             : standaloneTailRuntimeAvailable;
+    }
+
+    private void SelectDefaultCreateProtocol()
+    {
+        LanConnectProtocolOffer offer = LanConnectProtocolOffer.CreateCurrent();
+        SelectOptionById(
+            _protocolProfileOption,
+            GetDefaultCreateProtocolId(offer, IsStandaloneTailRuntimeAvailable()));
+    }
+
+    internal static int GetDefaultCreateProtocolIdForTests(
+        LanConnectProtocolOffer offer,
+        bool standaloneTailRuntimeAvailable) =>
+        GetDefaultCreateProtocolId(offer, standaloneTailRuntimeAvailable);
+
+    private static int GetDefaultCreateProtocolId(
+        LanConnectProtocolOffer offer,
+        bool standaloneTailRuntimeAvailable)
+    {
+        if (IsCreateProtocolSelectable(CreateProtocolCompatId, offer, standaloneTailRuntimeAvailable))
+        {
+            return CreateProtocolCompatId;
+        }
+
+        return IsCreateProtocolSelectable(CreateProtocolTailId, offer, standaloneTailRuntimeAvailable)
+            ? CreateProtocolTailId
+            : CreateProtocolCompatId;
     }
 
     private static bool IsStandaloneTailRuntimeAvailable() =>

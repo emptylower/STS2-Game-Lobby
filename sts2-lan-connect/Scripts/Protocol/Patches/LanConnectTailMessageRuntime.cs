@@ -226,20 +226,55 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             })
             .ToArray();
 
-        foreach ((ulong recipientPeerId, _, byte[] encoded) in submissions)
+        List<SidecarFlow> deliveredFlows = [];
+        foreach ((ulong recipientPeerId, SidecarFlow flow, byte[] encoded) in submissions)
         {
-            bool sent = binding.IsHost
-                ? LanConnectRitsuLibSidecarCarrier.Shared.SendToPeer(binding.Service, recipientPeerId, encoded)
-                : LanConnectRitsuLibSidecarCarrier.Shared.SendToHost(binding.Service, encoded);
-            if (!sent)
+            bool sent;
+            try
             {
+                sent = binding.IsHost
+                    ? LanConnectRitsuLibSidecarCarrier.Shared.SendToPeer(binding.Service, recipientPeerId, encoded)
+                    : LanConnectRitsuLibSidecarCarrier.Shared.SendToHost(binding.Service, encoded);
+            }
+            catch
+            {
+                AbortPartialSidecarBroadcast(binding, submissions, deliveredFlows);
                 throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
             }
+
+            if (!sent)
+            {
+                AbortPartialSidecarBroadcast(binding, submissions, deliveredFlows);
+                throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+            }
+
+            deliveredFlows.Add(flow);
         }
 
         foreach ((_, SidecarFlow flow, _) in submissions)
         {
             flow.AdvanceOutgoing();
+        }
+    }
+
+    private static void AbortPartialSidecarBroadcast(
+        Binding binding,
+        IReadOnlyList<(ulong RecipientPeerId, SidecarFlow Flow, byte[] Encoded)> submissions,
+        IReadOnlyList<SidecarFlow> deliveredFlows)
+    {
+        if (deliveredFlows.Count == 0 || binding.Service is not NetHostGameService host)
+        {
+            return;
+        }
+
+        foreach (SidecarFlow flow in deliveredFlows)
+        {
+            flow.AdvanceOutgoing();
+        }
+
+        foreach (ulong recipientPeerId in submissions.Select(static submission => submission.RecipientPeerId))
+        {
+            host.DisconnectClient(recipientPeerId, NetError.ModMismatch);
         }
     }
 
@@ -622,7 +657,11 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     {
         List<StartRunLobbyPlayer> projection = message.playersInLobby
             ?? throw new InvalidDataException("Begin-run has no vanilla roster projection.");
-        AcceptRoster(binding, snapshot, LanConnectRosterSnapshotUse.CurrentState);
+        LanConnectRosterAuthorityState authority = binding.RequireRoster();
+        authority.Accept(
+            snapshot.AuthorityPeerId,
+            snapshot,
+            LanConnectRosterSnapshotUse.StateTransition);
         message.playersInLobby = RestoreStartRunPlayers(snapshot, projection);
         SetBoxedField(boxedMessage, nameof(LobbyBeginRunMessage.playersInLobby), message.playersInLobby);
     }
