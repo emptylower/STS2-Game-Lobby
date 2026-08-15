@@ -4,7 +4,7 @@
 
 ## 房间模式
 
-- **兼容模式（默认）**：固定使用 `4/5-bit` wire profile，支持 2-8 人，不允许安装 RitsuLib 的客户端创建或加入。
+- **兼容模式（默认，`compat_4_5_v1`）**：固定使用 `4/5-bit` wire profile，支持 2-8 人，不允许安装 RitsuLib 的客户端创建或加入。
 - **0.6 新协议**：原版消息主体保持 `2/3-bit`，完整 roster 由 LAN protocol v1 携带。所有玩家都未安装 RitsuLib 时使用 standalone carrier；所有玩家都安装且公开 sidecar API 就绪时使用 Ritsu sidecar carrier。
 - 房间创建后 profile、carrier、RitsuLib presence 和 capability digest 均冻结，不会因加入失败自动降级或切换。
 - 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；两个方向的混合组合都会在 join ticket 和 transport 创建前拒绝。

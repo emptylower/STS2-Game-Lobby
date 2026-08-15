@@ -60,6 +60,7 @@ const expectedFiles = [
   "lobby-service/src/chat/room-gateway.ts",
   "lobby-service/src/chat/ticket-store.ts",
   "lobby-service/src/chat/upgrade-router.ts",
+  "lobby-service/src/client-version.ts",
   "lobby-service/src/client-ip.ts",
   "lobby-service/src/config.ts",
   "lobby-service/src/join-guard.ts",
@@ -92,9 +93,13 @@ const expectedFiles = [
   "lobby-service/src/peer/seeds-loader.ts",
   "lobby-service/src/peer/store.ts",
   "lobby-service/src/peer/types.ts",
+  "lobby-service/src/protocol-capabilities.ts",
+  "lobby-service/src/protocol-errors.ts",
+  "lobby-service/src/protocol-profile.ts",
   "lobby-service/src/relay.ts",
   "lobby-service/src/rolling-bandwidth.ts",
   "lobby-service/src/room-cleanup.ts",
+  "lobby-service/src/room-api-view.ts",
   "lobby-service/src/server-admin-auth.ts",
   "lobby-service/src/server-admin-state.ts",
   "lobby-service/src/server-admin-ui.ts",
@@ -252,9 +257,10 @@ test("service package uses exact production allowlist and deterministic temporar
       version?: unknown;
       packages?: Record<string, { version?: unknown }>;
     };
-    assert.equal(packageJson.version, "0.5.6-rc1");
-    assert.equal(packageLock.version, "0.5.6-rc1");
-    assert.equal(packageLock.packages?.[""]?.version, "0.5.6-rc1");
+    assert.equal(packageJson.version, "0.6.0-alpha.1");
+    assert.equal(packageLock.version, "0.6.0-alpha.1");
+    assert.equal(packageLock.packages?.[""]?.version, "0.6.0-alpha.1");
+    assert.match(readFileSync(join(packageDir, "README.md"), "utf8"), /0\.6\.0-alpha\.1/);
 
     for (const packagePath of expectedFiles) {
       assert.deepEqual(
@@ -307,7 +313,7 @@ test("service package rejects malformed protected traversal and symlink outputs"
   }
 });
 
-test("release sources pin service v0.5.6-rc1 and client v0.5.6-rc4 while preserving older fixtures", () => {
+test("release sources pin synchronized v0.6.0-alpha.1 while preserving older fixtures", () => {
   const servicePackage = JSON.parse(readFileSync(join(repositoryRoot, "lobby-service/package.json"), "utf8")) as {
     version?: unknown;
   };
@@ -319,12 +325,12 @@ test("release sources pin service v0.5.6-rc1 and client v0.5.6-rc4 while preserv
     version?: unknown;
   };
   const clientProject = readFileSync(join(repositoryRoot, "sts2-lan-connect/sts2_lan_connect.csproj"), "utf8");
-  assert.equal(servicePackage.version, "0.5.6-rc1");
-  assert.equal(serviceLock.version, "0.5.6-rc1");
-  assert.equal(serviceLock.packages?.[""]?.version, "0.5.6-rc1");
-  assert.equal(clientManifest.version, "0.5.6-rc4");
-  assert.match(clientProject, /<Version>0\.5\.6-rc4<\/Version>/);
-  assert.match(clientProject, /<AssemblyVersion>0\.5\.6\.0<\/AssemblyVersion>/);
+  assert.equal(servicePackage.version, "0.6.0-alpha.1");
+  assert.equal(serviceLock.version, "0.6.0-alpha.1");
+  assert.equal(serviceLock.packages?.[""]?.version, "0.6.0-alpha.1");
+  assert.equal(clientManifest.version, "0.6.0-alpha.1");
+  assert.match(clientProject, /<Version>0\.6\.0-alpha\.1<\/Version>/);
+  assert.match(clientProject, /<AssemblyVersion>0\.6\.0\.0<\/AssemblyVersion>/);
 
   const serviceFixture = readFileSync(
     join(repositoryRoot, "lobby-service/src/chat/compatibility.integration.test.ts"),
