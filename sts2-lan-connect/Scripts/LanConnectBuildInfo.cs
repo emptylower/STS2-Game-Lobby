@@ -64,7 +64,20 @@ internal static class LanConnectBuildInfo
         {
         }
 
-        _cachedModVersion = typeof(LanConnectBuildInfo).Assembly.GetName().Version?.ToString() ?? "unknown";
+        Assembly assembly = typeof(LanConnectBuildInfo).Assembly;
+        string? informationalVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            int metadataSeparator = informationalVersion.IndexOf('+');
+            _cachedModVersion = metadataSeparator < 0
+                ? informationalVersion
+                : informationalVersion[..metadataSeparator];
+            return _cachedModVersion;
+        }
+
+        _cachedModVersion = assembly.GetName().Version?.ToString(3) ?? "unknown";
         return _cachedModVersion;
     }
 
