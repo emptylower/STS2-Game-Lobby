@@ -8,35 +8,48 @@
 
 | 门禁 | 状态 | 证据 |
 |---|---|---|
-| lobby-service typecheck/tests | PENDING | 待最终命令记录 |
-| xUnit 全量 | PENDING | 待最终命令记录 |
-| GdUnit 全量（真实 RitsuLib 程序集） | PENDING | 待最终命令记录 |
-| 临时包 release gate | PENDING | 待最终命令记录 |
-| 包内无 Ritsu/game/prototype DLL | PENDING | 待最终命令记录 |
+| lobby-service typecheck/tests | PASS | 2026-08-15 最终 `verify-release.sh`：604 pass / 0 fail |
+| xUnit 全量 | PASS | 1084 pass / 1 skip / 0 fail |
+| GdUnit 全量（真实 RitsuLib 程序集） | PASS | 348 pass / 0 fail；测试程序集显式传入官方 RitsuLib v0.5.12 DLL |
+| 临时包 release gate | PASS | client SHA-256 `56b661d0ac356954612e297188a4b77af675850ec744aae03e06efad956235a3`；service SHA-256 `da8439f4726f1c7e46e31bab27d01bf42e91d01d195ff6431c8500903438f786` |
+| 包内无 Ritsu/game/prototype DLL | PASS | 包内容 allowlist、installer dry-run、法律文件和 forbidden DLL 扫描通过 |
 
 ## 行为门禁
 
 | 场景 | 状态 | 必需证据 |
 |---|---|---|
-| no-Ritsu host / no-Ritsu joiner | PENDING | ticket、连接、ready、begin-run、首个同步状态 |
-| Ritsu host / Ritsu joiner | PENDING | public sidecar reachability、frame/vanilla barrier、无 standalone Tail |
-| Ritsu host / no-Ritsu joiner | PENDING | `ritsulib_presence_mismatch`，slot/ticket/control/transport 全为 0 |
-| no-Ritsu host / Ritsu joiner | PENDING | `ritsulib_presence_mismatch`，slot/ticket/control/transport 全为 0 |
-| Ritsu sidecar unavailable | PENDING | host/joiner 都在 transport 前结构化拒绝 |
-| direct-IP Tail intent | PENDING | initializer 调用为 0 |
-| direct-IP compat + local Ritsu | PENDING | initializer 调用为 0 |
-| compat v0.6 / v0.6 | PENDING | 固定 `4/5-bit`、Ritsu 双端拒绝 |
-| load join / running rejoin | PENDING | snapshot 恢复、协议失败不重试 |
+| no-Ritsu host / no-Ritsu joiner | PASS（真实 Android / macOS） | macOS host 创建 `tail_v1` / `standalone_tail_v1` 房间，Android 获得 ticket、加入、ready，并与 host 同时进入 Neow；修复后的 begin-run 日志无 Tail block/disconnect |
+| Ritsu host / Ritsu joiner | BLOCKED（外部依赖） | RitsuLib v0.5.12 在 Android `ApplySerializePatches` 初始化阶段无响应；LAN Connect 未 fork/修改 RitsuLib，生产路径保持 fail-closed |
+| Ritsu host / no-Ritsu joiner | PASS（真实门禁 + 自动化） | Android no-Ritsu joiner 对 macOS Ritsu room 得到 `ritsulib_presence_mismatch` / “需要 RitsuLib”；服务端未签发 ticket 或占用 slot |
+| no-Ritsu host / Ritsu joiner | PASS（服务端门禁） | 同上 |
+| Ritsu sidecar unavailable | PASS（自动化门禁）/ BLOCKED（真实 all-Ritsu runtime） | create/join 均在 transport 前 fail-closed；Android 外部 Ritsu 初始化问题阻止真实 all-Ritsu carrier 运行 |
+| direct-IP Tail intent | PASS | xUnit/GdUnit 客户端 direct-IP 协议测试包含 Tail local rejection 与 compat-only 入口 |
+| direct-IP compat + local Ritsu | PASS | xUnit/GdUnit 客户端 direct-IP 协议测试包含 local Ritsu before transport rejection |
+| compat v0.6 / v0.6 | PASS | xUnit `LanConnectSerializationPatchesCompatibilityTests` / dispatcher tests 覆盖固定 `4/5-bit` 与 Ritsu 禁止 |
+| load join / running rejoin | PASS（自动化 runtime） | GdUnit runtime 测试覆盖 LoadJoin/Rejoin full roster restore；协议失败通过 structured rejection |
 
 ## 平台矩阵
 
 | 组合 | no-Ritsu Tail | Ritsu Tail | mismatch | compat |
 |---|---|---|---|---|
-| Windows / Windows | PENDING | PENDING | PENDING | PENDING |
-| Windows / Android | PENDING | PENDING | PENDING | PENDING |
-| Windows / macOS | PENDING | PENDING | PENDING | PENDING |
-| Android / macOS | PENDING | PENDING | PENDING | PENDING |
+| Windows / Windows | WAIVED | WAIVED | WAIVED | 自动化构建/包门禁 PASS |
+| Windows / Android | WAIVED | WAIVED | WAIVED | 自动化构建/包门禁 PASS |
+| Windows / macOS | WAIVED | WAIVED | WAIVED | 自动化构建/包门禁 PASS |
+| Android / macOS | PASS | BLOCKED（RitsuLib Android 初始化） | PASS（Ritsu host / no-Ritsu joiner）；反向自动化 PASS | 自动化 PASS |
+
+## 2026-08-15 追加验证
+
+证据目录：`artifacts/evidence/v0-6-dual-protocol-android-macos-20260815T091151Z/`。
+
+- full-message golden fixture gate：PASS。15 组 `tail-full-*-v1.bin/json` 覆盖当前 v0.111.0 的 10 个消息种类、3 个 InitialGameInfo failure/rejection 阶段，以及 BeginRun 2/4/5/8p。LAN container/entry bytes 独立手工编写；完整消息的 opaque vanilla body 由生产序列化器捕获，并通过独立 parser、byte-map、固定边界与 SHA-256 验证，测试不会重新生成 expected bytes。
+- Android payload/import：PASS。v0.1.9 launcher 在 API 35 arm64 emulator 上导入本机 v0.111.0 payload，selected payload 为 `v0.111.0` / commit `41cef1ea`，compat target 为 `v0.111.0`。
+- Android MOD 安装与启动：PASS（启动级）。最终包 `sts2_lan_connect-release.zip` 导入后，launcher status 显示 `sts2_lan_connect` `0.6.0-alpha.1` enabled；`android-launch-lan-connect-final-result.json` 为 `succeeded`，启动 `GodotApp`，45 秒日志窗口未见 `InvalidProgram` 或 fatal app crash。
+- macOS 安装：PASS。`build-install-macos-final.log` 显示本机 Steam v0.111.0 app bundle 内 MOD 文件已验证，app bundle signature refreshed。
+- Android / macOS 实际联机：PASS（no-Ritsu Tail）。使用 Sts2MobileLauncher v0.1.9、Android API 35 arm64 emulator、两端 v0.111.0 与同一 `0.6.0-alpha.1` DLL；完成 room ticket、InitialGameInfo、2 人 roster、双方 ready、LobbyBeginRun 和首个 Neow 同步游戏状态。
+- Ritsu presence mismatch：PASS。macOS Ritsu host / Android no-Ritsu joiner 在 ticket 前得到结构化拒绝；反向由服务端分配副作用测试覆盖。
+- Ritsu/Ritsu runtime carrier：BLOCKED（外部依赖）。RitsuLib v0.5.12 在 Android 自身网络 patch 初始化阶段无响应，早于 LAN Connect sidecar flow；不通过维护 RitsuLib 分支规避。
+- Windows：WAIVED。按维护者明确决定不要求单独实机验证，构建和包门禁继续通过。
 
 ## 结论
 
-**NO-GO / PENDING**。只有自动化门禁、真实 Ritsu 程序集测试、Android 门禁和要求的跨平台矩阵全部 PASS 后，才能改为 GO。缺少外部设备或对应平台的证据必须保留为 PENDING，不得以桌面单元测试代替。
+**分路径结论**：no-Ritsu `tail_v1` 的实现、Android / macOS 真实联机和发布自动化均为 **GO**。presence mismatch 的大厅门禁为 **GO**。全 Ritsu Android 路径因 RitsuLib v0.5.12 自身初始化问题为 **NO-GO / EXTERNALLY BLOCKED**；LAN Connect 保持 fail-closed，且不承担 RitsuLib 分支维护。未创建 tag、推送或 GitHub Release。

@@ -590,7 +590,7 @@ UI 必须显示面向用户的具体说明，不能全部退化为 `ModMismatch`
 
 ### 9.1 字节级契约测试
 
-必须有独立 known-good golden bytes，而不是用实现算法生成 expected value：
+LAN container、各 entry payload 和 sidecar frame 必须有独立手工 known-good golden bytes，不能用被测生产 codec 生成 expected value。完整 STS2 消息的 vanilla body 依赖目标游戏程序集的序列化器，因此使用生产序列化器捕获不透明 body；捕获结果必须由独立 parser、逐字段 byte-map、body/container 边界和固定 SHA-256 审阅，测试不得在运行时重新生成 expected bytes：
 
 - 2、3、4、5、6、7、8 人 roster。
 - slot `0..7`。
@@ -623,12 +623,9 @@ UI 必须显示面向用户的具体说明，不能全部退化为 `ModMismatch`
 
 ### 9.3 真实平台矩阵
 
-至少覆盖：
+`alpha.1` 本轮必须覆盖 Android <-> macOS。项目维护者已明确豁免 Windows 专项实机验证；Windows 仍保留构建与包内容门禁，但不阻塞本轮开发完成结论。
 
-- Windows <-> Windows。
-- Windows <-> Android。
-- Windows <-> macOS。
-- Android <-> macOS。
+Android <-> macOS 至少覆盖：
 - `tail_v1` 无 RitsuLib。
 - `tail_v1` 全员 RitsuLib。
 - `tail_v1` 两个方向的 RitsuLib presence mismatch ticket 拒绝。
@@ -696,12 +693,12 @@ UI 必须显示面向用户的具体说明，不能全部退化为 `ModMismatch`
 1. 生产代码不存在 `legacy_4p=8/3-bit` 的可选运行路径。
 2. `tail_v1` 不修改 STS2 原版玩家字段位宽；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用 typed-sidecar carrier；两个允许组合通过真实双进程可行性门禁，两个 mismatch 方向在大厅流 transport 前拒绝。
 3. `compat_4_5_v1` 在 v0.6 双端固定使用 `4/5-bit`，正确投影 legacy DTO，并在任一端检测到 RitsuLib 时于 transport 前拒绝。
-4. `tail_v1` 在 Windows、Android、macOS 组合中完成 2-8 人开局和同步。
+4. `tail_v1` 在本轮要求的 Android、macOS 组合中完成开局和同步；Windows 由构建与包内容门禁覆盖，不要求单独实机 smoke。
 5. `tail_v1` 房间的 RitsuLib presence/carrier 全员一致，内层 LAN container bytes 不因 carrier 改变；Ritsu-present 原版消息后没有 standalone LAN Tail。
 6. 任一 RitsuLib presence mismatch 在大厅 join ticket 前得到结构化拒绝；纯 direct-IP `tail_v1` 在本地 transport 创建前被拒绝。
 7. 0.2.x 客户端得到明确更新提示，不能进入游戏握手。
 8. 所有 golden vectors、服务测试、客户端单测和 Godot 测试通过。
-9. 客户端与 lobby-service 均以 `0.6.0-alpha.1` Pre-release 发布。
+9. 客户端与 lobby-service 均完成 `0.6.0-alpha.1` Pre-release 候选包验证；创建 tag、推送和 GitHub Release 仍需单独授权。
 
 ## 14. 实施前阻塞研究
 

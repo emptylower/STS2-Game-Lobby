@@ -1,6 +1,6 @@
 # STS2 LAN Connect v0.6.0-alpha.1 发布说明
 
-`0.6.0-alpha.1` 同步升级客户端与 lobby-service，引入显式房间协议选择，并移除 RC4 对 RitsuLib 私有 Harmony postfix 的卸载、调用和恢复桥。
+`0.6.0-alpha.1` 候选同步升级客户端与 lobby-service，引入显式房间协议选择，并移除 RC4 对 RitsuLib 私有 Harmony postfix 的卸载、调用和恢复桥。
 
 ## 房间模式
 
@@ -34,4 +34,6 @@ LAN Connect 只使用 RitsuLib 的公开 typed-sidecar、直接 `INetGameService
 
 - direct-IP Tail 不开放。
 - 同为 RitsuLib 不代表任意 RitsuLib 版本或扩展组合均兼容。
-- Android 真机、Windows 与跨平台矩阵必须在 acceptance 文档中取得 PASS 后才能把候选标记为 GO。
+- Android / macOS 的 no-Ritsu Tail 已在 v0.111.0 与 Sts2MobileLauncher v0.1.9 环境完成真实建房、加入、准备和开局验证。
+- RitsuLib v0.5.12 在当前 Android 启动器环境初始化其网络补丁时无响应，因此全 Ritsu Android 路径保持 fail-closed / NO-GO；LAN Connect 不维护或分发 RitsuLib 分支。
+- Windows 专项实机验证按本轮维护者决定豁免；Windows 构建和包内容门禁仍保留。
