@@ -18,8 +18,8 @@ internal static class LanConnectExternalCapabilityCollector
             return new LanConnectExternalCapabilitySnapshot(false, false);
         }
 
-        // Public API shape alone is not enough to prove the sidecar carrier is usable.
-        // Keep Ritsu Tail rooms fail-closed until the real two-process carrier/barrier gate is green.
-        return new LanConnectExternalCapabilitySnapshot(true, false);
+        bool sidecarAvailable = LanConnectRitsuLibSidecarCarrier.Shared.TryEnsureRegistered(loaded)
+                                && LanConnectRitsuLibSidecarCarrier.Shared.IsReady;
+        return new LanConnectExternalCapabilitySnapshot(true, sidecarAvailable);
     }
 }

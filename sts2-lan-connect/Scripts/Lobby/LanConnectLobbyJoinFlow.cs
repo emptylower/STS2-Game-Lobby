@@ -10,11 +10,13 @@ using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Connection;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Multiplayer.Transport.ENet;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.CustomRun;
 using MegaCrit.Sts2.Core.Nodes.Screens.DailyRun;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
+using MegaCrit.Sts2.Core.Platform;
 using MegaCrit.Sts2.Core.Runs;
 
 namespace Sts2LanConnect.Scripts;
@@ -51,6 +53,9 @@ internal static class LanConnectLobbyJoinFlow
         Exception? lastUnexpectedFailure = null;
         LanConnectSessionProtocolLease? protocolLease = null;
         bool leaseTransferred = false;
+        LobbyApiClient? preTransportControlApiClient = null;
+        LobbyControlClient? preTransportControlClient = null;
+        bool controlTransferred = false;
 
         try
         {
@@ -69,6 +74,27 @@ internal static class LanConnectLobbyJoinFlow
             }
 
             protocolLease = LanConnectSessionProtocolState.Shared.FreezeClient(selection, joinResponse.TicketId);
+            ulong netId = ResolveJoinNetId(joinResponse, desiredSavePlayerNetId);
+            if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
+            {
+                preTransportControlApiClient = LobbyApiClient.CreateConfigured();
+                preTransportControlClient = new LobbyControlClient();
+                Uri controlUri = preTransportControlApiClient.BuildClientControlUri(
+                    joinResponse.ConnectionPlan.ControlChannelId,
+                    joinResponse.Room.RoomId,
+                    joinResponse.TicketId,
+                    localOffer.ClientVersion,
+                    selection.CapabilityDigest);
+                await preTransportControlClient.ConnectClientAsync(
+                    controlUri,
+                    joinResponse.Room.RoomId,
+                    joinResponse.ConnectionPlan.ControlChannelId,
+                    joinResponse.TicketId,
+                    LanConnectConfig.GetEffectivePlayerDisplayName(),
+                    netId.ToString(),
+                    joinResponse.RoomSessionId,
+                    cancellationToken);
+            }
             List<JoinAttemptCandidate> candidates = BuildCandidates(joinResponse);
             if (candidates.Count == 0)
             {
@@ -77,7 +103,6 @@ internal static class LanConnectLobbyJoinFlow
                     "大厅服务没有返回可用的连接地址。");
             }
 
-            ulong netId = ResolveJoinNetId(joinResponse, desiredSavePlayerNetId);
             Log.Info($"sts2_lan_connect join_flow: policy={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()} roomCompatibility={LanConnectCompatibilityMatrix.DescribeRoomCompatibility(joinResponse.Room)} strategy={joinResponse.ConnectionPlan.Strategy} directCandidates={joinResponse.ConnectionPlan.DirectCandidates.Count} relayAllowed={joinResponse.ConnectionPlan.RelayAllowed}");
             for (int index = 0; index < candidates.Count; index++)
             {
@@ -98,7 +123,16 @@ internal static class LanConnectLobbyJoinFlow
                 }, joinFlow.CancelToken);
                 try
                 {
-                    ENetClientConnectionInitializer initializer = new(netId, candidate.Host, candidate.Port);
+                    IClientConnectionInitializer initializer = selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1
+                        ? new RitsuSidecarENetClientConnectionInitializer(
+                            netId,
+                            candidate.Host,
+                            candidate.Port,
+                            service => LanConnectTailMessageRuntime.Shared.BindClientHostSidecarFlow(
+                                service,
+                                netId,
+                                1UL))
+                        : new ENetClientConnectionInitializer(netId, candidate.Host, candidate.Port);
                     Log.Info($"sts2_lan_connect attempting lobby join via {candidate.Host}:{candidate.Port} ({candidate.Label}) using netId={netId}.");
                     JoinResult joinResult = await joinFlow.BeginAsync(initializer, stack.GetTree());
                     _ = TaskHelper.RunSafely(ReportConnectionEventSafeAsync(
@@ -122,7 +156,10 @@ internal static class LanConnectLobbyJoinFlow
                         joinResponse,
                         protocolLease,
                         localOffer.ClientVersion,
-                        selection);
+                        selection,
+                        preTransportControlClient,
+                        preTransportControlApiClient);
+                    controlTransferred = preTransportControlClient != null;
                     leaseTransferred = true;
                     PushJoinedScreen(stack, joinFlow.NetService, joinResult);
                     _ = TaskHelper.RunSafely(LanConnectPeerCacheExpander.ExpandAsync(LanConnectConfig.LobbyServerBaseUrl));
@@ -225,6 +262,14 @@ internal static class LanConnectLobbyJoinFlow
             if (!leaseTransferred)
             {
                 protocolLease?.Dispose();
+            }
+            if (!controlTransferred)
+            {
+                if (preTransportControlClient != null)
+                {
+                    await preTransportControlClient.DisposeAsync();
+                }
+                preTransportControlApiClient?.Dispose();
             }
             loadingOverlay.Visible = false;
         }
@@ -351,6 +396,34 @@ internal static class LanConnectLobbyJoinFlow
         Log.Info(
             $"sts2_lan_connect join_flow: no saved-run slot selected for room {joinResponse.Room.RoomId}; using persistent netId={fallbackNetId}");
         return fallbackNetId;
+    }
+
+    private sealed class RitsuSidecarENetClientConnectionInitializer(
+        ulong netId,
+        string ip,
+        ushort port,
+        Action<NetClientGameService> afterInitialize) : IClientConnectionInitializer
+    {
+        public async Task<NetErrorInfo?> Connect(
+            INetClientGameService netService,
+            CancellationToken cancelToken = default)
+        {
+            if (netService.IsConnected)
+            {
+                throw new InvalidOperationException(
+                    "NetClientGameService must not be connected when passed to RitsuSidecarENetClientConnectionInitializer.");
+            }
+
+            if (netService is not NetClientGameService concrete)
+            {
+                throw new InvalidOperationException("Ritsu sidecar ENet initializer requires NetClientGameService.");
+            }
+
+            ENetClient client = new(concrete);
+            netService.Initialize(client, PlatformType.None);
+            afterInitialize(concrete);
+            return await client.ConnectToHost(netId, ip, port, cancelToken);
+        }
     }
 
     private static async Task ReportConnectionEventSafeAsync(

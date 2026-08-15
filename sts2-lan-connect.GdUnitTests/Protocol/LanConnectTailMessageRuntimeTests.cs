@@ -250,6 +250,98 @@ public sealed class LanConnectTailMessageRuntimeTests
     }
 
     [TestCase]
+    public void Official_Ritsu_public_sidecar_contract_registers_and_hints_supported_then_unknown()
+    {
+        Assembly ritsuAssembly = LoadOfficialRitsuAssembly();
+        LanConnectRitsuLibSidecarCarrier.Shared.ResetForTesting();
+
+        LanConnectExternalCapabilitySnapshot snapshot = LanConnectExternalCapabilityCollector.Collect([ritsuAssembly]);
+        AssertThat(snapshot.RitsuLibPresent).IsTrue();
+        AssertThat(snapshot.RitsuLibSidecarAvailable).IsTrue();
+
+        using RuntimePair pair = new(ritsu: true);
+        LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(pair.Host);
+        LanConnectRitsuLibSidecarCarrier.Shared.SetPeerSupported(pair.ClientId);
+        AssertThat(LanConnectRitsuLibSidecarCarrier.Shared.CanSendToPeer(pair.ClientId)).IsTrue();
+        LanConnectRitsuLibSidecarCarrier.Shared.SetPeerUnknown(pair.ClientId);
+        AssertThat(LanConnectRitsuLibSidecarCarrier.Shared.CanSendToPeer(pair.ClientId)).IsFalse();
+    }
+
+    [TestCase]
+    public void Ritsu_sidecar_frame_first_pairing_releases_vanilla_deserialization()
+    {
+        _ = LoadOfficialRitsuAssembly();
+        InitializeSts2Serialization();
+        using RuntimePair pair = new(ritsu: true);
+        ClientLobbyJoinRequestMessage request = JoinRequest();
+        LanConnectPreparedTailMessage prepared = pair.Runtime.PrepareOutgoing(
+            pair.ClientBus,
+            LanConnectSidecarMessageKind.LobbyJoinRequest,
+            pair.ClientId,
+            request,
+            pair.Selection);
+        LanConnectSidecarFrame frame = new(
+            LanConnectSidecarMessageKind.LobbyJoinRequest,
+            pair.ProtocolFlowNonce,
+            1,
+            prepared.Container);
+
+        InvokeSidecarFrame(pair.Runtime, pair.ClientId, LanConnectSidecarFrameCodec.Encode(frame));
+        INetMessage boxed = request;
+        bool paired = pair.Runtime.TryPairSidecarIncoming(
+            pair.HostBus,
+            LanConnectSidecarMessageKind.LobbyJoinRequest,
+            pair.ClientId,
+            boxed,
+            pair.Selection);
+
+        AssertThat(paired).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Ritsu_sidecar_vanilla_first_pairing_defers_handler_release_until_frame_arrives()
+    {
+        _ = LoadOfficialRitsuAssembly();
+        InitializeSts2Serialization();
+        using RuntimePair pair = new(ritsu: true);
+        int handled = 0;
+        pair.Host.RegisterMessageHandler<ClientLobbyJoinRequestMessage>((_, senderId) =>
+        {
+            if (senderId == pair.ClientId)
+            {
+                handled++;
+            }
+        });
+        ClientLobbyJoinRequestMessage request = JoinRequest();
+        LanConnectPreparedTailMessage prepared = pair.Runtime.PrepareOutgoing(
+            pair.ClientBus,
+            LanConnectSidecarMessageKind.LobbyJoinRequest,
+            pair.ClientId,
+            request,
+            pair.Selection);
+
+        INetMessage boxed = request;
+        bool pairedBeforeFrame = pair.Runtime.TryPairSidecarIncoming(
+            pair.HostBus,
+            LanConnectSidecarMessageKind.LobbyJoinRequest,
+            pair.ClientId,
+            boxed,
+            pair.Selection);
+        AssertThat(pairedBeforeFrame).IsFalse();
+        AssertThat(handled).IsEqual(0);
+
+        LanConnectSidecarFrame frame = new(
+            LanConnectSidecarMessageKind.LobbyJoinRequest,
+            pair.ProtocolFlowNonce,
+            1,
+            prepared.Container);
+        InvokeSidecarFrame(pair.Runtime, pair.ClientId, LanConnectSidecarFrameCodec.Encode(frame));
+        await Task.Delay(100);
+
+        AssertThat(handled).IsEqual(1);
+    }
+
+    [TestCase]
     public void Malformed_request_returns_false_sends_structured_rejection_and_disconnects_peer()
     {
         InitializeSts2Serialization();
@@ -357,6 +449,64 @@ public sealed class LanConnectTailMessageRuntimeTests
             pair.HostId,
             pair.HostId).Roster!;
 
+    private static ClientLobbyJoinRequestMessage JoinRequest() => new()
+    {
+        maxAscensionUnlocked = 0,
+        unlockState = new SerializableUnlockState()
+    };
+
+    private static void InvokeSidecarFrame(
+        LanConnectTailMessageRuntime runtime,
+        ulong senderPeerId,
+        byte[] frame)
+    {
+        typeof(LanConnectTailMessageRuntime)
+            .GetMethod("OnSidecarFrameReceived", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(runtime, [senderPeerId, frame]);
+    }
+
+    private static Assembly LoadOfficialRitsuAssembly()
+    {
+        Assembly? loaded = AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(static assembly =>
+                string.Equals(assembly.GetName().Name, "STS2-RitsuLib", StringComparison.OrdinalIgnoreCase));
+        if (loaded != null)
+        {
+            return loaded;
+        }
+
+        string localCopy = Path.Combine(AppContext.BaseDirectory, "STS2-RitsuLib.dll");
+        if (File.Exists(localCopy))
+        {
+            Assembly sts2Assembly = typeof(INetGameService).Assembly;
+            string assemblyDirectory = Path.GetDirectoryName(localCopy)!;
+            AppDomain.CurrentDomain.AssemblyResolve += (_, args) =>
+            {
+                AssemblyName requested = new(args.Name);
+                if (string.Equals(requested.Name, sts2Assembly.GetName().Name, StringComparison.Ordinal))
+                {
+                    return sts2Assembly;
+                }
+
+                Assembly? loaded = AppDomain.CurrentDomain.GetAssemblies()
+                    .FirstOrDefault(assembly =>
+                        string.Equals(assembly.GetName().Name, requested.Name, StringComparison.OrdinalIgnoreCase));
+                if (loaded != null)
+                {
+                    return loaded;
+                }
+
+                string dependencyPath = Path.Combine(assemblyDirectory, requested.Name + ".dll");
+                return File.Exists(dependencyPath)
+                    ? Assembly.LoadFrom(dependencyPath)
+                    : null;
+            };
+            return Assembly.Load(File.ReadAllBytes(localCopy));
+        }
+
+        throw new FileNotFoundException("Official STS2-RitsuLib v0.5.12 assembly was not found.", localCopy);
+    }
+
     private static List<StartRunLobbyPlayer> StartRunPlayers(int count)
     {
         return StartRunPlayers(Enumerable.Range(0, count));
@@ -435,15 +585,24 @@ public sealed class LanConnectTailMessageRuntimeTests
         internal const ulong DefaultHostId = 1;
         internal const ulong DefaultClientId = 22;
 
-        internal RuntimePair()
+        internal RuntimePair(bool ritsu = false)
         {
             HostTransport = new TestNetHost(Host, DefaultHostId);
             typeof(NetHostGameService).GetField("_netHost", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(Host, HostTransport);
             ClientTransport = new TestNetClient(Client, DefaultClientId, DefaultHostId);
             Client.Initialize(ClientTransport, default);
+            Offer = ritsu
+                ? new LanConnectProtocolOffer(1, 1, "0.6.0-alpha.1", true, true)
+                : new LanConnectProtocolOffer(1, 1, "0.6.0-alpha.1", false, false);
+            Selection = CreateSelection(ritsu);
             Runtime.BindHost(Host, Offer, Selection);
-            Runtime.BindClient(Client, Offer, Selection, new byte[16]);
+            Runtime.BindClient(Client, Offer, Selection, ProtocolFlowNonce);
+            if (ritsu)
+            {
+                Runtime.BindHostTrustedSidecarFlow(Host, ClientId, ProtocolFlowNonce);
+                Runtime.BindClientHostSidecarFlow(Client);
+            }
         }
 
         internal LanConnectTailMessageRuntime Runtime { get; } = new();
@@ -453,8 +612,10 @@ public sealed class LanConnectTailMessageRuntimeTests
         internal TestNetClient ClientTransport { get; }
         internal ulong HostId => DefaultHostId;
         internal ulong ClientId => DefaultClientId;
-        internal LanConnectProtocolOffer Offer { get; } = new(1, 1, "0.6.0-alpha.1", false, false);
-        internal LanConnectProtocolSelection Selection { get; } = CreateSelection();
+        internal byte[] ProtocolFlowNonce { get; } =
+            Enumerable.Range(1, LanConnectSidecarFrameCodec.FlowNonceBytes).Select(static value => (byte)value).ToArray();
+        internal LanConnectProtocolOffer Offer { get; }
+        internal LanConnectProtocolSelection Selection { get; }
         internal NetMessageBus HostBus => GetBus(Host);
         internal NetMessageBus ClientBus => GetBus(Client);
 
@@ -473,17 +634,17 @@ public sealed class LanConnectTailMessageRuntimeTests
         }
     }
 
-    private static LanConnectProtocolSelection CreateSelection()
+    private static LanConnectProtocolSelection CreateSelection(bool ritsu = false)
     {
         LanConnectProtocolSelection selection = new(
             LanConnectProtocolProfile.TailV1,
             1,
-            LanConnectProtocolCarrier.StandaloneTailV1,
+            ritsu ? LanConnectProtocolCarrier.RitsuLibSidecarV1 : LanConnectProtocolCarrier.StandaloneTailV1,
             "0.6.0-alpha.1",
             8,
             "0.110.1",
             "aabb",
-            false,
+            ritsu,
             string.Empty);
         return selection with { CapabilityDigest = LanConnectCapabilityDigest.Compute(selection) };
     }

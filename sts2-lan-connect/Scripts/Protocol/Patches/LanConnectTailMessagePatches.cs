@@ -2,6 +2,7 @@ using System.Reflection;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
 
 namespace Sts2LanConnect.Scripts;
@@ -16,6 +17,7 @@ internal interface ILanConnectTailMessageRuntime
         LanConnectProtocolSelection selection);
 
     void SubmitSidecarBeforeVanilla(
+        NetMessageBus messageBus,
         LanConnectSidecarMessageKind messageKind,
         ulong senderPeerId,
         object message,
@@ -121,6 +123,39 @@ internal static class LanConnectTailMessagePatches
                 prefix: new HarmonyMethod(receivePrefix),
                 finalizer: new HarmonyMethod(receiveFinalizer));
         }
+
+        MethodInfo hostBroadcastDefinition = typeof(NetHostGameService).GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Single(method => method.Name == nameof(NetHostGameService.SendMessage)
+                              && method.IsGenericMethodDefinition
+                              && method.GetParameters().Length == 1);
+        MethodInfo hostSendInternalDefinition = typeof(NetHostGameService)
+            .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Single(method => method.Name == "SendMessageToClientInternal"
+                              && method.IsGenericMethodDefinition
+                              && method.GetParameters().Length == 4);
+        MethodInfo hostBroadcastPrefix = AccessTools.Method(
+            typeof(LanConnectTailMessagePatches),
+            nameof(HostBroadcastPrefix))
+            ?? throw new MissingMethodException(nameof(HostBroadcastPrefix));
+        MethodInfo hostSendInternalPrefix = AccessTools.Method(
+            typeof(LanConnectTailMessagePatches),
+            nameof(HostSendInternalPrefix))
+            ?? throw new MissingMethodException(nameof(HostSendInternalPrefix));
+        MethodInfo hostSendFinalizer = AccessTools.Method(
+            typeof(LanConnectTailMessagePatches),
+            nameof(HostSendFinalizer))
+            ?? throw new MissingMethodException(nameof(HostSendFinalizer));
+        foreach (Type messageType in messageTypes)
+        {
+            harmony.Patch(
+                hostBroadcastDefinition.MakeGenericMethod(messageType),
+                prefix: new HarmonyMethod(hostBroadcastPrefix),
+                finalizer: new HarmonyMethod(hostSendFinalizer));
+            harmony.Patch(
+                hostSendInternalDefinition.MakeGenericMethod(messageType),
+                prefix: new HarmonyMethod(hostSendInternalPrefix),
+                finalizer: new HarmonyMethod(hostSendFinalizer));
+        }
     }
 
     internal static byte[] EncodePeerOfferMessage(
@@ -193,7 +228,7 @@ internal static class LanConnectTailMessagePatches
         __state = prepared;
         if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
         {
-            runtime.SubmitSidecarBeforeVanilla(kind, senderId, message, prepared.Container, selection);
+            runtime.SubmitSidecarBeforeVanilla(__instance, kind, senderId, message, prepared.Container, selection);
         }
     }
 
@@ -277,7 +312,7 @@ internal static class LanConnectTailMessagePatches
 
         try
         {
-            LanConnectSidecarMessageKind kind = GetMessageKind(message.GetType());
+            LanConnectSidecarMessageKind kind = GetIncomingMessageKind(message);
             if (!TryPeekTransportSender(out ulong transportSenderPeerId))
             {
                 throw new InvalidDataException(
@@ -385,6 +420,53 @@ internal static class LanConnectTailMessagePatches
         return false;
     }
 
+    private static void HostBroadcastPrefix(
+        NetHostGameService __instance,
+        out IDisposable? __state)
+    {
+        __state = null;
+        if (!IsActiveRitsuTail())
+        {
+            return;
+        }
+
+        ulong[] recipients = __instance.ConnectedPeers
+            .Where(static peer => peer.readyForBroadcasting)
+            .Select(static peer => peer.peerId)
+            .ToArray();
+        __state = LanConnectTailMessageRuntime.PushOutgoingSidecarRecipientsForCurrentThread(recipients);
+    }
+
+    private static void HostSendInternalPrefix(
+        ulong peerId,
+        out IDisposable? __state)
+    {
+        __state = null;
+        if (!IsActiveRitsuTail())
+        {
+            return;
+        }
+
+        __state = LanConnectTailMessageRuntime.PushOutgoingSidecarRecipientsForCurrentThread([peerId]);
+    }
+
+    private static Exception? HostSendFinalizer(Exception? __exception, IDisposable? __state)
+    {
+        __state?.Dispose();
+        return __exception;
+    }
+
+    private static bool IsActiveRitsuTail()
+    {
+        LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
+        LanConnectProtocolSelection? selection = snapshot.Selection;
+        return selection is
+            {
+                Profile: LanConnectProtocolProfile.TailV1,
+                Carrier: LanConnectProtocolCarrier.RitsuLibSidecarV1
+            } && snapshot.IsActive;
+    }
+
     private sealed class TransportSenderScope : IDisposable
     {
         private int _disposed;
@@ -410,6 +492,18 @@ internal static class LanConnectTailMessagePatches
         }
 
         throw Invalid($"Message type {type.FullName} is not part of LAN protocol v1.");
+    }
+
+    private static LanConnectSidecarMessageKind GetIncomingMessageKind(INetMessage message)
+    {
+        LanConnectSidecarMessageKind kind = GetMessageKind(message.GetType());
+        if (kind == LanConnectSidecarMessageKind.InitialGameInfo
+            && message is InitialGameInfoMessage { connectionFailureReason: not null })
+        {
+            return LanConnectSidecarMessageKind.ConnectionFailed;
+        }
+
+        return kind;
     }
 
     private static string GetMessageTypeName(LanConnectSidecarMessageKind kind) => kind switch

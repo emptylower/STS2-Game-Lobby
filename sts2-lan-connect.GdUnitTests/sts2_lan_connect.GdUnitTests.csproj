@@ -49,5 +49,6 @@
       <HintPath>$(Sts2DataDir)/Steamworks.NET.dll</HintPath>
       <Private>true</Private>
     </Reference>
+    <None Include="$(RitsuLibAssembly)" Link="STS2-RitsuLib.dll" CopyToOutputDirectory="PreserveNewest" Condition="'$(RitsuLibAssembly)' != ''" />
   </ItemGroup>
 </Project>

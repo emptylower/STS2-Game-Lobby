@@ -1106,7 +1106,9 @@ internal sealed partial class LanConnectLobbyRuntime :
         LobbyJoinRoomResponse joinResponse,
         LanConnectSessionProtocolLease protocolLease,
         string clientVersion,
-        LanConnectProtocolSelection protocolSelection)
+        LanConnectProtocolSelection protocolSelection,
+        LobbyControlClient? connectedControlClient = null,
+        LobbyApiClient? connectedApiClient = null)
     {
         LanConnectRitsuLibLobbyCompatibility.TrackLobbyNetService(netService);
         _pendingSaveBindingCoordinator.AttachJoinedClient();
@@ -1123,7 +1125,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         JoinedClientSession session = new(
             netService,
-            LobbyApiClient.CreateConfigured(),
+            connectedApiClient ?? LobbyApiClient.CreateConfigured(),
             joinResponse.Room.RoomId,
             controlChannelId,
             joinResponse.TicketId,
@@ -1131,7 +1133,8 @@ internal sealed partial class LanConnectLobbyRuntime :
             joinResponse.RoomSessionId,
             protocolLease,
             clientVersion,
-            protocolSelection);
+            protocolSelection,
+            connectedControlClient);
         session.SetEnvelopeHandler(envelope => OnJoinedClientControlEnvelope(session, envelope));
         session.ControlClient.RoomChatReadyReceived += envelope =>
         {
@@ -1233,7 +1236,10 @@ internal sealed partial class LanConnectLobbyRuntime :
                 LanConnectConfig.GetEffectivePlayerDisplayName());
         });
         netService.Disconnected += session.OnDisconnected;
-        TaskHelper.RunSafely(ConnectJoinedClientControlAsync(session));
+        if (connectedControlClient == null)
+        {
+            TaskHelper.RunSafely(ConnectJoinedClientControlAsync(session));
+        }
         _pendingClientReconnect = null;
     }
 
@@ -2367,6 +2373,24 @@ internal sealed partial class LanConnectLobbyRuntime :
                     {
                         Log.Warn(
                             $"sts2_lan_connect kick binding cache full; ignored playerNetId={envelope.PlayerNetId}");
+                    }
+                    if (session.ProtocolSelection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1
+                        && ulong.TryParse(envelope.PlayerNetId, out ulong sidecarPeerId)
+                        && !string.IsNullOrWhiteSpace(envelope.ProtocolFlowNonce))
+                    {
+                        try
+                        {
+                            byte[] flowNonce = LanConnectSidecarFrameCodec.ParseFlowNonce(envelope.ProtocolFlowNonce);
+                            LanConnectTailMessageRuntime.Shared.BindHostTrustedSidecarFlow(
+                                session.NetService,
+                                sidecarPeerId,
+                                flowNonce);
+                        }
+                        catch (InvalidDataException exception)
+                        {
+                            Log.Warn(
+                                $"sts2_lan_connect ignored invalid Ritsu control binding nonce for playerNetId={envelope.PlayerNetId}: {exception.Message}");
+                        }
                     }
                     LanConnectRemoteLobbyPlayerPatches.QueueRefreshAll();
                 }
@@ -3590,6 +3614,10 @@ internal sealed partial class LanConnectLobbyRuntime :
         {
             _connectedPeerIds.Remove(_);
             _kickTargets.ObserveDisconnected(_.ToString());
+            if (ProtocolSelection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
+            {
+                LanConnectTailMessageRuntime.Shared.ClearSidecarPeer(NetService, _);
+            }
             if (LanConnectLobbyRuntime.Instance != null)
             {
                 LanConnectLobbyRuntime.Instance._timeUntilHeartbeat = 0d;
@@ -3650,7 +3678,8 @@ internal sealed partial class LanConnectLobbyRuntime :
             string? roomSessionId,
             LanConnectSessionProtocolLease protocolLease,
             string clientVersion,
-            LanConnectProtocolSelection protocolSelection)
+            LanConnectProtocolSelection protocolSelection,
+            LobbyControlClient? controlClient = null)
         {
             NetService = netService;
             ApiClient = apiClient;
@@ -3662,7 +3691,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             ProtocolLease = protocolLease;
             ClientVersion = clientVersion;
             ProtocolSelection = protocolSelection;
-            ControlClient = new LobbyControlClient();
+            ControlClient = controlClient ?? new LobbyControlClient();
             _disconnectedHandler = OnDisconnected;
         }
 

@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Godot;
 using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
@@ -18,11 +19,18 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
 
     [ThreadStatic]
     private static Stack<LanConnectProtocolFailure>? _outgoingRejections;
+    [ThreadStatic]
+    private static Stack<IReadOnlyList<ulong>>? _outgoingSidecarRecipients;
 
     internal static LanConnectTailMessageRuntime Shared { get; } = new();
 
     internal static bool HasPendingOutgoingRejectionForCurrentThread =>
         _outgoingRejections is { Count: > 0 };
+
+    internal LanConnectTailMessageRuntime()
+    {
+        LanConnectRitsuLibSidecarCarrier.Shared.FrameReceived += OnSidecarFrameReceived;
+    }
 
     internal void BindHost(
         NetHostGameService service,
@@ -61,8 +69,70 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         NetMessageBus bus = GetMessageBus(service);
         lock (_sync)
         {
-            _bindings.Remove(bus);
+            if (_bindings.Remove(bus, out Binding? binding)
+                && binding.Selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
+            {
+                ulong[] peers = binding.BoundPeerIds.ToArray();
+                binding.ClearSidecar();
+                foreach (ulong peerId in peers)
+                {
+                    LanConnectRitsuLibSidecarCarrier.Shared.SetPeerUnknown(peerId);
+                }
+                if (_bindings.Values.All(static value =>
+                        value.Selection.Carrier != LanConnectProtocolCarrier.RitsuLibSidecarV1))
+                {
+                    LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(null);
+                }
+            }
         }
+    }
+
+    internal void BindHostTrustedSidecarFlow(
+        NetHostGameService service,
+        ulong peerNetId,
+        ReadOnlySpan<byte> protocolFlowNonce)
+    {
+        Binding binding = RequireBinding(GetMessageBus(service));
+        if (binding.Selection.Carrier != LanConnectProtocolCarrier.RitsuLibSidecarV1)
+        {
+            return;
+        }
+
+        binding.BindBidirectionalSidecarFlow(service.NetId, peerNetId, protocolFlowNonce);
+        LanConnectRitsuLibSidecarCarrier.Shared.SetPeerSupported(peerNetId);
+    }
+
+    internal void BindClientHostSidecarFlow(NetClientGameService service)
+    {
+        BindClientHostSidecarFlow(service, service.NetId, service.HostNetId);
+    }
+
+    internal void BindClientHostSidecarFlow(NetClientGameService service, ulong localNetId, ulong hostNetId)
+    {
+        Binding binding = RequireBinding(GetMessageBus(service));
+        if (binding.Selection.Carrier != LanConnectProtocolCarrier.RitsuLibSidecarV1)
+        {
+            return;
+        }
+
+        byte[] nonce = binding.ProtocolFlowNonce
+            ?? throw new InvalidOperationException("Tail client sidecar binding has no protocol flow nonce.");
+        binding.BindBidirectionalSidecarFlow(localNetId, hostNetId, nonce);
+        LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(service);
+        LanConnectRitsuLibSidecarCarrier.Shared.SetPeerSupported(hostNetId);
+    }
+
+    internal void ClearSidecarPeer(INetGameService service, ulong peerNetId)
+    {
+        Binding binding = RequireBinding(GetMessageBus(service));
+        binding.ClearSidecarPeer(peerNetId);
+        LanConnectRitsuLibSidecarCarrier.Shared.SetPeerUnknown(peerNetId);
+    }
+
+    internal static IDisposable PushOutgoingSidecarRecipientsForCurrentThread(IReadOnlyList<ulong> recipientPeerIds)
+    {
+        (_outgoingSidecarRecipients ??= new Stack<IReadOnlyList<ulong>>()).Push(recipientPeerIds.ToArray());
+        return new OutgoingSidecarRecipientScope();
     }
 
     internal bool TryTakeValidatedRejection(
@@ -93,11 +163,6 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     {
         Binding binding = RequireBinding(messageBus);
         ValidateBinding(binding, senderPeerId, selection);
-        if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
-        {
-            throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
-        }
-
         return messageKind switch
         {
             LanConnectSidecarMessageKind.LobbyJoinRequest or
@@ -135,12 +200,42 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     }
 
     public void SubmitSidecarBeforeVanilla(
+        NetMessageBus messageBus,
         LanConnectSidecarMessageKind messageKind,
         ulong senderPeerId,
         object message,
         byte[] container,
-        LanConnectProtocolSelection selection) =>
-        throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+        LanConnectProtocolSelection selection)
+    {
+        _ = message;
+        Binding binding = RequireBinding(messageBus);
+        ValidateBinding(binding, senderPeerId, selection);
+        EnsureSidecarReady(binding);
+
+        IReadOnlyList<ulong> recipients = ResolveOutgoingRecipients(binding);
+        foreach (ulong recipientPeerId in recipients)
+        {
+            SidecarFlow flow = binding.RequireOutgoingSidecarFlow(senderPeerId, recipientPeerId);
+            LanConnectSidecarFrame frame = new(
+                messageKind,
+                flow.FlowNonce,
+                flow.NextOutgoingSequence,
+                container);
+            byte[] encoded = LanConnectSidecarFrameCodec.Encode(frame);
+            bool sent = binding.IsHost
+                ? LanConnectRitsuLibSidecarCarrier.Shared.SendToPeer(binding.Service, recipientPeerId, encoded)
+                : LanConnectRitsuLibSidecarCarrier.Shared.SendToHost(binding.Service, encoded);
+            if (!sent)
+            {
+                throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+            }
+        }
+
+        foreach (ulong recipientPeerId in recipients)
+        {
+            binding.RequireOutgoingSidecarFlow(senderPeerId, recipientPeerId).AdvanceOutgoing();
+        }
+    }
 
     public void ValidateStandaloneIncoming(
         NetMessageBus messageBus,
@@ -174,8 +269,120 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         LanConnectSidecarMessageKind messageKind,
         ulong senderPeerId,
         INetMessage message,
-        LanConnectProtocolSelection selection) =>
-        throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+        LanConnectProtocolSelection selection)
+    {
+        Binding binding = RequireBinding(messageBus);
+        ValidateBinding(binding, binding.Service.NetId, selection);
+        EnsureSidecarReady(binding);
+
+        ulong recipientPeerId = binding.Service.NetId;
+        SidecarFlow flow = binding.RequireIncomingSidecarFlow(senderPeerId, recipientPeerId);
+        LanConnectPairedSidecarMessage? paired = binding.SidecarPairing.SubmitVanilla(
+            senderPeerId,
+            recipientPeerId,
+            flow.FlowNonce,
+            messageKind,
+            message,
+            DateTimeOffset.UtcNow);
+        if (paired == null)
+        {
+            return false;
+        }
+
+        ValidateIncomingCore(
+            binding,
+            paired.MessageKind,
+            paired.SenderPeerId,
+            message,
+            paired.Frame.Container.ToArray(),
+            selection);
+        return true;
+    }
+
+    private void OnSidecarFrameReceived(ulong senderPeerId, byte[] payload)
+    {
+        LanConnectSidecarFrame frame;
+        try
+        {
+            frame = LanConnectSidecarFrameCodec.Decode(payload);
+        }
+        catch (InvalidDataException)
+        {
+            return;
+        }
+
+        Binding[] bindings;
+        lock (_sync)
+        {
+            bindings = _bindings.Values.ToArray();
+        }
+
+        foreach (Binding binding in bindings)
+        {
+            if (binding.Selection.Carrier != LanConnectProtocolCarrier.RitsuLibSidecarV1)
+            {
+                continue;
+            }
+
+            ulong recipientPeerId;
+            try
+            {
+                recipientPeerId = binding.Service.NetId;
+            }
+            catch (InvalidOperationException)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (!binding.HasIncomingSidecarFlow(senderPeerId, recipientPeerId, frame.FlowNonce.Span))
+                {
+                    continue;
+                }
+
+                LanConnectPairedSidecarMessage? paired = binding.SidecarPairing.SubmitFrame(
+                    senderPeerId,
+                    recipientPeerId,
+                    frame,
+                    DateTimeOffset.UtcNow);
+                if (paired != null)
+                {
+                    ReleasePairedIncoming(binding, paired);
+                }
+                return;
+            }
+            catch (Exception exception) when (exception is InvalidDataException or LanConnectProtocolException)
+            {
+                RejectAndDisconnect(
+                    binding,
+                    senderPeerId,
+                    Protocol("lan_protocol_version_mismatch", exception.Message).Failure);
+                return;
+            }
+        }
+    }
+
+    private void ReleasePairedIncoming(Binding binding, LanConnectPairedSidecarMessage paired)
+    {
+        INetMessage message = (INetMessage)paired.VanillaMessage;
+        ValidateIncomingCore(
+            binding,
+            paired.MessageKind,
+            paired.SenderPeerId,
+            message,
+            paired.Frame.Container.ToArray(),
+            binding.Selection);
+        void Release() => binding.MessageBus.SendMessageToAllHandlers(message, paired.SenderPeerId);
+        if (Engine.GetMainLoop() is SceneTree)
+        {
+            Callable.From(Release).CallDeferred();
+        }
+        else
+        {
+            Task.Run(Release);
+        }
+    }
 
     private void ValidateIncomingCore(
         Binding binding,
@@ -595,11 +802,65 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     {
         offer.Validate();
         if (!offer.Supports(selection.SelectedLanProtocolVersion)
-            || offer.RitsuLibPresent != selection.RitsuLibPresent
-            || offer.RitsuLibSidecarAvailable)
+            || offer.RitsuLibPresent != selection.RitsuLibPresent)
         {
-            throw new InvalidDataException("Peer offer is incompatible with the frozen standalone Tail selection.");
+            throw new InvalidDataException("Peer offer is incompatible with the frozen Tail selection.");
         }
+
+        if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
+        {
+            if (!offer.RitsuLibSidecarAvailable)
+            {
+                throw new InvalidDataException("Peer offer has no usable public RitsuLib sidecar.");
+            }
+        }
+        else if (offer.RitsuLibSidecarAvailable)
+        {
+            throw new InvalidDataException("Standalone Tail peer offer unexpectedly advertises RitsuLib sidecar.");
+        }
+    }
+
+    private static void EnsureSidecarReady(Binding binding)
+    {
+        if (binding.Selection.Carrier != LanConnectProtocolCarrier.RitsuLibSidecarV1
+            || !binding.Offer.RitsuLibPresent
+            || !binding.Offer.RitsuLibSidecarAvailable
+            || !LanConnectRitsuLibSidecarCarrier.Shared.TryEnsureRegistered()
+            || !LanConnectRitsuLibSidecarCarrier.Shared.IsReady)
+        {
+            throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+        }
+    }
+
+    private static IReadOnlyList<ulong> ResolveOutgoingRecipients(Binding binding)
+    {
+        if (!binding.IsHost)
+        {
+            return [GetHostPeerId(binding.Service)];
+        }
+
+        if (_outgoingSidecarRecipients is { Count: > 0 } stack)
+        {
+            IReadOnlyList<ulong> requested = stack.Peek();
+            ulong[] recipients = stack.Peek()
+                .Where(binding.HasSidecarPeer)
+                .Distinct()
+                .ToArray();
+            if (recipients.Length > 0 || requested.Count == 0)
+            {
+                return recipients;
+            }
+
+            throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+        }
+
+        ulong[] fallback = binding.BoundPeerIds.ToArray();
+        if (fallback.Length > 0)
+        {
+            return fallback;
+        }
+
+        throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
     }
 
     private static LanConnectRosterSnapshot RequireRoster(LanConnectTailMessagePayload payload) =>
@@ -652,6 +913,10 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         lock (_sync)
         {
             _bindings[bus] = binding;
+        }
+        if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1 && isHost)
+        {
+            LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(service);
         }
     }
 
@@ -733,6 +998,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             Selection = selection;
             IsHost = isHost;
             ProtocolFlowNonce = protocolFlowNonce?.ToArray();
+            MessageBus = GetMessageBus(service);
             _roster = isHost ? new LanConnectRosterAuthorityState(service.NetId) : null;
         }
 
@@ -742,6 +1008,9 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         internal LanConnectProtocolSelection Selection { get; }
         internal bool IsHost { get; }
         internal byte[]? ProtocolFlowNonce { get; }
+        internal NetMessageBus MessageBus { get; }
+        internal LanConnectSidecarPairingCache SidecarPairing { get; } = new();
+        private readonly Dictionary<SidecarFlowKey, SidecarFlow> _sidecarFlows = [];
         private LanConnectRosterAuthorityState? _roster;
         internal LanConnectRosterAuthorityState RequireRoster()
         {
@@ -751,5 +1020,166 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             }
         }
         internal Dictionary<ulong, LanConnectProtocolFailure> ValidatedRejections { get; } = [];
+
+        internal IReadOnlyCollection<ulong> BoundPeerIds
+        {
+            get
+            {
+                lock (Sync)
+                {
+                    ulong localPeerId = Service.NetId;
+                    return _sidecarFlows.Keys
+                        .Where(key => key.SenderPeerId == localPeerId || key.RecipientPeerId == localPeerId)
+                        .Select(key => key.SenderPeerId == localPeerId ? key.RecipientPeerId : key.SenderPeerId)
+                        .Where(peerId => peerId != localPeerId)
+                        .Distinct()
+                        .ToArray();
+                }
+            }
+        }
+
+        internal bool HasSidecarPeer(ulong peerNetId)
+        {
+            lock (Sync)
+            {
+                return _sidecarFlows.Keys.Any(key =>
+                    key.SenderPeerId == peerNetId || key.RecipientPeerId == peerNetId);
+            }
+        }
+
+        internal void BindBidirectionalSidecarFlow(
+            ulong localPeerId,
+            ulong remotePeerId,
+            ReadOnlySpan<byte> protocolFlowNonce)
+        {
+            if (protocolFlowNonce.Length != LanConnectSidecarFrameCodec.FlowNonceBytes)
+            {
+                throw Protocol(
+                    "lan_protocol_version_mismatch",
+                    "Ritsu sidecar binding requires a 16-byte protocol flow nonce.");
+            }
+
+            lock (Sync)
+            {
+                BindSidecarFlowLocked(localPeerId, remotePeerId, protocolFlowNonce);
+                BindSidecarFlowLocked(remotePeerId, localPeerId, protocolFlowNonce);
+            }
+        }
+
+        internal SidecarFlow RequireOutgoingSidecarFlow(ulong senderPeerId, ulong recipientPeerId)
+        {
+            lock (Sync)
+            {
+                SidecarFlowKey key = new(senderPeerId, recipientPeerId);
+                if (_sidecarFlows.TryGetValue(key, out SidecarFlow? flow)
+                    && LanConnectRitsuLibSidecarCarrier.Shared.CanSendToPeer(recipientPeerId))
+                {
+                    return flow;
+                }
+            }
+
+            throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+        }
+
+        internal SidecarFlow RequireIncomingSidecarFlow(ulong senderPeerId, ulong recipientPeerId)
+        {
+            lock (Sync)
+            {
+                SidecarFlowKey key = new(senderPeerId, recipientPeerId);
+                return _sidecarFlows.TryGetValue(key, out SidecarFlow? flow)
+                    ? flow
+                    : throw new InvalidDataException("Incoming Ritsu sidecar frame has no trusted flow binding.");
+            }
+        }
+
+        internal bool HasIncomingSidecarFlow(
+            ulong senderPeerId,
+            ulong recipientPeerId,
+            ReadOnlySpan<byte> protocolFlowNonce)
+        {
+            lock (Sync)
+            {
+                SidecarFlowKey key = new(senderPeerId, recipientPeerId);
+                return _sidecarFlows.TryGetValue(key, out SidecarFlow? flow)
+                       && flow.FlowNonce.SequenceEqual(protocolFlowNonce);
+            }
+        }
+
+        internal void ClearSidecarPeer(ulong peerNetId)
+        {
+            lock (Sync)
+            {
+                foreach (SidecarFlowKey key in _sidecarFlows.Keys
+                             .Where(key => key.SenderPeerId == peerNetId || key.RecipientPeerId == peerNetId)
+                             .ToArray())
+                {
+                    _sidecarFlows.Remove(key);
+                }
+                SidecarPairing.ClearPeer(peerNetId);
+            }
+        }
+
+        internal void ClearSidecar()
+        {
+            lock (Sync)
+            {
+                _sidecarFlows.Clear();
+                SidecarPairing.Clear();
+            }
+        }
+
+        private void BindSidecarFlowLocked(
+            ulong senderPeerId,
+            ulong recipientPeerId,
+            ReadOnlySpan<byte> protocolFlowNonce)
+        {
+            SidecarFlowKey key = new(senderPeerId, recipientPeerId);
+            if (_sidecarFlows.ContainsKey(key))
+            {
+                return;
+            }
+
+            SidecarPairing.BindFlow(senderPeerId, recipientPeerId, protocolFlowNonce);
+            _sidecarFlows.Add(key, new SidecarFlow(protocolFlowNonce));
+        }
+    }
+
+    private sealed class OutgoingSidecarRecipientScope : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0
+                && _outgoingSidecarRecipients is { Count: > 0 } recipients)
+            {
+                recipients.Pop();
+            }
+        }
+    }
+
+    private readonly record struct SidecarFlowKey(ulong SenderPeerId, ulong RecipientPeerId);
+
+    private sealed class SidecarFlow
+    {
+        private readonly byte[] _flowNonce;
+
+        internal SidecarFlow(ReadOnlySpan<byte> flowNonce)
+        {
+            _flowNonce = flowNonce.ToArray();
+        }
+
+        internal ReadOnlySpan<byte> FlowNonce => _flowNonce;
+        internal uint NextOutgoingSequence { get; private set; } = 1;
+
+        internal void AdvanceOutgoing()
+        {
+            if (NextOutgoingSequence == uint.MaxValue)
+            {
+                throw new InvalidDataException("Ritsu sidecar outgoing message sequence is exhausted.");
+            }
+
+            NextOutgoingSequence++;
+        }
     }
 }

@@ -74,30 +74,11 @@ public sealed class LanConnectTailMessageBusTests
     }
 
     [TestCase]
-    public void Ritsu_selection_stays_fail_closed_without_the_public_sidecar_runtime()
+    public void Ritsu_sidecar_capability_is_absent_without_the_public_assembly()
     {
-        LanConnectProtocolSelection selection = Selection() with
-        {
-            Carrier = LanConnectProtocolCarrier.RitsuLibSidecarV1,
-            RitsuLibPresent = true,
-            CapabilityDigest = string.Empty
-        };
-        selection = selection with { CapabilityDigest = LanConnectCapabilityDigest.Compute(selection) };
-        bool rejected = false;
-        try
-        {
-            LanConnectTailMessageRuntime.Shared.SubmitSidecarBeforeVanilla(
-                LanConnectSidecarMessageKind.InitialGameInfo,
-                1,
-                default(InitialGameInfoMessage),
-                [],
-                selection);
-        }
-        catch (LanConnectProtocolException exception)
-        {
-            rejected = exception.Failure.Code == "ritsulib_sidecar_unavailable";
-        }
-        AssertThat(rejected).IsTrue();
+        LanConnectExternalCapabilitySnapshot snapshot = LanConnectExternalCapabilityCollector.Collect([]);
+        AssertThat(snapshot.RitsuLibPresent).IsFalse();
+        AssertThat(snapshot.RitsuLibSidecarAvailable).IsFalse();
     }
 
     private static LanConnectProtocolOffer Offer() =>
@@ -141,6 +122,7 @@ public sealed class LanConnectTailMessageBusTests
         }
 
         public void SubmitSidecarBeforeVanilla(
+            NetMessageBus messageBus,
             LanConnectSidecarMessageKind messageKind,
             ulong senderPeerId,
             object message,
