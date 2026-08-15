@@ -6,6 +6,8 @@
 
 ## [0.6.0-alpha.1] - 2026-08-15
 
+客户端与 lobby-service `0.6.0-alpha.1` 双协议测试候选同步准备。
+
 ### Added
 
 - 客户端与 lobby-service 同步新增 `compat_4_5_v1` / `tail_v1` profile、不可变 protocol selection、capability digest 和结构化协议错误。
