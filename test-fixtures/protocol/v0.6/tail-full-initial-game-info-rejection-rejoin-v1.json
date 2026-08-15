@@ -1,0 +1,67 @@
+{
+  "name": "tail-full-initial-game-info-rejection-rejoin-v1",
+  "schema": "sts2-v0.111.0-netmessagebus-tail-full-v1",
+  "file": "tail-full-initial-game-info-rejection-rejoin-v1.bin",
+  "messageType": "InitialGameInfoMessage",
+  "messageTypeId": 16,
+  "senderPeerId": 1,
+  "headerBytes": 9,
+  "messageKind": "ConnectionFailed",
+  "messageKindValue": 8,
+  "vanillaBodyEndBit": 83,
+  "paddingBits": 5,
+  "containerStartBit": 88,
+  "containerStartByte": 11,
+  "containerBytes": 106,
+  "totalBytes": 117,
+  "sha256": "8c973d82655be4e99fa5304a9a98b4bdd36debc9c87826aa73270c1ffc59dcf2",
+  "containerSha256": "b7f783377ae49a4c224e693e6bbb7665f48e5c12772b51a83da83eb398687805",
+  "fixtureProvenance": {
+    "authoringMethod": "captured-from-production-serialization-manually-byte-map-reviewed",
+    "vanillaBodyAuthoring": "not-independent-authoring",
+    "lanContainerReview": "independent-test-parser-no-production-lan-codec-or-runtime",
+    "frozen": true,
+    "updatePolicy": "fixture updates require independent construction or manual byte-level review; tests are read-only",
+    "reviewedFields": [
+      "messageTypeId",
+      "senderPeerId",
+      "headerBytes",
+      "vanillaBodyEndBit",
+      "paddingBits",
+      "containerStartBit",
+      "containerStartByte",
+      "containerBytes",
+      "sha256",
+      "containerSha256",
+      "expected"
+    ]
+  },
+  "byteMapReview": {
+    "packetHeader": {
+      "messageTypeIdOffset": 0,
+      "senderPeerIdLittleEndianByteRange": "1..8",
+      "headerBytes": 9
+    },
+    "vanillaBody": {
+      "startBit": 72,
+      "endBit": 83,
+      "reviewStatus": "reviewed-by-offset-map-not-independently-constructed"
+    },
+    "standaloneTail": {
+      "paddingBits": 5,
+      "containerStartBit": 88,
+      "containerStartByte": 11,
+      "containerBytes": 106,
+      "containerSha256": "b7f783377ae49a4c224e693e6bbb7665f48e5c12772b51a83da83eb398687805"
+    }
+  },
+  "expected": {
+    "payload": "rejection",
+    "sessionState": "InLobby",
+    "gameMode": "Standard",
+    "connectionFailureReason": "ModMismatch",
+    "rejectionStage": "rejoin",
+    "code": "wire_cache_mismatch",
+    "detail": "rejected during rejoin request"
+  }
+}

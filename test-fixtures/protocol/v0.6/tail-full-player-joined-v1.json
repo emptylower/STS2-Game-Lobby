@@ -1,0 +1,76 @@
+{
+  "name": "tail-full-player-joined-v1",
+  "schema": "sts2-v0.111.0-netmessagebus-tail-full-v1",
+  "file": "tail-full-player-joined-v1.bin",
+  "messageType": "PlayerJoinedMessage",
+  "messageTypeId": 31,
+  "senderPeerId": 1,
+  "headerBytes": 9,
+  "messageKind": "PlayerJoined",
+  "messageKindValue": 9,
+  "vanillaBodyEndBit": 253,
+  "paddingBits": 3,
+  "containerStartBit": 256,
+  "containerStartByte": 32,
+  "containerBytes": 261,
+  "totalBytes": 293,
+  "sha256": "7e15866f45f1359e2e311d25b260ae932122552d9fdde24886bf90b62957a2b4",
+  "containerSha256": "5df5421146ca8fc75a1796c0b4933b96a818065d39bae6849220375bb2dd6735",
+  "fixtureProvenance": {
+    "authoringMethod": "captured-from-production-serialization-manually-byte-map-reviewed",
+    "vanillaBodyAuthoring": "not-independent-authoring",
+    "lanContainerReview": "independent-test-parser-no-production-lan-codec-or-runtime",
+    "frozen": true,
+    "updatePolicy": "fixture updates require independent construction or manual byte-level review; tests are read-only",
+    "reviewedFields": [
+      "messageTypeId",
+      "senderPeerId",
+      "headerBytes",
+      "vanillaBodyEndBit",
+      "paddingBits",
+      "containerStartBit",
+      "containerStartByte",
+      "containerBytes",
+      "sha256",
+      "containerSha256",
+      "expected"
+    ]
+  },
+  "byteMapReview": {
+    "packetHeader": {
+      "messageTypeIdOffset": 0,
+      "senderPeerIdLittleEndianByteRange": "1..8",
+      "headerBytes": 9
+    },
+    "vanillaBody": {
+      "startBit": 72,
+      "endBit": 253,
+      "reviewStatus": "reviewed-by-offset-map-not-independently-constructed"
+    },
+    "standaloneTail": {
+      "paddingBits": 3,
+      "containerStartBit": 256,
+      "containerStartByte": 32,
+      "containerBytes": 261,
+      "containerSha256": "5df5421146ca8fc75a1796c0b4933b96a818065d39bae6849220375bb2dd6735"
+    }
+  },
+  "expected": {
+    "payload": "roster",
+    "slots": [
+      0,
+      1,
+      2,
+      5,
+      7
+    ],
+    "playerIds": [
+      100,
+      101,
+      102,
+      105,
+      107
+    ],
+    "joinedPlayerId": 107
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "name": "tail-full-initial-game-info-v1",
+  "schema": "sts2-v0.111.0-netmessagebus-tail-full-v1",
+  "file": "tail-full-initial-game-info-v1.bin",
+  "messageType": "InitialGameInfoMessage",
+  "messageTypeId": 16,
+  "senderPeerId": 1,
+  "headerBytes": 9,
+  "messageKind": "InitialGameInfo",
+  "messageKindValue": 1,
+  "vanillaBodyEndBit": 79,
+  "paddingBits": 1,
+  "containerStartBit": 80,
+  "containerStartByte": 10,
+  "containerBytes": 48,
+  "totalBytes": 58,
+  "sha256": "7ba41a76208ec77c2836fd41cd8470eb0805330c4cd69c8c746b47255659ae92",
+  "containerSha256": "a43815bba65a92b024a4db90bda338b86696018942998d671dc0f67f6e03e54c",
+  "fixtureProvenance": {
+    "authoringMethod": "captured-from-production-serialization-manually-byte-map-reviewed",
+    "vanillaBodyAuthoring": "not-independent-authoring",
+    "lanContainerReview": "independent-test-parser-no-production-lan-codec-or-runtime",
+    "frozen": true,
+    "updatePolicy": "fixture updates require independent construction or manual byte-level review; tests are read-only",
+    "reviewedFields": [
+      "messageTypeId",
+      "senderPeerId",
+      "headerBytes",
+      "vanillaBodyEndBit",
+      "paddingBits",
+      "containerStartBit",
+      "containerStartByte",
+      "containerBytes",
+      "sha256",
+      "containerSha256",
+      "expected"
+    ]
+  },
+  "byteMapReview": {
+    "packetHeader": {
+      "messageTypeIdOffset": 0,
+      "senderPeerIdLittleEndianByteRange": "1..8",
+      "headerBytes": 9
+    },
+    "vanillaBody": {
+      "startBit": 72,
+      "endBit": 79,
+      "reviewStatus": "reviewed-by-offset-map-not-independently-constructed"
+    },
+    "standaloneTail": {
+      "paddingBits": 1,
+      "containerStartBit": 80,
+      "containerStartByte": 10,
+      "containerBytes": 48,
+      "containerSha256": "a43815bba65a92b024a4db90bda338b86696018942998d671dc0f67f6e03e54c"
+    }
+  },
+  "expected": {
+    "payload": "selection",
+    "sessionState": "InLobby",
+    "gameMode": "Standard"
+  }
+}

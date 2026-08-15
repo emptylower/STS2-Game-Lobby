@@ -1,0 +1,64 @@
+{
+  "name": "tail-full-rejoin-request-v1",
+  "schema": "sts2-v0.111.0-netmessagebus-tail-full-v1",
+  "file": "tail-full-rejoin-request-v1.bin",
+  "messageType": "ClientRejoinRequestMessage",
+  "messageTypeId": 8,
+  "senderPeerId": 22,
+  "headerBytes": 9,
+  "messageKind": "RejoinRequest",
+  "messageKindValue": 6,
+  "vanillaBodyEndBit": 72,
+  "paddingBits": 0,
+  "containerStartBit": 72,
+  "containerStartByte": 9,
+  "containerBytes": 63,
+  "totalBytes": 72,
+  "sha256": "b81e0b5f690ed6a2be1c498fb4c59ce40ebb5e4ce42748e61def90f2a1833b1d",
+  "containerSha256": "77f1e9e2839718ddbbd98a98e473524035c4a505ad5b94bb934c2d023544e890",
+  "fixtureProvenance": {
+    "authoringMethod": "captured-from-production-serialization-manually-byte-map-reviewed",
+    "vanillaBodyAuthoring": "not-independent-authoring",
+    "lanContainerReview": "independent-test-parser-no-production-lan-codec-or-runtime",
+    "frozen": true,
+    "updatePolicy": "fixture updates require independent construction or manual byte-level review; tests are read-only",
+    "reviewedFields": [
+      "messageTypeId",
+      "senderPeerId",
+      "headerBytes",
+      "vanillaBodyEndBit",
+      "paddingBits",
+      "containerStartBit",
+      "containerStartByte",
+      "containerBytes",
+      "sha256",
+      "containerSha256",
+      "expected"
+    ]
+  },
+  "byteMapReview": {
+    "packetHeader": {
+      "messageTypeIdOffset": 0,
+      "senderPeerIdLittleEndianByteRange": "1..8",
+      "headerBytes": 9
+    },
+    "vanillaBody": {
+      "startBit": 72,
+      "endBit": 72,
+      "reviewStatus": "reviewed-by-offset-map-not-independently-constructed"
+    },
+    "standaloneTail": {
+      "paddingBits": 0,
+      "containerStartBit": 72,
+      "containerStartByte": 9,
+      "containerBytes": 63,
+      "containerSha256": "77f1e9e2839718ddbbd98a98e473524035c4a505ad5b94bb934c2d023544e890"
+    }
+  },
+  "expected": {
+    "payload": "peerOffer",
+    "clientVersion": "0.6.0-alpha.1",
+    "ritsuLibPresent": false,
+    "ritsuLibSidecarAvailable": false
+  }
+}

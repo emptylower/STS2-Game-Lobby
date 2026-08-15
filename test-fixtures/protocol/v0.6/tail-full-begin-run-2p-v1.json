@@ -1,0 +1,71 @@
+{
+  "name": "tail-full-begin-run-2p-v1",
+  "schema": "sts2-v0.111.0-netmessagebus-tail-full-v1",
+  "file": "tail-full-begin-run-2p-v1.bin",
+  "messageType": "LobbyBeginRunMessage",
+  "messageTypeId": 19,
+  "senderPeerId": 1,
+  "headerBytes": 9,
+  "messageKind": "LobbyBeginRun",
+  "messageKindValue": 10,
+  "vanillaBodyEndBit": 613,
+  "paddingBits": 3,
+  "containerStartBit": 616,
+  "containerStartByte": 77,
+  "containerBytes": 153,
+  "totalBytes": 230,
+  "sha256": "b9ef6a1cc27f8ae653650f7b2f6b7f91db939b7d54b673a3e7df6f01d8ee74de",
+  "containerSha256": "65e724115c4332adefc11f7985c7c90ba3e41654b6a6e13abecddb6e6a14ca25",
+  "fixtureProvenance": {
+    "authoringMethod": "captured-from-production-serialization-manually-byte-map-reviewed",
+    "vanillaBodyAuthoring": "not-independent-authoring",
+    "lanContainerReview": "independent-test-parser-no-production-lan-codec-or-runtime",
+    "frozen": true,
+    "updatePolicy": "fixture updates require independent construction or manual byte-level review; tests are read-only",
+    "reviewedFields": [
+      "messageTypeId",
+      "senderPeerId",
+      "headerBytes",
+      "vanillaBodyEndBit",
+      "paddingBits",
+      "containerStartBit",
+      "containerStartByte",
+      "containerBytes",
+      "sha256",
+      "containerSha256",
+      "expected"
+    ]
+  },
+  "byteMapReview": {
+    "packetHeader": {
+      "messageTypeIdOffset": 0,
+      "senderPeerIdLittleEndianByteRange": "1..8",
+      "headerBytes": 9
+    },
+    "vanillaBody": {
+      "startBit": 72,
+      "endBit": 613,
+      "reviewStatus": "reviewed-by-offset-map-not-independently-constructed"
+    },
+    "standaloneTail": {
+      "paddingBits": 3,
+      "containerStartBit": 616,
+      "containerStartByte": 77,
+      "containerBytes": 153,
+      "containerSha256": "65e724115c4332adefc11f7985c7c90ba3e41654b6a6e13abecddb6e6a14ca25"
+    }
+  },
+  "expected": {
+    "payload": "roster",
+    "seed": "seed-2",
+    "act1": "Act1",
+    "slots": [
+      0,
+      1
+    ],
+    "playerIds": [
+      100,
+      101
+    ]
+  }
+}
