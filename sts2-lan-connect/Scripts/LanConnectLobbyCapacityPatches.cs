@@ -15,7 +15,8 @@ internal static class LanConnectLobbyCapacityPatches
 {
     private static readonly ConditionalWeakTable<NetHostGameService, GuardedProtocolLease> GuardedLeases = new();
     private static readonly FieldInfo? MaxPlayersField =
-        AccessTools.Field(typeof(StartRunLobby), "<MaxPlayers>k__BackingField");
+        AccessTools.Field(typeof(StartRunLobby), "_maxPlayers")
+        ?? AccessTools.Field(typeof(StartRunLobby), "<MaxPlayers>k__BackingField");
 
     public static void Apply(Harmony harmony)
     {
@@ -155,9 +156,10 @@ internal static class LanConnectLobbyCapacityPatches
 
     private static void StartRunLobbyCtorPostfix(StartRunLobby __instance, INetGameService netService)
     {
-        int effective = ResolveRoomScopedMaxPlayers(__instance.MaxPlayers);
+        int currentMaxPlayers = GetMaxPlayers(__instance);
+        int effective = ResolveRoomScopedMaxPlayers(currentMaxPlayers);
         if (netService.Type == NetGameType.Host
-            && __instance.MaxPlayers != effective
+            && currentMaxPlayers != effective
             && MaxPlayersField != null)
         {
             MaxPlayersField.SetValue(__instance, effective);
@@ -171,11 +173,22 @@ internal static class LanConnectLobbyCapacityPatches
             return;
         }
 
-        int effective = ResolveRoomScopedMaxPlayers(__instance.MaxPlayers);
-        if (__instance.MaxPlayers != effective)
+        int currentMaxPlayers = GetMaxPlayers(__instance);
+        int effective = ResolveRoomScopedMaxPlayers(currentMaxPlayers);
+        if (currentMaxPlayers != effective)
         {
             MaxPlayersField.SetValue(__instance, effective);
         }
+    }
+
+    private static int GetMaxPlayers(StartRunLobby lobby)
+    {
+        if (MaxPlayersField?.GetValue(lobby) is int value)
+        {
+            return value;
+        }
+
+        return LanConnectConstants.ProtocolMaxPlayers;
     }
 
     private static int ResolveRoomScopedMaxPlayers(int requestedMaxPlayers)

@@ -64,11 +64,48 @@ public sealed class LanConnectTailMessageRuntimeTests
     }
 
     [TestCase]
+    public void Normal_join_restores_sparse_high_real_slots()
+    {
+        InitializeSts2Serialization();
+        using RuntimePair pair = new();
+        int[] realSlots = [0, 2, 5, 7];
+        ClientLobbyJoinResponseMessage response = new()
+        {
+            playersInLobby = StartRunPlayers(realSlots),
+            modifiers = []
+        };
+
+        LanConnectPreparedTailMessage prepared = pair.Runtime.PrepareOutgoing(
+            pair.HostBus,
+            LanConnectSidecarMessageKind.LobbyJoinResponse,
+            pair.HostId,
+            response,
+            pair.Selection);
+        ClientLobbyJoinResponseMessage projected = (ClientLobbyJoinResponseMessage)prepared.Message;
+        AssertThat(projected.playersInLobby!.Select(static player => player.slotId).ToArray())
+            .IsEqual(new[] { 0, 1, 2, 3 });
+
+        INetMessage boxed = projected;
+        pair.Runtime.ValidateStandaloneIncoming(
+            pair.ClientBus,
+            LanConnectSidecarMessageKind.LobbyJoinResponse,
+            pair.HostId,
+            boxed,
+            prepared.Container,
+            pair.Selection);
+        ClientLobbyJoinResponseMessage restored = (ClientLobbyJoinResponseMessage)boxed;
+        AssertThat(restored.playersInLobby!.Select(static player => player.slotId).ToArray())
+            .IsEqual(realSlots);
+    }
+
+    [TestCase]
     public void Player_joined_mutates_once_and_begin_run_reuses_the_committed_snapshot()
     {
         InitializeSts2Serialization();
         using RuntimePair pair = new();
-        IReadOnlyList<StartRunLobbyPlayer> firstPlayers = StartRunPlayers(2);
+        int[] firstSlots = [0, 5];
+        int[] expandedSlots = [0, 5, 7];
+        IReadOnlyList<StartRunLobbyPlayer> firstPlayers = StartRunPlayers(firstSlots);
         LanConnectPreparedTailMessage firstJoin = pair.Runtime.PrepareOutgoing(
             pair.HostBus,
             LanConnectSidecarMessageKind.LobbyJoinResponse,
@@ -84,12 +121,12 @@ public sealed class LanConnectTailMessageRuntimeTests
             firstJoin.Container,
             pair.Selection);
 
-        IReadOnlyList<StartRunLobbyPlayer> expanded = StartRunPlayers(3);
+        IReadOnlyList<StartRunLobbyPlayer> expandedBootstrap = StartRunPlayers(expandedSlots);
         LanConnectPreparedTailMessage newClientBootstrap = pair.Runtime.PrepareOutgoing(
             pair.HostBus,
             LanConnectSidecarMessageKind.LobbyJoinResponse,
             pair.HostId,
-            new ClientLobbyJoinResponseMessage { playersInLobby = expanded.ToList(), modifiers = [] },
+            new ClientLobbyJoinResponseMessage { playersInLobby = expandedBootstrap.ToList(), modifiers = [] },
             pair.Selection);
         LanConnectRosterSnapshot revisionTwo = DecodeRoster(
             LanConnectSidecarMessageKind.LobbyJoinResponse,
@@ -101,7 +138,7 @@ public sealed class LanConnectTailMessageRuntimeTests
             pair.HostBus,
             LanConnectSidecarMessageKind.PlayerJoined,
             pair.HostId,
-            new PlayerJoinedMessage { lobbyPlayer = expanded[^1] },
+            new PlayerJoinedMessage { lobbyPlayer = StartRunPlayers([7]).Single() },
             pair.Selection);
         INetMessage joinedBox = (INetMessage)joined.Message;
         pair.Runtime.ValidateStandaloneIncoming(
@@ -112,7 +149,7 @@ public sealed class LanConnectTailMessageRuntimeTests
             joined.Container,
             pair.Selection);
         PlayerJoinedMessage restoredJoined = (PlayerJoinedMessage)joinedBox;
-        AssertThat(restoredJoined.lobbyPlayer.slotId).IsEqual(2);
+        AssertThat(restoredJoined.lobbyPlayer.slotId).IsEqual(7);
 
         LanConnectPreparedTailMessage begin = pair.Runtime.PrepareOutgoing(
             pair.HostBus,
@@ -120,7 +157,7 @@ public sealed class LanConnectTailMessageRuntimeTests
             pair.HostId,
             new LobbyBeginRunMessage
             {
-                playersInLobby = expanded.ToList(),
+                playersInLobby = StartRunPlayers(expandedSlots),
                 seed = "seed",
                 modifiers = [],
                 act1 = "act"
@@ -141,7 +178,7 @@ public sealed class LanConnectTailMessageRuntimeTests
             pair.Selection);
         LobbyBeginRunMessage restoredBegin = (LobbyBeginRunMessage)beginBox;
         AssertThat(restoredBegin.playersInLobby!.Select(static player => player.slotId).ToArray())
-            .IsEqual(new[] { 0, 1, 2 });
+            .IsEqual(expandedSlots);
     }
 
     [TestCase]
@@ -157,7 +194,6 @@ public sealed class LanConnectTailMessageRuntimeTests
                 .Select(static player => new LoadRunLobbyPlayer
                 {
                     id = player.NetId,
-                    versionInfo = VersionInfo(),
                     isReady = true
                 })
                 .ToList()
@@ -221,30 +257,29 @@ public sealed class LanConnectTailMessageRuntimeTests
         Harmony harmony = new($"sts2_lan_connect.tests.tail_runtime.{Guid.NewGuid():N}");
         using LanConnectSessionProtocolLease lease =
             LanConnectSessionProtocolState.Shared.FreezeHost(pair.Selection, harmony.Id);
-        LanConnectProtocolFailure? receivedFailure = null;
-        pair.Client.RegisterMessageHandler<ClientConnectionFailedMessage>((message, sender) =>
-        {
-            pair.Runtime.TryTakeValidatedRejection(pair.Client, sender, out receivedFailure);
-        });
 
         try
         {
             LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
             LanConnectTailMessagePatches.Apply(harmony);
-            pair.Client.SendMessage(new ClientLobbyJoinRequestMessage
-            {
-                maxAscensionUnlocked = 0,
-                unlockState = new SerializableUnlockState(),
-                versionInfo = VersionInfo()
-            });
-            byte[] validRequest = pair.ClientTransport.SentToHost.Single();
+            byte[] validRequest = pair.ClientBus.SerializeMessage(
+                pair.ClientId,
+                new ClientLobbyJoinRequestMessage
+                {
+                    maxAscensionUnlocked = 0,
+                    unlockState = new SerializableUnlockState()
+                },
+                out int validLength).AsSpan(0, validLength).ToArray();
             byte[] truncatedRequest = validRequest[..^1];
 
-            pair.Host.OnPacketReceived(
-                pair.ClientId,
-                truncatedRequest,
-                NetTransferMode.Reliable,
-                0);
+            using (LanConnectTailMessagePatches.PushTransportSenderForTesting(pair.ClientId))
+            {
+                bool decoded = pair.HostBus.TryDeserializeMessage(
+                    truncatedRequest,
+                    out INetMessage? _,
+                    out ulong? _);
+                AssertThat(decoded).IsFalse();
+            }
 
             AssertThat(pair.HostTransport.DisconnectedPeers).Contains(pair.ClientId);
             CapturedPacket rejection = pair.HostTransport.SentToClients.Single();
@@ -253,6 +288,11 @@ public sealed class LanConnectTailMessageRuntimeTests
                 rejection.Bytes,
                 NetTransferMode.Reliable,
                 0);
+            bool hasFailure = pair.Runtime.TryTakeValidatedRejection(
+                pair.Client,
+                pair.HostId,
+                out LanConnectProtocolFailure? receivedFailure);
+            AssertThat(hasFailure).IsTrue();
             AssertThat(receivedFailure != null).IsTrue();
             AssertThat(receivedFailure!.Code).IsEqual("lan_protocol_version_mismatch");
         }
@@ -276,20 +316,24 @@ public sealed class LanConnectTailMessageRuntimeTests
         {
             LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
             LanConnectTailMessagePatches.Apply(harmony);
-            pair.Client.SendMessage(new ClientLobbyJoinRequestMessage
-            {
-                maxAscensionUnlocked = 0,
-                unlockState = new SerializableUnlockState(),
-                versionInfo = VersionInfo()
-            });
-            byte[] requestFromClientId = pair.ClientTransport.SentToHost.Single();
+            byte[] requestFromClientId = pair.ClientBus.SerializeMessage(
+                pair.ClientId,
+                new ClientLobbyJoinRequestMessage
+                {
+                    maxAscensionUnlocked = 0,
+                    unlockState = new SerializableUnlockState()
+                },
+                out int requestLength).AsSpan(0, requestLength).ToArray();
             ulong authenticatedPeerId = pair.ClientId + 1;
 
-            pair.Host.OnPacketReceived(
-                authenticatedPeerId,
-                requestFromClientId,
-                NetTransferMode.Reliable,
-                0);
+            using (LanConnectTailMessagePatches.PushTransportSenderForTesting(authenticatedPeerId))
+            {
+                bool decoded = pair.HostBus.TryDeserializeMessage(
+                    requestFromClientId,
+                    out INetMessage? _,
+                    out ulong? _);
+                AssertThat(decoded).IsFalse();
+            }
 
             AssertThat(pair.HostTransport.DisconnectedPeers).Contains(authenticatedPeerId);
             CapturedPacket rejection = pair.HostTransport.SentToClients.Single();
@@ -315,15 +359,19 @@ public sealed class LanConnectTailMessageRuntimeTests
 
     private static List<StartRunLobbyPlayer> StartRunPlayers(int count)
     {
+        return StartRunPlayers(Enumerable.Range(0, count));
+    }
+
+    private static List<StartRunLobbyPlayer> StartRunPlayers(IEnumerable<int> realSlots)
+    {
         CharacterModel character = ModelDb.Character<Ironclad>();
-        return Enumerable.Range(0, count).Select(slot => new StartRunLobbyPlayer
+        return realSlots.Select(slot => new StartRunLobbyPlayer
         {
             id = 100UL + (ulong)slot,
             slotId = slot,
             character = character,
             unlockState = new SerializableUnlockState(),
             maxMultiplayerAscensionUnlocked = 0,
-            versionInfo = VersionInfo(),
             isReady = true
         }).ToList();
     }
@@ -399,8 +447,8 @@ public sealed class LanConnectTailMessageRuntimeTests
         }
 
         internal LanConnectTailMessageRuntime Runtime { get; } = new();
-        internal NetHostGameService Host { get; } = new();
-        internal NetClientGameService Client { get; } = new();
+        internal NetHostGameService Host { get; } = new(PeerVersionInfo.LocalDefault());
+        internal NetClientGameService Client { get; } = new(PeerVersionInfo.LocalDefault());
         internal TestNetHost HostTransport { get; }
         internal TestNetClient ClientTransport { get; }
         internal ulong HostId => DefaultHostId;

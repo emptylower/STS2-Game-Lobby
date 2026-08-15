@@ -38,7 +38,7 @@ internal static class LanConnectHostFlow
     public static async Task StartLanHostAsync(GameMode gameMode, Control loadingOverlay, NSubmenuStack stack)
     {
         loadingOverlay.Visible = true;
-        NetHostGameService netService = new();
+        NetHostGameService netService = new(PeerVersionInfo.LocalDefault());
         int maxPlayers = Math.Clamp(
             LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
             LanConnectConstants.ProtocolMinPlayers,
@@ -131,7 +131,7 @@ internal static class LanConnectHostFlow
         LanConnectCreateRoomIntent intent)
     {
         loadingOverlay.Visible = true;
-        NetHostGameService netService = new();
+        NetHostGameService netService = new(PeerVersionInfo.LocalDefault());
         LobbyApiClient? apiClient = null;
         LobbyCreateRoomResponse? registration = null;
         LanConnectSessionProtocolLease? protocolLease = null;

@@ -27,7 +27,7 @@ public sealed class LanConnectTailMessageBusTests
         try
         {
             LanConnectTailMessagePatches.ConfigureRuntime(runtime);
-            NetMessageBus bus = new();
+            NetMessageBus bus = new(new PacketReader(), new PacketWriter());
             AssemblyInfo.Init();
             typeof(MessageTypes).GetField("_cache", BindingFlags.Static | BindingFlags.NonPublic)!
                 .SetValue(null, new NetTypeCache<INetMessage>(INetMessageSubtypes.All.ToList()));

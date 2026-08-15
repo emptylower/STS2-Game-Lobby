@@ -21,6 +21,9 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
 
     internal static LanConnectTailMessageRuntime Shared { get; } = new();
 
+    internal static bool HasPendingOutgoingRejectionForCurrentThread =>
+        _outgoingRejections is { Count: > 0 };
+
     internal void BindHost(
         NetHostGameService service,
         LanConnectProtocolOffer offer,
@@ -102,7 +105,9 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             LanConnectSidecarMessageKind.RejoinRequest => new(
                 message,
                 LanConnectTailMessagePatches.EncodePeerOfferMessage(messageKind, binding.Offer)),
-            LanConnectSidecarMessageKind.InitialGameInfo => SessionOnly(messageKind, message, selection),
+            LanConnectSidecarMessageKind.InitialGameInfo => HasPendingOutgoingRejectionForCurrentThread
+                ? PrepareRejection(message, selection)
+                : SessionOnly(messageKind, message, selection),
             LanConnectSidecarMessageKind.LobbyJoinResponse => PrepareStartRunRoster(
                 messageKind,
                 RequireMessage<ClientLobbyJoinResponseMessage>(message),
@@ -124,9 +129,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                 RequireMessage<ClientRejoinResponseMessage>(message),
                 selection,
                 binding),
-            LanConnectSidecarMessageKind.ConnectionFailed => PrepareRejection(
-                RequireMessage<ClientConnectionFailedMessage>(message),
-                selection),
+            LanConnectSidecarMessageKind.ConnectionFailed => PrepareRejection(message, selection),
             _ => throw Protocol("lan_protocol_version_mismatch", $"Unsupported Tail message kind {messageKind}.")
         };
     }
@@ -183,12 +186,26 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         LanConnectProtocolSelection selection)
     {
         ulong hostPeerId = binding.IsHost ? binding.Service.NetId : GetHostPeerId(binding.Service);
-        LanConnectTailMessagePayload payload = LanConnectTailMessagePatches.DecodeAndValidate(
-            messageKind,
-            container,
-            selection,
-            senderPeerId,
-            hostPeerId);
+        LanConnectTailMessagePayload payload;
+        try
+        {
+            payload = LanConnectTailMessagePatches.DecodeAndValidate(
+                messageKind,
+                container,
+                selection,
+                senderPeerId,
+                hostPeerId);
+        }
+        catch (InvalidDataException) when (messageKind == LanConnectSidecarMessageKind.InitialGameInfo)
+        {
+            payload = LanConnectTailMessagePatches.DecodeAndValidate(
+                LanConnectSidecarMessageKind.ConnectionFailed,
+                container,
+                selection,
+                senderPeerId,
+                hostPeerId);
+            messageKind = LanConnectSidecarMessageKind.ConnectionFailed;
+        }
 
         if (IsRequest(messageKind))
         {
@@ -355,7 +372,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     }
 
     private static LanConnectPreparedTailMessage PrepareRejection(
-        ClientConnectionFailedMessage message,
+        object message,
         LanConnectProtocolSelection selection)
     {
         if (_outgoingRejections is not { Count: > 0 } rejections)
@@ -600,15 +617,9 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             rejections.Push(failure);
             try
             {
-                host.SendMessage(new ClientConnectionFailedMessage
+                host.SendMessage(new InitialGameInfoMessage
                 {
-                    disconnectionReason = ConnectionFailureReason.ModMismatch,
-                    versionInfo = new PeerVersionInfo
-                    {
-                        version = binding.Selection.GameVersion,
-                        gameplayAffectingMods = [],
-                        otherMods = []
-                    }
+                    connectionFailureReason = ConnectionFailureReason.ModMismatch
                 }, senderPeerId);
             }
             finally

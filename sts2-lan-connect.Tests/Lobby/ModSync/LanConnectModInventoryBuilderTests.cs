@@ -181,6 +181,7 @@ public sealed class LanConnectModInventoryBuilderTests
             case "v0.109.1":
             case "v0.110.0":
             case "v0.110.1":
+            case "v0.111.0":
                 Assert.Contains("workshopId", modFields);
                 break;
             default:

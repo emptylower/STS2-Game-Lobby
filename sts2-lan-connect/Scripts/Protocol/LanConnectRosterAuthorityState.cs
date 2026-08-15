@@ -51,7 +51,7 @@ internal sealed class LanConnectRosterAuthorityState
             }
 
             Store(candidate, candidateBytes);
-            return candidate;
+            return _current!;
         }
     }
 

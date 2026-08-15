@@ -4,6 +4,37 @@ namespace Sts2LanConnect.Tests.Protocol;
 
 public sealed class LanConnectTailMessageMatrixTests
 {
+    [Fact]
+    public void Independent_full_message_golden_vectors_decode_expected_wire_contracts()
+    {
+        LanConnectTailMessagePayload offer = LanConnectTailMessageProtocol.DecodeAndValidate(
+            LanConnectSidecarMessageKind.LobbyJoinRequest,
+            Convert.FromHexString(
+                "5354534c414e303101000000003700000001106c616e2e6361706162696c69746965730001010000001501000100010d302e362e302d616c7068612e310000"));
+        Assert.Equal(new LanConnectProtocolOffer(1, 1, "0.6.0-alpha.1", false, false), offer.PeerOffer);
+
+        LanConnectProtocolSelection selection = TailSelection();
+        LanConnectTailMessagePayload session = LanConnectTailMessageProtocol.DecodeAndValidate(
+            LanConnectSidecarMessageKind.LobbyJoinResponse,
+            Convert.FromHexString(
+                "5354534c414e303101000000006500010002106c616e2e6361706162696c6974696573000101000000060200010100000a6c616e2e726f737465720001010000002b010100000000000000640000000902000000000000000b00000000080500000000000000160700000008aa"),
+            selection,
+            100,
+            100);
+        Assert.Equal(9u, session.Roster!.RosterRevision);
+        Assert.Equal([0, 7], session.Roster.Players.Select(static player => (int)player.RealSlotId).ToArray());
+        Assert.Equal([11UL, 22UL], session.Roster.Players.Select(static player => player.PlayerId).ToArray());
+
+        LanConnectTailMessagePayload rejection = LanConnectTailMessageProtocol.DecodeAndValidate(
+            LanConnectSidecarMessageKind.ConnectionFailed,
+            Convert.FromHexString(
+                "5354534c414e303101000000004400010002106c616e2e6361706162696c6974696573000101000000060200010100000d6c616e2e72656a656374696f6e0001010000000701000400010000"),
+            selection);
+        Assert.Equal(
+            LanConnectProtocolFailure.RitsuLibPresenceMismatch(false),
+            rejection.Rejection);
+    }
+
     [Theory]
     [InlineData((int)LanConnectSidecarMessageKind.LobbyJoinRequest)]
     [InlineData((int)LanConnectSidecarMessageKind.LoadJoinRequest)]

@@ -83,6 +83,44 @@ public sealed class LanConnectRosterProjectionTests
         Assert.Equal(2u, changed.RosterRevision);
     }
 
+    [Fact]
+    public void Sparse_and_high_real_slots_project_restore_and_track_revision_by_canonical_bytes()
+    {
+        LanConnectRosterPlayerCarrier[] sparsePlayers =
+        [
+            new(44, 7, 8, [0x44]),
+            new(11, 0, 8, [0x11]),
+            new(33, 5, 8, [0x33]),
+            new(22, 2, 8, [0x22])
+        ];
+        LanConnectRosterAuthorityState state = new(100);
+
+        LanConnectRosterSnapshot initial = state.CommitHostSnapshot(sparsePlayers);
+        LanConnectRosterSnapshot unchanged = state.CommitHostSnapshot(
+            [sparsePlayers[2], sparsePlayers[0], sparsePlayers[3], sparsePlayers[1]]);
+        LanConnectRosterSnapshot highSlotChange = state.CommitHostSnapshot(
+            [sparsePlayers[0], sparsePlayers[1], sparsePlayers[2], new(22, 6, 8, [0x22])]);
+
+        Assert.Equal([0, 2, 5, 7], initial.Players.Select(static player => (int)player.RealSlotId));
+        Assert.Equal([11UL, 22UL, 33UL, 44UL], initial.Players.Select(static player => player.PlayerId));
+        Assert.Equal(1u, unchanged.RosterRevision);
+        Assert.Equal(2u, highSlotChange.RosterRevision);
+
+        IReadOnlyList<FakePlayer> restored = LanConnectRosterProjection.Restore(
+            initial,
+            carrier => (new FakePlayer(carrier.PlayerId, initial.Players
+                .OrderBy(static player => player.RealSlotId)
+                .ThenBy(static player => player.PlayerId)
+                .Select((player, index) => (player, index))
+                .Single(value => value.player.PlayerId == carrier.PlayerId).index % 4),
+                carrier.VanillaPlayerBitLength),
+            static player => player.Id,
+            static player => player.Slot,
+            static (player, slot) => player with { Slot = slot });
+
+        Assert.Equal([0, 2, 5, 7], restored.Select(static player => player.Slot));
+    }
+
     private static LanConnectRosterSnapshot Snapshot() => new(
         100,
         1,

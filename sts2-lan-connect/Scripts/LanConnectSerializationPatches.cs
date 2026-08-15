@@ -79,6 +79,7 @@ internal static class LanConnectSerializationPatches
         }
         catch (Exception ex)
         {
+            ResetAppliedAfterExternalRollback();
             _failedCount++;
             string message =
                 $"sts2_lan_connect serialization: incompatible game wire schema; no patches were applied. " +
@@ -309,7 +310,19 @@ internal static class LanConnectSerializationPatches
             Log.Error($"sts2_lan_connect serialization: failed to roll back incomplete wire patches: {ex}");
         }
 
+        ResetAppliedAfterExternalRollback();
     }
+
+    internal static void ResetAppliedAfterExternalRollback()
+    {
+        _applied = false;
+        _patchedCount = 0;
+        _failedCount = 0;
+    }
+
+    internal static bool IsAppliedForTesting => _applied;
+
+    internal static void SetAppliedForTesting(bool applied) => _applied = applied;
 
     // ReSharper disable UnusedMember.Local — invoked by Harmony via reflection
 

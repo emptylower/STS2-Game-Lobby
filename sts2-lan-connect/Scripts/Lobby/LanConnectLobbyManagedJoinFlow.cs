@@ -71,7 +71,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         }
 
         _logger.Info($"Beginning managed join with initializer {initializer} relaxedCompatibility={_relaxedCompatibility}");
-        NetService = new NetClientGameService();
+        NetService = new NetClientGameService(PeerVersionInfo.LocalDefault());
         if (_protocolSelection?.Profile == LanConnectProtocolProfile.TailV1)
         {
             LanConnectTailMessageRuntime.Shared.BindClient(
@@ -92,7 +92,6 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             NetService.RegisterMessageHandler<ClientLobbyJoinResponseMessage>(HandleJoinResponseMessage);
             NetService.RegisterMessageHandler<ClientLoadJoinResponseMessage>(HandleLoadJoinResponseMessage);
             NetService.RegisterMessageHandler<ClientRejoinResponseMessage>(HandleRejoinResponseMessage);
-            NetService.RegisterMessageHandler<ClientConnectionFailedMessage>(HandleConnectionFailedMessage);
             NetService.Disconnected += OnDisconnected;
 
             _connectCompletion = new TaskCompletionSource<InitialGameInfoMessage>();
@@ -166,7 +165,6 @@ internal sealed class LanConnectLobbyManagedJoinFlow
                 NetService.UnregisterMessageHandler<ClientLobbyJoinResponseMessage>(HandleJoinResponseMessage);
                 NetService.UnregisterMessageHandler<ClientLoadJoinResponseMessage>(HandleLoadJoinResponseMessage);
                 NetService.UnregisterMessageHandler<ClientRejoinResponseMessage>(HandleRejoinResponseMessage);
-                NetService.UnregisterMessageHandler<ClientConnectionFailedMessage>(HandleConnectionFailedMessage);
                 NetService.Disconnected -= OnDisconnected;
             }
         }
@@ -509,29 +507,24 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         _joinCompletion.SetResult(message);
     }
 
-    private void HandleConnectionFailedMessage(ClientConnectionFailedMessage message, ulong senderPeerId)
+    private void OnDisconnected(NetErrorInfo info)
     {
-        if (NetService == null
-            || !LanConnectTailMessageRuntime.Shared.TryTakeValidatedRejection(
+        if (NetService != null
+            && LanConnectTailMessageRuntime.Shared.TryTakeValidatedRejection(
                 NetService,
-                senderPeerId,
+                NetService.HostNetId,
                 out LanConnectProtocolFailure? failure)
-            || failure == null)
+            && failure != null)
         {
-            _logger.Warn("Received ClientConnectionFailedMessage without a validated LAN rejection.");
+            _logger.Warn($"Disconnect carried validated LAN protocol rejection: {failure.Code}");
+            LanConnectProtocolException rejectionException = new(failure);
+            TrySetException(_connectCompletion, rejectionException);
+            TrySetException(_joinCompletion, rejectionException);
+            TrySetException(_loadJoinCompletion, rejectionException);
+            TrySetException(_rejoinCompletion, rejectionException);
             return;
         }
 
-        LanConnectProtocolException exception = new(failure);
-        TrySetException(_connectCompletion, exception);
-        TrySetException(_joinCompletion, exception);
-        TrySetException(_loadJoinCompletion, exception);
-        TrySetException(_rejoinCompletion, exception);
-        NetService.Disconnect(NetError.ModMismatch);
-    }
-
-    private void OnDisconnected(NetErrorInfo info)
-    {
         if ((_detectedMissingModsOnLocal?.Count > 0 || _detectedMissingModsOnHost?.Count > 0)
             && IsJoinHandshakeStillPending())
         {

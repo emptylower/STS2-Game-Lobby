@@ -67,8 +67,10 @@ internal static class LanConnectTailMessagePatches
             .Select(kind => assembly.GetType(
                 $"MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.{GetMessageTypeName(kind)}",
                 throwOnError: false,
-                ignoreCase: false)
-                ?? throw new TypeLoadException($"Required Tail message type for {kind} was not found."))
+                ignoreCase: false))
+            .Where(static type => type != null)
+            .Cast<Type>()
+            .Distinct()
             .ToArray();
         MethodInfo serializePostfix = AccessTools.Method(typeof(LanConnectTailMessagePatches), nameof(SerializePostfix))
             ?? throw new MissingMethodException(nameof(SerializePostfix));
@@ -170,6 +172,11 @@ internal static class LanConnectTailMessagePatches
         ILanConnectTailMessageRuntime runtime = Volatile.Read(ref _runtime)
             ?? throw new InvalidOperationException("Tail protocol message runtime is not configured.");
         LanConnectSidecarMessageKind kind = GetMessageKind(typeof(T));
+        if (kind == LanConnectSidecarMessageKind.InitialGameInfo
+            && LanConnectTailMessageRuntime.HasPendingOutgoingRejectionForCurrentThread)
+        {
+            kind = LanConnectSidecarMessageKind.ConnectionFailed;
+        }
         LanConnectPreparedTailMessage prepared = runtime.PrepareOutgoing(
             __instance,
             kind,
@@ -231,11 +238,6 @@ internal static class LanConnectTailMessagePatches
         ref INetMessage? message,
         ref ulong? overrideSenderId)
     {
-        if (!__result || message == null || !overrideSenderId.HasValue)
-        {
-            return;
-        }
-
         LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
         LanConnectProtocolSelection? selection = snapshot.Selection;
         if (selection?.Profile != LanConnectProtocolProfile.TailV1 || !snapshot.IsActive)
@@ -249,6 +251,27 @@ internal static class LanConnectTailMessagePatches
             __result = false;
             message = null;
             overrideSenderId = null;
+            return;
+        }
+
+        if (!__result || message == null || !overrideSenderId.HasValue)
+        {
+            if (!__result && TryPeekTransportSender(out ulong failedSenderPeerId))
+            {
+                try
+                {
+                    runtime.HandleIncomingFailure(
+                        __instance,
+                        failedSenderPeerId,
+                        new InvalidDataException("Tail message deserialization failed before vanilla dispatch."),
+                        selection);
+                }
+                catch
+                {
+                    // Rejection transport can fail too; the malformed message must still stay blocked.
+                }
+            }
+
             return;
         }
 
@@ -398,7 +421,7 @@ internal static class LanConnectTailMessagePatches
         LanConnectSidecarMessageKind.LoadJoinResponse => "ClientLoadJoinResponseMessage",
         LanConnectSidecarMessageKind.RejoinRequest => "ClientRejoinRequestMessage",
         LanConnectSidecarMessageKind.RejoinResponse => "ClientRejoinResponseMessage",
-        LanConnectSidecarMessageKind.ConnectionFailed => "ClientConnectionFailedMessage",
+        LanConnectSidecarMessageKind.ConnectionFailed => "InitialGameInfoMessage",
         LanConnectSidecarMessageKind.PlayerJoined => "PlayerJoinedMessage",
         LanConnectSidecarMessageKind.LobbyBeginRun => "LobbyBeginRunMessage",
         _ => throw Invalid($"Unknown LAN message kind {kind}.")

@@ -35,6 +35,8 @@ internal static class LanConnectProtocolPatchDispatcher
             catch
             {
                 harmony.UnpatchAll(HarmonyId);
+                TryResetSerializationPatchesAfterRollback();
+                _applied = false;
                 throw;
             }
         }
@@ -54,7 +56,25 @@ internal static class LanConnectProtocolPatchDispatcher
         catch
         {
             harmony.UnpatchAll(harmony.Id);
+            TryResetSerializationPatchesAfterRollback();
+            _applied = false;
             throw;
+        }
+    }
+
+    internal static bool IsAppliedForTesting => _applied;
+
+    internal static void SetAppliedForTesting(bool applied) => _applied = applied;
+
+    private static void TryResetSerializationPatchesAfterRollback()
+    {
+        try
+        {
+            LanConnectSerializationPatches.ResetAppliedAfterExternalRollback();
+        }
+        catch (FileNotFoundException)
+        {
+            // Some non-Godot xUnit runs do not copy sts2.dll. Rollback must still clear dispatcher state.
         }
     }
 }

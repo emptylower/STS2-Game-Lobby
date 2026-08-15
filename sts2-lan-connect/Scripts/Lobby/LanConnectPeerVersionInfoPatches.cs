@@ -117,26 +117,43 @@ internal static class LanConnectPeerVersionInfoPatches
         // Deliberate trade-off: these prefixes only detect and log. Skipping the load
         // handler can leak _connectingPlayers, while a swallowed disconnect failure can
         // strand a connected peer with no response; enforcement remains client-side.
-        internal static void StartRunJoinPrefix(ClientLobbyJoinRequestMessage message, ulong senderId) =>
-            LogRemoteHandshake(message.versionInfo, senderId, "lobby-join");
+        internal static void StartRunJoinPrefix(ClientLobbyJoinRequestMessage message, ulong senderId)
+        {
+            _ = message;
+            LogRemoteHandshake(null, senderId, "lobby-join");
+        }
 
-        internal static void LoadRunJoinPrefix(ClientLoadJoinRequestMessage message, ulong senderId) =>
-            LogRemoteHandshake(message.versionInfo, senderId, "load-join");
+        internal static void LoadRunJoinPrefix(ClientLoadJoinRequestMessage message, ulong senderId)
+        {
+            _ = message;
+            LogRemoteHandshake(null, senderId, "load-join");
+        }
 
-        internal static void RunRejoinPrefix(ClientRejoinRequestMessage message, ulong senderId) =>
-            LogRemoteHandshake(message.versionInfo, senderId, "rejoin");
+        internal static void RunRejoinPrefix(ClientRejoinRequestMessage message, ulong senderId)
+        {
+            _ = message;
+            LogRemoteHandshake(null, senderId, "rejoin");
+        }
 
         private static void LogRemoteHandshake(
-            PeerVersionInfo remoteInfo,
+            PeerVersionInfo? remoteInfo,
             ulong senderId,
             string path)
         {
             try
             {
+                if (remoteInfo == null)
+                {
+                    SafeLog(() => Log.Warn(
+                        $"sts2_lan_connect wire_handshake host: path={path}, senderId={senderId}, " +
+                        "remoteSignature=unavailable, decision=request-body-has-no-version-info"));
+                    return;
+                }
+
                 LanConnectWireCacheCaptureResult localCapture =
                     LanConnectWireCacheDiagnostics.GetCurrentResult();
                 LanConnectWireCacheHandshakeTokenParseResult remoteParse =
-                    LanConnectWireCacheHandshakeToken.Parse(remoteInfo.otherMods);
+                    LanConnectWireCacheHandshakeToken.Parse(remoteInfo.Value.otherMods);
                 LanConnectWireCacheHandshakeDecision decision =
                     LanConnectWireCacheHandshakeDecision.Evaluate(
                         localCapture,
