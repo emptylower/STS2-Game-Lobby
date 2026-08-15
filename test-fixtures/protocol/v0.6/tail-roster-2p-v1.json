@@ -1,0 +1,17 @@
+{
+  "name": "tail-roster-2p-v1",
+  "description": "Independently reviewed two-player authoritative roster payload v1.",
+  "file": "tail-roster-2p-v1.bin",
+  "totalBytes": 43,
+  "hex": "01 01 01 02 03 04 05 06 07 08 00 00 00 01 02 00 00 00 00 00 00 00 0b 00 00 00 00 03 05 00 00 00 00 00 00 00 16 07 00 00 00 08 aa",
+  "fields": {
+    "schemaVersion": 1,
+    "snapshotKind": 1,
+    "authorityPeerId": "0x0102030405060708",
+    "rosterRevision": 1,
+    "players": [
+      { "playerId": 11, "realSlotId": 0, "vanillaPlayerBitLength": 3, "vanillaPlayerBytesHex": "05" },
+      { "playerId": 22, "realSlotId": 7, "vanillaPlayerBitLength": 8, "vanillaPlayerBytesHex": "aa" }
+    ]
+  }
+}
