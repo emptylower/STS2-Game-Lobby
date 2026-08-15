@@ -55,6 +55,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private const int FilterModeStandardId = 200;
     private const int FilterModeDailyId = 201;
     private const int FilterModeCustomId = 202;
+    private const int CreateProtocolCompatId = 300;
+    private const int CreateProtocolTailId = 301;
     private const double JoinCancelRevealDelaySeconds = 3d;
 
     // ── Retro pixel-art palette (converted from reference UI oklch values) ──
@@ -102,6 +104,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Label? _selectedRoomPlayersLabel;
     private Label? _selectedRoomModeLabel;
     private Label? _selectedRoomVersionLabel;
+    private Label? _selectedRoomProtocolLabel;
     private Label? _selectedRoomAccessLabel;
     private LobbyAnnouncementCarousel? _announcementCarousel;
     private HSeparator? _settingsSeparator;
@@ -162,6 +165,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Label? _createDialogErrorLabel;
     private LineEdit? _roomNameInput;
     private OptionButton? _roomTypeOption;
+    private OptionButton? _protocolProfileOption;
+    private Label? _protocolProfileHintLabel;
     private LineEdit? _roomPasswordInput;
     private SpinBox? _maxPlayersSpinBox;
     private Label? _maxPlayersHintLabel;
@@ -502,6 +507,97 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     internal bool ServerPickerOpenForTests => _serverPickerOpen;
 
     internal bool AnyDialogVisibleForTests => IsAnyDialogVisible();
+
+    internal int SelectedCreateProtocolIdForTests => GetSelectedCreateProtocolId();
+
+    internal string CreateProtocolDescriptionForTests => GetSelectedCreateProtocolDescription();
+
+    internal void SelectCreateProtocolForTests(int protocolId)
+    {
+        if (_protocolProfileOption == null)
+        {
+            return;
+        }
+
+        SelectOptionById(_protocolProfileOption, protocolId);
+        UpdateProtocolProfileHint();
+    }
+
+    internal void OpenCreateDialogForTests()
+    {
+        if (_createDialogContainer == null || _roomNameInput == null || _roomPasswordInput == null || _roomTypeOption == null)
+        {
+            return;
+        }
+
+        _roomNameInput.Text = GetSuggestedRoomName();
+        _roomTypeOption.Select(0);
+        SelectOptionById(_protocolProfileOption, CreateProtocolCompatId);
+        RefreshProtocolProfileOptionAvailability();
+        _roomPasswordInput.Text = string.Empty;
+        if (_maxPlayersSpinBox != null)
+        {
+            _maxPlayersSpinBox.Value = LanConnectConstants.ProtocolMaxPlayers;
+            UpdateMaxPlayersHint();
+        }
+
+        ShowCreateDialogError(string.Empty, visible: false);
+        _createDialogContainer.Visible = true;
+    }
+
+    internal static string CreateProtocolDescriptionForTestsStatic(int protocolId) =>
+        GetProtocolProfileDescription(ProtocolProfileFromCreateId(protocolId));
+
+    internal static LanConnectCreateRoomIntent BuildCreateRoomIntentForTests(
+        int protocolId,
+        int maxPlayers,
+        LanConnectProtocolOffer offer) =>
+        BuildCreateRoomIntent(protocolId, maxPlayers, offer);
+
+    internal static bool IsCreateProtocolSelectableForTests(
+        int protocolId,
+        LanConnectProtocolOffer offer,
+        bool standaloneTailRuntimeAvailable) =>
+        IsCreateProtocolSelectable(protocolId, offer, standaloneTailRuntimeAvailable);
+
+    internal IReadOnlyList<string> VisibleLabelTextsForTests() =>
+        FindChildren("*", "Label", recursive: true, owned: false)
+            .OfType<Label>()
+            .Where(static label => label.Visible)
+            .Select(static label => label.Text)
+            .ToArray();
+
+    internal IReadOnlyList<string> CreateProtocolOptionLabelsForTests()
+    {
+        if (_protocolProfileOption == null)
+        {
+            return [];
+        }
+
+        List<string> labels = [];
+        for (var index = 0; index < _protocolProfileOption.ItemCount; index++)
+        {
+            labels.Add(_protocolProfileOption.GetItemText(index));
+        }
+
+        return labels;
+    }
+
+    internal IReadOnlyList<bool> CreateProtocolOptionDisabledStatesForTests()
+    {
+        if (_protocolProfileOption == null)
+        {
+            return [];
+        }
+
+        List<bool> states = [];
+        for (var index = 0; index < _protocolProfileOption.ItemCount; index++)
+        {
+            states.Add(_protocolProfileOption.IsItemDisabled(index));
+        }
+
+        return states;
+    }
 
     internal bool HasPendingInviteForTests => _pendingInvitePayload != null;
 
@@ -1560,12 +1656,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill
         };
-        section.AddThemeConstantOverride("separation", 10);
+        section.AddThemeConstantOverride("separation", 8);
 
-        PanelContainer card = CreatePixelBorderPanel(background: CardColor, padding: 16);
+        PanelContainer card = CreatePixelBorderPanel(background: CardColor, padding: 12);
         card.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         VBoxContainer body = new();
-        body.AddThemeConstantOverride("separation", 6);
+        body.AddThemeConstantOverride("separation", 4);
         card.AddChild(body);
 
         HBoxContainer header = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
@@ -1597,6 +1693,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _selectedRoomPlayersLabel = CreateRoomDetailValue(body, "人数", "--");
         _selectedRoomModeLabel = CreateRoomDetailValue(body, "模式", "--");
         _selectedRoomVersionLabel = CreateRoomDetailValue(body, "版本", "--");
+        _selectedRoomProtocolLabel = CreateRoomDetailValue(body, "协议", "--");
         _selectedRoomAccessLabel = CreateRoomDetailValue(body, "状态", "--");
 
         _statusLabel = CreateBodyLabel(string.Empty);
@@ -1612,7 +1709,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         Label label = CreateBodyLabel($"{key}: {value}");
         label.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-        label.AddThemeFontSizeOverride("font_size", 14);
+        label.AddThemeFontSizeOverride("font_size", 13);
         label.AddThemeColorOverride("font_color", TextMutedColor);
         parent.AddChild(label);
         return label;
@@ -1980,8 +2077,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         bool compact = _layoutMode == LobbyLayoutMode.Compact;
-        _roomDetailPanel.CustomMinimumSize = new Vector2(0f, compact ? 390f : 330f);
-        _serverChatFrame.CustomMinimumSize = new Vector2(0f, compact ? 330f : 270f);
+        _roomDetailPanel.CustomMinimumSize = new Vector2(0f, compact ? 390f : 310f);
+        _serverChatFrame.CustomMinimumSize = new Vector2(0f, compact ? 330f : 250f);
         _roomDetailPanel.SizeFlagsVertical = compact ? SizeFlags.ShrinkBegin : SizeFlags.ExpandFill;
         _serverChatFrame.SizeFlagsVertical = compact ? SizeFlags.ShrinkBegin : SizeFlags.ExpandFill;
         _roomDetailPanel.SizeFlagsStretchRatio = 1f;
@@ -1996,6 +2093,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _selectedRoomPlayersLabel == null ||
             _selectedRoomModeLabel == null ||
             _selectedRoomVersionLabel == null ||
+            _selectedRoomProtocolLabel == null ||
             _selectedRoomAccessLabel == null)
         {
             return;
@@ -2009,6 +2107,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _selectedRoomPlayersLabel.Text = "人数: --";
             _selectedRoomModeLabel.Text = "模式: --";
             _selectedRoomVersionLabel.Text = "版本: --";
+            _selectedRoomProtocolLabel.Text = "协议: --";
             _selectedRoomAccessLabel.Text = "状态: 选择左侧房间查看详情";
             return;
         }
@@ -2033,6 +2132,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             ? room.Version
             : $"{room.Version} · MOD {room.ModVersion}";
         _selectedRoomVersionLabel.Text = $"版本: {version}";
+        _selectedRoomProtocolLabel.Text = $"协议: {BuildRoomProtocolSummary(room)}";
         _selectedRoomAccessLabel.Text = $"状态: {access}";
     }
 
@@ -2260,6 +2360,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             ("标准模式", 0),
             ("多人每日挑战", 1),
             ("自定义模式", 2)));
+        body.AddChild(BuildProtocolProfileRow());
         body.AddChild(BuildLabeledInputRow("可选密码", string.Empty, out _roomPasswordInput, "留空表示公开房间", showLengthCounter: true, maxLength: LanConnectConfig.MaxRoomPasswordLength));
         body.AddChild(BuildMaxPlayersRow());
 
@@ -2724,6 +2825,41 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return row;
     }
 
+    private Control BuildProtocolProfileRow()
+    {
+        VBoxContainer row = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        row.AddThemeConstantOverride("separation", 6);
+
+        Label label = CreateBodyLabel("联机协议");
+        label.AddThemeColorOverride("font_color", TextStrongColor);
+        row.AddChild(label);
+
+        _protocolProfileOption = new OptionButton
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            FitToLongestItem = false
+        };
+        _protocolProfileOption.AddItem(UiText("兼容旧版客户端（默认）"), CreateProtocolCompatId);
+        _protocolProfileOption.AddItem(UiText("0.6 新协议（RitsuLib 状态必须一致）"), CreateProtocolTailId);
+        _protocolProfileOption.Select(0);
+        _protocolProfileOption.Connect(
+            OptionButton.SignalName.ItemSelected,
+            Callable.From<long>(_ => UpdateProtocolProfileHint()));
+        ApplyInputStyle(_protocolProfileOption);
+        row.AddChild(_protocolProfileOption);
+
+        _protocolProfileHintLabel = CreateBodyLabel(string.Empty);
+        _protocolProfileHintLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        _protocolProfileHintLabel.AddThemeColorOverride("font_color", TextMutedColor);
+        row.AddChild(_protocolProfileHintLabel);
+        RefreshProtocolProfileOptionAvailability();
+
+        return row;
+    }
+
     private Control BuildMaxPlayersRow()
     {
         VBoxContainer row = new()
@@ -2738,11 +2874,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _maxPlayersSpinBox = new SpinBox
         {
-            MinValue = LanConnectConstants.MinMaxPlayers,
+            MinValue = LanConnectConstants.ProtocolMinPlayers,
             MaxValue = 8,
             Value = 8,
             Step = 1,
-            AllowGreater = true,
+            AllowGreater = false,
             AllowLesser = false,
             Rounded = true,
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
@@ -3363,6 +3499,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         row.AddChild(CreateMetaLabel($"HOST: {room.HostPlayerName}"));
         row.AddChild(CreateMetaLabel($"GAME: {room.Version}"));
         row.AddChild(CreateMetaLabel($"MOD: {room.ModVersion}"));
+        row.AddChild(CreateMetaLabel($"协议: {BuildRoomProtocolSummary(room)}"));
 
         HBoxContainer playerGroup = new()
         {
@@ -3381,6 +3518,43 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         playerGroup.AddChild(CreateMetaLabel($"{room.CurrentPlayers}/{room.MaxPlayers}"));
         return row;
     }
+
+    private static string BuildRoomProtocolSummary(LobbyRoomSummary room)
+    {
+        string profile = string.IsNullOrWhiteSpace(room.ProtocolProfileV2)
+            ? room.ProtocolProfile
+            : room.ProtocolProfileV2;
+        string profileLabel = profile switch
+        {
+            LanConnectProtocolProfileExtensions.CompatCanonical or LanConnectProtocolProfiles.Extended8p =>
+                "compat_4_5_v1",
+            LanConnectProtocolProfileExtensions.TailCanonical => "tail_v1",
+            _ => string.IsNullOrWhiteSpace(profile) ? "compat_4_5_v1" : profile
+        };
+
+        string? carrier = room.ProtocolSelection?.Carrier;
+        string carrierLabel = string.IsNullOrWhiteSpace(carrier)
+            ? "none"
+            : carrier;
+        return $"{profileLabel} / {carrierLabel} / {GetRoomRitsuPresencePill(room)}";
+    }
+
+    private static string GetRoomProtocolPill(LobbyRoomSummary room)
+    {
+        string profile = string.IsNullOrWhiteSpace(room.ProtocolProfileV2)
+            ? room.ProtocolProfile
+            : room.ProtocolProfileV2;
+        return profile switch
+        {
+            LanConnectProtocolProfileExtensions.TailCanonical => "TAIL",
+            _ => "COMPAT"
+        };
+    }
+
+    private static string GetRoomRitsuPresencePill(LobbyRoomSummary room) =>
+        room.ProtocolSelection?.RitsuLibPresent == true
+            ? "需要 RitsuLib"
+            : "无 RitsuLib";
 
     private Control CreateRoomCard(LobbyRoomSummary room, bool isSelected, bool isHostRoom)
     {
@@ -3492,6 +3666,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         (string modeText, Color modeBorder, Color modeBackground) = GetRoomGameModePill(room.GameMode);
         leftGroup.AddChild(CreateTagPill(modeText, modeBorder, modeBackground, false));
+        leftGroup.AddChild(CreateTagPill(GetRoomProtocolPill(room), BorderColor, SecondaryColor, false));
+        leftGroup.AddChild(CreateTagPill(GetRoomRitsuPresencePill(room), BorderColor, SecondaryColor, false));
 
         // PASS REQ: right-aligned, separate from tags
         if (room.RequiresPassword)
@@ -3760,12 +3936,33 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_maxPlayersSpinBox != null)
         {
             int parsedMaxPlayers = (int)_maxPlayersSpinBox.Value;
-            if (parsedMaxPlayers > 8)
+            if (parsedMaxPlayers is < LanConnectConstants.ProtocolMinPlayers or > LanConnectConstants.ProtocolMaxPlayers)
             {
-                ShowCreateDialogError("房间最大人数不能超过 8 人。");
+                ShowCreateDialogError("房间最大人数必须是 2-8 人。");
                 return;
             }
             selectedMaxPlayers = parsedMaxPlayers;
+        }
+
+        int maxPlayers = Math.Clamp(
+            selectedMaxPlayers ?? LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
+            LanConnectConstants.ProtocolMinPlayers,
+            LanConnectConstants.ProtocolMaxPlayers);
+        LanConnectCreateRoomIntent intent;
+        try
+        {
+            intent = BuildCreateRoomIntent(
+                    GetSelectedCreateProtocolId(),
+                    maxPlayers,
+                    LanConnectProtocolOffer.CreateCurrent())
+                .Validate();
+        }
+        catch (LanConnectProtocolException ex)
+        {
+            string message = LanConnectProtocolUiMessages.Describe(ex.Failure);
+            ShowCreateDialogError(message);
+            SetStatus(message);
+            return;
         }
 
         _actionInFlight = true;
@@ -3775,8 +3972,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         try
         {
-            int maxPlayers = selectedMaxPlayers ?? LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
-            LanConnectCreateRoomIntent intent = LanConnectCreateRoomIntent.CreateDefaultCompat(maxPlayers);
             LanConnectHostAttemptResult created = await LanConnectHostFlow.StartLobbyHostAsync(
                 roomName,
                 password,
@@ -4269,10 +4464,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             ? GetSuggestedRoomName()
             : LanConnectConfig.LastRoomName;
         _roomTypeOption.Select(0);
+        SelectOptionById(_protocolProfileOption, CreateProtocolCompatId);
+        RefreshProtocolProfileOptionAvailability();
         _roomPasswordInput.Text = string.Empty;
         if (_maxPlayersSpinBox != null)
         {
-            int effectiveMax = Math.Clamp(LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(), LanConnectConstants.MinMaxPlayers, 8);
+            int effectiveMax = Math.Clamp(
+                LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
+                LanConnectConstants.ProtocolMinPlayers,
+                LanConnectConstants.ProtocolMaxPlayers);
             _maxPlayersSpinBox.Value = effectiveMax;
             UpdateMaxPlayersHint();
         }
@@ -5734,10 +5934,119 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         int selectedMaxPlayers = (int)_maxPlayersSpinBox.Value;
-        string message = selectedMaxPlayers <= LanConnectConstants.MinMaxPlayers
-            ? "4 人房会自动启用 0.2.2 兼容协议，可与 0.2.2 玩家共同游玩。"
-            : "5-8 人房仅支持 0.2.3+ 客户端，不兼容 0.2.2。";
-        SetLabelText(_maxPlayersHintLabel, message);
+        SetLabelText(
+            _maxPlayersHintLabel,
+            $"当前房间人数 {selectedMaxPlayers} 人；人数不改变联机协议，协议由上方模式决定。");
+    }
+
+    private void RefreshProtocolProfileOptionAvailability()
+    {
+        if (_protocolProfileOption == null)
+        {
+            UpdateProtocolProfileHint();
+            return;
+        }
+
+        LanConnectProtocolOffer offer = LanConnectProtocolOffer.CreateCurrent();
+        bool standaloneTailRuntimeAvailable = IsStandaloneTailRuntimeAvailable();
+        for (var index = 0; index < _protocolProfileOption.ItemCount; index++)
+        {
+            int protocolId = _protocolProfileOption.GetItemId(index);
+            _protocolProfileOption.SetItemDisabled(
+                index,
+                !IsCreateProtocolSelectable(protocolId, offer, standaloneTailRuntimeAvailable));
+        }
+
+        int selected = GetSelectedCreateProtocolId();
+        if (!IsCreateProtocolSelectable(selected, offer, standaloneTailRuntimeAvailable))
+        {
+            SelectOptionById(_protocolProfileOption, CreateProtocolCompatId);
+        }
+
+        UpdateProtocolProfileHint();
+    }
+
+    private void UpdateProtocolProfileHint()
+    {
+        if (_protocolProfileHintLabel == null)
+        {
+            return;
+        }
+
+        SetLabelText(_protocolProfileHintLabel, GetSelectedCreateProtocolDescription());
+    }
+
+    private string GetSelectedCreateProtocolDescription() =>
+        GetProtocolProfileDescription(ProtocolProfileFromCreateId(GetSelectedCreateProtocolId()));
+
+    private int GetSelectedCreateProtocolId()
+    {
+        if (_protocolProfileOption == null)
+        {
+            return CreateProtocolCompatId;
+        }
+
+        int selected = _protocolProfileOption.GetSelectedId();
+        return selected == CreateProtocolTailId ? CreateProtocolTailId : CreateProtocolCompatId;
+    }
+
+    private static string GetProtocolProfileDescription(LanConnectProtocolProfile profile) => profile switch
+    {
+        LanConnectProtocolProfile.Compat4x5V1 => "支持 0.3-0.5，不支持 RitsuLib",
+        LanConnectProtocolProfile.TailV1 => "仅支持 0.6+；RitsuLib 状态必须一致",
+        _ => "当前客户端不支持该房间的联机协议。"
+    };
+
+    private static LanConnectProtocolProfile ProtocolProfileFromCreateId(int protocolId) =>
+        protocolId == CreateProtocolTailId
+            ? LanConnectProtocolProfile.TailV1
+            : LanConnectProtocolProfile.Compat4x5V1;
+
+    private static bool IsCreateProtocolSelectable(
+        int protocolId,
+        LanConnectProtocolOffer offer,
+        bool standaloneTailRuntimeAvailable)
+    {
+        if (protocolId == CreateProtocolCompatId)
+        {
+            return true;
+        }
+
+        if (protocolId != CreateProtocolTailId)
+        {
+            return false;
+        }
+
+        return !offer.RitsuLibPresent && standaloneTailRuntimeAvailable;
+    }
+
+    private static bool IsStandaloneTailRuntimeAvailable() =>
+        !LanConnectExternalModDetection.IsRmpModLoaded;
+
+    private static LanConnectCreateRoomIntent BuildCreateRoomIntent(
+        int protocolId,
+        int maxPlayers,
+        LanConnectProtocolOffer offer) =>
+        new(
+            ProtocolProfileFromCreateId(protocolId),
+            maxPlayers,
+            offer);
+
+    private static void SelectOptionById(OptionButton? option, int id)
+    {
+        if (option == null)
+        {
+            return;
+        }
+
+        for (var index = 0; index < option.ItemCount; index++)
+        {
+            if (option.GetItemId(index) == id)
+            {
+                option.Select(index);
+                return;
+            }
+        }
     }
 
     private void ReplaceJoinCancellationSource(CancellationTokenSource cancellationTokenSource)
@@ -6080,8 +6389,25 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                && string.Equals(left.Version, right.Version, StringComparison.Ordinal)
                && string.Equals(left.ModVersion, right.ModVersion, StringComparison.Ordinal)
                && string.Equals(left.ProtocolProfile, right.ProtocolProfile, StringComparison.Ordinal)
+               && string.Equals(left.ProtocolProfileV2, right.ProtocolProfileV2, StringComparison.Ordinal)
+               && AreProtocolSelectionsVisuallyEquivalent(left.ProtocolSelection, right.ProtocolSelection)
                && string.Equals(left.RelayState, right.RelayState, StringComparison.Ordinal)
                && AreSavedRunsEquivalent(left.SavedRun, right.SavedRun);
+    }
+
+    private static bool AreProtocolSelectionsVisuallyEquivalent(
+        LobbyProtocolSelectionDto? left,
+        LobbyProtocolSelectionDto? right)
+    {
+        if (left == null || right == null)
+        {
+            return left == right;
+        }
+
+        return string.Equals(left.Profile, right.Profile, StringComparison.Ordinal)
+               && string.Equals(left.Carrier, right.Carrier, StringComparison.Ordinal)
+               && left.RitsuLibPresent == right.RitsuLibPresent
+               && left.SelectedLanProtocolVersion == right.SelectedLanProtocolVersion;
     }
 
     private static bool AreSavedRunsEquivalent(LobbySavedRunInfo? left, LobbySavedRunInfo? right)

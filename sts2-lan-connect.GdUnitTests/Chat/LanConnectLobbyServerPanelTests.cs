@@ -522,7 +522,20 @@ internal sealed class LobbyOverlayFixture : IDisposable
             GameMode = "standard",
             Version = "1.0",
             ModVersion = "0.5.0",
-            Status = "waiting"
+            Status = "waiting",
+            ProtocolProfile = LanConnectProtocolProfiles.Extended8p,
+            ProtocolProfileV2 = LanConnectProtocolProfileExtensions.CompatCanonical,
+            ProtocolSelection = new LobbyProtocolSelectionDto
+            {
+                Profile = LanConnectProtocolProfileExtensions.CompatCanonical,
+                SelectedLanProtocolVersion = 0,
+                Carrier = "none",
+                MinimumClientVersion = "0.3.0",
+                MaxPlayers = 4,
+                GameVersion = "1.0",
+                RitsuLibPresent = false,
+                CapabilityDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            }
         },
         new LobbyRoomSummary
         {
@@ -535,7 +548,20 @@ internal sealed class LobbyOverlayFixture : IDisposable
             Version = "1.0",
             ModVersion = "0.5.0",
             Status = "waiting",
-            RequiresPassword = true
+            RequiresPassword = true,
+            ProtocolProfile = LanConnectProtocolProfiles.Extended8p,
+            ProtocolProfileV2 = LanConnectProtocolProfileExtensions.TailCanonical,
+            ProtocolSelection = new LobbyProtocolSelectionDto
+            {
+                Profile = LanConnectProtocolProfileExtensions.TailCanonical,
+                SelectedLanProtocolVersion = 1,
+                Carrier = "ritsulib_sidecar_v1",
+                MinimumClientVersion = "0.6.0-alpha.1",
+                MaxPlayers = 4,
+                GameVersion = "1.0",
+                RitsuLibPresent = true,
+                CapabilityDigest = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            }
         }
     ];
 }

@@ -20,12 +20,25 @@ internal sealed record LanConnectCreateRoomIntent(
             throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibNotAllowedInCompat());
         }
 
+        if (Profile == LanConnectProtocolProfile.TailV1
+            && Offer.RitsuLibPresent
+            && !Offer.RitsuLibSidecarAvailable)
+        {
+            throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+        }
+
         return this;
     }
 
     public static LanConnectCreateRoomIntent CreateDefaultCompat(int maxPlayers) =>
         new LanConnectCreateRoomIntent(
             LanConnectProtocolProfile.Compat4x5V1,
+            maxPlayers,
+            LanConnectProtocolOffer.CreateCurrent());
+
+    public static LanConnectCreateRoomIntent CreateTailV1(int maxPlayers) =>
+        new LanConnectCreateRoomIntent(
+            LanConnectProtocolProfile.TailV1,
             maxPlayers,
             LanConnectProtocolOffer.CreateCurrent());
 }

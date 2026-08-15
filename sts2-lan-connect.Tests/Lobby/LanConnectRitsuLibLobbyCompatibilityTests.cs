@@ -1,40 +1,32 @@
-using System.Reflection;
-using Sts2LanConnect.Scripts;
-
 namespace Sts2LanConnect.Tests.Lobby;
 
 public sealed class LanConnectRitsuLibLobbyCompatibilityTests
 {
     [Fact]
-    public void Finds_every_run_manager_net_service_read()
+    public void Compatibility_entrypoint_is_disabled_until_public_sidecar_gate_passes()
     {
-        MethodInfo unrelated = typeof(ProbeRunManager).GetProperty(nameof(ProbeRunManager.Other))!.GetMethod!;
-        MethodInfo getter = typeof(ProbeRunManager).GetProperty(nameof(ProbeRunManager.NetService))!.GetMethod!;
+        string source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "sts2-lan-connect",
+            "Scripts",
+            "Lobby",
+            "LanConnectRitsuLibLobbyCompatibility.cs"));
 
-        int[] indices = LanConnectRitsuLibLobbyCompatibility.FindGetterReadIndices(
-            [unrelated, getter, null, getter],
-            getter);
-
-        Assert.Equal([1, 3], indices);
+        Assert.Contains("disabled in v0.6 alpha", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ResolveLobbyNetService", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("TranspileRunManagerSend", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("InjectResolverAfterGetter", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("RunManager send fallback", source, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void Reports_no_match_when_run_manager_send_shape_changes()
+    private static string FindRepositoryRoot()
     {
-        MethodInfo unrelated = typeof(ProbeRunManager).GetProperty(nameof(ProbeRunManager.Other))!.GetMethod!;
-        MethodInfo getter = typeof(ProbeRunManager).GetProperty(nameof(ProbeRunManager.NetService))!.GetMethod!;
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "STS2-Game-Lobby.sln")))
+        {
+            directory = directory.Parent;
+        }
 
-        int[] indices = LanConnectRitsuLibLobbyCompatibility.FindGetterReadIndices(
-            [unrelated, null],
-            getter);
-
-        Assert.Empty(indices);
-    }
-
-    private sealed class ProbeRunManager
-    {
-        public object? NetService { get; init; }
-
-        public object? Other { get; init; }
+        return directory?.FullName ?? throw new DirectoryNotFoundException();
     }
 }

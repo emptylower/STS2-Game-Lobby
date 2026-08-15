@@ -115,8 +115,8 @@
 ## 房主流程
 
 1. 打开 `游戏大厅`，点击 `创建房间`
-2. 填写房间名，选择类型，可选填密码；最大人数默认 8 人，上限 8 人
-3. 如需与 `0.2.2` 玩家兼容联机，请将房间人数设为 `4`；`5-8` 人房仅支持 `0.2.3+`
+2. 填写房间名，选择类型和联机协议，可选填密码；最大人数支持 2-8 人，默认 8 人
+3. 默认 `兼容旧版客户端（默认）` 支持 LAN Connect `0.3-0.5` 加入且禁止 RitsuLib；`0.6 新协议（RitsuLib 状态必须一致）` 仅支持 `0.6+`
 4. 发布成功后，客户端会自动启动本地 ENet Host、向大厅注册房间并持续发送心跳保活
 
 ## 玩家流程
@@ -193,10 +193,10 @@
 - 默认连接策略由安装包内的 `lobby-defaults.json` 决定，可选 `direct-first`、`relay-first` 或 `relay-only`
 - 公开包默认使用阿里云大厅 `47.111.146.69:8787` 作为兜底社区节点，并通过 CF 发现入口 `https://sts2-gamelobby-register.xyz` + 内置种子聚合可用服务器；测试节点 `101.35.217.99:8788` 固定排在服务器列表第一位。显示“支持 0.5.1+ MOD 同步”的服务器已实时声明加入前 gameplay MOD 预检/Workshop 同步能力；旧的 `47.111.146.69:18787` 公开目录在 v0.4.0 中不再参与运行时发现
 - 兼容矩阵当前统一规则为：
-  - `4` 人房发布 `legacy_4p`，用于兼容 `0.2.2`
-  - `5-8` 人房发布 `extended_8p`，仅支持 `0.2.3+`
-  - 客户端实际日志 / 调试报告会同时记录 `compatibilityProfile`、`connectionStrategy`、`effectiveMaxPlayers`、`publishedProtocolProfile`
-- MOD 内置 5-8 人支持；`4` 人房自动启用 `legacy_4p` 兼容协议，可与 `0.2.2` 联机；`5-8` 人房仅支持 `0.2.3+`
+  - `compat_4_5_v1` 固定使用历史 `4/5-bit`，支持 2-8 人，禁止 RitsuLib
+  - `tail_v1` 固定使用原版 `2/3-bit` 主体和 LAN protocol v1；无 RitsuLib 使用 standalone carrier，有 RitsuLib 必须全员一致并等待公开 sidecar gate
+  - 客户端实际日志 / 调试报告会同时记录 `compatibilityProfile`、`connectionStrategy`、`effectiveMaxPlayers`、`publishedProtocolProfile`、`carrier` 和 `capabilityDigest`
+- MOD 内置 2-8 人支持；房间人数不再决定协议，建房时选择的协议在房间生命周期内冻结
 - 检测到 RMP 等外部扩展人数 MOD 时，内置补丁会自动跳过以避免冲突
 - `切换服务器` 从 CF 发现入口、本地缓存与内置种子聚合可用大厅，并将选择写入客户端的 HTTP 覆盖设置
 - 大厅显示的服务延迟来自独立探测，不是房间列表接口总耗时
@@ -233,7 +233,7 @@
 - `version_mismatch` 通常表示游戏版本、协议版本或关键数据版本不一致
 - `mod_mismatch` / `mod_version_mismatch` 表示双方 STS2 LAN Connect 或相关联机 MOD 组合不一致
 - 所有联机玩家应尽量使用同一批 release，并核对 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号
-- `4` 人房兼容 `0.2.2` 的 `legacy_4p`；`5-8` 人房要求 `0.2.3+` 的 `extended_8p`
+- `0.2.x` 客户端不再支持；`0.3-0.5` 只能加入兼容房，`tail_v1` 房间要求 `0.6+`
 
 ### 提示房间已满 / 已关闭 / 已开局
 
@@ -386,8 +386,8 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 ## Host Flow
 
 1. Open `Game Lobby` and click `Create Room`
-2. Enter a room name, choose a room type, and optionally set a password; max players defaults to 8 (upper limit: 8)
-3. To allow `0.2.2` players to join, set max players to `4`; rooms of `5-8` require `0.2.3+`
+2. Enter a room name, choose a room type and protocol, and optionally set a password; max players supports 2-8 and defaults to 8
+3. The default compat mode supports LAN Connect `0.3-0.5` and forbids RitsuLib; Tail v1 requires `0.6+` and matching RitsuLib presence
 4. After a successful publish, the client automatically starts the local ENet Host, registers the room with the lobby, and sends periodic heartbeats
 
 ## Player Flow
@@ -463,10 +463,10 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 - The default connection strategy is determined by `lobby-defaults.json` in the installation package: `direct-first`, `relay-first`, or `relay-only`
 - The public release defaults to the Alibaba Cloud lobby at `47.111.146.69:8787` as a fallback community node and aggregates available servers through the CF discovery worker `https://sts2-gamelobby-register.xyz` plus bundled seed peers. Test node `101.35.217.99:8788` is always pinned first. Servers tagged `Supports 0.5.1+ MOD Sync` have declared live gameplay-MOD preflight/Workshop sync capability. The legacy `47.111.146.69:18787` directory is no longer used for runtime discovery in v0.4.0
 - The compatibility matrix is currently unified as:
-  - `4`-player rooms publish `legacy_4p` for `0.2.2` compatibility
-  - `5-8`-player rooms publish `extended_8p` and require `0.2.3+`
-  - Client runtime logs and debug reports record `compatibilityProfile`, `connectionStrategy`, `effectiveMaxPlayers`, and `publishedProtocolProfile`
-- MOD supports 2-8 players natively; 4-player rooms automatically use the `legacy_4p` compatibility protocol for `0.2.2` clients; 5-8 player rooms require `0.2.3+`
+  - `compat_4_5_v1` always uses fixed historical `4/5-bit`, supports 2-8 players, and forbids RitsuLib
+  - `tail_v1` keeps the vanilla `2/3-bit` body and LAN protocol v1; no-Ritsu rooms use standalone carrier, while Ritsu rooms require homogeneous presence and the public sidecar gate
+  - Client runtime logs and debug reports record `compatibilityProfile`, `connectionStrategy`, `effectiveMaxPlayers`, `publishedProtocolProfile`, `carrier`, and `capabilityDigest`
+- MOD supports 2-8 players natively; player count no longer selects the wire protocol, and the selected protocol is frozen for the room lifetime
 - If external player-count expansion MODs such as RMP are detected, the built-in patch skips automatically to avoid conflicts
 - `Switch Server` aggregates available lobbies from the CF discovery worker, local cache, and bundled seed peers, then writes the selected lobby to client override settings
 - The latency shown in the lobby comes from an independent probe, not the total round-trip time of the room list request
@@ -503,7 +503,7 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 - `version_mismatch` usually means the game version, protocol layer, or critical data version does not line up
 - `mod_mismatch` / `mod_version_mismatch` means the STS2 LAN Connect build or related multiplayer MOD set differs between peers
 - All players should use the same release batch whenever possible, and verify the version in `mods/sts2_lan_connect/sts2_lan_connect.json`
-- `4`-player rooms use the `legacy_4p` compatibility path for `0.2.2`; `5-8`-player rooms require `0.2.3+` with `extended_8p`
+- `0.2.x` clients are no longer supported; `0.3-0.5` clients can only join compat rooms, while `tail_v1` requires `0.6+`
 
 ### Room full / closed / already started
 
