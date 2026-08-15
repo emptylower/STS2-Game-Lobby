@@ -22,7 +22,9 @@ internal static class LanConnectMultiplayerCompatibility
 
             Log.Info(
                 $"sts2_lan_connect multiplayer compatibility ready. effectiveMaxPlayers={GetEffectiveMaxPlayers()} " +
-                $"legacy4pSlotBits={LanConnectConstants.Legacy4pSlotIdBits} matrix={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()}");
+                $"compatSlotBits={LanConnectConstants.ExtendedSlotIdBits} " +
+                $"compatLobbyBits={LanConnectConstants.ExtendedLobbyListBits} " +
+                $"matrix={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()}");
         }
         catch (Exception ex)
         {
