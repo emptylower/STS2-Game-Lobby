@@ -3775,8 +3775,21 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         try
         {
-            bool created = await LanConnectHostFlow.StartLobbyHostAsync(roomName, password, gameMode, _loadingOverlay, _stack, selectedMaxPlayers);
-            if (created)
+            int maxPlayers = selectedMaxPlayers ?? LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
+            LanConnectCreateRoomIntent intent = LanConnectCreateRoomIntent.CreateDefaultCompat(maxPlayers);
+            LanConnectHostAttemptResult created = await LanConnectHostFlow.StartLobbyHostAsync(
+                roomName,
+                password,
+                gameMode,
+                _loadingOverlay,
+                _stack,
+                intent);
+            if (created.ProtocolFailure != null)
+            {
+                LanConnectProtocolUiMessages.Present(created.ProtocolFailure);
+                SetStatus(LanConnectProtocolUiMessages.Describe(created.ProtocolFailure));
+            }
+            else if (created.Succeeded)
             {
                 CloseCreateDialog();
                 HideOverlay();
@@ -3873,6 +3886,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             if (preflightJoin.Outcome != LanConnectModPreflightJoinOutcome.TicketIssued ||
                 preflightJoin.JoinResponse == null)
             {
+                if (preflightJoin.ProtocolFailure != null)
+                {
+                    LanConnectProtocolUiMessages.Present(preflightJoin.ProtocolFailure);
+                    SetStatus(LanConnectProtocolUiMessages.Describe(preflightJoin.ProtocolFailure));
+                    return false;
+                }
                 switch (preflightJoin.Outcome)
                 {
                     case LanConnectModPreflightJoinOutcome.GameVersionMismatch:
@@ -3924,28 +3943,31 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
             if (joinResult.Canceled)
             {
-                LanConnectProtocolProfiles.ResetActiveProfile("join_canceled_overlay");
                 SetStatus($"已取消加入 {FormatRoomName(room.RoomName, 24)}。");
+                return false;
+            }
+
+            if (joinResult.ProtocolFailure != null)
+            {
+                LanConnectProtocolUiMessages.Present(joinResult.ProtocolFailure);
+                SetStatus(LanConnectProtocolUiMessages.Describe(joinResult.ProtocolFailure));
                 return false;
             }
 
             string failureMessage = string.IsNullOrWhiteSpace(joinResult.FailureMessage)
                 ? "请查看错误弹窗或连接日志。"
                 : joinResult.FailureMessage;
-            LanConnectProtocolProfiles.ResetActiveProfile("join_failed_overlay");
             SetStatus($"加入 {FormatRoomName(room.RoomName, 24)} 失败：{failureMessage}");
             return false;
         }
         catch (OperationCanceledException) when (joinCancellationSource.IsCancellationRequested)
         {
-            LanConnectProtocolProfiles.ResetActiveProfile("join_canceled_request");
             SetStatus($"已取消加入 {FormatRoomName(room.RoomName, 24)}。");
             externalCancellationToken.ThrowIfCancellationRequested();
             return false;
         }
         catch (LobbyServiceException ex)
         {
-            LanConnectProtocolProfiles.ResetActiveProfile("join_service_exception");
             if (LanConnectModerationUiMessages.IsContentBlocked(ex))
             {
                 const string moderationMessage = LanConnectModerationUiMessages.PlayerNameBlocked;
@@ -3971,7 +3993,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
         catch (Exception ex)
         {
-            LanConnectProtocolProfiles.ResetActiveProfile("join_exception");
             SetStatus($"加入房间失败：{DescribeGenericJoinFailure(ex)}");
             return false;
         }

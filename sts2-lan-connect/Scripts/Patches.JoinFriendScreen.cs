@@ -232,7 +232,7 @@ internal static class JoinFriendScreenPatches
                 identitySource = "persistent_installation";
             }
 
-            await LanConnectDirectJoinFlow.JoinAsync(
+            LobbyJoinAttemptResult result = await LanConnectDirectJoinFlow.JoinAsync(
                 stack,
                 sceneTree,
                 ip,
@@ -240,6 +240,10 @@ internal static class JoinFriendScreenPatches
                 netId,
                 identitySource,
                 state.CancellationSource?.Token ?? CancellationToken.None);
+            if (result.ProtocolFailure != null)
+            {
+                LanConnectProtocolUiMessages.Present(result.ProtocolFailure);
+            }
         }
         finally
         {

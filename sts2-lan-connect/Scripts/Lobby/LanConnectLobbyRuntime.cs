@@ -505,7 +505,6 @@ internal sealed partial class LanConnectLobbyRuntime :
             this,
             _chatOwner,
             new ConfigServerAddressStore());
-        LanConnectProtocolProfiles.ResetActiveProfile("runtime_ready");
         SaveManager.Instance.Saved += OnRunSaved;
         LanConnectSaveDiagnostics.LogNow("runtime_ready");
         LanConnectWireCacheDiagnostics.LogStartupSnapshot();
@@ -861,7 +860,8 @@ internal sealed partial class LanConnectLobbyRuntime :
         string hostChannel,
         string roomName,
         string? password,
-        string gameMode)
+        string gameMode,
+        LanConnectSessionProtocolLease? protocolLease = null)
     {
         if (netService == null)
         {
@@ -885,7 +885,8 @@ internal sealed partial class LanConnectLobbyRuntime :
             hostChannel.Trim().ToLowerInvariant(),
             LanConnectConfig.SanitizeRoomName(roomName),
             string.IsNullOrWhiteSpace(password) ? null : LanConnectConfig.SanitizeRoomPassword(password),
-            string.IsNullOrWhiteSpace(gameMode) ? LanConnectConstants.DefaultGameMode : gameMode.Trim());
+            string.IsNullOrWhiteSpace(gameMode) ? LanConnectConstants.DefaultGameMode : gameMode.Trim(),
+            protocolLease);
 
         GD.Print(
             $"sts2_lan_connect lobby runtime: registered host origin channel={_hostOrigin.HostChannel}, roomName='{_hostOrigin.RoomName}'");
@@ -939,7 +940,13 @@ internal sealed partial class LanConnectLobbyRuntime :
         }
     }
 
-    public void AttachHostedRoom(NetHostGameService netService, LobbyApiClient apiClient, LobbyCreateRoomResponse registration, LanConnectHostedRoomMetadata metadata)
+    public void AttachHostedRoom(
+        NetHostGameService netService,
+        LobbyApiClient apiClient,
+        LobbyCreateRoomResponse registration,
+        LanConnectHostedRoomMetadata metadata,
+        LanConnectSessionProtocolLease protocolLease,
+        LanConnectProtocolSelection protocolSelection)
     {
         LanConnectRitsuLibLobbyCompatibility.TrackLobbyNetService(netService);
         _pendingSaveBindingCoordinator.DifferentHostedRoomWillAttach();
@@ -948,7 +955,13 @@ internal sealed partial class LanConnectLobbyRuntime :
         string? previousChatRoomId = null;
         string? previousChatRoomSessionId = null;
 
-        HostedRoomSession session = new(netService, apiClient, registration, metadata);
+        HostedRoomSession session = new(
+            netService,
+            apiClient,
+            registration,
+            metadata,
+            protocolLease,
+            protocolSelection);
         session.SetEnvelopeHandler(envelope => OnHostedControlEnvelope(session, envelope));
         session.ControlClient.RoomChatReadyReceived += envelope =>
         {
@@ -1056,7 +1069,6 @@ internal sealed partial class LanConnectLobbyRuntime :
                 LanConnectConfig.GetEffectivePlayerDisplayName());
         });
         _timeUntilHeartbeat = 0d;
-        LanConnectProtocolProfiles.SetActiveProfile(registration.Room.ProtocolProfile, registration.Room.MaxPlayers, "attach_hosted_room");
         GD.Print(
             $"sts2_lan_connect lobby runtime: attached hosted room roomId={registration.RoomId}, roomName='{metadata.RoomName}', source={metadata.PublishSource}, saveKey={(metadata.SaveKey ?? "<none>")}");
         LanConnectSaveDiagnostics.LogNow("attach_hosted_room", $"roomId={registration.RoomId}, publishSource={metadata.PublishSource}, saveKey={(metadata.SaveKey ?? "<none>")}");
@@ -1081,7 +1093,12 @@ internal sealed partial class LanConnectLobbyRuntime :
         _pendingHostRestart = null;
     }
 
-    public void AttachJoinedClient(NetClientGameService netService, LobbyJoinRoomResponse joinResponse)
+    public void AttachJoinedClient(
+        NetClientGameService netService,
+        LobbyJoinRoomResponse joinResponse,
+        LanConnectSessionProtocolLease protocolLease,
+        string clientVersion,
+        LanConnectProtocolSelection protocolSelection)
     {
         LanConnectRitsuLibLobbyCompatibility.TrackLobbyNetService(netService);
         _pendingSaveBindingCoordinator.AttachJoinedClient();
@@ -1103,7 +1120,10 @@ internal sealed partial class LanConnectLobbyRuntime :
             controlChannelId,
             joinResponse.TicketId,
             netService.NetId.ToString(),
-            joinResponse.RoomSessionId);
+            joinResponse.RoomSessionId,
+            protocolLease,
+            clientVersion,
+            protocolSelection);
         session.SetEnvelopeHandler(envelope => OnJoinedClientControlEnvelope(session, envelope));
         session.ControlClient.RoomChatReadyReceived += envelope =>
         {
@@ -1204,7 +1224,6 @@ internal sealed partial class LanConnectLobbyRuntime :
                 netService.NetId,
                 LanConnectConfig.GetEffectivePlayerDisplayName());
         });
-        LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, joinResponse.Room.MaxPlayers, "attach_joined_client");
         netService.Disconnected += session.OnDisconnected;
         TaskHelper.RunSafely(ConnectJoinedClientControlAsync(session));
         _pendingClientReconnect = null;
@@ -1320,7 +1339,12 @@ internal sealed partial class LanConnectLobbyRuntime :
     {
         try
         {
-            Uri uri = session.ApiClient.BuildClientControlUri(session.ControlChannelId, session.RoomId, session.TicketId);
+            Uri uri = session.ApiClient.BuildClientControlUri(
+                session.ControlChannelId,
+                session.RoomId,
+                session.TicketId,
+                session.ClientVersion,
+                session.ProtocolSelection.CapabilityDigest);
             GD.Print($"sts2_lan_connect lobby runtime: connecting client control channel roomId={session.RoomId}");
             await session.ControlClient.ConnectClientAsync(
                 uri,
@@ -1436,10 +1460,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     private void ResetProtocolProfileIfIdle(string source)
     {
-        if (_activeSession == null && _activeClientSession == null)
-        {
-            LanConnectProtocolProfiles.ResetActiveProfile(source);
-        }
+        // Session-owned protocol leases reset themselves during session disposal.
     }
 
     internal Task SendRoomChatMessageAsync(string messageText) =>
@@ -2643,6 +2664,11 @@ internal sealed partial class LanConnectLobbyRuntime :
                         preflightJoin.JoinResponse == null)
                     {
                         _pendingClientReconnect = null;
+                        if (preflightJoin.ProtocolFailure != null)
+                        {
+                            LanConnectProtocolUiMessages.Present(preflightJoin.ProtocolFailure);
+                            return;
+                        }
                         if (preflightJoin.Outcome == LanConnectModPreflightJoinOutcome.RestartScheduled)
                         {
                             return;
@@ -2665,6 +2691,13 @@ internal sealed partial class LanConnectLobbyRuntime :
                     {
                         _pendingClientReconnect = null;
                         LanConnectPopupUtil.ShowInfo("已自动重新加入房间。");
+                        return;
+                    }
+
+                    if (joinResult.ProtocolFailure != null)
+                    {
+                        _pendingClientReconnect = null;
+                        LanConnectProtocolUiMessages.Present(joinResult.ProtocolFailure);
                         return;
                     }
 
@@ -3333,13 +3366,15 @@ internal sealed partial class LanConnectLobbyRuntime :
             string hostChannel,
             string roomName,
             string? password,
-            string gameMode)
+            string gameMode,
+            LanConnectSessionProtocolLease? protocolLease)
         {
             NetService = netService;
             HostChannel = hostChannel;
             RoomName = roomName;
             Password = password;
             GameMode = gameMode;
+            ProtocolLease = protocolLease;
             _disconnectedHandler = OnDisconnected;
             netService.Disconnected += _disconnectedHandler;
         }
@@ -3354,6 +3389,8 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         public string GameMode { get; }
 
+        public LanConnectSessionProtocolLease? ProtocolLease { get; }
+
         public bool HasPersisted { get; set; }
 
         public string? SaveKey { get; set; }
@@ -3361,6 +3398,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         public void Detach()
         {
             NetService.Disconnected -= _disconnectedHandler;
+            ProtocolLease?.Dispose();
         }
 
         private void OnDisconnected(NetErrorInfo _)
@@ -3391,12 +3429,16 @@ internal sealed partial class LanConnectLobbyRuntime :
             NetHostGameService netService,
             LobbyApiClient apiClient,
             LobbyCreateRoomResponse registration,
-            LanConnectHostedRoomMetadata metadata)
+            LanConnectHostedRoomMetadata metadata,
+            LanConnectSessionProtocolLease protocolLease,
+            LanConnectProtocolSelection protocolSelection)
         {
             NetService = netService;
             ApiClient = apiClient;
             Registration = registration;
             Metadata = metadata;
+            ProtocolLease = protocolLease;
+            ProtocolSelection = protocolSelection;
             BoundSaveKey = metadata.SaveKey;
             ControlClient = new LobbyControlClient();
             RelayTunnel = registration.RelayEndpoint != null
@@ -3414,6 +3456,10 @@ internal sealed partial class LanConnectLobbyRuntime :
         public LobbyCreateRoomResponse Registration { get; }
 
         public LanConnectHostedRoomMetadata Metadata { get; }
+
+        public LanConnectSessionProtocolLease ProtocolLease { get; }
+
+        public LanConnectProtocolSelection ProtocolSelection { get; }
 
         public string? BoundSaveKey { get; set; }
 
@@ -3558,6 +3604,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             {
                 ControlClient.EnvelopeReceived -= _controlEnvelopeHandler;
             }
+            ProtocolLease.Dispose();
             lock (_pendingKickSync)
             {
                 foreach (TaskCompletionSource<LobbyControlEnvelope> completion in _pendingKicks.Values)
@@ -3591,7 +3638,10 @@ internal sealed partial class LanConnectLobbyRuntime :
             string controlChannelId,
             string ticketId,
             string playerNetId,
-            string? roomSessionId)
+            string? roomSessionId,
+            LanConnectSessionProtocolLease protocolLease,
+            string clientVersion,
+            LanConnectProtocolSelection protocolSelection)
         {
             NetService = netService;
             ApiClient = apiClient;
@@ -3600,6 +3650,9 @@ internal sealed partial class LanConnectLobbyRuntime :
             TicketId = ticketId;
             PlayerNetId = playerNetId;
             RoomSessionId = roomSessionId ?? string.Empty;
+            ProtocolLease = protocolLease;
+            ClientVersion = clientVersion;
+            ProtocolSelection = protocolSelection;
             ControlClient = new LobbyControlClient();
             _disconnectedHandler = OnDisconnected;
         }
@@ -3619,6 +3672,12 @@ internal sealed partial class LanConnectLobbyRuntime :
         public string PlayerNetId { get; }
 
         public string RoomSessionId { get; }
+
+        public LanConnectSessionProtocolLease ProtocolLease { get; }
+
+        public string ClientVersion { get; }
+
+        public LanConnectProtocolSelection ProtocolSelection { get; }
 
         public bool IsClosing { get; set; }
 
@@ -3644,6 +3703,7 @@ internal sealed partial class LanConnectLobbyRuntime :
         public void Dispose()
         {
             NetService.Disconnected -= _disconnectedHandler;
+            ProtocolLease.Dispose();
             if (_controlEnvelopeHandler != null)
             {
                 ControlClient.EnvelopeReceived -= _controlEnvelopeHandler;

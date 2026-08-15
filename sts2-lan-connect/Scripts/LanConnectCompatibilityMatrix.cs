@@ -10,7 +10,8 @@ internal static class LanConnectCompatibilityMatrix
         int effectiveMaxPlayers = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
         string compatibilityProfile = LanConnectLobbyEndpointDefaults.GetCompatibilityProfile();
         string connectionStrategy = LanConnectLobbyEndpointDefaults.GetConnectionStrategy();
-        string protocolProfile = LanConnectProtocolProfiles.DetermineProfileForMaxPlayers(effectiveMaxPlayers);
+        string protocolProfile = LanConnectSessionProtocolState.Shared.Current.Selection?.Profile.ToCanonical()
+            ?? LanConnectProtocolProfile.Compat4x5V1.ToCanonical();
 
         return $"compatibilityProfile={compatibilityProfile}, connectionStrategy={connectionStrategy}, effectiveMaxPlayers={effectiveMaxPlayers}, publishedProtocolProfile={protocolProfile}";
     }
@@ -21,17 +22,14 @@ internal static class LanConnectCompatibilityMatrix
         builder.Append($"profile={LanConnectLobbyEndpointDefaults.GetCompatibilityProfile()}");
         builder.Append($", strategy={LanConnectLobbyEndpointDefaults.GetConnectionStrategy()}");
         builder.Append($", effectiveMaxPlayers={LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers()}");
-        builder.Append($", 4pProtocol={LanConnectProtocolProfiles.Legacy4p}");
-        builder.Append($", 5-8pProtocol={LanConnectProtocolProfiles.Extended8p}");
+        builder.Append($", defaultProtocol={LanConnectProtocolProfile.Compat4x5V1.ToCanonical()}");
         return builder.ToString();
     }
 
     public static string DescribeRoomCompatibility(LobbyRoomSummary room)
     {
-        string roomProtocol = LanConnectProtocolProfiles.Normalize(room.ProtocolProfile);
-        string expectedProtocol = room.MaxPlayers <= LanConnectConstants.LegacyMatrixMaxPlayers
-            ? LanConnectProtocolProfiles.Legacy4p
-            : LanConnectProtocolProfiles.Extended8p;
+        string roomProtocol = room.ProtocolProfileV2 ?? LanConnectProtocolProfile.Compat4x5V1.ToCanonical();
+        string expectedProtocol = room.ProtocolSelection?.Profile ?? roomProtocol;
         bool protocolAligned = string.Equals(roomProtocol, expectedProtocol, StringComparison.Ordinal);
 
         return $"roomId={room.RoomId}, maxPlayers={room.MaxPlayers}, roomProtocol={roomProtocol}, expectedProtocol={expectedProtocol}, protocolAligned={protocolAligned}, relayState={room.RelayState}, version={room.Version}, modVersion={room.ModVersion}";

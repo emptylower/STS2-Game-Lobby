@@ -108,18 +108,42 @@ internal static class LanConnectMultiplayerSaveCompatibility
     public static Task StartLoadedRunAsLanHostAsync(Control loadingOverlay, NSubmenuStack stack)
     {
         NetHostGameService? netService = null;
+        LanConnectSessionProtocolLease? protocolLease = null;
         ExecuteSafeLoad(
             BindingCoordinatorHolder.Instance,
             isLoading => loadingOverlay.Visible = isLoading,
-            _ =>
+            run =>
             {
                 netService = new NetHostGameService();
-                int maxPlayers = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
+                LanConnectResolvedRoomBinding binding = LanConnectMultiplayerSaveRoomBinding.Resolve(run);
+                if (binding.ProtocolFailure != null)
+                {
+                    LanConnectProtocolUiMessages.Present(binding.ProtocolFailure);
+                    return false;
+                }
+                LanConnectProtocolSelection selection = binding.ProtocolSelection
+                    ?? LanConnectProtocolSelection.CreateLocalCompat(
+                        LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
+                        LanConnectBuildInfo.GetGameVersion(),
+                        LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
+                int maxPlayers = selection.MaxPlayers;
+                protocolLease = LanConnectSessionProtocolState.Shared.FreezeHost(
+                    selection,
+                    $"host:{netService.GetHashCode():x8}");
                 NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, maxPlayers);
                 if (!error.HasValue)
                 {
+                    LanConnectLobbyRuntime.Instance?.RegisterHostOrigin(
+                        netService,
+                        LanConnectHostChannels.Lan,
+                        binding.RoomName,
+                        binding.Password,
+                        binding.GameMode,
+                        protocolLease);
                     return true;
                 }
+
+                protocolLease.Dispose();
 
                 NErrorPopup? popup = NErrorPopup.Create(error.Value);
                 if (popup != null)
@@ -140,6 +164,7 @@ internal static class LanConnectMultiplayerSaveCompatibility
             },
             failureReason =>
             {
+                protocolLease?.Dispose();
                 Log.Warn($"sts2_lan_connect save_compat: safe load failed before host start. reason={failureReason}");
                 ShowInvalidSavePopup();
             });

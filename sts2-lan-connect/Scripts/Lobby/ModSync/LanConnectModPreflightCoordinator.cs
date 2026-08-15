@@ -28,6 +28,8 @@ internal sealed record LanConnectModPreflightJoinRequest
     public string? Password { get; init; }
     public string GameVersion { get; init; } = string.Empty;
     public string ModVersion { get; init; } = string.Empty;
+    public LanConnectProtocolOffer ProtocolOffer { get; init; } =
+        new(1, 1, "0.6.0-alpha.1", false, false);
     public List<string> ModList { get; init; } = [];
     public string? WireCacheSignatureV1 { get; init; }
     public List<LobbyModDescriptor> LocalMods { get; init; } = [];
@@ -46,6 +48,7 @@ internal sealed record LanConnectModPreflightJoinRequest
         Password = string.IsNullOrWhiteSpace(password) ? null : password,
         GameVersion = LanConnectBuildInfo.GetGameVersion(),
         ModVersion = LanConnectBuildInfo.GetModVersion(),
+        ProtocolOffer = LanConnectProtocolOffer.CreateCurrent(),
         ModList = LanConnectBuildInfo.GetModList(),
         WireCacheSignatureV1 = LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature,
         LocalMods = LanConnectBuildInfo.GetModInventory(),
@@ -60,6 +63,7 @@ internal sealed record LanConnectModPreflightJoinResult
     public LobbyJoinRoomResponse? JoinResponse { get; init; }
     public LobbyModPreflightResponse? Preflight { get; init; }
     public string? Message { get; init; }
+    public LanConnectProtocolFailure? ProtocolFailure { get; init; }
 }
 
 internal interface ILanConnectModPreflightPorts
@@ -94,6 +98,25 @@ internal sealed class LanConnectModPreflightCoordinator
     public async Task<LanConnectModPreflightJoinResult> JoinAsync(
         LanConnectModPreflightJoinRequest request,
         CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await JoinCoreAsync(request, cancellationToken);
+        }
+        catch (LobbyServiceException exception)
+            when (LanConnectProtocolFailureMapper.IsKnownProtocolServiceCode(exception.Code))
+        {
+            return new LanConnectModPreflightJoinResult
+            {
+                Outcome = LanConnectModPreflightJoinOutcome.Canceled,
+                ProtocolFailure = LanConnectProtocolFailureMapper.FromService(exception)
+            };
+        }
+    }
+
+    private async Task<LanConnectModPreflightJoinResult> JoinCoreAsync(
+        LanConnectModPreflightJoinRequest request,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
@@ -197,6 +220,8 @@ internal sealed class LanConnectModPreflightCoordinator
                 Password = request.Password,
                 Version = request.GameVersion,
                 ModVersion = request.ModVersion,
+                ClientVersion = request.ProtocolOffer.ClientVersion,
+                ProtocolOffer = LobbyProtocolOfferDto.FromValue(request.ProtocolOffer),
                 ModList = request.ModList,
                 WireCacheSignatureV1 = request.WireCacheSignatureV1,
                 DesiredSavePlayerNetId = request.DesiredSavePlayerNetId,

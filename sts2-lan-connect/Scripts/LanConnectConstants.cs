@@ -6,6 +6,12 @@ internal static class LanConnectConstants
 
     public const int DefaultMaxPlayers = 8;
 
+    public const int ProtocolMinPlayers = 2;
+
+    public const int ProtocolMaxPlayers = 8;
+
+    public const int TailLanProtocolVersion = 1;
+
     public const int MinMaxPlayers = 4;
 
     public const int MaxMaxPlayers = 16;

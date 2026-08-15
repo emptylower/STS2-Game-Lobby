@@ -21,7 +21,7 @@ internal static class LanConnectDirectJoinFlow
 {
     internal const int MaxAttempts = 2;
 
-    public static async Task<bool> JoinAsync(
+    public static async Task<LobbyJoinAttemptResult> JoinAsync(
         NSubmenuStack stack,
         SceneTree sceneTree,
         string ip,
@@ -31,8 +31,23 @@ internal static class LanConnectDirectJoinFlow
         CancellationToken cancellationToken)
     {
         LanConnectLobbyManagedJoinFlow? currentFlow = null;
+        LanConnectProtocolFailure? localFailure = ValidateCompatOnlyPreTransport(
+            LanConnectExternalCapabilityCollector.Collect().RitsuLibPresent);
+        if (localFailure != null)
+        {
+            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, null, localFailure);
+        }
+
+        LanConnectSessionProtocolLease? protocolLease = null;
         try
         {
+            LanConnectProtocolSelection selection = LanConnectProtocolSelection.CreateLocalCompat(
+                LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
+                LanConnectBuildInfo.GetGameVersion(),
+                LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
+            protocolLease = LanConnectSessionProtocolState.Shared.FreezeClient(
+                selection,
+                $"direct:{ip}:{port}:{netId}");
             LanConnectDirectJoinSuccess success = await ExecuteAttemptsAsync(
                 netId,
                 async (attempt, stableNetId) =>
@@ -63,7 +78,7 @@ internal static class LanConnectDirectJoinFlow
                         throw;
                     }
                 },
-                IsRetryable,
+                LanConnectJoinRetryPolicy.IsRetryable,
                 async (attempt, _) =>
                 {
                     bool cleaned = LanConnectNetClientCleanup.TryCleanup(currentFlow?.NetService);
@@ -73,13 +88,28 @@ internal static class LanConnectDirectJoinFlow
                 });
 
             LanConnectLobbyJoinFlow.PushJoinedScreen(stack, success.NetService, success.JoinResult);
-            return true;
+            protocolLease.Attach();
+            Action<NetErrorInfo>? releaseLease = null;
+            releaseLease = _ =>
+            {
+                success.NetService.Disconnected -= releaseLease;
+                protocolLease.Dispose();
+            };
+            success.NetService.Disconnected += releaseLease;
+            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Joined);
+        }
+        catch (LanConnectProtocolException exception)
+        {
+            LanConnectNetClientCleanup.TryCleanup(currentFlow?.NetService);
+            protocolLease?.Dispose();
+            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, null, exception.Failure);
         }
         catch (OperationCanceledException)
         {
             Log.Warn($"sts2_lan_connect lan_direct_join: endpoint={ip}:{port}, netId={netId}, result=canceled");
             LanConnectNetClientCleanup.TryCleanup(currentFlow?.NetService);
-            return false;
+            protocolLease?.Dispose();
+            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Canceled, "加入操作已取消。");
         }
         catch (ClientConnectionFailedException ex)
         {
@@ -90,7 +120,8 @@ internal static class LanConnectDirectJoinFlow
                 NModalContainer.Instance?.Add(popup);
             }
 
-            return false;
+            protocolLease?.Dispose();
+            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, ex.Message);
         }
         catch (Exception ex)
         {
@@ -102,7 +133,8 @@ internal static class LanConnectDirectJoinFlow
                 NModalContainer.Instance?.Add(popup);
             }
 
-            return false;
+            protocolLease?.Dispose();
+            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, ex.Message);
         }
     }
 
@@ -127,8 +159,7 @@ internal static class LanConnectDirectJoinFlow
 
     internal static bool IsRetryable(Exception exception)
     {
-        return exception is ClientConnectionFailedException connectionFailure
-               && IsRetryable(connectionFailure.info.GetReason());
+        return LanConnectJoinRetryPolicy.IsRetryable(exception);
     }
 
     internal static bool IsRetryable(NetError reason)
@@ -138,9 +169,14 @@ internal static class LanConnectDirectJoinFlow
 
     internal static bool IsRetryableReason(string? reason)
     {
-        return string.Equals(reason, "Timeout", StringComparison.Ordinal)
-               || string.Equals(reason, "UnknownNetworkError", StringComparison.Ordinal);
+        return LanConnectJoinRetryPolicy.IsRetryableReason(reason);
     }
+
+    internal static LanConnectProtocolFailure? ValidateCompatOnlyPreTransport(bool ritsuLibPresent) =>
+        ritsuLibPresent
+            ? LanConnectProtocolFailure.RitsuLibNotAllowedInCompat(
+                "Pure direct-IP is compat-only in 0.6.0-alpha.1.")
+            : null;
 
     private static string DescribeFailure(Exception exception)
     {

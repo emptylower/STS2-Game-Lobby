@@ -17,7 +17,7 @@ namespace Sts2LanConnect.Scripts;
 
 internal sealed class LanConnectSavedRoomBinding
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public int SchemaVersion { get; set; }
 
@@ -43,6 +43,24 @@ internal sealed class LanConnectSavedRoomBinding
     /// Raw persisted host channel ("lan" / "lobby"). Empty means legacy/missing; resolve via LanConnectHostChannels.Resolve.
     /// </summary>
     public string HostChannel { get; set; } = string.Empty;
+
+    public string ProtocolProfileV2 { get; set; } = string.Empty;
+
+    public int SelectedLanProtocolVersion { get; set; }
+
+    public string ProtocolCarrier { get; set; } = string.Empty;
+
+    public int ProtocolMaxPlayers { get; set; }
+
+    public string MinimumClientVersion { get; set; } = string.Empty;
+
+    public string ProtocolGameVersion { get; set; } = string.Empty;
+
+    public string? WireCacheSignatureV1 { get; set; }
+
+    public bool RitsuLibPresent { get; set; }
+
+    public string CapabilityDigest { get; set; } = string.Empty;
 }
 
 internal sealed class LanConnectResolvedRoomBinding
@@ -65,6 +83,10 @@ internal sealed class LanConnectResolvedRoomBinding
     public string HostChannel { get; init; } = string.Empty;
 
     public string EffectiveHostChannel => LanConnectHostChannels.Resolve(HostChannel);
+
+    public LanConnectProtocolSelection? ProtocolSelection { get; init; }
+
+    public LanConnectProtocolFailure? ProtocolFailure { get; init; }
 }
 
 internal static class LanConnectMultiplayerSaveRoomBinding
@@ -109,6 +131,9 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         LanConnectSavedRoomBinding? storedBinding = LanConnectConfig.TryGetSaveRoomBinding(saveKey);
         if (storedBinding != null)
         {
+            LanConnectProtocolSelection? protocolSelection = TryRestoreProtocolSelection(
+                storedBinding,
+                out LanConnectProtocolFailure? protocolFailure);
             return new LanConnectResolvedRoomBinding
             {
                 SaveKey = saveKey,
@@ -117,7 +142,9 @@ internal static class LanConnectMultiplayerSaveRoomBinding
                 GameMode = string.IsNullOrWhiteSpace(storedBinding.GameMode) ? GetLobbyGameMode(run) : storedBinding.GameMode,
                 HasStoredBinding = true,
                 HostChannel = storedBinding.HostChannel ?? string.Empty,
-                SchemaVersion = storedBinding.SchemaVersion
+                SchemaVersion = storedBinding.SchemaVersion,
+                ProtocolSelection = protocolSelection,
+                ProtocolFailure = protocolFailure
             };
         }
 
@@ -156,6 +183,11 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         }
 
         string normalizedHostChannel = hostChannel.Trim().ToLowerInvariant();
+        LanConnectProtocolSelection selection = LanConnectSessionProtocolState.Shared.Current.Selection
+            ?? LanConnectProtocolSelection.CreateLocalCompat(
+                LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
+                LanConnectBuildInfo.GetGameVersion(),
+                LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
 
         LanConnectSavedRoomBinding binding = new()
         {
@@ -171,11 +203,57 @@ internal static class LanConnectMultiplayerSaveRoomBinding
             UpdatedAtUnixSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             HostChannel = normalizedHostChannel
         };
+        binding.ProtocolProfileV2 = selection.Profile.ToCanonical();
+        binding.SelectedLanProtocolVersion = selection.SelectedLanProtocolVersion;
+        binding.ProtocolCarrier = selection.Carrier.ToWireValue();
+        binding.ProtocolMaxPlayers = selection.MaxPlayers;
+        binding.MinimumClientVersion = selection.MinimumClientVersion;
+        binding.ProtocolGameVersion = selection.GameVersion;
+        binding.WireCacheSignatureV1 = selection.WireCacheSignature;
+        binding.RitsuLibPresent = selection.RitsuLibPresent;
+        binding.CapabilityDigest = selection.CapabilityDigest;
 
         LanConnectConfig.UpsertSaveRoomBinding(binding);
         GD.Print(
             $"sts2_lan_connect save_binding: persisted source={source}, saveKey={binding.SaveKey}, roomName='{binding.RoomName}', hostChannel={binding.HostChannel}, passwordSet={!string.IsNullOrWhiteSpace(binding.Password)}, playerCount={binding.PlayerCount}, signature={binding.PlayerSignature}");
         return true;
+    }
+
+    private static LanConnectProtocolSelection? TryRestoreProtocolSelection(
+        LanConnectSavedRoomBinding binding,
+        out LanConnectProtocolFailure? failure)
+    {
+        failure = null;
+        if (binding.SchemaVersion < 2
+            || string.IsNullOrWhiteSpace(binding.ProtocolProfileV2)
+            || string.IsNullOrWhiteSpace(binding.ProtocolCarrier)
+            || string.IsNullOrWhiteSpace(binding.CapabilityDigest))
+        {
+            return null;
+        }
+
+        try
+        {
+            LanConnectProtocolSelection selection = new(
+                LanConnectProtocolProfileExtensions.ParseCanonical(binding.ProtocolProfileV2),
+                binding.SelectedLanProtocolVersion,
+                LanConnectProtocolProfileExtensions.ParseCarrier(binding.ProtocolCarrier),
+                binding.MinimumClientVersion,
+                binding.ProtocolMaxPlayers,
+                binding.ProtocolGameVersion,
+                binding.WireCacheSignatureV1,
+                binding.RitsuLibPresent,
+                binding.CapabilityDigest);
+            LanConnectProtocolOffer offer = LanConnectProtocolOffer.CreateCurrent();
+            return selection.Validate(offer);
+        }
+        catch (LanConnectProtocolException exception)
+        {
+            GD.Print(
+                $"sts2_lan_connect save_binding: stored protocol selection rejected code={exception.Failure.Code}");
+            failure = exception.Failure;
+            return null;
+        }
     }
 
     public static string GetLobbyGameMode(GameMode gameMode)

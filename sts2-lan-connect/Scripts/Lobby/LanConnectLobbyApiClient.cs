@@ -62,9 +62,31 @@ internal sealed class LobbyApiClient : IDisposable
         return BuildControlUri(controlChannelId, "host", roomId, "token", hostToken);
     }
 
-    public Uri BuildClientControlUri(string controlChannelId, string roomId, string ticketId)
+    public Uri BuildClientControlUri(
+        string controlChannelId,
+        string roomId,
+        string ticketId,
+        string? clientVersion = null,
+        string? capabilityDigest = null)
     {
-        return BuildControlUri(controlChannelId, "client", roomId, "ticketId", ticketId);
+        Uri baseUri = BuildControlUri(controlChannelId, "client", roomId, "ticketId", ticketId);
+        if (string.IsNullOrWhiteSpace(clientVersion) && string.IsNullOrWhiteSpace(capabilityDigest))
+        {
+            return baseUri;
+        }
+
+        string uri = baseUri.ToString();
+        if (!string.IsNullOrWhiteSpace(clientVersion))
+        {
+            uri += $"&clientVersion={Uri.EscapeDataString(clientVersion)}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(capabilityDigest))
+        {
+            uri += $"&capabilityDigest={Uri.EscapeDataString(capabilityDigest)}";
+        }
+
+        return new Uri(uri, UriKind.Absolute);
     }
 
     public async Task<IReadOnlyList<LobbyRoomSummary>> GetRoomsAsync(CancellationToken cancellationToken = default)
@@ -288,8 +310,8 @@ internal sealed class LobbyApiClient : IDisposable
         return payload switch
         {
             null => "no-payload",
-            LobbyCreateRoomRequest create => $"create room='{create.RoomName}', passwordSet={!string.IsNullOrWhiteSpace(create.Password)}, maxPlayers={create.MaxPlayers}, protocolProfile={create.ProtocolProfile ?? "<auto>"}, localAddressCount={create.HostConnectionInfo.LocalAddresses.Count}, savedRunSlots={create.SavedRun?.Slots.Count ?? 0}, hostModCount={create.HostModInventory?.Count ?? 0}",
-            LobbyJoinRoomRequest join => $"join player='{join.PlayerName}', passwordSet={!string.IsNullOrWhiteSpace(join.Password)}, desiredSavePlayerNetId={(string.IsNullOrWhiteSpace(join.DesiredSavePlayerNetId) ? "<none>" : join.DesiredSavePlayerNetId)}",
+            LobbyCreateRoomRequest create => $"create room='{create.RoomName}', passwordSet={!string.IsNullOrWhiteSpace(create.Password)}, maxPlayers={create.MaxPlayers}, protocolProfile={create.ProtocolProfileV2 ?? create.ProtocolProfile ?? "<auto>"}, clientVersion={create.ClientVersion ?? "<legacy>"}, localAddressCount={create.HostConnectionInfo.LocalAddresses.Count}, savedRunSlots={create.SavedRun?.Slots.Count ?? 0}, hostModCount={create.HostModInventory?.Count ?? 0}",
+            LobbyJoinRoomRequest join => $"join player='{join.PlayerName}', passwordSet={!string.IsNullOrWhiteSpace(join.Password)}, clientVersion={join.ClientVersion ?? "<legacy>"}, desiredSavePlayerNetId={(string.IsNullOrWhiteSpace(join.DesiredSavePlayerNetId) ? "<none>" : join.DesiredSavePlayerNetId)}",
             LobbyModPreflightRequest preflight => $"mod-preflight passwordSet={!string.IsNullOrWhiteSpace(preflight.Password)}, protocolVersion={preflight.ModSyncProtocolVersion}, localModCount={preflight.LocalMods.Count}",
             LobbyHeartbeatRequest heartbeat => $"heartbeat currentPlayers={heartbeat.CurrentPlayers}, status={heartbeat.Status}, connectedSaveSlots={heartbeat.ConnectedPlayerNetIds?.Count ?? 0}",
             LobbyDeleteRoomRequest => "delete-room",

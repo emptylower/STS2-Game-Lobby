@@ -87,6 +87,12 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
         // Resolve host channel before lobby-endpoint preflight so pure-LAN saves never
         // depend on lobby URL or show "未绑定大厅服务" when they should not publish.
         LanConnectResolvedRoomBinding earlyBinding = LanConnectMultiplayerSaveRoomBinding.Resolve(context.Run);
+        if (earlyBinding.ProtocolFailure != null)
+        {
+            CompletedScreens.Add(instanceId);
+            LanConnectProtocolUiMessages.Present(earlyBinding.ProtocolFailure);
+            return;
+        }
         string? earlyPersistedChannel = earlyBinding.HostChannel;
         if (!string.IsNullOrWhiteSpace(earlyPersistedChannel) && !LanConnectHostChannels.IsValid(earlyPersistedChannel))
         {
@@ -270,7 +276,7 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                 return;
             }
 
-            bool published = await LanConnectHostFlow.PublishExistingHostToLobbyAsync(
+            LanConnectHostAttemptResult published = await LanConnectHostFlow.PublishExistingHostToLobbyAsync(
                 context.NetService,
                 binding.RoomName,
                 binding.Password,
@@ -280,8 +286,12 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                 savedRunInfo: savedRunInfo,
                 maxPlayers: LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
                 notifyOnFailure: false);
-            if (!published)
+            if (!published.Succeeded)
             {
+                if (published.ProtocolFailure != null)
+                {
+                    LanConnectProtocolUiMessages.Present(published.ProtocolFailure);
+                }
                 GD.Print($"sts2_lan_connect continue_run_publish: publish failed screen={context.ScreenType}, saveKey={binding.SaveKey}");
                 return;
             }

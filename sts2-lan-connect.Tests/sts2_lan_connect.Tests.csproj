@@ -33,6 +33,10 @@
       <HintPath>$(Sts2DataDir)/0Harmony.dll</HintPath>
       <Private>true</Private>
     </Reference>
+    <Reference Include="sts2">
+      <HintPath>$(Sts2DataDir)/sts2.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

@@ -48,6 +48,7 @@ public sealed class LanConnectDirectJoinFlowTests
 
     [Theory]
     [InlineData("Timeout", true)]
+    [InlineData("HandshakeTimeout", true)]
     [InlineData("UnknownNetworkError", true)]
     [InlineData("NotInSaveGame", false)]
     [InlineData("RunInProgress", false)]
@@ -56,6 +57,22 @@ public sealed class LanConnectDirectJoinFlowTests
     public void Retry_policy_only_retries_transport_failures(string reason, bool expected)
     {
         Assert.Equal(expected, LanConnectDirectJoinFlow.IsRetryableReason(reason));
+    }
+
+    [Fact]
+    public void Local_ritsulib_is_rejected_before_direct_transport()
+    {
+        LanConnectProtocolFailure? failure =
+            LanConnectDirectJoinFlow.ValidateCompatOnlyPreTransport(ritsuLibPresent: true);
+
+        Assert.NotNull(failure);
+        Assert.Equal("ritsulib_not_allowed_in_compat_mode", failure.Code);
+    }
+
+    [Fact]
+    public void No_ritsulib_passes_direct_pre_transport_guard()
+    {
+        Assert.Null(LanConnectDirectJoinFlow.ValidateCompatOnlyPreTransport(ritsuLibPresent: false));
     }
 
     private sealed class RetryableTestException : Exception;

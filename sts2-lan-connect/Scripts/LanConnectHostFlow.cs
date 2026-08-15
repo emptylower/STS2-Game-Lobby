@@ -39,20 +39,30 @@ internal static class LanConnectHostFlow
     {
         loadingOverlay.Visible = true;
         NetHostGameService netService = new();
-        int maxPlayers = LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
-        string protocolProfile = LanConnectProtocolProfiles.DetermineProfileForMaxPlayers(maxPlayers);
+        int maxPlayers = Math.Clamp(
+            LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
+            LanConnectConstants.ProtocolMinPlayers,
+            LanConnectConstants.ProtocolMaxPlayers);
         string lobbyGameMode = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode);
+        LanConnectSessionProtocolLease? protocolLease = null;
+        bool leaseTransferred = false;
 
         GD.Print(
             $"sts2_lan_connect host_flow: start LAN host gameMode={lobbyGameMode}, port={LanConnectConstants.DefaultPort}, maxPlayers={maxPlayers}");
 
         try
         {
-            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, maxPlayers, "start_lan_host");
+            LanConnectProtocolSelection selection = LanConnectProtocolSelection.CreateLocalCompat(
+                maxPlayers,
+                LanConnectBuildInfo.GetGameVersion(),
+                LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
+            protocolLease = LanConnectSessionProtocolState.Shared.FreezeHost(
+                selection,
+                BuildHostLeaseOwner(netService));
             NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, maxPlayers);
             if (error.HasValue)
             {
-                LanConnectProtocolProfiles.ResetActiveProfile("start_lan_host_failed");
+                protocolLease.Dispose();
                 GD.Print(
                     $"sts2_lan_connect host_flow: LAN host failed gameMode={lobbyGameMode}, port={LanConnectConstants.DefaultPort}, reason={error.Value}");
                 NErrorPopup? popup = NErrorPopup.Create(error.Value);
@@ -74,7 +84,9 @@ internal static class LanConnectHostFlow
                     LanConnectHostChannels.Lan,
                     "LAN 联机房间",
                     password: null,
-                    gameMode: LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode));
+                    gameMode: LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode),
+                    protocolLease);
+                leaseTransferred = true;
             }
             else
             {
@@ -89,7 +101,7 @@ internal static class LanConnectHostFlow
         }
         catch (Exception ex)
         {
-            LanConnectProtocolProfiles.ResetActiveProfile("start_lan_host_exception");
+            protocolLease?.Dispose();
             GD.Print(
                 $"sts2_lan_connect host_flow: LAN host failed gameMode={lobbyGameMode}, port={LanConnectConstants.DefaultPort}, reason={ex}");
             NErrorPopup? popup = NErrorPopup.Create(new NetErrorInfo(NetError.InternalError, selfInitiated: false));
@@ -102,16 +114,29 @@ internal static class LanConnectHostFlow
         }
         finally
         {
+            if (!leaseTransferred)
+            {
+                protocolLease?.Dispose();
+            }
             loadingOverlay.Visible = false;
         }
     }
 
-    public static async Task<bool> StartLobbyHostAsync(string roomName, string? password, GameMode gameMode, Control loadingOverlay, NSubmenuStack stack, int? maxPlayersOverride = null)
+    public static async Task<LanConnectHostAttemptResult> StartLobbyHostAsync(
+        string roomName,
+        string? password,
+        GameMode gameMode,
+        Control loadingOverlay,
+        NSubmenuStack stack,
+        LanConnectCreateRoomIntent intent)
     {
         loadingOverlay.Visible = true;
         NetHostGameService netService = new();
-        int maxPlayers = maxPlayersOverride ?? LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers();
-        string protocolProfile = LanConnectProtocolProfiles.DetermineProfileForMaxPlayers(maxPlayers);
+        LobbyApiClient? apiClient = null;
+        LobbyCreateRoomResponse? registration = null;
+        LanConnectSessionProtocolLease? protocolLease = null;
+        bool leaseTransferred = false;
+        int maxPlayers = intent.MaxPlayers;
         string lobbyGameMode = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode);
         string gameModeLabel = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameModeLabel(gameMode);
 
@@ -120,11 +145,37 @@ internal static class LanConnectHostFlow
 
         try
         {
-            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, maxPlayers, "start_lobby_host");
+            intent.Validate();
+            string trimmedRoomName = LanConnectConfig.SanitizeRoomName(roomName);
+            string? trimmedPassword = string.IsNullOrWhiteSpace(password)
+                ? null
+                : LanConnectConfig.SanitizeRoomPassword(password);
+            apiClient = LobbyApiClient.CreateConfigured();
+            registration = await apiClient.CreateRoomAsync(BuildCreateRoomRequest(
+                trimmedRoomName,
+                trimmedPassword,
+                lobbyGameMode,
+                intent,
+                savedRunInfo: null));
+
+            LobbyProtocolSelectionDto selectionDto = registration.ProtocolSelection
+                ?? registration.Room.ProtocolSelection
+                ?? throw LanConnectProtocolFailureMapper.FromLocalException(
+                    "lan_protocol_version_mismatch",
+                    "The create response did not include a frozen protocol selection.");
+            LanConnectProtocolSelection selection = selectionDto.ToValidatedValue(intent.Offer);
+            if (selection.Profile != intent.Profile)
+            {
+                throw LanConnectProtocolFailureMapper.FromLocalException(
+                    "protocol_profile_unsupported",
+                    "The service selected a different profile than the create intent.");
+            }
+
+            protocolLease = LanConnectSessionProtocolState.Shared.FreezeHost(selection, registration.RoomId);
             NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, maxPlayers);
             if (error.HasValue)
             {
-                LanConnectProtocolProfiles.ResetActiveProfile("start_lobby_host_failed");
+                await DeleteRegisteredRoomSafeAsync(apiClient, registration);
                 GD.Print($"sts2_lan_connect host_flow: ENet host failed with {error.Value}");
                 NErrorPopup? popup = NErrorPopup.Create(error.Value);
                 if (popup != null)
@@ -132,27 +183,33 @@ internal static class LanConnectHostFlow
                     NModalContainer.Instance?.Add(popup);
                 }
 
-                return false;
+                return LanConnectHostAttemptResult.Failed(error.Value.ToString());
             }
 
-            GD.Print("sts2_lan_connect host_flow: ENet host started, registering room with lobby service.");
-            bool published = await PublishExistingHostToLobbyAsync(
-                netService,
-                roomName,
-                password,
-                gameMode,
-                publishSource: "overlay_create",
-                boundSaveKey: null,
-                savedRunInfo: null,
-                maxPlayers,
-                notifyOnFailure: true,
-                throwOnCreateGuardRejection: true);
-            if (!published)
+            if (LanConnectLobbyRuntime.Instance == null)
             {
                 netService.Disconnect(NetError.InternalError, now: true);
-                LanConnectProtocolProfiles.ResetActiveProfile("publish_existing_host_failed");
-                return false;
+                await DeleteRegisteredRoomSafeAsync(apiClient, registration);
+                return LanConnectHostAttemptResult.Failed("大厅后台运行时未安装，无法托管房主会话。");
             }
+
+            LanConnectConfig.LastRoomName = trimmedRoomName;
+            LanConnectLobbyRuntime.Instance.AttachHostedRoom(
+                netService,
+                apiClient,
+                registration,
+                new LanConnectHostedRoomMetadata
+                {
+                    RoomName = trimmedRoomName,
+                    Password = trimmedPassword,
+                    GameMode = lobbyGameMode,
+                    PublishSource = "overlay_create",
+                    ProtocolProfile = selection.Profile.ToCanonical()
+                },
+                protocolLease,
+                selection);
+            apiClient = null;
+            leaseTransferred = true;
 
             PushHostScreen(gameMode, stack, netService, maxPlayers);
             await Task.Yield();
@@ -161,24 +218,40 @@ internal static class LanConnectHostFlow
             string lockStatus = string.IsNullOrWhiteSpace(password) ? "无密码" : "已加锁";
             LanConnectPopupUtil.ShowInfo(
                 $"大厅房间已发布。\n房间名：{roomName}\n模式：{gameModeLabel}\n状态：{lockStatus}\n本地 ENet：{primaryAddress}:{LanConnectConstants.DefaultPort}\n好友现在可以从“游戏大厅”直接加入。");
-            return true;
+            return LanConnectHostAttemptResult.Success();
+        }
+        catch (LanConnectProtocolException ex)
+        {
+            netService.Disconnect(NetError.InternalError, now: true);
+            if (apiClient != null && registration != null)
+            {
+                await DeleteRegisteredRoomSafeAsync(apiClient, registration);
+            }
+            return LanConnectHostAttemptResult.Failed(ex.Failure);
         }
         catch (LobbyServiceException ex)
         {
             netService.Disconnect(NetError.InternalError, now: true);
-            LanConnectProtocolProfiles.ResetActiveProfile("start_lobby_host_service_exception");
             GD.Print($"sts2_lan_connect host_flow: lobby create failed code={ex.Code}, status={ex.StatusCode}, message={ex.Message}");
             if (string.Equals(ex.Code, "server_bandwidth_near_capacity", StringComparison.Ordinal))
             {
                 throw;
             }
-            LanConnectPopupUtil.ShowInfo(LanConnectModerationUiMessages.DescribeCreateRoomFailure(ex));
-            return false;
+            if (LanConnectProtocolFailureMapper.IsKnownProtocolServiceCode(ex.Code))
+            {
+                return LanConnectHostAttemptResult.Failed(LanConnectProtocolFailureMapper.FromService(ex));
+            }
+            string message = LanConnectModerationUiMessages.DescribeCreateRoomFailure(ex);
+            LanConnectPopupUtil.ShowInfo(message);
+            return LanConnectHostAttemptResult.Failed(message);
         }
         catch (Exception ex)
         {
             netService.Disconnect(NetError.InternalError, now: true);
-            LanConnectProtocolProfiles.ResetActiveProfile("start_lobby_host_exception");
+            if (apiClient != null && registration != null)
+            {
+                await DeleteRegisteredRoomSafeAsync(apiClient, registration);
+            }
             GD.Print($"sts2_lan_connect host_flow: unexpected exception during host create -> {ex}");
             NErrorPopup? popup = NErrorPopup.Create(new NetErrorInfo(NetError.InternalError, selfInitiated: false));
             if (popup != null)
@@ -190,12 +263,17 @@ internal static class LanConnectHostFlow
         }
         finally
         {
+            apiClient?.Dispose();
+            if (!leaseTransferred)
+            {
+                protocolLease?.Dispose();
+            }
             GD.Print("sts2_lan_connect host_flow: create flow finished.");
             loadingOverlay.Visible = false;
         }
     }
 
-    public static async Task<bool> PublishExistingHostToLobbyAsync(
+    public static async Task<LanConnectHostAttemptResult> PublishExistingHostToLobbyAsync(
         NetHostGameService netService,
         string roomName,
         string? password,
@@ -210,39 +288,57 @@ internal static class LanConnectHostFlow
         string trimmedRoomName = LanConnectConfig.SanitizeRoomName(roomName);
         string? trimmedPassword = string.IsNullOrWhiteSpace(password) ? null : LanConnectConfig.SanitizeRoomPassword(password);
         LobbyApiClient? apiClient = null;
+        LobbyCreateRoomResponse? registration = null;
+        LanConnectSessionProtocolLease? protocolLease = null;
+        bool leaseTransferred = false;
         string playerName = LanConnectConfig.GetEffectivePlayerDisplayName();
         string lobbyGameMode = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(gameMode);
         int localAddressCount = LanConnectNetUtil.GetLanAddressStrings().Count;
-        string protocolProfile = LanConnectProtocolProfiles.DetermineProfileForMaxPlayers(maxPlayers);
 
         GD.Print(
             $"sts2_lan_connect host_flow: publish existing host source={publishSource}, roomName='{trimmedRoomName}', passwordSet={!string.IsNullOrWhiteSpace(trimmedPassword)}, gameMode={lobbyGameMode}, player='{playerName}', platform={netService.Platform}, localAddressCount={localAddressCount}, saveKey={(boundSaveKey ?? "<none>")}, matrix={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()}");
 
         try
         {
-            LanConnectProtocolProfiles.SetActiveProfile(protocolProfile, maxPlayers, $"publish_existing_host:{publishSource}");
+            LanConnectProtocolOffer offer = LanConnectProtocolOffer.CreateCurrent();
+            LanConnectSessionProtocolSnapshot activeSnapshot = LanConnectSessionProtocolState.Shared.Current;
+            LanConnectProtocolSelection requestedSelection =
+                activeSnapshot.Role == LanConnectSessionProtocolRole.Host && activeSnapshot.Selection != null
+                    ? activeSnapshot.Selection
+                    : LanConnectProtocolSelection.CreateLocalCompat(
+                        maxPlayers,
+                        LanConnectBuildInfo.GetGameVersion(),
+                        LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
+            LanConnectCreateRoomIntent intent = new(
+                requestedSelection.Profile,
+                requestedSelection.MaxPlayers,
+                offer);
+            intent.Validate();
+            protocolLease = LanConnectSessionProtocolState.Shared.FreezeHost(
+                requestedSelection,
+                activeSnapshot.Role == LanConnectSessionProtocolRole.Host
+                    ? activeSnapshot.OwnerId!
+                    : BuildHostLeaseOwner(netService));
             apiClient = LobbyApiClient.CreateConfigured();
-            LobbyCreateRoomResponse registration = await apiClient.CreateRoomAsync(new LobbyCreateRoomRequest
+            registration = await apiClient.CreateRoomAsync(
+                BuildCreateRoomRequest(
+                    trimmedRoomName,
+                    trimmedPassword,
+                    lobbyGameMode,
+                    intent,
+                    savedRunInfo));
+            LobbyProtocolSelectionDto selectionDto = registration.ProtocolSelection
+                ?? registration.Room.ProtocolSelection
+                ?? throw LanConnectProtocolFailureMapper.FromLocalException(
+                    "lan_protocol_version_mismatch",
+                    "The create response did not include a frozen protocol selection.");
+            LanConnectProtocolSelection serverSelection = selectionDto.ToValidatedValue(offer);
+            if (serverSelection != requestedSelection)
             {
-                RoomName = trimmedRoomName,
-                Password = trimmedPassword,
-                HostPlayerName = playerName,
-                ClientInstallationId = LanConnectConfig.GetOrCreateClientInstallationId(),
-                GameMode = lobbyGameMode,
-                Version = LanConnectBuildInfo.GetGameVersion(),
-                ModVersion = LanConnectBuildInfo.GetModVersion(),
-                ModList = LanConnectBuildInfo.GetModList(),
-                WireCacheSignatureV1 = LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature,
-                HostModInventory = LanConnectBuildInfo.GetModInventory(),
-                ProtocolProfile = protocolProfile,
-                MaxPlayers = maxPlayers,
-                HostConnectionInfo = new LobbyHostConnectionInfo
-                {
-                    EnetPort = LanConnectConstants.DefaultPort,
-                    LocalAddresses = LanConnectNetUtil.GetLanAddressStrings().ToList()
-                },
-                SavedRun = savedRunInfo
-            });
+                throw LanConnectProtocolFailureMapper.FromLocalException(
+                    "capability_digest_mismatch",
+                    "Continue-run publication cannot replace the already frozen selection.");
+            }
 
             GD.Print(
                 $"sts2_lan_connect host_flow: lobby room registered roomId={registration.RoomId}, controlChannelId={registration.ControlChannelId}, heartbeat={registration.HeartbeatIntervalSeconds}s, source={publishSource}");
@@ -250,6 +346,7 @@ internal static class LanConnectHostFlow
             LanConnectConfig.LastRoomName = trimmedRoomName;
             if (LanConnectLobbyRuntime.Instance == null)
             {
+                await DeleteRegisteredRoomSafeAsync(apiClient, registration);
                 apiClient.Dispose();
                 apiClient = null;
                 GD.Print("sts2_lan_connect host_flow: runtime missing after room registration, host session cannot attach.");
@@ -258,7 +355,7 @@ internal static class LanConnectHostFlow
                     LanConnectPopupUtil.ShowInfo("大厅后台运行时未安装，无法托管房主会话。请重启游戏后重试。");
                 }
 
-                return false;
+                return LanConnectHostAttemptResult.Failed("大厅后台运行时未安装，无法托管房主会话。");
             }
 
             LanConnectLobbyRuntime.Instance.AttachHostedRoom(
@@ -273,33 +370,55 @@ internal static class LanConnectHostFlow
                     PublishSource = publishSource,
                     SaveKey = boundSaveKey,
                     SavedRun = savedRunInfo,
-                    ProtocolProfile = protocolProfile
-                });
+                    ProtocolProfile = serverSelection.Profile.ToCanonical()
+                },
+                protocolLease,
+                serverSelection);
             apiClient = null;
+            leaseTransferred = true;
             GD.Print($"sts2_lan_connect host_flow: attached hosted room session roomId={registration.RoomId}, source={publishSource}");
-            return true;
+            return LanConnectHostAttemptResult.Success();
+        }
+        catch (LanConnectProtocolException ex)
+        {
+            if (apiClient != null && registration != null)
+            {
+                await DeleteRegisteredRoomSafeAsync(apiClient, registration);
+            }
+            apiClient?.Dispose();
+            return LanConnectHostAttemptResult.Failed(ex.Failure);
         }
         catch (LobbyServiceException ex)
         {
+            if (apiClient != null && registration != null)
+            {
+                await DeleteRegisteredRoomSafeAsync(apiClient, registration);
+            }
             apiClient?.Dispose();
-            LanConnectProtocolProfiles.ResetActiveProfile($"publish_existing_host_failed:{publishSource}");
             GD.Print(
                 $"sts2_lan_connect host_flow: publish existing host failed source={publishSource}, code={ex.Code}, status={ex.StatusCode}, message={ex.Message}");
             if (throwOnCreateGuardRejection && string.Equals(ex.Code, "server_bandwidth_near_capacity", StringComparison.Ordinal))
             {
                 throw;
             }
+            if (LanConnectProtocolFailureMapper.IsKnownProtocolServiceCode(ex.Code))
+            {
+                return LanConnectHostAttemptResult.Failed(LanConnectProtocolFailureMapper.FromService(ex));
+            }
             if (notifyOnFailure)
             {
                 LanConnectPopupUtil.ShowInfo(LanConnectModerationUiMessages.DescribeCreateRoomFailure(ex));
             }
 
-            return false;
+            return LanConnectHostAttemptResult.Failed(ex.Message);
         }
         catch (Exception ex)
         {
+            if (apiClient != null && registration != null)
+            {
+                await DeleteRegisteredRoomSafeAsync(apiClient, registration);
+            }
             apiClient?.Dispose();
-            LanConnectProtocolProfiles.ResetActiveProfile($"publish_existing_host_exception:{publishSource}");
             GD.Print($"sts2_lan_connect host_flow: unexpected exception during publish source={publishSource} -> {ex}");
             if (notifyOnFailure)
             {
@@ -310,9 +429,66 @@ internal static class LanConnectHostFlow
                 }
             }
 
-            return false;
+            return LanConnectHostAttemptResult.Failed(ex.Message);
+        }
+        finally
+        {
+            if (!leaseTransferred)
+            {
+                protocolLease?.Dispose();
+            }
         }
     }
+
+    private static LobbyCreateRoomRequest BuildCreateRoomRequest(
+        string roomName,
+        string? password,
+        string lobbyGameMode,
+        LanConnectCreateRoomIntent intent,
+        LobbySavedRunInfo? savedRunInfo) => new LobbyCreateRoomRequest
+    {
+        RoomName = roomName,
+        Password = password,
+        HostPlayerName = LanConnectConfig.GetEffectivePlayerDisplayName(),
+        ClientInstallationId = LanConnectConfig.GetOrCreateClientInstallationId(),
+        GameMode = lobbyGameMode,
+        Version = LanConnectBuildInfo.GetGameVersion(),
+        ModVersion = intent.Offer.ClientVersion,
+        ClientVersion = intent.Offer.ClientVersion,
+        ModList = LanConnectBuildInfo.GetModList(),
+        WireCacheSignatureV1 = LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature,
+        HostModInventory = LanConnectBuildInfo.GetModInventory(),
+        ProtocolProfile = LanConnectProtocolProfiles.Extended8p,
+        ProtocolProfileV2 = intent.Profile.ToCanonical(),
+        ProtocolOffer = LobbyProtocolOfferDto.FromValue(intent.Offer),
+        MaxPlayers = intent.MaxPlayers,
+        HostConnectionInfo = new LobbyHostConnectionInfo
+        {
+            EnetPort = LanConnectConstants.DefaultPort,
+            LocalAddresses = LanConnectNetUtil.GetLanAddressStrings().ToList()
+        },
+        SavedRun = savedRunInfo
+    };
+
+    private static async Task DeleteRegisteredRoomSafeAsync(
+        LobbyApiClient apiClient,
+        LobbyCreateRoomResponse registration)
+    {
+        try
+        {
+            await apiClient.DeleteRoomAsync(
+                registration.RoomId,
+                new LobbyDeleteRoomRequest { HostToken = registration.HostToken });
+        }
+        catch (Exception exception)
+        {
+            GD.Print(
+                $"sts2_lan_connect host_flow: failed to roll back room {registration.RoomId}: {exception.Message}");
+        }
+    }
+
+    private static string BuildHostLeaseOwner(NetHostGameService netService) =>
+        $"host:{netService.GetHashCode():x8}";
 
     private static void PushHostScreen(GameMode gameMode, NSubmenuStack stack, NetHostGameService netService, int maxPlayers)
     {

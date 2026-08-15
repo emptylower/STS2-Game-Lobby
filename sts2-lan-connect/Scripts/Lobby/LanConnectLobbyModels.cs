@@ -28,6 +28,10 @@ internal sealed class LobbyRoomSummary
 
     public string ProtocolProfile { get; set; } = LanConnectProtocolProfiles.Extended8p;
 
+    public string? ProtocolProfileV2 { get; set; }
+
+    public LobbyProtocolSelectionDto? ProtocolSelection { get; set; }
+
     public string RelayState { get; set; } = "disabled";
 
     public DateTimeOffset CreatedAt { get; set; }
@@ -129,6 +133,18 @@ internal sealed class LobbyProbeResponse
 
 internal sealed class LobbyProbeCapabilities
 {
+    public int DualProtocolApiVersion { get; set; }
+
+    public List<string> SupportedProtocolProfiles { get; set; } = [];
+
+    public int LanProtocolMin { get; set; }
+
+    public int LanProtocolMax { get; set; }
+
+    public string MinimumClientVersion { get; set; } = string.Empty;
+
+    public string TailV1MinimumClientVersion { get; set; } = string.Empty;
+
     public int ServerChatVersion { get; set; }
 
     public int RoomChatProtocolVersion { get; set; }
@@ -214,6 +230,8 @@ internal sealed class LobbyCreateRoomRequest
 
     public string ModVersion { get; set; } = string.Empty;
 
+    public string? ClientVersion { get; set; }
+
     public List<string> ModList { get; set; } = new();
 
     public string? WireCacheSignatureV1 { get; set; }
@@ -221,6 +239,10 @@ internal sealed class LobbyCreateRoomRequest
     public List<LobbyModDescriptor>? HostModInventory { get; set; }
 
     public string? ProtocolProfile { get; set; }
+
+    public string? ProtocolProfileV2 { get; set; }
+
+    public LobbyProtocolOfferDto? ProtocolOffer { get; set; }
 
     public int MaxPlayers { get; set; } = LanConnectConstants.DefaultMaxPlayers;
 
@@ -241,6 +263,8 @@ internal sealed class LobbyCreateRoomResponse
 
     public LobbyRoomSummary Room { get; set; } = new();
 
+    public LobbyProtocolSelectionDto? ProtocolSelection { get; set; }
+
     public LobbyRelayEndpoint? RelayEndpoint { get; set; }
 
     public string? RoomSessionId { get; set; }
@@ -257,6 +281,10 @@ internal sealed class LobbyJoinRoomRequest
     public string Version { get; set; } = string.Empty;
 
     public string ModVersion { get; set; } = string.Empty;
+
+    public string? ClientVersion { get; set; }
+
+    public LobbyProtocolOfferDto? ProtocolOffer { get; set; }
 
     public List<string> ModList { get; set; } = new();
 
@@ -350,6 +378,95 @@ internal sealed class LobbyJoinRoomResponse
     public LobbyConnectionPlan ConnectionPlan { get; set; } = new();
 
     public string? RoomSessionId { get; set; }
+
+    public string? ProtocolFlowNonce { get; set; }
+
+    public byte[] GetProtocolFlowNonceBytes()
+    {
+        if (ProtocolFlowNonce is null
+            || ProtocolFlowNonce.Length != 32
+            || ProtocolFlowNonce.Any(static character =>
+                !char.IsAsciiHexDigit(character) || char.IsAsciiLetterUpper(character)))
+        {
+            throw LanConnectProtocolFailureMapper.FromLocalException(
+                "lan_protocol_version_mismatch",
+                "protocolFlowNonce must be exactly 32 lowercase hexadecimal characters.");
+        }
+
+        return Convert.FromHexString(ProtocolFlowNonce);
+    }
+}
+
+internal sealed class LobbyProtocolOfferDto
+{
+    public int LanProtocolMin { get; set; }
+
+    public int LanProtocolMax { get; set; }
+
+    public string ClientVersion { get; set; } = string.Empty;
+
+    public bool RitsuLibPresent { get; set; }
+
+    public bool RitsuLibSidecarAvailable { get; set; }
+
+    public static LobbyProtocolOfferDto FromValue(LanConnectProtocolOffer offer) => new()
+    {
+        LanProtocolMin = offer.LanProtocolMin,
+        LanProtocolMax = offer.LanProtocolMax,
+        ClientVersion = offer.ClientVersion,
+        RitsuLibPresent = offer.RitsuLibPresent,
+        RitsuLibSidecarAvailable = offer.RitsuLibSidecarAvailable
+    };
+}
+
+internal sealed class LobbyProtocolSelectionDto
+{
+    public string Profile { get; set; } = string.Empty;
+
+    public int SelectedLanProtocolVersion { get; set; }
+
+    public string Carrier { get; set; } = string.Empty;
+
+    public string MinimumClientVersion { get; set; } = string.Empty;
+
+    public int MaxPlayers { get; set; }
+
+    public string GameVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("wireCacheSignature")]
+    public string? WireCacheSignature { get; set; }
+
+    public bool RitsuLibPresent { get; set; }
+
+    public string CapabilityDigest { get; set; } = string.Empty;
+
+    public LanConnectProtocolSelection ToValidatedValue(LanConnectProtocolOffer offer)
+    {
+        LanConnectProtocolSelection selection = new(
+            LanConnectProtocolProfileExtensions.ParseCanonical(Profile),
+            SelectedLanProtocolVersion,
+            LanConnectProtocolProfileExtensions.ParseCarrier(Carrier),
+            MinimumClientVersion,
+            MaxPlayers,
+            GameVersion,
+            WireCacheSignature,
+            RitsuLibPresent,
+            CapabilityDigest);
+        return selection.Validate(offer);
+    }
+
+    public static LobbyProtocolSelectionDto FromValue(LanConnectProtocolSelection selection) => new()
+    {
+        Profile = selection.Profile.ToCanonical(),
+        SelectedLanProtocolVersion = selection.SelectedLanProtocolVersion,
+        Carrier = selection.Carrier.ToWireValue(),
+        MinimumClientVersion = selection.MinimumClientVersion,
+        MaxPlayers = selection.MaxPlayers,
+        GameVersion = selection.GameVersion,
+        WireCacheSignature = selection.WireCacheSignature,
+        RitsuLibPresent = selection.RitsuLibPresent,
+        CapabilityDigest = selection.CapabilityDigest
+    };
 }
 
 internal sealed class LobbyHeartbeatRequest
@@ -398,6 +515,8 @@ internal sealed class LobbyControlEnvelope
     public string? PlayerNetId { get; set; }
 
     public string? BindingId { get; set; }
+
+    public string? ProtocolFlowNonce { get; set; }
 
     public string? KickRequestId { get; set; }
 
@@ -475,6 +594,13 @@ internal sealed class LobbyErrorResponse
 
 internal sealed class LobbyErrorDetails
 {
+    public string? RequiredClientVersion { get; set; }
+
+    [JsonPropertyName("requiredRitsuLibPresent")]
+    public bool? RequiredRitsuLibPresent { get; set; }
+
+    public string? Detail { get; set; }
+
     public string? Reason { get; set; }
 
     public string? Surface { get; set; }

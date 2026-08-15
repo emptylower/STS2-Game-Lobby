@@ -26,7 +26,10 @@ internal enum LobbyJoinAttemptKind
     Canceled
 }
 
-internal readonly record struct LobbyJoinAttemptResult(LobbyJoinAttemptKind Kind, string? FailureMessage = null)
+internal readonly record struct LobbyJoinAttemptResult(
+    LobbyJoinAttemptKind Kind,
+    string? FailureMessage = null,
+    LanConnectProtocolFailure? ProtocolFailure = null)
 {
     public bool Joined => Kind == LobbyJoinAttemptKind.Joined;
 
@@ -43,21 +46,37 @@ internal static class LanConnectLobbyJoinFlow
         CancellationToken cancellationToken,
         Action<string>? reportProgress = null)
     {
-        List<JoinAttemptCandidate> candidates = BuildCandidates(joinResponse);
-
-        if (candidates.Count == 0)
-        {
-            LanConnectPopupUtil.ShowInfo("大厅服务没有返回可用的连接地址，无法加入该房间。");
-            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, "大厅服务没有返回可用的连接地址。");
-        }
-
         loadingOverlay.Visible = true;
         ClientConnectionFailedException? lastConnectionFailure = null;
         Exception? lastUnexpectedFailure = null;
+        LanConnectSessionProtocolLease? protocolLease = null;
+        bool leaseTransferred = false;
 
         try
         {
-            LanConnectProtocolProfiles.SetActiveProfile(joinResponse.Room.ProtocolProfile, joinResponse.Room.MaxPlayers, "join_room");
+            LanConnectProtocolOffer localOffer = LanConnectProtocolOffer.CreateCurrent();
+            LobbyProtocolSelectionDto selectionDto = joinResponse.Room.ProtocolSelection
+                ?? throw LanConnectProtocolFailureMapper.FromLocalException(
+                    "lan_protocol_version_mismatch",
+                    "The join response did not include a frozen protocol selection.");
+            LanConnectProtocolSelection selection = selectionDto.ToValidatedValue(localOffer);
+            _ = joinResponse.GetProtocolFlowNonceBytes();
+            if (string.IsNullOrWhiteSpace(joinResponse.ConnectionPlan.ControlChannelId))
+            {
+                throw LanConnectProtocolFailureMapper.FromLocalException(
+                    "lan_protocol_version_mismatch",
+                    "The join response did not include a control channel binding.");
+            }
+
+            protocolLease = LanConnectSessionProtocolState.Shared.FreezeClient(selection, joinResponse.TicketId);
+            List<JoinAttemptCandidate> candidates = BuildCandidates(joinResponse);
+            if (candidates.Count == 0)
+            {
+                return new LobbyJoinAttemptResult(
+                    LobbyJoinAttemptKind.Failed,
+                    "大厅服务没有返回可用的连接地址。");
+            }
+
             ulong netId = ResolveJoinNetId(joinResponse, desiredSavePlayerNetId);
             Log.Info($"sts2_lan_connect join_flow: policy={LanConnectCompatibilityMatrix.DescribeCurrentPolicy()} roomCompatibility={LanConnectCompatibilityMatrix.DescribeRoomCompatibility(joinResponse.Room)} strategy={joinResponse.ConnectionPlan.Strategy} directCandidates={joinResponse.ConnectionPlan.DirectCandidates.Count} relayAllowed={joinResponse.ConnectionPlan.RelayAllowed}");
             for (int index = 0; index < candidates.Count; index++)
@@ -90,10 +109,25 @@ internal static class LanConnectLobbyJoinFlow
                         throw new InvalidOperationException("Managed JoinFlow completed without an active net service.");
                     }
 
+                    LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance
+                        ?? throw new InvalidOperationException(
+                            "Lobby runtime is required to own the joined protocol lease.");
+                    protocolLease.Attach();
+                    runtime.AttachJoinedClient(
+                        joinFlow.NetService,
+                        joinResponse,
+                        protocolLease,
+                        localOffer.ClientVersion,
+                        selection);
+                    leaseTransferred = true;
                     PushJoinedScreen(stack, joinFlow.NetService, joinResult);
-                    LanConnectLobbyRuntime.Instance?.AttachJoinedClient(joinFlow.NetService, joinResponse);
                     _ = TaskHelper.RunSafely(LanConnectPeerCacheExpander.ExpandAsync(LanConnectConfig.LobbyServerBaseUrl));
                     return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Joined);
+                }
+                catch (LanConnectProtocolException ex)
+                {
+                    joinFlow.NetService?.Disconnect(NetError.ModMismatch);
+                    return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, null, ex.Failure);
                 }
                 catch (ClientConnectionFailedException ex)
                 {
@@ -107,7 +141,7 @@ internal static class LanConnectLobbyJoinFlow
                         candidate,
                         BuildFailureDetail(ex)));
 
-                    if (ShouldStopRetryingAfterFailure(ex))
+                    if (!LanConnectJoinRetryPolicy.IsRetryable(ex))
                     {
                         break;
                     }
@@ -139,6 +173,7 @@ internal static class LanConnectLobbyJoinFlow
                         candidate.IsRelay ? "relay_failure" : "direct_failure",
                         candidate,
                         ex.GetType().Name));
+                    break;
                 }
             }
 
@@ -173,12 +208,20 @@ internal static class LanConnectLobbyJoinFlow
 
             return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, "请查看错误弹窗或连接日志。");
         }
+        catch (LanConnectProtocolException ex)
+        {
+            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, null, ex.Failure);
+        }
         catch (OperationCanceledException)
         {
             return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Canceled, "加入操作已取消。");
         }
         finally
         {
+            if (!leaseTransferred)
+            {
+                protocolLease?.Dispose();
+            }
             loadingOverlay.Visible = false;
         }
     }
@@ -290,11 +333,6 @@ internal static class LanConnectLobbyJoinFlow
     private static bool IsLanCandidate(JoinAttemptCandidate candidate)
     {
         return candidate.Label.StartsWith("lan_", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool ShouldStopRetryingAfterFailure(ClientConnectionFailedException ex)
-    {
-        return !string.IsNullOrWhiteSpace(DescribeJoinFailure(ex));
     }
 
     internal static ulong ResolveJoinNetId(LobbyJoinRoomResponse joinResponse, string? desiredSavePlayerNetId)

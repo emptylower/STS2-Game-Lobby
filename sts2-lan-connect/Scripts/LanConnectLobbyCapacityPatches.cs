@@ -1,6 +1,8 @@
 using System;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
@@ -11,6 +13,7 @@ namespace Sts2LanConnect.Scripts;
 
 internal static class LanConnectLobbyCapacityPatches
 {
+    private static readonly ConditionalWeakTable<NetHostGameService, GuardedProtocolLease> GuardedLeases = new();
     private static readonly FieldInfo? MaxPlayersField =
         AccessTools.Field(typeof(StartRunLobby), "<MaxPlayers>k__BackingField");
 
@@ -23,7 +26,8 @@ internal static class LanConnectLobbyCapacityPatches
         MethodInfo? startENet = AccessTools.Method(typeof(NetHostGameService), nameof(NetHostGameService.StartENetHost));
         TrySafePatch(harmony, startENet, "StartENetHost",
             ref applied, ref skipped, ref failed,
-            prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartENetHostPrefix)));
+            prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartENetHostPrefix)),
+            postfix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartHostPostfix)));
 
         if (OperatingSystem.IsAndroid())
         {
@@ -35,7 +39,8 @@ internal static class LanConnectLobbyCapacityPatches
             MethodInfo? startSteam = AccessTools.Method(typeof(NetHostGameService), nameof(NetHostGameService.StartSteamHost));
             TrySafePatch(harmony, startSteam, "StartSteamHost",
                 ref applied, ref skipped, ref failed,
-                prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartSteamHostPrefix)));
+                prefix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartSteamHostPrefix)),
+                postfix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartHostPostfix)));
         }
 
         ConstructorInfo? lobbyCtor = AccessTools.Constructor(typeof(StartRunLobby),
@@ -89,14 +94,63 @@ internal static class LanConnectLobbyCapacityPatches
 
     // ReSharper disable UnusedMember.Local
 
-    private static void StartENetHostPrefix(ref int maxClients)
+    private static void StartENetHostPrefix(
+        NetHostGameService __instance,
+        ref int maxClients,
+        out LanConnectSessionProtocolLease? __state)
     {
+        __state = FreezeCompatGuardIfNeeded(__instance, maxClients);
         maxClients = ResolveRoomScopedMaxPlayers(maxClients);
     }
 
-    private static void StartSteamHostPrefix(ref int maxClients)
+    private static void StartSteamHostPrefix(
+        NetHostGameService __instance,
+        ref int maxClients,
+        out LanConnectSessionProtocolLease? __state)
     {
+        __state = FreezeCompatGuardIfNeeded(__instance, maxClients);
         maxClients = ResolveRoomScopedMaxPlayers(maxClients);
+    }
+
+    private static void StartHostPostfix(
+        NetHostGameService __instance,
+        NetErrorInfo? __result,
+        LanConnectSessionProtocolLease? __state)
+    {
+        if (__state == null)
+        {
+            return;
+        }
+
+        if (__result.HasValue)
+        {
+            __state.Dispose();
+            return;
+        }
+
+        GuardedLeases.Remove(__instance);
+        GuardedLeases.Add(__instance, new GuardedProtocolLease(__instance, __state));
+    }
+
+    private static LanConnectSessionProtocolLease? FreezeCompatGuardIfNeeded(
+        NetHostGameService netService,
+        int requestedMaxPlayers)
+    {
+        if (LanConnectSessionProtocolState.Shared.Current.Selection != null)
+        {
+            return null;
+        }
+
+        LanConnectProtocolSelection selection = LanConnectProtocolSelection.CreateLocalCompat(
+            Math.Clamp(
+                requestedMaxPlayers,
+                LanConnectConstants.ProtocolMinPlayers,
+                LanConnectConstants.ProtocolMaxPlayers),
+            LanConnectBuildInfo.GetGameVersion(),
+            LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
+        return LanConnectSessionProtocolState.Shared.FreezeHost(
+            selection,
+            $"host:{netService.GetHashCode():x8}");
     }
 
     private static void StartRunLobbyCtorPostfix(StartRunLobby __instance, INetGameService netService)
@@ -129,10 +183,40 @@ internal static class LanConnectLobbyCapacityPatches
         int active = LanConnectProtocolProfiles.GetActiveMaxPlayers();
         if (active > 0)
         {
-            return Math.Clamp(active, LanConnectConstants.MinMaxPlayers, LanConnectConstants.MaxMaxPlayers);
+            return Math.Clamp(
+                active,
+                LanConnectConstants.ProtocolMinPlayers,
+                LanConnectConstants.ProtocolMaxPlayers);
         }
 
-        return Math.Clamp(requestedMaxPlayers, LanConnectConstants.MinMaxPlayers, LanConnectConstants.MaxMaxPlayers);
+        return Math.Clamp(
+            requestedMaxPlayers,
+            LanConnectConstants.ProtocolMinPlayers,
+            LanConnectConstants.ProtocolMaxPlayers);
+    }
+
+    private sealed class GuardedProtocolLease
+    {
+        private readonly NetHostGameService _netService;
+        private readonly LanConnectSessionProtocolLease _lease;
+        private readonly Action<NetErrorInfo> _disconnected;
+
+        public GuardedProtocolLease(
+            NetHostGameService netService,
+            LanConnectSessionProtocolLease lease)
+        {
+            _netService = netService;
+            _lease = lease;
+            _disconnected = OnDisconnected;
+            _netService.Disconnected += _disconnected;
+        }
+
+        private void OnDisconnected(NetErrorInfo _)
+        {
+            _netService.Disconnected -= _disconnected;
+            _lease.Dispose();
+            GuardedLeases.Remove(_netService);
+        }
     }
 
     // ReSharper restore UnusedMember.Local
