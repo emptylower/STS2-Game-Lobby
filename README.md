@@ -3,8 +3,8 @@
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-![Client](https://img.shields.io/badge/client-v0.5.6--rc4-orange)
-![Service](https://img.shields.io/badge/service-v0.5.6--rc1-orange)
+![Client](https://img.shields.io/badge/client-v0.6.0--alpha.1-orange)
+![Service](https://img.shields.io/badge/service-v0.6.0--alpha.1-orange)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
 **[中文](#中文) · [English](#english)**
@@ -17,7 +17,7 @@
 
 ## 中文
 
-**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端测试候选为 **v0.5.6-rc4**，大厅服务继续使用 **v0.5.6-rc1**；最新正式客户端为 **v0.5.5**。本候选版主要服务对象是：
+**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端与大厅服务测试候选均为 **v0.6.0-alpha.1**。本候选版主要服务对象是：
 
 - 想自行部署大厅服务的服主 / 运维
 - 想构建或分发客户端 MOD 的维护者
@@ -31,7 +31,7 @@
 |------|------|------|
 | 客户端 MOD | `sts2-lan-connect/` | 游戏内大厅 UI、建房 / 加房、续局绑定、服务器频道与房间富聊天 |
 | 大厅服务 | `lobby-service/` | 房间目录、聊天网关、管理面板、公告、relay fallback、加入去中心化节点网络 |
-| (可选) 公共列表服务源码 | `server-registry/` | v0.3.x 时代的母面板源码；v0.5.6-rc1 不需要，仅供想自托管列表服务的运维参考 |
+| (可选) 公共列表服务源码 | `server-registry/` | v0.3.x 时代的母面板源码；v0.6 不需要，仅供想自托管列表服务的运维参考 |
 | 文档 | `docs/` | 玩家说明、部署指南、历史兼容文档 |
 | 脚本 | `scripts/` | 构建、打包、安装、同步发布产物 |
 
@@ -41,25 +41,23 @@
 - 客户端通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）拿到聚合节点列表
 - 不再有任何"母面板"或中心化审核后台；`SERVER_REGISTRY_*` 一组环境变量自 v0.4.0 起已从 lobby-service 中完全移除
 
-### v0.5.6-rc4 客户端测试候选
+### v0.6.0-alpha.1 双协议候选
 
-- RC3 现场日志确认其在启动时叠加 RitsuLib 闭合泛型 postfix 与 LAN prefix 会触发 `InvalidProgramException`，7 个必需补丁只安装 6 个后全部回滚
-- RC4 在安装 LAN prefix 前精确卸载冲突 postfix，并在 5-bit 开始游戏消息体写入后直接调用 RitsuLib 尾数据桥，保留 RitsuLib 功能且避免 Harmony 再次组合冲突
-- 初始化失败时会恢复 RitsuLib 原补丁及排序信息，避免留下半补丁状态
-- 新增 `WireCacheSignatureV1`，在服务端签发 join ticket 前与游戏 join request 前比较四张 ModelId net-id 表和四个位宽
-- 内容 MOD 改变线上编码时会明确拒绝加入，不再先连接后黑屏或卡在等待页；签名缺失或读取失败仍 fail-open
-- 发布默认兼容配置由 `test_relaxed` 恢复为 `strict`，不再吞掉原版 gameplay MOD / ID 数据库不一致检查
-- safe-load 与存档修复不再误写或删除续局绑定；未知来源只询问一次，旧版本污染过的存档会重新确认 LAN / 大厅通道
-- 房主重开后使用当前存档重新发布房间，队友可再次看到并加入
-- 踢出身份与存档槽位分离，binding handle 锁定列表绘制时的占用者，避免误封原槽位主人或误发通知
-- 所有同房玩家必须统一使用客户端 `0.5.6-rc4`；lobby-service 继续使用 `0.5.6-rc1`，本次没有服务端协议变更
-- 同一客户端构建继续面向游戏 `0.107.1`、`0.109.0`、`0.109.1` 与 `0.110.x`；同一房间内仍要求完全相同的游戏版本
+- 建房显式选择兼容模式或 0.6 新协议；选择结果、carrier、RitsuLib presence 和 capability digest 在房间生命周期内冻结
+- 兼容模式固定使用 `4/5-bit`，支持 2-8 人并拒绝 RitsuLib
+- 0.6 新协议保持原版 `2/3-bit` 消息主体，完整 roster 由 LAN protocol v1 携带
+- 无 RitsuLib 房间使用 standalone carrier；全员 RitsuLib 房间只使用公开 typed-sidecar API
+- 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合在 ticket 和 transport 前拒绝
+- 删除 RC4 对 RitsuLib 私有 postfix 的卸载、直接调用和恢复逻辑，不维护 RitsuLib 分支
+- direct-IP 在 alpha.1 中只允许兼容模式，本地 Ritsu 或 Tail intent 在创建 transport 前拒绝
+- 客户端与 lobby-service 必须同步升级到 `0.6.0-alpha.1`
+- 历史客户端真实互通不属于本 alpha 的测试或发布门禁
 
 ### 当前版本
 
-- 客户端源码 / 构建版本：`0.5.6-rc4`（测试候选）
-- 大厅服务源码 / 构建版本：`0.5.6-rc1`（测试候选）
-- 当前测试候选：[`v0.5.6-rc4`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc4)
+- 客户端源码 / 构建版本：`0.6.0-alpha.1`（测试候选）
+- 大厅服务源码 / 构建版本：`0.6.0-alpha.1`（测试候选）
+- 当前测试候选：`v0.6.0-alpha.1`（尚未发布）
 - 最新 GitHub 稳定版：[`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
 - Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（候选版测试公告见 `docs/STEAM_WORKSHOP_UPDATE_V0.5.6_ZH.txt`）
 
@@ -69,7 +67,7 @@
 1. 本页（仓库总览）
 2. [`lobby-service/README.md`](./lobby-service/README.md) — 服主运维手册
 3. [`docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](./docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) — 当前部署主路径
-4. (可选) 想自托管完整公共列表服务时再看 [`server-registry/README.md`](./server-registry/README.md)（v0.5.6-rc1 不依赖它）
+4. (可选) 想自托管完整公共列表服务时再看 [`server-registry/README.md`](./server-registry/README.md)（v0.6 不依赖它）
 
 **如果你是客户端维护者：**
 1. 本页
@@ -207,7 +205,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 ## English
 
-**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current client release candidate is **v0.5.6-rc4**, while lobby-service remains on **v0.5.6-rc1**; the latest stable client remains **v0.5.5**.
+**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current client and lobby-service candidate is **v0.6.0-alpha.1**.
 
 ### What is in this repository
 
@@ -215,7 +213,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 |-----------|------|---------|
 | Client MOD | `sts2-lan-connect/` | In-game lobby UI, room create/join, save-run binding, server-channel and rich-room chat |
 | Lobby Service | `lobby-service/` | Room directory, chat gateways, admin panel, announcements, relay fallback, decentralized peer-network membership |
-| (Optional) Public listing service source | `server-registry/` | Source for v0.3.x-style self-hosted public listing service; not required in v0.5.6-rc1 |
+| (Optional) Public listing service source | `server-registry/` | Source for v0.3.x-style self-hosted public listing service; not required in v0.6 |
 | Docs | `docs/` | Player docs, deployment guide, historical compatibility notes |
 | Scripts | `scripts/` | Build, package, install, and release-sync helpers |
 
@@ -223,25 +221,21 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 Each `lobby-service` node advertises itself to peers via the built-in peer-announce protocol. Clients aggregate the public node list through a Cloudflare discovery worker (`https://sts2-gamelobby-register.xyz`). There is no master panel and no central review backend; the `SERVER_REGISTRY_*` env vars from v0.3.x have been removed from `lobby-service` and have been inert since v0.4.0.
 
-### v0.5.6-rc4 client candidate highlights
+### v0.6.0-alpha.1 dual-protocol candidate
 
-- RC3 field logs showed that composing RitsuLib's closed-generic postfix with LAN's prefix throws `InvalidProgramException` during startup, rolling back all wire patches after only 6 of 7 were installed.
-- RC4 detaches that postfix before installing the LAN prefix, then calls the validated RitsuLib tail writer after serializing the 5-bit begin-run body. This preserves the RitsuLib tail without asking Harmony to compose the conflicting patches.
-- A failed compatibility initialization restores RitsuLib's original patch metadata instead of leaving a partial patch state.
-- `WireCacheSignatureV1` compares the four ModelId net-id tables and bit widths before ticket issuance and again before the game join request.
-- A genuine wire mismatch is rejected before a black screen or stuck waiting room; missing or unreadable signatures remain fail-open.
-- The shipped compatibility profile is `strict` again, preserving vanilla gameplay-MOD and ID-database mismatch checks.
-- Safe load and save repair no longer stamp or delete continue-run bindings; ambiguous legacy saves ask once whether they originated from LAN or the lobby.
-- Restarted hosts republish the room against the active save so teammates can find it again.
-- Installation identity and game slots are separate, while binding handles pin kick actions to the occupant rendered by the host.
-- Every player in a room must use client `0.5.6-rc4`; lobby-service remains on `0.5.6-rc1` because this release does not change the service protocol.
-- One client build still targets game versions `0.107.1`, `0.109.0`, `0.109.1`, and `0.110.x`; every player in a room must use the exact same game version.
+- Room creation explicitly selects compat or Tail v1 and freezes the profile, carrier, RitsuLib presence, and capability digest.
+- Compat uses fixed `4/5-bit` encoding for 2-8 players and rejects RitsuLib.
+- Tail v1 preserves the vanilla `2/3-bit` body and carries the complete roster in LAN protocol v1.
+- No-Ritsu rooms use the standalone carrier; all-Ritsu rooms use only the public typed-sidecar API.
+- Ritsu-present peers connect only to Ritsu-present peers, while Ritsu-absent peers connect only to Ritsu-absent peers. Mixed presence is rejected before ticket and transport allocation.
+- The RC4 private-postfix detach/invoke/restore bridge is removed. LAN Connect does not maintain a RitsuLib fork.
+- Direct IP is compat-only in alpha.1. Historical-client interoperability is not part of this alpha gate.
 
 ### Current versions
 
-- Client source/build version: `0.5.6-rc4` (release candidate)
-- Lobby service source/build version: `0.5.6-rc1` (release candidate)
-- Current release candidate: [`v0.5.6-rc4`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc4)
+- Client source/build version: `0.6.0-alpha.1` (prerelease candidate)
+- Lobby service source/build version: `0.6.0-alpha.1` (prerelease candidate)
+- Current release candidate: `v0.6.0-alpha.1` (not published)
 - Latest stable GitHub release: [`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
 - Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 
@@ -251,7 +245,7 @@ Each `lobby-service` node advertises itself to peers via the built-in peer-annou
 1. This README
 2. [`lobby-service/README.md`](./lobby-service/README.md)
 3. [`docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md`](./docs/STS2_LOBBY_DEPLOYMENT_GUIDE_ZH.md) *(current deployment guide, Chinese)*
-4. (Optional) [`server-registry/README.md`](./server-registry/README.md) only if you want to self-host the v0.3.x-style public listing service — v0.5.6-rc1 itself does not require it
+4. (Optional) [`server-registry/README.md`](./server-registry/README.md) only if you want to self-host the v0.3.x-style public listing service; v0.6 itself does not require it
 
 **For client maintainers:**
 1. This README

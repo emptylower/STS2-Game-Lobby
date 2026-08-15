@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.6.0-alpha.1] - 2026-08-15
+
+### Added
+
+- 客户端与 lobby-service 同步新增 `compat_4_5_v1` / `tail_v1` profile、不可变 protocol selection、capability digest 和结构化协议错误。
+- `tail_v1` 在无 RitsuLib 房间使用 standalone carrier，在全员 RitsuLib 房间使用公开 typed-sidecar carrier。
+- RitsuLib presence 必须同质；两个 mismatch 方向与 sidecar readiness 失败都在 ticket/transport 前 fail closed。
+
+### Changed
+
+- 兼容模式固定使用 `4/5-bit`，新协议保持原版 `2/3-bit` 主体并以 LAN protocol v1 携带完整 roster。
+- direct-IP 在 alpha.1 中仅支持兼容模式。
+- 历史客户端真实互通、抓包与 fixture 不属于本 alpha 的验收门禁。
+
+### Removed
+
+- 删除 RC4 对 RitsuLib 私有 Harmony postfix 的卸载、调用与恢复桥；不再访问 RitsuLib 私有 patch state。
+
 ## [0.5.6-rc4] - 2026-08-12
 
 客户端 `0.5.6-rc4` 测试候选发布；lobby-service 继续使用 `0.5.6-rc1`，本次不改变服务端 API、中继或控制协议。
