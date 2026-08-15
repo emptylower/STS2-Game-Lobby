@@ -1,11 +1,15 @@
+using GdUnit4;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
 using Sts2LanConnect.Scripts;
+using static GdUnit4.Assertions;
 
-namespace Sts2LanConnect.Tests.Protocol;
+namespace Sts2LanConnect.GdUnitTests.Protocol;
 
-public sealed class LanConnectStandaloneTailCarrierTests
+[TestSuite]
+[RequireGodotRuntime]
+public sealed class LanConnectStandaloneTailCarrierRuntimeTests
 {
-    [Fact]
+    [TestCase]
     public void Aligns_with_zero_bits_and_preserves_exact_carrier_neutral_bytes()
     {
         byte[] container = ReadFixture("tail-envelope-capabilities-v1.bin");
@@ -18,19 +22,19 @@ public sealed class LanConnectStandaloneTailCarrierTests
         byte[] packet = writer.Buffer.AsSpan(0, writer.BytePosition).ToArray();
         PacketReader reader = new();
         reader.Reset(packet);
-        Assert.True(reader.ReadBool());
-        Assert.False(reader.ReadBool());
-        Assert.True(reader.ReadBool());
+        AssertThat(reader.ReadBool()).IsTrue();
+        AssertThat(reader.ReadBool()).IsFalse();
+        AssertThat(reader.ReadBool()).IsTrue();
         LanConnectStandaloneTailPlacement read = LanConnectStandaloneTailCarrier.Read(reader);
 
-        Assert.Equal(3, written.VanillaBodyEndBit);
-        Assert.Equal(5, written.PaddingBits);
-        Assert.Equal(8, written.ContainerStartBit);
-        Assert.Equal(container, read.ContainerBytes);
-        Assert.Equal(packet.Length * 8, read.ContainerEndBit);
+        AssertThat(written.VanillaBodyEndBit).IsEqual(3);
+        AssertThat(written.PaddingBits).IsEqual(5);
+        AssertThat(written.ContainerStartBit).IsEqual(8);
+        AssertThat(read.ContainerBytes).IsEqual(container);
+        AssertThat(read.ContainerEndBit).IsEqual(packet.Length * 8);
     }
 
-    [Fact]
+    [TestCase]
     public void Rejects_nonzero_padding_truncation_and_trailing_bytes()
     {
         byte[] container = ReadFixture("tail-envelope-capabilities-v1.bin");
@@ -43,19 +47,27 @@ public sealed class LanConnectStandaloneTailCarrierTests
 
         byte[] nonzeroPadding = packet.ToArray();
         nonzeroPadding[0] |= 1 << 3;
-        AssertReadFails(nonzeroPadding);
-        AssertReadFails(packet[..^1]);
-        AssertReadFails([.. packet, 0]);
+        AssertThat(ReadFails(nonzeroPadding)).IsTrue();
+        AssertThat(ReadFails(packet[..^1])).IsTrue();
+        AssertThat(ReadFails([.. packet, 0])).IsTrue();
     }
 
-    private static void AssertReadFails(byte[] packet)
+    private static bool ReadFails(byte[] packet)
     {
-        PacketReader reader = new();
-        reader.Reset(packet);
-        _ = reader.ReadBool();
-        _ = reader.ReadBool();
-        _ = reader.ReadBool();
-        Assert.Throws<InvalidDataException>(() => LanConnectStandaloneTailCarrier.Read(reader));
+        try
+        {
+            PacketReader reader = new();
+            reader.Reset(packet);
+            _ = reader.ReadBool();
+            _ = reader.ReadBool();
+            _ = reader.ReadBool();
+            _ = LanConnectStandaloneTailCarrier.Read(reader);
+            return false;
+        }
+        catch (InvalidDataException)
+        {
+            return true;
+        }
     }
 
     private static byte[] ReadFixture(string name)
