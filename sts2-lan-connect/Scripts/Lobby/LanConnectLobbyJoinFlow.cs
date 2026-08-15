@@ -84,7 +84,11 @@ internal static class LanConnectLobbyJoinFlow
                 cancellationToken.ThrowIfCancellationRequested();
                 JoinAttemptCandidate candidate = candidates[index];
                 reportProgress?.Invoke(BuildCandidateProgressMessage(candidate, index + 1, candidates.Count));
-                LanConnectLobbyManagedJoinFlow joinFlow = new(LanConnectLobbyEndpointDefaults.GetCompatibilityProfile());
+                LanConnectLobbyManagedJoinFlow joinFlow = new(
+                    LanConnectLobbyEndpointDefaults.GetCompatibilityProfile(),
+                    localOffer,
+                    selection,
+                    joinResponse.GetProtocolFlowNonceBytes());
                 using CancellationTokenRegistration cancelRegistration = cancellationToken.Register(static state =>
                 {
                     if (state is CancellationTokenSource source && !source.IsCancellationRequested)

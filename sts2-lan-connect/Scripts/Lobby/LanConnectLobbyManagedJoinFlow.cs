@@ -27,17 +27,32 @@ internal sealed class LanConnectLobbyManagedJoinFlow
     private TaskCompletionSource<ClientLobbyJoinResponseMessage>? _joinCompletion;
     private readonly MegaCrit.Sts2.Core.Logging.Logger _logger = new("LanConnectManagedJoinFlow", LogType.Network);
     private readonly bool _relaxedCompatibility;
+    private readonly LanConnectProtocolOffer? _protocolOffer;
+    private readonly LanConnectProtocolSelection? _protocolSelection;
+    private readonly byte[]? _protocolFlowNonce;
     private string? _protocolMismatchSummary;
     private List<string>? _detectedMissingModsOnLocal;
     private List<string>? _detectedMissingModsOnHost;
     private bool _protocolMismatchEscalated;
 
     public LanConnectLobbyManagedJoinFlow(string compatibilityProfile)
+        : this(compatibilityProfile, null, null, null)
+    {
+    }
+
+    internal LanConnectLobbyManagedJoinFlow(
+        string compatibilityProfile,
+        LanConnectProtocolOffer? protocolOffer,
+        LanConnectProtocolSelection? protocolSelection,
+        byte[]? protocolFlowNonce)
     {
         _relaxedCompatibility = string.Equals(
             compatibilityProfile,
             "test_relaxed",
             StringComparison.OrdinalIgnoreCase);
+        _protocolOffer = protocolOffer;
+        _protocolSelection = protocolSelection;
+        _protocolFlowNonce = protocolFlowNonce?.ToArray();
     }
 
     public NetClientGameService? NetService { get; private set; }
@@ -57,6 +72,14 @@ internal sealed class LanConnectLobbyManagedJoinFlow
 
         _logger.Info($"Beginning managed join with initializer {initializer} relaxedCompatibility={_relaxedCompatibility}");
         NetService = new NetClientGameService();
+        if (_protocolSelection?.Profile == LanConnectProtocolProfile.TailV1)
+        {
+            LanConnectTailMessageRuntime.Shared.BindClient(
+                NetService,
+                _protocolOffer ?? throw new InvalidOperationException("Tail join has no frozen local offer."),
+                _protocolSelection,
+                _protocolFlowNonce ?? throw new InvalidOperationException("Tail join has no protocol flow nonce."));
+        }
         LanConnectRitsuLibLobbyCompatibility.TrackLobbyNetService(NetService);
         CancelToken.Token.Register(Cancel);
 
@@ -69,6 +92,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             NetService.RegisterMessageHandler<ClientLobbyJoinResponseMessage>(HandleJoinResponseMessage);
             NetService.RegisterMessageHandler<ClientLoadJoinResponseMessage>(HandleLoadJoinResponseMessage);
             NetService.RegisterMessageHandler<ClientRejoinResponseMessage>(HandleRejoinResponseMessage);
+            NetService.RegisterMessageHandler<ClientConnectionFailedMessage>(HandleConnectionFailedMessage);
             NetService.Disconnected += OnDisconnected;
 
             _connectCompletion = new TaskCompletionSource<InitialGameInfoMessage>();
@@ -122,6 +146,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
 
             if (NetService != null)
             {
+                LanConnectTailMessageRuntime.Shared.Unbind(NetService);
                 LanConnectRitsuLibLobbyCompatibility.ReleaseLobbyNetService(NetService);
             }
 
@@ -141,6 +166,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
                 NetService.UnregisterMessageHandler<ClientLobbyJoinResponseMessage>(HandleJoinResponseMessage);
                 NetService.UnregisterMessageHandler<ClientLoadJoinResponseMessage>(HandleLoadJoinResponseMessage);
                 NetService.UnregisterMessageHandler<ClientRejoinResponseMessage>(HandleRejoinResponseMessage);
+                NetService.UnregisterMessageHandler<ClientConnectionFailedMessage>(HandleConnectionFailedMessage);
                 NetService.Disconnected -= OnDisconnected;
             }
         }
@@ -481,6 +507,27 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         }
 
         _joinCompletion.SetResult(message);
+    }
+
+    private void HandleConnectionFailedMessage(ClientConnectionFailedMessage message, ulong senderPeerId)
+    {
+        if (NetService == null
+            || !LanConnectTailMessageRuntime.Shared.TryTakeValidatedRejection(
+                NetService,
+                senderPeerId,
+                out LanConnectProtocolFailure? failure)
+            || failure == null)
+        {
+            _logger.Warn("Received ClientConnectionFailedMessage without a validated LAN rejection.");
+            return;
+        }
+
+        LanConnectProtocolException exception = new(failure);
+        TrySetException(_connectCompletion, exception);
+        TrySetException(_joinCompletion, exception);
+        TrySetException(_loadJoinCompletion, exception);
+        TrySetException(_rejoinCompletion, exception);
+        NetService.Disconnect(NetError.ModMismatch);
     }
 
     private void OnDisconnected(NetErrorInfo info)

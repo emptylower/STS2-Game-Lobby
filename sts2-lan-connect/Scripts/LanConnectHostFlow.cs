@@ -207,6 +207,7 @@ internal static class LanConnectHostFlow
                     ProtocolProfile = selection.Profile.ToCanonical()
                 },
                 protocolLease,
+                intent.Offer,
                 selection);
             apiClient = null;
             leaseTransferred = true;
@@ -373,6 +374,7 @@ internal static class LanConnectHostFlow
                     ProtocolProfile = serverSelection.Profile.ToCanonical()
                 },
                 protocolLease,
+                offer,
                 serverSelection);
             apiClient = null;
             leaseTransferred = true;

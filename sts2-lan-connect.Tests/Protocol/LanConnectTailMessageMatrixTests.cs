@@ -12,8 +12,8 @@ public sealed class LanConnectTailMessageMatrixTests
     {
         LanConnectSidecarMessageKind kind = (LanConnectSidecarMessageKind)kindValue;
         LanConnectProtocolOffer offer = new(1, 1, "0.6.0-alpha.1", false, false);
-        byte[] container = LanConnectTailMessagePatches.EncodePeerOfferMessage(kind, offer);
-        LanConnectTailMessagePayload decoded = LanConnectTailMessagePatches.DecodeAndValidate(kind, container);
+        byte[] container = LanConnectTailMessageProtocol.EncodePeerOffer(kind, offer);
+        LanConnectTailMessagePayload decoded = LanConnectTailMessageProtocol.DecodeAndValidate(kind, container);
 
         Assert.Equal(offer, decoded.PeerOffer);
         Assert.Null(decoded.SessionSelection);
@@ -33,8 +33,8 @@ public sealed class LanConnectTailMessageMatrixTests
         LanConnectSidecarMessageKind kind = (LanConnectSidecarMessageKind)kindValue;
         LanConnectProtocolSelection selection = TailSelection();
         LanConnectRosterSnapshot roster = Roster();
-        byte[] container = LanConnectTailMessagePatches.EncodeSessionMessage(kind, selection, roster);
-        LanConnectTailMessagePayload decoded = LanConnectTailMessagePatches.DecodeAndValidate(
+        byte[] container = LanConnectTailMessageProtocol.EncodeSession(kind, selection, roster);
+        LanConnectTailMessagePayload decoded = LanConnectTailMessageProtocol.DecodeAndValidate(
             kind, container, selection, 100, 100);
 
         Assert.NotNull(decoded.SessionSelection);
@@ -46,18 +46,18 @@ public sealed class LanConnectTailMessageMatrixTests
     public void Initial_info_requires_selection_only_and_failure_requires_rejection_only()
     {
         LanConnectProtocolSelection selection = TailSelection();
-        byte[] initial = LanConnectTailMessagePatches.EncodeSessionMessage(
+        byte[] initial = LanConnectTailMessageProtocol.EncodeSession(
             LanConnectSidecarMessageKind.InitialGameInfo,
             selection);
-        Assert.NotNull(LanConnectTailMessagePatches.DecodeAndValidate(
+        Assert.NotNull(LanConnectTailMessageProtocol.DecodeAndValidate(
             LanConnectSidecarMessageKind.InitialGameInfo, initial, selection).SessionSelection);
 
         LanConnectProtocolFailure failure = LanConnectProtocolFailure.RitsuLibPresenceMismatch(false);
-        byte[] rejection = LanConnectTailMessagePatches.EncodeSessionMessage(
+        byte[] rejection = LanConnectTailMessageProtocol.EncodeSession(
             LanConnectSidecarMessageKind.ConnectionFailed,
             selection,
             rejection: failure);
-        Assert.Equal(failure, LanConnectTailMessagePatches.DecodeAndValidate(
+        Assert.Equal(failure, LanConnectTailMessageProtocol.DecodeAndValidate(
             LanConnectSidecarMessageKind.ConnectionFailed, rejection, selection).Rejection);
     }
 
@@ -65,17 +65,17 @@ public sealed class LanConnectTailMessageMatrixTests
     public void Matrix_rejects_forbidden_entries_wrong_authority_and_selection_drift()
     {
         LanConnectProtocolSelection selection = TailSelection();
-        Assert.Throws<InvalidDataException>(() => LanConnectTailMessagePatches.EncodeSessionMessage(
+        Assert.Throws<InvalidDataException>(() => LanConnectTailMessageProtocol.EncodeSession(
             LanConnectSidecarMessageKind.LobbyJoinResponse,
             selection));
-        Assert.Throws<InvalidDataException>(() => LanConnectTailMessagePatches.EncodeSessionMessage(
+        Assert.Throws<InvalidDataException>(() => LanConnectTailMessageProtocol.EncodeSession(
             LanConnectSidecarMessageKind.InitialGameInfo,
             selection,
             Roster()));
 
-        byte[] response = LanConnectTailMessagePatches.EncodeSessionMessage(
+        byte[] response = LanConnectTailMessageProtocol.EncodeSession(
             LanConnectSidecarMessageKind.LobbyJoinResponse, selection, Roster());
-        Assert.Throws<InvalidDataException>(() => LanConnectTailMessagePatches.DecodeAndValidate(
+        Assert.Throws<InvalidDataException>(() => LanConnectTailMessageProtocol.DecodeAndValidate(
             LanConnectSidecarMessageKind.LobbyJoinResponse, response, selection, 200, 100));
 
         LanConnectProtocolSelection drift = selection with
@@ -83,7 +83,7 @@ public sealed class LanConnectTailMessageMatrixTests
             Carrier = LanConnectProtocolCarrier.RitsuLibSidecarV1,
             RitsuLibPresent = true
         };
-        Assert.Throws<InvalidDataException>(() => LanConnectTailMessagePatches.DecodeAndValidate(
+        Assert.Throws<InvalidDataException>(() => LanConnectTailMessageProtocol.DecodeAndValidate(
             LanConnectSidecarMessageKind.LobbyJoinResponse, response, drift, 100, 100));
     }
 

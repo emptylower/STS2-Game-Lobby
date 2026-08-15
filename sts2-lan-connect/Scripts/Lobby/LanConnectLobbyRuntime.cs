@@ -946,9 +946,17 @@ internal sealed partial class LanConnectLobbyRuntime :
         LobbyCreateRoomResponse registration,
         LanConnectHostedRoomMetadata metadata,
         LanConnectSessionProtocolLease protocolLease,
+        LanConnectProtocolOffer protocolOffer,
         LanConnectProtocolSelection protocolSelection)
     {
         LanConnectRitsuLibLobbyCompatibility.TrackLobbyNetService(netService);
+        if (protocolSelection.Profile == LanConnectProtocolProfile.TailV1)
+        {
+            LanConnectTailMessageRuntime.Shared.BindHost(
+                netService,
+                protocolOffer,
+                protocolSelection);
+        }
         _pendingSaveBindingCoordinator.DifferentHostedRoomWillAttach();
         HostedRoomSession? previousHostedSession = null;
         JoinedClientSession? previousClientSession = null;
@@ -3597,6 +3605,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         public void Dispose()
         {
+            LanConnectTailMessageRuntime.Shared.Unbind(NetService);
             NetService.Disconnected -= _disconnectedHandler;
             NetService.ClientConnected -= _clientConnectedHandler;
             NetService.ClientDisconnected -= _clientDisconnectedHandler;
@@ -3702,6 +3711,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         public void Dispose()
         {
+            LanConnectTailMessageRuntime.Shared.Unbind(NetService);
             NetService.Disconnected -= _disconnectedHandler;
             ProtocolLease.Dispose();
             if (_controlEnvelopeHandler != null)

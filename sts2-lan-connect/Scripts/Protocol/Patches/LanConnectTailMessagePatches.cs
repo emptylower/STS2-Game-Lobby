@@ -1,20 +1,15 @@
 using System.Reflection;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Multiplayer;
+using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
 
 namespace Sts2LanConnect.Scripts;
 
-internal sealed record LanConnectTailMessagePayload(
-    LanConnectSidecarMessageKind MessageKind,
-    LanConnectProtocolOffer? PeerOffer,
-    LanConnectCapabilitiesSelection? SessionSelection,
-    LanConnectRosterSnapshot? Roster,
-    LanConnectProtocolFailure? Rejection);
-
 internal interface ILanConnectTailMessageRuntime
 {
-    byte[] BuildOutgoingContainer(
+    LanConnectPreparedTailMessage PrepareOutgoing(
+        NetMessageBus messageBus,
         LanConnectSidecarMessageKind messageKind,
         ulong senderPeerId,
         object message,
@@ -28,10 +23,17 @@ internal interface ILanConnectTailMessageRuntime
         LanConnectProtocolSelection selection);
 
     void ValidateStandaloneIncoming(
+        NetMessageBus messageBus,
         LanConnectSidecarMessageKind messageKind,
-        ulong senderPeerId,
+        ulong transportSenderPeerId,
         INetMessage message,
         byte[] container,
+        LanConnectProtocolSelection selection);
+
+    void HandleIncomingFailure(
+        NetMessageBus messageBus,
+        ulong transportSenderPeerId,
+        Exception exception,
         LanConnectProtocolSelection selection);
 
     bool TryPairSidecarIncoming(
@@ -41,6 +43,8 @@ internal interface ILanConnectTailMessageRuntime
         INetMessage message,
         LanConnectProtocolSelection selection);
 }
+
+internal sealed record LanConnectPreparedTailMessage(object Message, byte[] Container);
 
 internal static class LanConnectTailMessagePatches
 {
@@ -68,6 +72,10 @@ internal static class LanConnectTailMessagePatches
             .ToArray();
         MethodInfo serializePostfix = AccessTools.Method(typeof(LanConnectTailMessagePatches), nameof(SerializePostfix))
             ?? throw new MissingMethodException(nameof(SerializePostfix));
+        MethodInfo serializePrefixDefinition = AccessTools.Method(
+            typeof(LanConnectTailMessagePatches),
+            nameof(SerializePrefix))
+            ?? throw new MissingMethodException(nameof(SerializePrefix));
         MethodInfo deserializePostfix = AccessTools.Method(typeof(LanConnectTailMessagePatches), nameof(DeserializePostfix))
             ?? throw new MissingMethodException(nameof(DeserializePostfix));
         MethodInfo deserialize = AccessTools.Method(
@@ -81,166 +89,77 @@ internal static class LanConnectTailMessagePatches
             MethodInfo serialize = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
                 typeof(NetMessageBus),
                 messageType);
-            harmony.Patch(serialize, postfix: new HarmonyMethod(serializePostfix));
+            MethodInfo serializePrefix = serializePrefixDefinition.MakeGenericMethod(messageType);
+            harmony.Patch(
+                serialize,
+                prefix: new HarmonyMethod(serializePrefix) { priority = Priority.First + 100 },
+                postfix: new HarmonyMethod(serializePostfix));
         }
 
         harmony.Patch(deserialize, postfix: new HarmonyMethod(deserializePostfix));
+
+        MethodInfo receivePrefix = AccessTools.Method(
+            typeof(LanConnectTailMessagePatches),
+            nameof(ReceivePrefix))
+            ?? throw new MissingMethodException(nameof(ReceivePrefix));
+        MethodInfo receiveFinalizer = AccessTools.Method(
+            typeof(LanConnectTailMessagePatches),
+            nameof(ReceiveFinalizer))
+            ?? throw new MissingMethodException(nameof(ReceiveFinalizer));
+        foreach (Type serviceType in new[] { typeof(NetHostGameService), typeof(NetClientGameService) })
+        {
+            MethodInfo receive = AccessTools.Method(
+                serviceType,
+                "OnPacketReceived",
+                [typeof(ulong), typeof(byte[]),
+                    typeof(MegaCrit.Sts2.Core.Multiplayer.Transport.NetTransferMode), typeof(int)])
+                ?? throw new MissingMethodException(serviceType.FullName, "OnPacketReceived");
+            harmony.Patch(
+                receive,
+                prefix: new HarmonyMethod(receivePrefix),
+                finalizer: new HarmonyMethod(receiveFinalizer));
+        }
     }
 
     internal static byte[] EncodePeerOfferMessage(
         LanConnectSidecarMessageKind messageKind,
-        LanConnectProtocolOffer offer)
-    {
-        if (!IsRequest(messageKind))
-        {
-            throw Invalid($"Message kind {messageKind} cannot carry a peer offer.");
-        }
-
-        LanConnectTailEntry capabilities = new(
-            LanConnectTailEntry.CapabilitiesId,
-            1,
-            true,
-            LanConnectCapabilitiesCodec.EncodePeerOffer(offer));
-        return LanConnectTailCodec.Encode(0, [capabilities]);
-    }
+        LanConnectProtocolOffer offer) =>
+        LanConnectTailMessageProtocol.EncodePeerOffer(messageKind, offer);
 
     internal static byte[] EncodeSessionMessage(
         LanConnectSidecarMessageKind messageKind,
         LanConnectProtocolSelection selection,
         LanConnectRosterSnapshot? roster = null,
-        LanConnectProtocolFailure? rejection = null)
-    {
-        ArgumentNullException.ThrowIfNull(selection);
-        if (IsRequest(messageKind))
-        {
-            throw Invalid($"Request kind {messageKind} must carry a peer offer, not a session selection.");
-        }
-
-        ValidateEntryMatrix(messageKind, roster, rejection);
-        List<LanConnectTailEntry> entries =
-        [
-            new(
-                LanConnectTailEntry.CapabilitiesId,
-                1,
-                true,
-                LanConnectCapabilitiesCodec.EncodeSessionSelection(selection))
-        ];
-        if (roster != null)
-        {
-            entries.Add(new LanConnectTailEntry(
-                LanConnectTailEntry.RosterId,
-                1,
-                true,
-                LanConnectRosterCodec.Encode(roster)));
-        }
-
-        if (rejection != null)
-        {
-            entries.Add(new LanConnectTailEntry(
-                LanConnectTailEntry.RejectionId,
-                1,
-                true,
-                LanConnectRejectionCodec.Encode(rejection)));
-        }
-
-        return LanConnectTailCodec.Encode(checked((ushort)selection.SelectedLanProtocolVersion), entries);
-    }
+        LanConnectProtocolFailure? rejection = null) =>
+        LanConnectTailMessageProtocol.EncodeSession(messageKind, selection, roster, rejection);
 
     internal static LanConnectTailMessagePayload DecodeAndValidate(
         LanConnectSidecarMessageKind messageKind,
         ReadOnlySpan<byte> container,
         LanConnectProtocolSelection? frozenSelection = null,
         ulong? transportSenderPeerId = null,
-        ulong? currentHostPeerId = null)
-    {
-        LanConnectTailEnvelope envelope = LanConnectTailCodec.Decode(container);
-        LanConnectTailEntry capabilities = RequireSingle(envelope, LanConnectTailEntry.CapabilitiesId);
-        LanConnectTailEntry? rosterEntry = Find(envelope, LanConnectTailEntry.RosterId);
-        LanConnectTailEntry? rejectionEntry = Find(envelope, LanConnectTailEntry.RejectionId);
-
-        if (IsRequest(messageKind))
-        {
-            if (rosterEntry != null || rejectionEntry != null || envelope.SessionProtocolVersion != 0)
-            {
-                throw Invalid("Join requests permit only a session-version-zero peer offer.");
-            }
-
-            LanConnectProtocolOffer offer = LanConnectCapabilitiesCodec.DecodePeerOffer(
-                capabilities.Payload.Span,
-                envelope.SessionProtocolVersion);
-            return new LanConnectTailMessagePayload(messageKind, offer, null, null, null);
-        }
-
-        if (frozenSelection == null)
-        {
-            throw Invalid("Session messages require a frozen protocol selection.");
-        }
-
-        LanConnectCapabilitiesSelection selection = LanConnectCapabilitiesCodec.DecodeSessionSelection(
-            capabilities.Payload.Span,
-            envelope.SessionProtocolVersion);
-        LanConnectCapabilitiesCodec.ValidateMatches(selection, frozenSelection);
-        LanConnectRosterSnapshot? roster = rosterEntry == null
-            ? null
-            : LanConnectRosterCodec.Decode(rosterEntry.Payload.Span);
-        LanConnectProtocolFailure? rejection = rejectionEntry == null
-            ? null
-            : LanConnectRejectionCodec.Decode(rejectionEntry.Payload.Span);
-        ValidateEntryMatrix(messageKind, roster, rejection);
-        if (roster != null)
-        {
-            if (!transportSenderPeerId.HasValue || !currentHostPeerId.HasValue)
-            {
-                throw Invalid("Roster messages require transport-sender and current-host authority inputs.");
-            }
-
-            LanConnectRosterCodec.ValidateAuthority(roster, transportSenderPeerId.Value, currentHostPeerId.Value);
-        }
-
-        return new LanConnectTailMessagePayload(messageKind, null, selection, roster, rejection);
-    }
-
-    private static void ValidateEntryMatrix(
-        LanConnectSidecarMessageKind messageKind,
-        LanConnectRosterSnapshot? roster,
-        LanConnectProtocolFailure? rejection)
-    {
-        bool requiresRoster = messageKind is
-            LanConnectSidecarMessageKind.LobbyJoinResponse or
-            LanConnectSidecarMessageKind.LoadJoinResponse or
-            LanConnectSidecarMessageKind.RejoinResponse or
-            LanConnectSidecarMessageKind.PlayerJoined or
-            LanConnectSidecarMessageKind.LobbyBeginRun;
-        bool requiresRejection = messageKind == LanConnectSidecarMessageKind.ConnectionFailed;
-        if ((roster != null) != requiresRoster
-            || (rejection != null) != requiresRejection
-            || (roster != null && rejection != null))
-        {
-            throw Invalid($"Message kind {messageKind} has an invalid roster/rejection entry combination.");
-        }
-    }
-
-    private static bool IsRequest(LanConnectSidecarMessageKind kind) => kind is
-        LanConnectSidecarMessageKind.LobbyJoinRequest or
-        LanConnectSidecarMessageKind.LoadJoinRequest or
-        LanConnectSidecarMessageKind.RejoinRequest;
-
-    private static LanConnectTailEntry RequireSingle(LanConnectTailEnvelope envelope, string id) =>
-        Find(envelope, id) ?? throw Invalid($"Required entry '{id}' is missing.");
-
-    private static LanConnectTailEntry? Find(LanConnectTailEnvelope envelope, string id) =>
-        envelope.Entries.SingleOrDefault(entry => string.Equals(entry.Id, id, StringComparison.Ordinal));
+        ulong? currentHostPeerId = null) =>
+        LanConnectTailMessageProtocol.DecodeAndValidate(
+            messageKind,
+            container,
+            frozenSelection,
+            transportSenderPeerId,
+            currentHostPeerId);
 
     private static InvalidDataException Invalid(string message) => new(message);
 
+    [ThreadStatic]
+    private static Stack<ulong>? _transportSenders;
+
     // ReSharper disable UnusedMember.Local -- invoked by Harmony.
-    private static void SerializePostfix(
+    private static void SerializePrefix<T>(
         NetMessageBus __instance,
         ulong senderId,
-        object message,
-        ref int length,
-        ref byte[] __result)
+        ref T message,
+        out LanConnectPreparedTailMessage? __state)
+        where T : struct, INetMessage
     {
+        __state = null;
         LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
         LanConnectProtocolSelection? selection = snapshot.Selection;
         if (selection?.Profile != LanConnectProtocolProfile.TailV1 || !snapshot.IsActive)
@@ -250,11 +169,49 @@ internal static class LanConnectTailMessagePatches
 
         ILanConnectTailMessageRuntime runtime = Volatile.Read(ref _runtime)
             ?? throw new InvalidOperationException("Tail protocol message runtime is not configured.");
-        LanConnectSidecarMessageKind kind = GetMessageKind(message.GetType());
-        byte[] container = runtime.BuildOutgoingContainer(kind, senderId, message, selection);
+        LanConnectSidecarMessageKind kind = GetMessageKind(typeof(T));
+        LanConnectPreparedTailMessage prepared = runtime.PrepareOutgoing(
+            __instance,
+            kind,
+            senderId,
+            message,
+            selection);
+        if (prepared.Message is not T projected)
+        {
+            throw new InvalidOperationException(
+                $"Tail runtime returned {prepared.Message.GetType().FullName} for {typeof(T).FullName}.");
+        }
+
+        message = projected;
+        __state = prepared;
         if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
         {
-            runtime.SubmitSidecarBeforeVanilla(kind, senderId, message, container, selection);
+            runtime.SubmitSidecarBeforeVanilla(kind, senderId, message, prepared.Container, selection);
+        }
+    }
+
+    private static void SerializePostfix(
+        NetMessageBus __instance,
+        ulong senderId,
+        object message,
+        ref int length,
+        ref byte[] __result,
+        LanConnectPreparedTailMessage? __state)
+    {
+        LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
+        LanConnectProtocolSelection? selection = snapshot.Selection;
+        if (selection?.Profile != LanConnectProtocolProfile.TailV1 || !snapshot.IsActive)
+        {
+            return;
+        }
+
+        if (__state == null)
+        {
+            throw new InvalidOperationException("Tail outgoing message was not prepared before serialization.");
+        }
+
+        if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
+        {
             return;
         }
 
@@ -262,7 +219,7 @@ internal static class LanConnectTailMessagePatches
             ?? throw new InvalidOperationException("NetMessageBus writer is unavailable.");
         LanConnectStandaloneTailPlacement placement = LanConnectStandaloneTailCarrier.Write(
             writer,
-            container,
+            __state.Container,
             selection);
         length = checked((placement.ContainerEndBit + 7) / 8);
         __result = writer.Buffer;
@@ -298,14 +255,27 @@ internal static class LanConnectTailMessagePatches
         try
         {
             LanConnectSidecarMessageKind kind = GetMessageKind(message.GetType());
+            if (!TryPeekTransportSender(out ulong transportSenderPeerId))
+            {
+                throw new InvalidDataException(
+                    "Tail message deserialization has no authenticated transport-sender context.");
+            }
+
+            if (overrideSenderId.Value != transportSenderPeerId)
+            {
+                throw new InvalidDataException(
+                    "Embedded message sender differs from the authenticated transport sender.");
+            }
+
             if (selection.Carrier == LanConnectProtocolCarrier.StandaloneTailV1)
             {
                 PacketReader reader = NetMessageBusReader?.GetValue(__instance) as PacketReader
                     ?? throw new InvalidOperationException("NetMessageBus reader is unavailable.");
                 LanConnectStandaloneTailPlacement placement = LanConnectStandaloneTailCarrier.Read(reader, selection);
                 runtime.ValidateStandaloneIncoming(
+                    __instance,
                     kind,
-                    overrideSenderId.Value,
+                    transportSenderPeerId,
                     message,
                     placement.ContainerBytes,
                     selection);
@@ -313,7 +283,7 @@ internal static class LanConnectTailMessagePatches
             else if (!runtime.TryPairSidecarIncoming(
                          __instance,
                          kind,
-                         overrideSenderId.Value,
+                         transportSenderPeerId,
                          message,
                          selection))
             {
@@ -322,12 +292,86 @@ internal static class LanConnectTailMessagePatches
                 overrideSenderId = null;
             }
         }
-        catch
+        catch (Exception exception)
         {
             __result = false;
             message = null;
             overrideSenderId = null;
-            throw;
+            if (!TryPeekTransportSender(out ulong transportSenderPeerId))
+            {
+                return;
+            }
+
+            try
+            {
+                runtime.HandleIncomingFailure(
+                    __instance,
+                    transportSenderPeerId,
+                    exception,
+                    selection);
+            }
+            catch
+            {
+                // Protocol rejection transport can fail too; the original message must still stay blocked.
+            }
+        }
+    }
+
+    private static void ReceivePrefix(INetGameService __instance, ulong senderId)
+    {
+        _ = __instance;
+        (_transportSenders ??= new Stack<ulong>()).Push(senderId);
+    }
+
+    private static Exception? ReceiveFinalizer(Exception? __exception)
+    {
+        if (_transportSenders is { Count: > 0 } senders)
+        {
+            senders.Pop();
+        }
+
+        return __exception;
+    }
+
+    internal static IDisposable PushTransportSenderForTesting(ulong senderPeerId)
+    {
+        (_transportSenders ??= new Stack<ulong>()).Push(senderPeerId);
+        return new TransportSenderScope();
+    }
+
+    private static ulong RequireTransportSender()
+    {
+        if (!TryPeekTransportSender(out ulong senderPeerId))
+        {
+            throw new InvalidOperationException(
+                "Tail message deserialization has no authenticated transport-sender context.");
+        }
+
+        return senderPeerId;
+    }
+
+    private static bool TryPeekTransportSender(out ulong senderPeerId)
+    {
+        if (_transportSenders is { Count: > 0 } senders)
+        {
+            senderPeerId = senders.Peek();
+            return true;
+        }
+
+        senderPeerId = 0;
+        return false;
+    }
+
+    private sealed class TransportSenderScope : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0 && _transportSenders is { Count: > 0 } senders)
+            {
+                senders.Pop();
+            }
         }
     }
     // ReSharper restore UnusedMember.Local
