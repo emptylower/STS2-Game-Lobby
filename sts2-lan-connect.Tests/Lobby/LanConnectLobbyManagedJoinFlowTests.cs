@@ -113,6 +113,23 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
     }
 
     [Fact]
+    public void Marks_current_game_message_without_version_fields_as_metadata_unavailable()
+    {
+        CurrentGameInitialMessage message = new() { sessionState = 1, gameMode = 2 };
+
+        LanConnectLobbyHandshakeCompatibility.PeerVersionSnapshot snapshot =
+            LanConnectLobbyHandshakeCompatibility.ReadInitialGameInfo(message);
+
+        Assert.False(snapshot.HasVersionMetadata);
+        Assert.Equal(string.Empty, snapshot.Version);
+        Assert.Equal(0UL, snapshot.IdDatabaseHash);
+        Assert.Empty(snapshot.GameplayAffectingMods);
+        Assert.Empty(snapshot.OtherMods);
+        Assert.Equal(LanConnectWireCacheHandshakeTokenStatus.Absent, snapshot.WireCacheToken.Status);
+        Assert.Null(snapshot.RawVersionInfo);
+    }
+
+    [Fact]
     public void Reads_legacy_mods_field_alias()
     {
         LegacyAliasedModsInitialGameInfo message = new()
@@ -228,6 +245,12 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
     }
 
 #pragma warning disable CS0649
+    private struct CurrentGameInitialMessage
+    {
+        public int sessionState;
+        public int gameMode;
+    }
+
     private struct LegacyInitialGameInfo
     {
         public string version;

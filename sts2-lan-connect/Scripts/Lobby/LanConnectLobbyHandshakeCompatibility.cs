@@ -19,7 +19,8 @@ internal static class LanConnectLobbyHandshakeCompatibility
         List<string> GameplayAffectingMods,
         List<string> OtherMods,
         LanConnectWireCacheHandshakeTokenParseResult WireCacheToken,
-        object? RawVersionInfo);
+        object? RawVersionInfo,
+        bool HasVersionMetadata = true);
 
     internal static PeerVersionSnapshot ReadInitialGameInfo(object initialMessage)
     {
@@ -29,6 +30,19 @@ internal static class LanConnectLobbyHandshakeCompatibility
         FieldInfo? versionInfoField = messageType.GetField("versionInfo", InstanceFields);
         object? rawVersionInfo = versionInfoField?.GetValue(initialMessage);
         object versionSource = rawVersionInfo ?? initialMessage;
+
+        if (versionSource.GetType().GetField("version", InstanceFields) == null ||
+            versionSource.GetType().GetField("idDatabaseHash", InstanceFields) == null)
+        {
+            return new PeerVersionSnapshot(
+                string.Empty,
+                0,
+                [],
+                [],
+                LanConnectWireCacheHandshakeToken.Parse(null),
+                rawVersionInfo,
+                HasVersionMetadata: false);
+        }
 
         string version = ReadRequiredField<string>(versionSource, "version");
         ulong idDatabaseHash = Convert.ToUInt64(ReadRequiredField<object>(versionSource, "idDatabaseHash"));

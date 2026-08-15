@@ -4,6 +4,16 @@ namespace Sts2LanConnect.Tests.Protocol;
 
 public sealed class LanConnectTailMessageMatrixTests
 {
+    private sealed class HeartbeatRequestMessage;
+
+    [Fact]
+    public void Non_protocol_game_messages_bypass_the_tail_dispatcher()
+    {
+        Assert.False(LanConnectTailMessageTypeMatrix.TryGetKind(
+            nameof(HeartbeatRequestMessage),
+            out _));
+    }
+
     [Fact]
     public void Independent_full_message_golden_vectors_decode_expected_wire_contracts()
     {

@@ -1,5 +1,6 @@
 using System.Reflection;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby;
@@ -67,7 +68,7 @@ internal static class LanConnectTailMessagePatches
         Assembly assembly = typeof(PacketWriter).Assembly;
         Type[] messageTypes = Enum.GetValues<LanConnectSidecarMessageKind>()
             .Select(kind => assembly.GetType(
-                $"MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.{GetMessageTypeName(kind)}",
+                $"MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.{LanConnectTailMessageTypeMatrix.GetTypeName(kind)}",
                 throwOnError: false,
                 ignoreCase: false))
             .Where(static type => type != null)
@@ -312,7 +313,11 @@ internal static class LanConnectTailMessagePatches
 
         try
         {
-            LanConnectSidecarMessageKind kind = GetIncomingMessageKind(message);
+            if (!TryGetIncomingMessageKind(message, out LanConnectSidecarMessageKind kind))
+            {
+                return;
+            }
+
             if (!TryPeekTransportSender(out ulong transportSenderPeerId))
             {
                 throw new InvalidDataException(
@@ -352,6 +357,10 @@ internal static class LanConnectTailMessagePatches
         }
         catch (Exception exception)
         {
+            Log.Warn(
+                $"sts2_lan_connect tail: blocked {message?.GetType().Name ?? "unknown"} " +
+                $"from transport peer {overrideSenderId?.ToString() ?? "unknown"}: " +
+                $"{exception.GetType().Name}: {exception.Message}");
             __result = false;
             message = null;
             overrideSenderId = null;
@@ -481,43 +490,30 @@ internal static class LanConnectTailMessagePatches
     }
     // ReSharper restore UnusedMember.Local
 
-    private static LanConnectSidecarMessageKind GetMessageKind(Type type)
+    internal static bool TryGetMessageKind(Type type, out LanConnectSidecarMessageKind kind)
+        => LanConnectTailMessageTypeMatrix.TryGetKind(type.Name, out kind);
+
+    private static LanConnectSidecarMessageKind GetMessageKind(Type type) =>
+        TryGetMessageKind(type, out LanConnectSidecarMessageKind kind)
+            ? kind
+            : throw Invalid($"Message type {type.FullName} is not part of LAN protocol v1.");
+
+    private static bool TryGetIncomingMessageKind(
+        INetMessage message,
+        out LanConnectSidecarMessageKind kind)
     {
-        foreach (LanConnectSidecarMessageKind kind in Enum.GetValues<LanConnectSidecarMessageKind>())
+        if (!TryGetMessageKind(message.GetType(), out kind))
         {
-            if (string.Equals(type.Name, GetMessageTypeName(kind), StringComparison.Ordinal))
-            {
-                return kind;
-            }
+            return false;
         }
 
-        throw Invalid($"Message type {type.FullName} is not part of LAN protocol v1.");
-    }
-
-    private static LanConnectSidecarMessageKind GetIncomingMessageKind(INetMessage message)
-    {
-        LanConnectSidecarMessageKind kind = GetMessageKind(message.GetType());
         if (kind == LanConnectSidecarMessageKind.InitialGameInfo
             && message is InitialGameInfoMessage { connectionFailureReason: not null })
         {
-            return LanConnectSidecarMessageKind.ConnectionFailed;
+            kind = LanConnectSidecarMessageKind.ConnectionFailed;
         }
 
-        return kind;
+        return true;
     }
 
-    private static string GetMessageTypeName(LanConnectSidecarMessageKind kind) => kind switch
-    {
-        LanConnectSidecarMessageKind.InitialGameInfo => "InitialGameInfoMessage",
-        LanConnectSidecarMessageKind.LobbyJoinRequest => "ClientLobbyJoinRequestMessage",
-        LanConnectSidecarMessageKind.LobbyJoinResponse => "ClientLobbyJoinResponseMessage",
-        LanConnectSidecarMessageKind.LoadJoinRequest => "ClientLoadJoinRequestMessage",
-        LanConnectSidecarMessageKind.LoadJoinResponse => "ClientLoadJoinResponseMessage",
-        LanConnectSidecarMessageKind.RejoinRequest => "ClientRejoinRequestMessage",
-        LanConnectSidecarMessageKind.RejoinResponse => "ClientRejoinResponseMessage",
-        LanConnectSidecarMessageKind.ConnectionFailed => "InitialGameInfoMessage",
-        LanConnectSidecarMessageKind.PlayerJoined => "PlayerJoinedMessage",
-        LanConnectSidecarMessageKind.LobbyBeginRun => "LobbyBeginRunMessage",
-        _ => throw Invalid($"Unknown LAN message kind {kind}.")
-    };
 }

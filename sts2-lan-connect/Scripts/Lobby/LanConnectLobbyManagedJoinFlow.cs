@@ -109,8 +109,10 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             ValidateInitialMessage(initialMessage, hostInfo);
 
             RunSessionState sessionState = initialMessage.sessionState;
-            _logger.Info(
-                $"Got initial game info message. Version={hostInfo.Version} Hash={hostInfo.IdDatabaseHash} Mode={initialMessage.gameMode} State={sessionState}");
+            string peerMetadata = hostInfo.HasVersionMetadata
+                ? $"Version={hostInfo.Version} Hash={hostInfo.IdDatabaseHash}"
+                : "VersionMetadata=unavailable";
+            _logger.Info($"Got initial game info message. {peerMetadata} Mode={initialMessage.gameMode} State={sessionState}");
 
             return sessionState switch
             {
@@ -231,8 +233,6 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         InitialGameInfoMessage initialMessage,
         LanConnectLobbyHandshakeCompatibility.PeerVersionSnapshot hostInfo)
     {
-        ValidateWireCacheCompatibility(hostInfo);
-
         ConnectionFailureReason? declaredCompatibilityFailure = null;
         if (initialMessage.connectionFailureReason.HasValue)
         {
@@ -255,6 +255,23 @@ internal sealed class LanConnectLobbyManagedJoinFlow
                 declaredCompatibilityFailure = failureReason;
             }
         }
+
+        if (!hostInfo.HasVersionMetadata)
+        {
+            _logger.Info(
+                "InitialGameInfoMessage has no native peer version metadata; " +
+                "using the game transport handshake plus the frozen LAN protocol selection.");
+            if (declaredCompatibilityFailure.HasValue)
+            {
+                throw new ClientConnectionFailedException(
+                    $"房主报告了连接兼容性错误：{declaredCompatibilityFailure.Value}",
+                    new NetErrorInfo(declaredCompatibilityFailure.Value));
+            }
+
+            return;
+        }
+
+        ValidateWireCacheCompatibility(hostInfo);
 
         string localVersion = LanConnectBuildInfo.GetGameVersion();
         ValidateGameVersion(hostInfo.Version, localVersion);
