@@ -3,6 +3,7 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -10,6 +11,8 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -189,7 +192,10 @@ function snapshotTree(root: string): string {
     throw error;
   }
 
-  const records = [`D|.|${statSync(root).mode}|${statSync(root).mtimeMs}`];
+  // The package tests run in the same worktree as client build/package validation. Those
+  // flows can refresh release directory mtimes without changing release contents. Historical
+  // release protection must catch content/structure pollution, not fail on unrelated metadata.
+  const records = [`D|.|${statSync(root).mode}`];
   const visit = (current: string): void => {
     for (const name of readdirSync(current).sort()) {
       const path = join(current, name);
@@ -198,10 +204,10 @@ function snapshotTree(root: string): string {
       if (stat.isSymbolicLink()) {
         records.push(`L|${item}|${readlinkSync(path)}`);
       } else if (stat.isDirectory()) {
-        records.push(`D|${item}|${stat.mode}|${stat.mtimeMs}`);
+        records.push(`D|${item}|${stat.mode}`);
         visit(path);
       } else {
-        records.push(`F|${item}|${stat.mode}|${stat.size}|${stat.mtimeMs}|${sha256(readFileSync(path))}`);
+        records.push(`F|${item}|${stat.mode}|${stat.size}|${sha256(readFileSync(path))}`);
       }
     }
   };
@@ -279,6 +285,26 @@ test("service package uses exact production allowlist and deterministic temporar
       "service zip must be byte-for-byte deterministic",
     );
     assert.deepEqual(snapshotHistorical(), before);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("historical release snapshots ignore metadata-only churn but detect content pollution", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "sts2 historical snapshot "));
+  try {
+    const releaseRoot = join(tempRoot, "release");
+    const nestedRoot = join(releaseRoot, "nested");
+    mkdirSync(nestedRoot, { recursive: true });
+    writeFileSync(join(nestedRoot, "package.txt"), "stable release bytes\n");
+
+    const before = snapshotTree(releaseRoot);
+    const original = statSync(nestedRoot);
+    utimesSync(nestedRoot, original.atime, new Date(original.mtimeMs + 5000));
+    assert.equal(snapshotTree(releaseRoot), before, "mtime-only churn must not fail historical release checks");
+
+    writeFileSync(join(nestedRoot, "pollution.txt"), "unexpected package output\n");
+    assert.notEqual(snapshotTree(releaseRoot), before, "content pollution must still fail historical release checks");
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
