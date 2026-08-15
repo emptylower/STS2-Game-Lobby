@@ -1,0 +1,26 @@
+{
+  "name": "tail-envelope-capabilities-v1",
+  "description": "Independently reviewed smallest LAN protocol v1 envelope containing one critical lan.capabilities session-selection entry.",
+  "file": "tail-envelope-capabilities-v1.bin",
+  "totalBytes": 48,
+  "containerByteLength": 40,
+  "sha256": "a43815bba65a92b024a4db90bda338b86696018942998d671dc0f67f6e03e54c",
+  "byteOrder": "network (big-endian) for all multi-byte integer fields",
+  "fields": [
+    { "name": "magic", "offsetBytes": 0, "lengthBytes": 8, "type": "ascii[8]", "value": "STSLAN01", "hex": "53 54 53 4c 41 4e 30 31" },
+    { "name": "containerVersion", "offsetBytes": 8, "lengthBytes": 1, "type": "uint8", "value": 1, "hex": "01" },
+    { "name": "flags", "offsetBytes": 9, "lengthBytes": 1, "type": "uint8", "value": 0, "hex": "00" },
+    { "name": "containerByteLength", "offsetBytes": 10, "lengthBytes": 4, "type": "uint32be", "value": 40, "hex": "00 00 00 28", "note": "Counts from containerVersion through the final payload byte." },
+    { "name": "sessionProtocolVersion", "offsetBytes": 14, "lengthBytes": 2, "type": "uint16be", "value": 1, "hex": "00 01" },
+    { "name": "entryCount", "offsetBytes": 16, "lengthBytes": 2, "type": "uint16be", "value": 1, "hex": "00 01" },
+    { "name": "entries[0].idByteLength", "offsetBytes": 18, "lengthBytes": 1, "type": "uint8", "value": 16, "hex": "10" },
+    { "name": "entries[0].id", "offsetBytes": 19, "lengthBytes": 16, "type": "utf8", "value": "lan.capabilities", "hex": "6c 61 6e 2e 63 61 70 61 62 69 6c 69 74 69 65 73" },
+    { "name": "entries[0].version", "offsetBytes": 35, "lengthBytes": 2, "type": "uint16be", "value": 1, "hex": "00 01" },
+    { "name": "entries[0].flags", "offsetBytes": 37, "lengthBytes": 1, "type": "uint8", "value": 1, "hex": "01", "note": "bit 0 = critical" },
+    { "name": "entries[0].payloadByteLength", "offsetBytes": 38, "lengthBytes": 4, "type": "uint32be", "value": 6, "hex": "00 00 00 06" },
+    { "name": "entries[0].payload.recordKind", "offsetBytes": 42, "lengthBytes": 1, "type": "uint8", "value": 2, "hex": "02", "note": "session selection" },
+    { "name": "entries[0].payload.selectedLanProtocolVersion", "offsetBytes": 43, "lengthBytes": 2, "type": "uint16be", "value": 1, "hex": "00 01" },
+    { "name": "entries[0].payload.carrier", "offsetBytes": 45, "lengthBytes": 1, "type": "uint8", "value": 1, "hex": "01", "note": "standalone Tail" },
+    { "name": "entries[0].payload.flags", "offsetBytes": 46, "lengthBytes": 2, "type": "uint16be", "value": 0, "hex": "00 00", "note": "RitsuLib absent" }
+  ]
+}
