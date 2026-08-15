@@ -40,7 +40,7 @@ LAN Connect 当前通过 Harmony 修改 STS2 原版多人消息中的位宽：
 5. `tail_v1` 房间内 RitsuLib presence 必须完全一致：有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib。
 6. 不再依赖 RitsuLib 私有 Harmony postfix、patch owner、priority 或内部泛型类型；全员 RitsuLib 房间只使用公开 sidecar API。
 7. 将不兼容从开局后的黑屏提前为建房或加入阶段的结构化错误。
-8. 为新旧两条协议建立字节级契约测试和真实跨平台联机门禁。
+8. 为 v0.6 两种载体建立字节级契约测试和真实跨平台联机门禁。
 
 ### 2.2 非目标
 
@@ -51,6 +51,7 @@ LAN Connect 当前通过 Harmony 修改 STS2 原版多人消息中的位宽：
 5. 不允许兼容模式与 RitsuLib 共存。
 6. 不允许房间创建后在两种 wire profile 之间自动切换。
 7. 不把 Harmony patch 枚举作为长期扩展服务发现机制。
+8. 不捕获、冻结或发布 `0.3.x-0.5.x` 客户端流量 fixture；旧客户端真实互通不作为 `alpha.1` 测试或发布门禁。
 
 ## 3. 产品模式
 
@@ -491,7 +492,7 @@ type ProtocolProfile = "compat_4_5_v1" | "tail_v1";
 | 0.6+ create/join/control | 请求中的 capability + 客户端版本 | 规范 profile | `compat_4_5_v1` 或 `tail_v1` |
 | 无可靠版本信号 | 无 | 不创建、不签票 | `client_update_required` |
 
-公开 room-list 在协议实施前必须确认是否携带可靠调用方版本。如果不能按版本返回变体，则列表 DTO保留旧客户端可解析的 `protocolProfile` 字段，并新增 0.6 可选的规范 profile/capability 字段；0.6 客户端优先读取新字段。真实 0.5.5 create/list/join/control fixture 是服务端模型改造的阻塞前置。
+公开 room-list 保留旧客户端可解析的 `protocolProfile` 字段，并新增 0.6 可选的规范 profile/capability 字段；0.6 客户端优先读取新字段。旧字段投影由当前 DTO 契约单元测试覆盖，不依赖历史客户端抓包。
 
 ### 6.2 房间 capability
 
@@ -612,10 +613,10 @@ UI 必须显示面向用户的具体说明，不能全部退化为 `ModMismatch`
 - LoadJoin/Rejoin request offer 不匹配、LAN rejection、response authority/session membership/revision 不一致、首次 bootstrap 和重复当前 snapshot 的幂等接受。
 - HTTP、本地、普通 join、load join、rejoin、compat direct join 和 restart auto-rejoin 的结构化失败保持及不可重试行为。
 
-### 9.2 历史兼容测试
+### 9.2 兼容 profile 运行时测试
 
-- 固定 `0.3.x-0.5.x` 的 `4/5-bit` fixture。
-- 0.6 兼容模式可以双向读取 fixture。
+- 不运行真实 `0.3.x-0.5.x` 客户端，也不捕获或维护其 fixture。
+- 以 v0.6 当前 DTO 和 codec 测试固定 `compat_4_5_v1` 的 `4/5-bit` 行为与 legacy API 投影。
 - `0.2.x` 请求明确被服务端和客户端拒绝。
 - 生产运行时不再选择 `8/3-bit`。
 - `extended_8p` 房间状态迁移为兼容模式。
@@ -632,7 +633,7 @@ UI 必须显示面向用户的具体说明，不能全部退化为 `ModMismatch`
 - `tail_v1` 全员 RitsuLib。
 - `tail_v1` 两个方向的 RitsuLib presence mismatch ticket 拒绝。
 - Ritsu-present host/joiner 任一 sidecar readiness 失败时的 pre-transport 拒绝。
-- `compat_4_5_v1` 的 0.6 <-> 0.5.5。
+- `compat_4_5_v1` 的 0.6 <-> 0.6。
 - 兼容模式中 RitsuLib 被拒绝。
 - 2、4、5、8 人作为所有平台 smoke 的主边界；3、6、7 人至少分别在一个跨平台组合中完成建房、加入、准备和开局。
 
@@ -654,7 +655,7 @@ UI 必须显示面向用户的具体说明，不能全部退化为 `ModMismatch`
 - 客户端：`v0.6.0-alpha.1`。
 - lobby-service：`v0.6.0-alpha.1`。
 - 两者同步发布和部署。
-- 保留 `v0.5.5` 作为稳定客户端下载。
+- 历史版本下载不受本次实现影响，但不属于 `alpha.1` 验收矩阵。
 - `v0.5.6-rc2` 至 `rc4` 标记为已知 RitsuLib 兼容实验版本，不再推荐。
 - `alpha.1` 只发布为 GitHub Pre-release。
 - `alpha.1` 的目标是协议与跨平台验证，不承诺直接晋升正式版。
@@ -670,7 +671,7 @@ UI 必须显示面向用户的具体说明，不能全部退化为 `ModMismatch`
 4. **Player joined 切片**：高 slot 玩家占位、恢复和 fail-closed。
 5. **Begin-run 切片**：最终 authoritative roster 恢复并完成真实双端开局。
 6. **RitsuLib 切片**：通过 §4.0 可行性门禁后，接入 presence/carrier 冻结、同质门禁和全员 RitsuLib 的公开 typed-sidecar barrier。
-7. **兼容房切片**：0.6 <-> 0.5.5，RitsuLib 明确拒绝。
+7. **兼容房切片**：v0.6 固定 `4/5-bit` 与 legacy DTO 投影，RitsuLib 明确拒绝。
 8. **UI/发布切片**：建房选项、错误提示、文档、跨平台矩阵和 alpha 包。
 
 每个切片必须保持测试绿色，并能够在 fresh context 中独立验证。
@@ -683,7 +684,7 @@ UI 必须显示面向用户的具体说明，不能全部退化为 `ModMismatch`
 | Android 对动态闭合泛型 Harmony patch 仍有限制 | 尽量 patch 稳定非泛型 handler；必须动态闭合的入口进行 Android 真机启动门禁 |
 | RitsuLib 公开 sidecar API无法在 handler 前稳定配对 LAN container | 不发布 RitsuLib 房支持，回到设计评审；禁止私有 postfix 桥或独立双 Tail |
 | 同为 RitsuLib 但版本或第三方扩展不兼容 | LAN Connect 仅保证 presence 同质；保留原版 MOD inventory 和 RitsuLib 自身门禁，并在文档/UI 明示此边界 |
-| 旧客户端无法识别新服务端 profile 字符串 | 服务端按客户端版本投影旧 DTO，并建立真实旧客户端 fixture |
+| 旧客户端无法识别新服务端 profile 字符串 | 服务端继续投影旧 DTO；该行为仅由当前版本契约测试覆盖，不作为历史客户端互通保证 |
 | 两套 profile 增加维护成本 | 兼容 profile 只保留 0.3-0.5 所需的完整旧路径，不再增加新能力或 Ritsu 兼容 |
 | 房间误发布 profile/carrier 导致首包错位 | profile/carrier 建房后不可变，服务端和客户端握手双重验证 |
 | 0.5.6 RC 用户继续使用已知失败版本 | Release 和文档明确标记不推荐，稳定入口仍指向 0.5.5 |
@@ -694,7 +695,7 @@ UI 必须显示面向用户的具体说明，不能全部退化为 `ModMismatch`
 
 1. 生产代码不存在 `legacy_4p=8/3-bit` 的可选运行路径。
 2. `tail_v1` 不修改 STS2 原版玩家字段位宽；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用 typed-sidecar carrier；两个允许组合通过真实双进程可行性门禁，两个 mismatch 方向在大厅流 transport 前拒绝。
-3. `compat_4_5_v1` 可与真实 `0.5.5` 双向加入并开局。
+3. `compat_4_5_v1` 在 v0.6 双端固定使用 `4/5-bit`，正确投影 legacy DTO，并在任一端检测到 RitsuLib 时于 transport 前拒绝。
 4. `tail_v1` 在 Windows、Android、macOS 组合中完成 2-8 人开局和同步。
 5. `tail_v1` 房间的 RitsuLib presence/carrier 全员一致，内层 LAN container bytes 不因 carrier 改变；Ritsu-present 原版消息后没有 standalone LAN Tail。
 6. 任一 RitsuLib presence mismatch 在大厅 join ticket 前得到结构化拒绝；纯 direct-IP `tail_v1` 在本地 transport 创建前被拒绝。
@@ -708,7 +709,6 @@ UI 必须显示面向用户的具体说明，不能全部退化为 `ModMismatch`
 
 - 使用真实程序集和真实双进程证明 §4.0 的 standalone/typed-sidecar 两个允许组合、sidecar frame/vanilla handler barrier，以及两个 mismatch 方向在大厅流的 transport 前拒绝；这是 RitsuLib 切片的阻塞门禁。
 - 确认 RitsuLib 公开 typed-sidecar/direct `INetGameService` API能否在首个 LAN flow 前建立 reachability 并稳定配对；不再要求扩展 inventory API或 Tail owner 协作。
-- 捕获真实 `0.5.5` create/list/join/control DTO fixture，确认服务端 profile 投影方案。
 - 公开 sidecar carrier 是否能完全替代旧 resolver transpiler，并覆盖普通 join、load join、rejoin、player joined 与 begin-run。
 - `alpha.1` 验证后，兼容模式的长期保留期限。
 

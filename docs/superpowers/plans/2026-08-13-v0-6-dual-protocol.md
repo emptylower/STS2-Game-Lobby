@@ -74,7 +74,7 @@
 ### Fixtures and evidence
 
 - Create `research/prototypes/v0.6-tail-ritsulib/`: tracked test harness source only; no third-party/game DLLs.
-- Create `test-fixtures/protocol/v0.6/`: reviewed golden vectors and captured `0.5.5` DTO fixtures.
+- Create `test-fixtures/protocol/v0.6/`: reviewed v0.6 golden vectors only; do not add captured historical-client fixtures.
 - Create `docs/testing/STS2_LAN_CONNECT_V0.6_ALPHA1_FEASIBILITY_ZH.md`: feasibility evidence and gate verdicts.
 - Create `docs/testing/STS2_LAN_CONNECT_V0.6_ALPHA1_ACCEPTANCE_ZH.md`: platform/mode/player-count acceptance matrix.
 
@@ -412,82 +412,21 @@ Do not stage real DLLs, `bin/`, `obj/`, logs containing user paths, `tem/`, or u
 
 ---
 
-### Task 1: Capture and Freeze Real 0.5.5 API Compatibility Fixtures
+### Task 1: Remove Historical-Client Compatibility Evidence From Scope
 
 **Files:**
-- Create: `test-fixtures/protocol/v0.6/v0.5.5-create-request.json`
-- Create: `test-fixtures/protocol/v0.6/v0.5.5-create-response.json`
-- Create: `test-fixtures/protocol/v0.6/v0.5.5-room-list-response.json`
-- Create: `test-fixtures/protocol/v0.6/v0.5.5-join-request.json`
-- Create: `test-fixtures/protocol/v0.6/v0.5.5-join-response.json`
-- Create: `test-fixtures/protocol/v0.6/v0.5.5-host-control.json`
-- Create: `test-fixtures/protocol/v0.6/v0.5.5-client-control.json`
-- Create: `test-fixtures/protocol/v0.6/compat-v0.3.x-join-response.bin`
-- Create: `test-fixtures/protocol/v0.6/compat-v0.3.x-player-joined.bin`
-- Create: `test-fixtures/protocol/v0.6/compat-v0.3.x-begin-run.bin`
-- Create: `test-fixtures/protocol/v0.6/compat-v0.5.5-join-response.bin`
-- Create: `test-fixtures/protocol/v0.6/compat-v0.5.5-player-joined.bin`
-- Create: `test-fixtures/protocol/v0.6/compat-v0.5.5-begin-run.bin`
-- Create: `test-fixtures/protocol/v0.6/README.md`
-- Modify: `sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj:38-42`
-- Test: `sts2-lan-connect.Tests/Protocol/LanConnectCompatWireFixtureTests.cs`
-- Test: `lobby-service/src/protocol-compatibility.integration.test.ts`
+- Modify: this plan and the approved design.
+- Remove: untracked `test-fixtures/legacy/` capture tooling and all captured raw traffic.
 
 **Interfaces:**
-- Consumes: unmodified released `0.5.5` and one actually released `0.3.x` client plus the current compatible service/game runtime.
-- Produces: reviewed JSON/WS fixtures for DTO projection and raw join-response/player-joined/begin-run `4/5-bit` fixtures proving the supported client generations share the same game wire.
+- Produces: an explicit boundary that `alpha.1` does not run released `0.3.x-0.5.x` clients, capture their traffic, or require historical-client fixtures.
+- Keeps: the `compat_4_5_v1` runtime profile, fixed `4/5-bit` behavior, legacy API projection, and Ritsu rejection, tested only through current v0.6 service/client contracts.
 
-- [ ] **Step 1: Capture create/list/join/control traffic from a real 0.5.5 client**
+- [x] **Step 1: Remove historical capture and fixture work from the plan**
+- [x] **Step 2: Remove real old-client runs from acceptance and release gates**
+- [x] **Step 3: Keep current-version tests for compat profile invariants**
 
-Capture exact request/response JSON after redacting tokens, IP addresses, passwords, installation IDs, and player names. Replace volatile values with stable literals such as `room-fixture`, `ticket-fixture`, and `2026-01-01T00:00:00.000Z`; do not alter field presence or enum strings.
-
-- [ ] **Step 2: Capture raw game messages from released 0.3.x and 0.5.5 clients**
-
-Use the same two-player lobby state and capture serialized `ClientLobbyJoinResponseMessage`, `PlayerJoinedMessage`, and `LobbyBeginRunMessage` bytes before transport encryption/framing. Record exact client/game versions and annotate message header/body offsets. Confirm both generations encode slot/list widths `4/5`; if bytes differ outside expected volatile IDs/seed fields, stop and revise the claimed compat generation before production changes.
-
-- [ ] **Step 3: Add the fixture directory to the xUnit output**
-
-```xml
-<None Include="..\test-fixtures\protocol\v0.6\*"
-      Link="TestFixtures\ProtocolV06\%(Filename)%(Extension)"
-      CopyToOutputDirectory="PreserveNewest" />
-```
-
-- [ ] **Step 4: Write a fixture test that documents the captured API and wire contracts**
-
-```ts
-test("0.5.5 fixtures use extended_8p and omit v0.6 capability fields", async () => {
-  const create = await readFixture("v0.5.5-create-request.json");
-  assert.equal(create.modVersion, "0.5.5");
-  assert.equal(create.protocolProfile, "extended_8p");
-  assert.equal(create.protocolProfileV2, undefined);
-  assert.equal(create.protocolCapabilities, undefined);
-});
-```
-
-Add a C# fixture test that parses the annotated message vectors with explicit `4/5` widths and rejects parsing with `8/3` or `2/3`.
-
-- [ ] **Step 5: Run the focused fixture tests**
-
-```bash
-cd lobby-service
-npm run build
-node --test dist/protocol-compatibility.integration.test.js
-
-cd ..
-DOTNET_ROOT="/Users/mac/.dotnet" /Users/mac/.dotnet/dotnet test \
-  sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj \
-  --filter "FullyQualifiedName~LanConnectCompatWireFixtureTests" -m:1
-```
-
-Expected: PASS for captured field shape; if capture contradicts the design’s assumed version signal/profile shape, stop and update the design before Task 2.
-
-- [ ] **Step 6: Commit the independently captured contract**
-
-```bash
-git add test-fixtures/protocol/v0.6/v0.5.5-create-request.json test-fixtures/protocol/v0.6/v0.5.5-create-response.json test-fixtures/protocol/v0.6/v0.5.5-room-list-response.json test-fixtures/protocol/v0.6/v0.5.5-join-request.json test-fixtures/protocol/v0.6/v0.5.5-join-response.json test-fixtures/protocol/v0.6/v0.5.5-host-control.json test-fixtures/protocol/v0.6/v0.5.5-client-control.json test-fixtures/protocol/v0.6/compat-v0.3.x-join-response.bin test-fixtures/protocol/v0.6/compat-v0.3.x-player-joined.bin test-fixtures/protocol/v0.6/compat-v0.3.x-begin-run.bin test-fixtures/protocol/v0.6/compat-v0.5.5-join-response.bin test-fixtures/protocol/v0.6/compat-v0.5.5-player-joined.bin test-fixtures/protocol/v0.6/compat-v0.5.5-begin-run.bin test-fixtures/protocol/v0.6/README.md sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj sts2-lan-connect.Tests/Protocol/LanConnectCompatWireFixtureTests.cs lobby-service/src/protocol-compatibility.integration.test.ts
-git commit -m "test: capture v0.5.5 lobby protocol fixtures"
-```
+Expected: production Tasks 2-12 have no dependency on captured old-client data, and release status never claims verified interoperability with a released old client.
 
 ---
 
@@ -514,7 +453,7 @@ git commit -m "test: capture v0.5.5 lobby protocol fixtures"
 - Modify: `scripts/verify-release.sh`
 
 **Interfaces:**
-- Consumes: Task 1’s real `0.5.5` fixtures.
+- Consumes: Task 1’s explicit no-historical-fixture scope and current DTO contracts.
 - Produces:
   - `classifyClientVersion(clientVersion?: string, modVersion?: string): ClientApiGeneration`
   - `parseRequestedProfile(input): ProtocolProfile`
@@ -826,7 +765,7 @@ type JoinProtocolBindingDto = {
 };
 ```
 
-Placement is fixed: create request adds `clientVersion`, `protocolProfileV2`, and `protocolOffer`; create response adds `protocolSelection`; room-list item adds `protocolProfileV2` and `protocolSelection`; join/preflight request adds `clientVersion` and `protocolOffer`; join response and matching host control event add the same `protocolFlowNonce`; control hello adds `clientVersion` and `capabilityDigest`; `LobbyErrorDetails` adds the three error-detail fields. Validate nonce as exactly 32 lowercase hex and decode to 16 bytes without numeric conversion. Legacy fields stay where Task 1 fixtures require them. Add the listed probe capabilities. Enforce all string bounds in both runtimes.
+Placement is fixed: create request adds `clientVersion`, `protocolProfileV2`, and `protocolOffer`; create response adds `protocolSelection`; room-list item adds `protocolProfileV2` and `protocolSelection`; join/preflight request adds `clientVersion` and `protocolOffer`; join response and matching host control event add the same `protocolFlowNonce`; control hello adds `clientVersion` and `capabilityDigest`; `LobbyErrorDetails` adds the three error-detail fields. Validate nonce as exactly 32 lowercase hex and decode to 16 bytes without numeric conversion. Legacy fields stay at their existing API positions. Add the listed probe capabilities. Enforce all string bounds in both runtimes.
 
 - [ ] **Step 8: Reorder host creation around server selection**
 
@@ -1402,7 +1341,7 @@ git commit -m "feat(protocol): enforce homogeneous RitsuLib rooms"
 
 ---
 
-### Task 10: Complete the 0.3-0.5 Compat Room End-to-End
+### Task 10: Complete the Compat Room Runtime Contract
 
 **Files:**
 - Modify: `sts2-lan-connect/Scripts/Protocol/Patches/LanConnectCompatWirePatches.cs`
@@ -1418,12 +1357,12 @@ git commit -m "feat(protocol): enforce homogeneous RitsuLib rooms"
 - Create: `sts2-lan-connect.Tests/Protocol/LanConnectCompatFixtureTests.cs`
 
 **Interfaces:**
-- Consumes: Task 1 real fixtures and Tasks 2-3 canonical/legacy API adapters.
-- Produces: explicit `compat_4_5_v1` rooms that speak `4/5`, project as `extended_8p` to 0.3-0.5, allow 0.6<->0.5.5, reject Ritsu, and never use `8/3`.
+- Consumes: Tasks 2-3 canonical/legacy API adapters.
+- Produces: explicit `compat_4_5_v1` rooms that speak `4/5`, retain the `extended_8p` API projection, reject Ritsu, and never use `8/3`; no historical-client interoperability claim is made.
 
-- [ ] **Step 1: Write fixture-driven red tests in both runtimes**
+- [ ] **Step 1: Write current-contract red tests in both runtimes**
 
-Service tests feed captured 0.5.5 create/join/control and assert internal compat selection plus legacy output. C# tests deserialize captured list/join responses and assert canonical mapping to compat.
+Service tests construct current create/join/control requests and assert internal compat selection plus legacy output. C# tests construct current list/join DTOs and assert canonical mapping to compat. Do not consume captured historical-client traffic.
 
 - [ ] **Step 2: Decouple LAN Connect client version from general MOD equality**
 
@@ -1441,7 +1380,7 @@ Host create with local Ritsu fails locally and at the service. A Ritsu joiner fa
 
 Unversioned lists expose legacy `protocolProfile=extended_8p` plus optional v0.6 canonical fields. Old control URLs and frames continue working; protocol/digest fields are server-generated and cannot be relayed from clients as authority fields.
 
-- [ ] **Step 6: Run service, C#, and real 0.5.5 compatibility tests**
+- [ ] **Step 6: Run service and C# compat contract tests**
 
 ```bash
 cd lobby-service
@@ -1453,8 +1392,6 @@ DOTNET_ROOT="/Users/mac/.dotnet" /Users/mac/.dotnet/dotnet test \
   sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj \
   --filter "FullyQualifiedName~LanConnectCompatFixtureTests|FullyQualifiedName~LanConnectProtocolProfileTests" -m:1
 ```
-
-Then run real 0.6 host/0.5.5 client and 0.5.5 host/0.6 client through ready, begin-run, and first synchronized game state.
 
 - [ ] **Step 7: Commit the compat path**
 
@@ -1573,7 +1510,7 @@ Service package/lock root: `0.6.0-alpha.1`. Manifest: `0.6.0-alpha.1`.
 
 - [ ] **Step 2: Replace RC4-specific package assertions**
 
-Assert the alpha version, default compat mode, Tail v1 documentation, removal of `ritsuTailBridge=True`, no recommended RC2-RC4 path, and stable client still `0.5.5`.
+Assert the alpha version, default compat mode, Tail v1 documentation, removal of `ritsuTailBridge=True`, and no recommended RC2-RC4 path. Do not assert or advertise verified historical-client interoperability.
 
 - [ ] **Step 3: Update user/release documentation**
 
@@ -1637,7 +1574,7 @@ Tail rejection: Ritsu host/no-Ritsu joiner and no-Ritsu host/Ritsu joiner before
 Tail readiness rejection: Ritsu host or joiner with sidecar unavailable before transport
 Direct-IP: compat only; local Ritsu and any Tail intent rejected before transport
 Tail continuation: InLoadedLobby load join and Running rejoin, including one 5+ player case
-Compat: 0.6 <-> real 0.5.5
+Compat: 0.6 <-> 0.6
 Compat: Ritsu host rejection and Ritsu joiner rejection
 Player counts: 2/4/5/8 across principal smokes
 Player counts: 3/6/7 each in at least one cross-platform run
@@ -1671,8 +1608,8 @@ Review only commits/files from this plan. Do not stage or restore unrelated `.om
 ## Execution Notes
 
 - Use an isolated worktree at execution time; this workspace already contains unrelated changes.
-- Tasks 0 and 1 are evidence gates. Do not start production protocol edits before Task 1 passes; non-Ritsu Tail work may continue after Task 0 only if the evidence document explicitly scopes Ritsu as blocked, but the approved alpha release cannot be declared complete until the Ritsu gate is resolved or the design is revised.
+- Task 0 is the protocol feasibility gate. Task 1 records the explicit removal of historical-client evidence from scope; production work has no old-client fixture prerequisite.
 - Every task ends in a focused commit and an independent review. Review the fixed diff on both standards and approved-spec axes.
 - Golden bytes must be reviewed independently; expected bytes may not be generated by the production codec under test.
-- Automated fixture compatibility does not replace a real `0.5.5` two-client start-run test.
+- Historical-client capture, fixtures, and real-client runs are intentionally outside this release gate.
 - `scripts/verify-release.sh` validates temporary packages only. Tagging, pushing, and GitHub Pre-release creation require a separate explicit user request.
