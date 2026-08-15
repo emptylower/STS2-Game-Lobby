@@ -6009,7 +6009,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         if (protocolId == CreateProtocolCompatId)
         {
-            return true;
+            return !offer.RitsuLibPresent;
         }
 
         if (protocolId != CreateProtocolTailId)
@@ -6017,7 +6017,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return false;
         }
 
-        return !offer.RitsuLibPresent && standaloneTailRuntimeAvailable;
+        return offer.RitsuLibPresent
+            ? offer.RitsuLibSidecarAvailable
+            : standaloneTailRuntimeAvailable;
     }
 
     private static bool IsStandaloneTailRuntimeAvailable() =>

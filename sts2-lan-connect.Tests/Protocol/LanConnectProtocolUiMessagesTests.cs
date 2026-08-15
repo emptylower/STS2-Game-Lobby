@@ -76,14 +76,17 @@ public sealed class LanConnectProtocolUiMessagesTests
     }
 
     [Fact]
-    public void Tail_create_option_is_selectable_only_for_no_Ritsu_standalone_runtime()
+    public void Create_options_follow_local_Ritsu_presence_and_carrier_readiness()
     {
         LanConnectProtocolOffer noRitsu = new(1, 1, "0.6.0-alpha.1", false, false);
-        LanConnectProtocolOffer ritsu = new(1, 1, "0.6.0-alpha.1", true, false);
+        LanConnectProtocolOffer ritsuUnavailable = new(1, 1, "0.6.0-alpha.1", true, false);
+        LanConnectProtocolOffer ritsuReady = new(1, 1, "0.6.0-alpha.1", true, true);
 
         Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, noRitsu, true));
         Assert.False(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, noRitsu, false));
-        Assert.False(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, ritsu, true));
-        Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(300, ritsu, false));
+        Assert.False(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, ritsuUnavailable, true));
+        Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, ritsuReady, false));
+        Assert.False(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(300, ritsuReady, false));
+        Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(300, noRitsu, false));
     }
 }

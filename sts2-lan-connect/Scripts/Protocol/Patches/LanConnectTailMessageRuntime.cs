@@ -213,15 +213,21 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         EnsureSidecarReady(binding);
 
         IReadOnlyList<ulong> recipients = ResolveOutgoingRecipients(binding);
-        foreach (ulong recipientPeerId in recipients)
+        (ulong RecipientPeerId, SidecarFlow Flow, byte[] Encoded)[] submissions = recipients
+            .Select(recipientPeerId =>
+            {
+                SidecarFlow flow = binding.RequireOutgoingSidecarFlow(senderPeerId, recipientPeerId);
+                LanConnectSidecarFrame frame = new(
+                    messageKind,
+                    flow.FlowNonce,
+                    flow.NextOutgoingSequence,
+                    container);
+                return (recipientPeerId, flow, LanConnectSidecarFrameCodec.Encode(frame));
+            })
+            .ToArray();
+
+        foreach ((ulong recipientPeerId, _, byte[] encoded) in submissions)
         {
-            SidecarFlow flow = binding.RequireOutgoingSidecarFlow(senderPeerId, recipientPeerId);
-            LanConnectSidecarFrame frame = new(
-                messageKind,
-                flow.FlowNonce,
-                flow.NextOutgoingSequence,
-                container);
-            byte[] encoded = LanConnectSidecarFrameCodec.Encode(frame);
             bool sent = binding.IsHost
                 ? LanConnectRitsuLibSidecarCarrier.Shared.SendToPeer(binding.Service, recipientPeerId, encoded)
                 : LanConnectRitsuLibSidecarCarrier.Shared.SendToHost(binding.Service, encoded);
@@ -231,9 +237,9 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             }
         }
 
-        foreach (ulong recipientPeerId in recipients)
+        foreach ((_, SidecarFlow flow, _) in submissions)
         {
-            binding.RequireOutgoingSidecarFlow(senderPeerId, recipientPeerId).AdvanceOutgoing();
+            flow.AdvanceOutgoing();
         }
     }
 
@@ -842,16 +848,14 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         if (_outgoingSidecarRecipients is { Count: > 0 } stack)
         {
             IReadOnlyList<ulong> requested = stack.Peek();
-            ulong[] recipients = stack.Peek()
-                .Where(binding.HasSidecarPeer)
-                .Distinct()
-                .ToArray();
-            if (recipients.Length > 0 || requested.Count == 0)
+            ulong[] recipients = requested.Distinct().ToArray();
+            if (recipients.Length != requested.Count
+                || recipients.Any(peerId => !binding.HasSidecarPeer(peerId)))
             {
-                return recipients;
+                throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
             }
 
-            throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+            return recipients;
         }
 
         ulong[] fallback = binding.BoundPeerIds.ToArray();

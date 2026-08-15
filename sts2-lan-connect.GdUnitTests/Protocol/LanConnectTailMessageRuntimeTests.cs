@@ -268,6 +268,46 @@ public sealed class LanConnectTailMessageRuntimeTests
     }
 
     [TestCase]
+    public void Ritsu_broadcast_preflight_rejects_three_peer_partial_delivery_before_any_send()
+    {
+        _ = LoadOfficialRitsuAssembly();
+        InitializeSts2Serialization();
+        LanConnectRitsuLibSidecarCarrier.Shared.ResetForTesting();
+        using RuntimePair pair = new(ritsu: true);
+        const ulong secondPeerId = 23;
+        const ulong thirdPeerId = 24;
+        byte[] secondNonce = Enumerable.Repeat((byte)0x22, LanConnectSidecarFrameCodec.FlowNonceBytes).ToArray();
+        byte[] thirdNonce = Enumerable.Repeat((byte)0x33, LanConnectSidecarFrameCodec.FlowNonceBytes).ToArray();
+        pair.Runtime.BindHostTrustedSidecarFlow(pair.Host, secondPeerId, secondNonce);
+        pair.Runtime.BindHostTrustedSidecarFlow(pair.Host, thirdPeerId, thirdNonce);
+        LanConnectRitsuLibSidecarCarrier.Shared.SetPeerUnknown(thirdPeerId);
+
+        LanConnectProtocolException? failure = null;
+        using (LanConnectTailMessageRuntime.PushOutgoingSidecarRecipientsForCurrentThread(
+                   [pair.ClientId, secondPeerId, thirdPeerId]))
+        {
+            try
+            {
+                pair.Runtime.SubmitSidecarBeforeVanilla(
+                    pair.HostBus,
+                    LanConnectSidecarMessageKind.PlayerJoined,
+                    pair.HostId,
+                    new object(),
+                    [0x01],
+                    pair.Selection);
+            }
+            catch (LanConnectProtocolException exception)
+            {
+                failure = exception;
+            }
+        }
+
+        AssertThat(failure != null).IsTrue();
+        AssertThat(failure!.Failure.Code).IsEqual("ritsulib_sidecar_unavailable");
+        AssertThat(pair.HostTransport.SentToClients.Count).IsEqual(0);
+    }
+
+    [TestCase]
     public void Ritsu_sidecar_frame_first_pairing_releases_vanilla_deserialization()
     {
         _ = LoadOfficialRitsuAssembly();

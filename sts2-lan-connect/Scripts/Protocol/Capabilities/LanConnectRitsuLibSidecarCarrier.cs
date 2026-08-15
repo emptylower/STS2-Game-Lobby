@@ -6,7 +6,7 @@ namespace Sts2LanConnect.Scripts;
 internal sealed class LanConnectRitsuLibSidecarCarrier
 {
     internal const string ModuleId = "sts2_lan_connect";
-    internal const string MessageKey = "tail_frame_v1";
+    internal const string MessageKey = "protocol_v1";
 
     private readonly object _sync = new();
     private RitsuBinding? _binding;

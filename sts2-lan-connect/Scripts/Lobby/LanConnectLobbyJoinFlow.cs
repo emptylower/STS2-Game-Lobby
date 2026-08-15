@@ -128,10 +128,7 @@ internal static class LanConnectLobbyJoinFlow
                             netId,
                             candidate.Host,
                             candidate.Port,
-                            service => LanConnectTailMessageRuntime.Shared.BindClientHostSidecarFlow(
-                                service,
-                                netId,
-                                1UL))
+                            service => LanConnectTailMessageRuntime.Shared.BindClientHostSidecarFlow(service))
                         : new ENetClientConnectionInitializer(netId, candidate.Host, candidate.Port);
                     Log.Info($"sts2_lan_connect attempting lobby join via {candidate.Host}:{candidate.Port} ({candidate.Label}) using netId={netId}.");
                     JoinResult joinResult = await joinFlow.BeginAsync(initializer, stack.GetTree());

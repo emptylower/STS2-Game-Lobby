@@ -37,6 +37,14 @@ internal static class LanConnectHostFlow
 
     public static async Task StartLanHostAsync(GameMode gameMode, Control loadingOverlay, NSubmenuStack stack)
     {
+        LanConnectProtocolFailure? localFailure = ValidateDirectCompatHostPreTransport(
+            LanConnectExternalCapabilityCollector.Collect().RitsuLibPresent);
+        if (localFailure != null)
+        {
+            LanConnectProtocolUiMessages.Present(localFailure);
+            return;
+        }
+
         loadingOverlay.Visible = true;
         NetHostGameService netService = new(PeerVersionInfo.LocalDefault());
         int maxPlayers = Math.Clamp(
@@ -121,6 +129,9 @@ internal static class LanConnectHostFlow
             loadingOverlay.Visible = false;
         }
     }
+
+    internal static LanConnectProtocolFailure? ValidateDirectCompatHostPreTransport(bool ritsuLibPresent) =>
+        LanConnectDirectJoinFlow.ValidateCompatOnlyPreTransport(ritsuLibPresent);
 
     public static async Task<LanConnectHostAttemptResult> StartLobbyHostAsync(
         string roomName,

@@ -75,5 +75,16 @@ public sealed class LanConnectDirectJoinFlowTests
         Assert.Null(LanConnectDirectJoinFlow.ValidateCompatOnlyPreTransport(ritsuLibPresent: false));
     }
 
+    [Fact]
+    public void Direct_host_uses_the_same_pre_transport_Ritsu_guard()
+    {
+        LanConnectProtocolFailure? failure =
+            LanConnectHostFlow.ValidateDirectCompatHostPreTransport(ritsuLibPresent: true);
+
+        Assert.NotNull(failure);
+        Assert.Equal("ritsulib_not_allowed_in_compat_mode", failure.Code);
+        Assert.Null(LanConnectHostFlow.ValidateDirectCompatHostPreTransport(ritsuLibPresent: false));
+    }
+
     private sealed class RetryableTestException : Exception;
 }
