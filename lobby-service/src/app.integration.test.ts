@@ -210,7 +210,7 @@ test("close terminates active control-channel sockets and finishes promptly", as
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: {
@@ -403,6 +403,12 @@ const CURRENT_PROBE_CAPABILITIES = {
   modSyncEnabled: true,
   modSyncMinimumClientVersion: "0.5.1",
   wireCacheSignatureV1Enforced: true,
+  dualProtocolApiVersion: 1,
+  supportedProtocolProfiles: ["compat_4_5_v1", "tail_v1"],
+  lanProtocolMin: 1,
+  lanProtocolMax: 1,
+  minimumClientVersion: "0.3.0",
+  tailV1MinimumClientVersion: "0.6.0-alpha.1",
 } as const;
 
 test("GET /probe returns exact current chat capabilities", async () => {
@@ -429,7 +435,111 @@ test("GET /probe returns exact current chat capabilities", async () => {
   }
 });
 
-test("old client without a wire cache signature can join a signed room", async () => {
+test("HTTP protocol gates reject Ritsu mismatch and sidecar unavailability before tickets", async () => {
+  const scenarios = [
+    { host: true, joiner: false, joinerSidecar: false, code: "ritsulib_presence_mismatch" },
+    { host: false, joiner: true, joinerSidecar: true, code: "ritsulib_presence_mismatch" },
+    { host: true, joiner: true, joinerSidecar: false, code: "ritsulib_sidecar_unavailable" },
+  ] as const;
+  for (const scenario of scenarios) {
+    const config = testConfig({ port: 0 });
+    const service = await createLobbyService(config);
+    const address = await service.start();
+    try {
+      const createdResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          roomName: "protocol-gate",
+          hostPlayerName: "Host",
+          gameMode: "standard",
+          version: "1.0.0",
+          modVersion: "0.6.0-alpha.1",
+          clientVersion: "0.6.0-alpha.1",
+          protocolProfileV2: "tail_v1",
+          protocolOffer: {
+            lanProtocolMin: 1,
+            lanProtocolMax: 1,
+            ritsuLibPresent: scenario.host,
+            ritsuLibSidecarAvailable: scenario.host,
+          },
+          maxPlayers: 8,
+          hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+        }),
+      });
+      assert.equal(createdResponse.status, 201);
+      const created = await createdResponse.json() as { roomId: string };
+      const rejected = await fetch(`http://127.0.0.1:${address.port}/rooms/${created.roomId}/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          playerName: "Guest",
+          version: "1.0.0",
+          modVersion: "0.6.0-alpha.1",
+          clientVersion: "0.6.0-alpha.1",
+          protocolOffer: {
+            lanProtocolMin: 1,
+            lanProtocolMax: 1,
+            ritsuLibPresent: scenario.joiner,
+            ritsuLibSidecarAvailable: scenario.joinerSidecar,
+          },
+        }),
+      });
+      assert.equal(rejected.status, 409);
+      const body = await rejected.json() as Record<string, unknown>;
+      assert.equal(body.code, scenario.code);
+      assert.equal("ticketId" in body, false);
+      assert.equal("connectionPlan" in body, false);
+    } finally {
+      await service.close();
+      cleanupTempDir(config);
+    }
+  }
+});
+
+test("HTTP create gates reject Ritsu in compat and unavailable Tail sidecar without rooms", async () => {
+  const cases = [
+    { profile: "compat_4_5_v1", sidecar: true, code: "ritsulib_not_allowed_in_compat_mode" },
+    { profile: "tail_v1", sidecar: false, code: "ritsulib_sidecar_unavailable" },
+  ] as const;
+  for (const scenario of cases) {
+    const config = testConfig({ port: 0 });
+    const service = await createLobbyService(config);
+    const address = await service.start();
+    try {
+      const rejected = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          roomName: "blocked-create",
+          hostPlayerName: "Host",
+          gameMode: "standard",
+          version: "1.0.0",
+          modVersion: "0.6.0-alpha.1",
+          clientVersion: "0.6.0-alpha.1",
+          protocolProfileV2: scenario.profile,
+          protocolOffer: {
+            lanProtocolMin: 1,
+            lanProtocolMax: 1,
+            ritsuLibPresent: true,
+            ritsuLibSidecarAvailable: scenario.sidecar,
+          },
+          maxPlayers: 8,
+          hostConnectionInfo: { enetPort: 7777 },
+        }),
+      });
+      assert.equal(rejected.status, 409);
+      assert.equal(((await rejected.json()) as { code: string }).code, scenario.code);
+      const rooms = await fetch(`http://127.0.0.1:${address.port}/rooms`);
+      assert.deepEqual(await rooms.json(), []);
+    } finally {
+      await service.close();
+      cleanupTempDir(config);
+    }
+  }
+});
+
+test("compat caller without a wire cache signature can join a signed room", async () => {
   const config = testConfig({ port: 0 });
   const service = await createLobbyService(config);
   const address = await service.start();
@@ -443,7 +553,7 @@ test("old client without a wire cache signature can join a signed room", async (
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         wireCacheSignatureV1: `wcv1:${"a".repeat(43)}`,
         maxPlayers: 4,
@@ -457,9 +567,9 @@ test("old client without a wire cache signature can join a signed room", async (
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        playerName: "Legacy Guest",
+        playerName: "Compat Guest",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
       }),
     });
@@ -493,7 +603,7 @@ test("repeated wire cache rejections do not consume join rate-limit state or iss
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         wireCacheSignatureV1: hostSignature,
         maxPlayers: 4,
@@ -510,7 +620,7 @@ test("repeated wire cache rejections do not consume join rate-limit state or iss
         body: JSON.stringify({
           playerName: "Guest",
           version: "1.0.0",
-          modVersion: "1.0.0",
+          modVersion: "0.5.5",
           modList: [],
           wireCacheSignatureV1,
         }),
@@ -888,7 +998,7 @@ test("slot takeover supersedes stale control peer and kick bans only current ins
         clientInstallationId: "install-host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -910,7 +1020,7 @@ test("slot takeover supersedes stale control peer and kick bans only current ins
           playerNetId: "save-slot-owner",
           ...(clientInstallationId === undefined ? {} : { clientInstallationId }),
           version: "1.0.0",
-          modVersion: "1.0.0",
+          modVersion: "0.5.5",
           modList: [],
         }),
       });
@@ -1102,7 +1212,7 @@ test("a stale kick handle after slot supersede neither bans nor notifies the rep
         clientInstallationId: "install-host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -1123,7 +1233,7 @@ test("a stale kick handle after slot supersede neither bans nor notifies the rep
           playerNetId: "shared-save-slot",
           clientInstallationId,
           version: "1.0.0",
-          modVersion: "1.0.0",
+          modVersion: "0.5.5",
           modList: [],
         }),
       });
@@ -1222,7 +1332,7 @@ test("kick still bans the latest slot binding after its control socket disconnec
         clientInstallationId: "install-host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -1243,7 +1353,7 @@ test("kick still bans the latest slot binding after its control socket disconnec
           playerNetId: "save-slot-owner",
           clientInstallationId: "install-taker",
           version: "1.0.0",
-          modVersion: "1.0.0",
+          modVersion: "0.5.5",
           modList: [],
         }),
       });
@@ -1317,7 +1427,7 @@ test("control host and client room_chat_ready uses Phase 1 generation for rich a
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -1339,7 +1449,7 @@ test("control host and client room_chat_ready uses Phase 1 generation for rich a
           playerName,
           playerNetId,
           version: "1.0.0",
-          modVersion: "1.0.0",
+          modVersion: "0.5.5",
           modList: [],
         }),
       });
@@ -1741,7 +1851,7 @@ test("legacy room chat burst forwards only the shared connection budget without 
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -1760,7 +1870,7 @@ test("legacy room chat burst forwards only the shared connection budget without 
         playerName: "Recipient",
         playerNetId: "net:recipient",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
       }),
     });
@@ -1828,7 +1938,7 @@ test("control websocket closes frames over the configured payload before routing
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -3304,7 +3414,7 @@ test("create room rejects sensitive roomName with 400 and reason detail", async 
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -3334,7 +3444,7 @@ test("create room rejects sensitive hostPlayerName", async () => {
         hostPlayerName: "白痴房主",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -3405,7 +3515,7 @@ test("AI semantic review can allow sensitive room and player names before room c
         hostPlayerName: "敏感词玩家",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -3495,7 +3605,7 @@ test("clean names and clean chat work unchanged when filter enabled", async () =
         hostPlayerName: "正常玩家",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -3559,7 +3669,7 @@ test("admin settings expose and toggle the sensitive filter at runtime", async (
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -3587,7 +3697,7 @@ test("admin settings expose and toggle the sensitive filter at runtime", async (
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -3610,7 +3720,7 @@ test("admin settings expose and toggle the sensitive filter at runtime", async (
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -3644,7 +3754,7 @@ test("join room rejects sensitive playerName with 400", async () => {
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -3659,7 +3769,7 @@ test("join room rejects sensitive playerName with 400", async () => {
       body: JSON.stringify({
         playerName,
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
       }),
     });
@@ -3696,7 +3806,7 @@ test("create room rejects sensitive savedRun slot characterName", async () => {
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -3739,7 +3849,7 @@ test("mod preflight rejects sensitive playerName with 400", async () => {
         hostPlayerName: "Host",
         gameMode: "standard",
         version: "1.0.0",
-        modVersion: "1.0.0",
+        modVersion: "0.5.5",
         modList: [],
         maxPlayers: 4,
         hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },

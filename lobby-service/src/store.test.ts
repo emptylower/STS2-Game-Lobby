@@ -45,7 +45,7 @@ function createBasicRoom(store: LobbyStore): CreateRoomResult {
       clientInstallationId: "install-host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -62,7 +62,7 @@ function basicJoinInput(): JoinRoomInput {
     playerNetId: "slot-guest",
     clientInstallationId: "install-guest",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
   };
 }
 
@@ -80,7 +80,7 @@ function createWireCacheRoom(
       clientInstallationId: "install-host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       wireCacheSignatureV1,
       maxPlayers: 4,
       hostConnectionInfo: { enetPort: 33771 },
@@ -189,7 +189,7 @@ test("createRoom exposes room summary in listRooms", () => {
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -205,54 +205,132 @@ test("createRoom exposes room summary in listRooms", () => {
   assert.equal(rooms[0]?.requiresPassword, false);
 });
 
-test("createRoom infers legacy_4p protocol profile for old 0.2.2 four-player rooms", () => {
-  const store = new LobbyStore(baseConfig);
-  const created = store.createRoom(
-    {
-      roomName: "旧版本四人房",
-      hostPlayerName: "Host",
-      gameMode: "standard",
-      version: "1.2.3",
-      modVersion: "0.2.2",
-      modList: ["sts2_lan_connect"],
-      maxPlayers: 4,
-      hostConnectionInfo: {
-        enetPort: 33771,
+test("createRoom rejects pre-0.3 callers before allocating a room id", () => {
+  let idAllocations = 0;
+  const store = new LobbyStore(baseConfig, { id: () => { idAllocations += 1; return `id-${idAllocations}`; } });
+  assert.throws(
+    () => store.createRoom(
+      {
+        roomName: "过期客户端房间",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.2.3",
+        modVersion: "0.2.2",
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 33771 },
       },
-    },
-    "203.0.113.10",
+      "203.0.113.10",
+    ),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "client_update_required",
   );
-
-  assert.equal(created.room.protocolProfile, "legacy_4p");
-
-  const joined = store.joinRoom(created.roomId, {
-    playerName: "Guest",
-    version: "1.2.3",
-    modVersion: "0.2.2",
-    modList: ["sts2_lan_connect"],
-  });
-  assert.equal(joined.room.protocolProfile, "legacy_4p");
+  assert.equal(idAllocations, 0);
+  assert.equal(store.listRooms().length, 0);
 });
 
-test("createRoom infers legacy_4p protocol profile for prefixed 0.2.2 mod versions", () => {
-  const store = new LobbyStore(baseConfig);
-  const created = store.createRoom(
-    {
-      roomName: "跨端旧版本四人房",
-      hostPlayerName: "Host",
-      gameMode: "standard",
-      version: "1.2.3",
-      modVersion: "iOS.0.2.2",
-      modList: ["sts2_lan_connect"],
-      maxPlayers: 4,
-      hostConnectionInfo: {
-        enetPort: 33771,
-      },
+function tailCreateInput(ritsuLibPresent: boolean, ritsuLibSidecarAvailable = ritsuLibPresent) {
+  return {
+    roomName: "0.6 协议房",
+    hostPlayerName: "Host",
+    gameMode: "standard",
+    version: "1.2.3",
+    modVersion: "0.6.0-alpha.1",
+    clientVersion: "0.6.0-alpha.1",
+    protocolProfileV2: "tail_v1" as const,
+    protocolOffer: {
+      lanProtocolMin: 1,
+      lanProtocolMax: 1,
+      ritsuLibPresent,
+      ritsuLibSidecarAvailable,
     },
-    "203.0.113.10",
-  );
+    maxPlayers: 8,
+    hostConnectionInfo: { enetPort: 33771 },
+  };
+}
 
-  assert.equal(created.room.protocolProfile, "legacy_4p");
+function tailJoinInput(ritsuLibPresent: boolean, ritsuLibSidecarAvailable = ritsuLibPresent): JoinRoomInput {
+  return {
+    playerName: "Guest",
+    version: "1.2.3",
+    modVersion: "0.6.0-alpha.1",
+    clientVersion: "0.6.0-alpha.1",
+    protocolOffer: {
+      lanProtocolMin: 1,
+      lanProtocolMax: 1,
+      ritsuLibPresent,
+      ritsuLibSidecarAvailable,
+    },
+  };
+}
+
+test("Tail rooms freeze deterministic homogeneous carriers and issue per-ticket nonces", () => {
+  for (const ritsuLibPresent of [false, true]) {
+    const store = new LobbyStore(baseConfig);
+    const created = store.createRoom(tailCreateInput(ritsuLibPresent), "203.0.113.10");
+    assert.equal(
+      created.room.protocolSelection.carrier,
+      ritsuLibPresent ? "ritsulib_sidecar_v1" : "standalone_tail_v1",
+    );
+    assert.equal(created.protocolSelection, created.room.protocolSelection);
+    assert.equal(created.room.protocolSelection.ritsuLibPresent, ritsuLibPresent);
+    const first = store.joinRoom(created.roomId, tailJoinInput(ritsuLibPresent));
+    const second = store.joinRoom(created.roomId, tailJoinInput(ritsuLibPresent));
+    assert.match(first.protocolFlowNonce, /^[0-9a-f]{32}$/);
+    assert.match(second.protocolFlowNonce, /^[0-9a-f]{32}$/);
+    assert.notEqual(first.protocolFlowNonce, second.protocolFlowNonce);
+    assert.equal(Object.hasOwn(store.listRooms()[0] as object, "protocolFlowNonce"), false);
+  }
+});
+
+test("Tail create rejects an unavailable host sidecar before every allocation", () => {
+  let idAllocations = 0;
+  const store = new LobbyStore(baseConfig, { id: () => { idAllocations += 1; return `id-${idAllocations}`; } });
+  assert.throws(
+    () => store.createRoom(tailCreateInput(true, false), "203.0.113.10"),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "ritsulib_sidecar_unavailable",
+  );
+  assert.equal(idAllocations, 0);
+  assert.equal(store.listRooms().length, 0);
+});
+
+test("Tail join rejects both presence mismatch directions and unavailable joiner sidecar before ticket allocation", () => {
+  const cases = [
+    { host: true, joiner: false, sidecar: false, code: "ritsulib_presence_mismatch" },
+    { host: false, joiner: true, sidecar: true, code: "ritsulib_presence_mismatch" },
+    { host: true, joiner: true, sidecar: false, code: "ritsulib_sidecar_unavailable" },
+  ] as const;
+  for (const scenario of cases) {
+    let idAllocations = 0;
+    const store = new LobbyStore(baseConfig, { id: () => { idAllocations += 1; return `id-${idAllocations}`; } });
+    const created = store.createRoom(tailCreateInput(scenario.host), "203.0.113.10");
+    const afterCreate = idAllocations;
+    assert.throws(
+      () => store.joinRoom(created.roomId, tailJoinInput(scenario.joiner, scenario.sidecar)),
+      (error: unknown) => error instanceof LobbyStoreError && error.code === scenario.code,
+    );
+    assert.equal(idAllocations, afterCreate, scenario.code);
+  }
+});
+
+test("Tail control binding validates version and digest before allocating a binding", () => {
+  let idAllocations = 0;
+  const store = new LobbyStore(baseConfig, { id: () => { idAllocations += 1; return `id-${idAllocations}`; } });
+  const created = store.createRoom(tailCreateInput(false), "203.0.113.10");
+  const joined = store.joinRoom(created.roomId, tailJoinInput(false));
+  const afterTicket = idAllocations;
+  assert.throws(
+    () => store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId, "0.6.0-alpha.1", "0".repeat(64)),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "capability_digest_mismatch",
+  );
+  assert.equal(idAllocations, afterTicket);
+  const redeemed = store.validateClientControl(
+    created.roomId,
+    created.controlChannelId,
+    joined.ticketId,
+    "0.6.0-alpha.1",
+    created.room.protocolSelection.capabilityDigest,
+  );
+  assert.equal(redeemed.protocolFlowNonce, joined.protocolFlowNonce);
+  assert.equal(idAllocations, afterTicket + 1);
 });
 
 test("createRoom preserves explicit protocol profile and echoes it in joins", () => {
@@ -263,7 +341,7 @@ test("createRoom preserves explicit protocol profile and echoes it in joins", ()
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.2.3",
+      modVersion: "0.5.3",
       protocolProfile: "extended_8p",
       maxPlayers: 8,
       hostConnectionInfo: {
@@ -279,30 +357,9 @@ test("createRoom preserves explicit protocol profile and echoes it in joins", ()
   const joined = store.joinRoom(created.roomId, {
     playerName: "Guest",
     version: "1.2.3",
-    modVersion: "0.2.3",
+    modVersion: "0.5.3",
   });
   assert.equal(joined.room.protocolProfile, "extended_8p");
-});
-
-test("createRoom does not infer legacy_4p when the RMP mod is advertised", () => {
-  const store = new LobbyStore(baseConfig);
-  const created = store.createRoom(
-    {
-      roomName: "RMP四人房",
-      hostPlayerName: "Host",
-      gameMode: "standard",
-      version: "1.2.3",
-      modVersion: "0.2.2",
-      modList: ["RemoveMultiplayerPlayerLimit"],
-      maxPlayers: 4,
-      hostConnectionInfo: {
-        enetPort: 33771,
-      },
-    },
-    "203.0.113.10",
-  );
-
-  assert.equal(created.room.protocolProfile, "extended_8p");
 });
 
 test("listRooms stays stable when heartbeat updates last seen time", () => {
@@ -315,7 +372,7 @@ test("listRooms stays stable when heartbeat updates last seen time", () => {
       hostPlayerName: "Host-A",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -330,7 +387,7 @@ test("listRooms stays stable when heartbeat updates last seen time", () => {
       hostPlayerName: "Host-B",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33772,
@@ -359,7 +416,7 @@ test("joinRoom returns direct candidates with public and lan addresses", () => {
       password: "secret",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -373,7 +430,7 @@ test("joinRoom returns direct candidates with public and lan addresses", () => {
     playerName: "Guest",
     password: "secret",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
   });
 
   assert.equal(joined.connectionPlan.directCandidates.length, 2);
@@ -390,7 +447,7 @@ test("joinRoom rejects wrong password", () => {
       password: "secret",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -405,7 +462,7 @@ test("joinRoom rejects wrong password", () => {
         playerName: "Guest",
         password: "bad",
         version: "1.2.3",
-        modVersion: "0.1.0",
+        modVersion: "0.5.0",
       }),
     (error: unknown) =>
       error instanceof LobbyStoreError &&
@@ -423,7 +480,7 @@ test("cleanupExpired deletes rooms after heartbeat timeout", () => {
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -446,7 +503,7 @@ test("saved run rooms expose slot occupancy and allow selecting an available slo
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -470,7 +527,7 @@ test("saved run rooms expose slot occupancy and allow selecting an available slo
   const joined = store.joinRoom(created.roomId, {
     playerName: "Guest",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
     desiredSavePlayerNetId: "222",
   });
 
@@ -485,7 +542,7 @@ test("saved run rooms reject occupied or ambiguous slot joins", () => {
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -508,7 +565,7 @@ test("saved run rooms reject occupied or ambiguous slot joins", () => {
       store.joinRoom(created.roomId, {
         playerName: "Guest",
         version: "1.2.3",
-        modVersion: "0.1.0",
+        modVersion: "0.5.0",
         desiredSavePlayerNetId: "999",
       }),
     (error: unknown) =>
@@ -522,7 +579,7 @@ test("saved run rooms reject occupied or ambiguous slot joins", () => {
       store.joinRoom(created.roomId, {
         playerName: "Guest",
         version: "1.2.3",
-        modVersion: "0.1.0",
+        modVersion: "0.5.0",
       }),
     (error: unknown) =>
       error instanceof LobbyStoreError &&
@@ -539,7 +596,7 @@ test("joinRoom rejects rooms that already started", () => {
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -559,7 +616,7 @@ test("joinRoom rejects rooms that already started", () => {
       store.joinRoom(created.roomId, {
         playerName: "Guest",
         version: "1.2.3",
-        modVersion: "0.1.0",
+        modVersion: "0.5.0",
       }),
     (error: unknown) =>
       error instanceof LobbyStoreError &&
@@ -576,7 +633,7 @@ test("saved run rooms can still join after status becomes starting when a slot i
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -603,7 +660,7 @@ test("saved run rooms can still join after status becomes starting when a slot i
   const joined = store.joinRoom(created.roomId, {
     playerName: "Guest",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
     desiredSavePlayerNetId: "222",
   });
 
@@ -619,7 +676,7 @@ test("saved run rooms surface as open in room list when they still have reconnec
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -660,7 +717,7 @@ test("relaxed compatibility can skip game and mod version checks", () => {
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "2026.3.13-mobile",
-      modVersion: "cross-end-preview",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -672,7 +729,7 @@ test("relaxed compatibility can skip game and mod version checks", () => {
   const joined = store.joinRoom(created.roomId, {
     playerName: "Guest",
     version: "2026.3.13-pc",
-    modVersion: "test-build",
+    modVersion: "0.5.1",
   });
 
   assert.equal(joined.room.roomId, created.roomId);
@@ -800,7 +857,7 @@ test("repeated wire cache mismatches create no ticket or saved-run reservation s
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       wireCacheSignatureV1: WireCacheSignatureA,
       maxPlayers: 4,
       hostConnectionInfo: { enetPort: 33771 },
@@ -851,7 +908,7 @@ test("joinRoom returns missing mod details when mod lists differ", () => {
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       modList: ["BaseMod", "SharedMod", "HostOnlyMod"],
       maxPlayers: 4,
       hostConnectionInfo: {
@@ -866,7 +923,7 @@ test("joinRoom returns missing mod details when mod lists differ", () => {
       store.joinRoom(created.roomId, {
         playerName: "Guest",
         version: "1.2.3",
-        modVersion: "0.1.0",
+        modVersion: "0.5.0",
         modList: ["BaseMod", "SharedMod", "LocalOnlyMod"],
       }),
     (error: unknown) =>
@@ -876,15 +933,15 @@ test("joinRoom returns missing mod details when mod lists differ", () => {
       typeof error.details === "object" &&
       error.details !== null &&
       JSON.stringify(error.details) === JSON.stringify({
-        roomModVersion: "0.1.0",
-        requestedModVersion: "0.1.0",
+        roomModVersion: "0.5.0",
+        requestedModVersion: "0.5.0",
         missingModsOnLocal: ["HostOnlyMod"],
         missingModsOnHost: ["LocalOnlyMod"],
       }),
   );
 });
 
-test("joinRoom treats trailing .0 mod version suffix as equivalent", () => {
+test("joinRoom accepts equal supported mod versions", () => {
   const store = new LobbyStore(baseConfig);
   const created = store.createRoom(
     {
@@ -892,7 +949,7 @@ test("joinRoom treats trailing .0 mod version suffix as equivalent", () => {
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.2",
+      modVersion: "0.5.2",
       modList: ["BaseMod", "SharedMod"],
       maxPlayers: 4,
       hostConnectionInfo: {
@@ -905,11 +962,11 @@ test("joinRoom treats trailing .0 mod version suffix as equivalent", () => {
   const joined = store.joinRoom(created.roomId, {
     playerName: "Guest",
     version: "1.2.3",
-    modVersion: "0.1.2.0",
+    modVersion: "0.5.2",
     modList: ["BaseMod", "SharedMod"],
   });
 
-  assert.equal(joined.room.modVersion, "0.1.2");
+  assert.equal(joined.room.modVersion, "0.5.2");
 });
 
 test("kickPlayer bans only the current occupant installation and never the shared save slot", () => {
@@ -921,7 +978,7 @@ test("kickPlayer bans only the current occupant installation and never the share
       clientInstallationId: "install-host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -933,7 +990,7 @@ test("kickPlayer bans only the current occupant installation and never the share
   const originalOwner = store.joinRoom(created.roomId, {
     playerName: "Original Owner",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
     playerNetId: "save-slot-12345",
     clientInstallationId: "install-original",
   });
@@ -945,7 +1002,7 @@ test("kickPlayer bans only the current occupant installation and never the share
   const currentOccupant = store.joinRoom(created.roomId, {
     playerName: "Current Occupant",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
     playerNetId: "save-slot-12345",
     clientInstallationId: "install-takeover",
   });
@@ -984,7 +1041,7 @@ test("kickPlayer bans only the current occupant installation and never the share
       store.joinRoom(created.roomId, {
         playerName: "Kicked Occupant",
         version: "1.2.3",
-        modVersion: "0.1.0",
+        modVersion: "0.5.0",
         playerNetId: "save-slot-12345",
         clientInstallationId: "install-takeover",
       }),
@@ -997,7 +1054,7 @@ test("kickPlayer bans only the current occupant installation and never the share
   const rejoined = store.joinRoom(created.roomId, {
     playerName: "Original Owner",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
     playerNetId: "save-slot-12345",
     clientInstallationId: "install-original",
   });
@@ -1012,7 +1069,7 @@ test("kickPlayer rejects invalid host token", () => {
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -1038,7 +1095,7 @@ test("updateRoomSettings persists and returns settings", () => {
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -1080,7 +1137,7 @@ test("declaring the original owner's public slot as an installation id cannot ba
       clientInstallationId: "install-host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -1093,7 +1150,7 @@ test("declaring the original owner's public slot as an installation id cannot ba
     playerName: "Original Owner",
     clientInstallationId: "76561198000000001",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
     playerNetId: "76561198000000001",
   });
   store.validateClientControl(created.roomId, created.controlChannelId, originalOwner.ticketId);
@@ -1102,7 +1159,7 @@ test("declaring the original owner's public slot as an installation id cannot ba
     playerName: "Hostile Taker",
     clientInstallationId: "76561198000000001",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
     playerNetId: "76561198000000001",
   });
   const legacyBinding = store.validateClientControl(
@@ -1129,7 +1186,7 @@ test("declaring the original owner's public slot as an installation id cannot ba
     playerName: "Original Owner",
     clientInstallationId: "76561198000000001",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
     playerNetId: "76561198000000001",
   });
   assert.equal(ownerRejoin.room.roomId, created.roomId);
@@ -1138,7 +1195,7 @@ test("declaring the original owner's public slot as an installation id cannot ba
     playerName: "Hostile Taker",
     clientInstallationId: "76561198000000001",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
     playerNetId: "76561198000000001",
   });
   assert.equal(legacyRejoin.room.roomId, created.roomId);
@@ -1154,7 +1211,7 @@ test("a declared installation id matching another known save slot is treated as 
       clientInstallationId: "install-host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: { enetPort: 33771 },
       savedRun: {
@@ -1171,7 +1228,7 @@ test("a declared installation id matching another known save slot is treated as 
   const joined = store.joinRoom(created.roomId, {
     playerName: "Attacker",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
     desiredSavePlayerNetId: "76561198000000002",
     playerNetId: "76561198000000002",
     clientInstallationId: "76561198000000001",
@@ -1399,7 +1456,7 @@ test("every active occupant remains kickable at the supported room capacity", ()
       clientInstallationId: "install-host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: MaxSupportedRoomPlayers,
       hostConnectionInfo: { enetPort: 33771 },
     },
@@ -1572,7 +1629,7 @@ test("relay-only strategy omits direct candidates", () => {
       hostPlayerName: "Host",
       gameMode: "standard",
       version: "1.2.3",
-      modVersion: "0.1.0",
+      modVersion: "0.5.0",
       maxPlayers: 4,
       hostConnectionInfo: {
         enetPort: 33771,
@@ -1585,7 +1642,7 @@ test("relay-only strategy omits direct candidates", () => {
   const joined = store.joinRoom(created.roomId, {
     playerName: "Guest",
     version: "1.2.3",
-    modVersion: "0.1.0",
+    modVersion: "0.5.0",
   });
 
   assert.equal(joined.connectionPlan.strategy, "relay-only");

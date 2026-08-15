@@ -230,8 +230,13 @@ lobby-service/src/chat/room-gateway.ts
 lobby-service/src/chat/ticket-store.ts
 lobby-service/src/chat/upgrade-router.ts
 lobby-service/src/client-ip.ts
+lobby-service/src/client-version.ts
 lobby-service/src/config.ts
 lobby-service/src/join-guard.ts
+lobby-service/src/protocol-capabilities.ts
+lobby-service/src/protocol-errors.ts
+lobby-service/src/protocol-profile.ts
+lobby-service/src/room-api-view.ts
 lobby-service/src/mod-sync/diff.ts
 lobby-service/src/mod-sync/protocol.ts
 lobby-service/src/mod-sync/validator.ts

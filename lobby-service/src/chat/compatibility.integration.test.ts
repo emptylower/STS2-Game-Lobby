@@ -39,14 +39,11 @@ interface ConnectedPeer {
   joined: JoinedRoom;
 }
 
-interface LegacyFixture {
-  modVersion: "0.4.0" | "0.2.2";
+interface CompatFixture {
+  modVersion: "0.5.5";
 }
 
-const fixtures: LegacyFixture[] = [
-  { modVersion: "0.4.0" },
-  { modVersion: "0.2.2" },
-];
+const fixtures: CompatFixture[] = [{ modVersion: "0.5.5" }];
 
 const phaseThreeVersions = {
   richContentVersion: 1,
@@ -802,7 +799,7 @@ test("real room gateway routes rich and exact legacy fallback per recipient and 
   );
 });
 
-test("new server preserves 0.4.0 and 0.2.2 legacy lobby/control compatibility", async (t) => {
+test("compat profile preserves the current lobby/control contract", async (t) => {
   for (const fixture of fixtures) {
     await t.test(`mod ${fixture.modVersion}`, async () => {
       let service: Awaited<ReturnType<typeof createLobbyService>> | undefined;

@@ -1,0 +1,59 @@
+[
+  {
+    "name": "compat_4_5_v1",
+    "profile": "compat_4_5_v1",
+    "offer": {
+      "lanProtocolMin": 1,
+      "lanProtocolMax": 1,
+      "ritsuLibPresent": false,
+      "ritsuLibSidecarAvailable": false
+    },
+    "policy": {
+      "profile": "compat_4_5_v1",
+      "lanProtocolMin": 1,
+      "lanProtocolMax": 1,
+      "maxPlayers": 8,
+      "gameVersion": "0.110.1",
+      "wireCacheSignatureV1": "aabb"
+    },
+    "expectedDigest": "7b811605988583bc5332ddd2de37adda901aba9fce84194df92590e61524c167"
+  },
+  {
+    "name": "tail_v1_standalone",
+    "profile": "tail_v1",
+    "offer": {
+      "lanProtocolMin": 1,
+      "lanProtocolMax": 1,
+      "ritsuLibPresent": false,
+      "ritsuLibSidecarAvailable": false
+    },
+    "policy": {
+      "profile": "tail_v1",
+      "lanProtocolMin": 1,
+      "lanProtocolMax": 1,
+      "maxPlayers": 8,
+      "gameVersion": "0.110.1",
+      "wireCacheSignatureV1": "aabb"
+    },
+    "expectedDigest": "9e05bfe38a117996c20b46d9caa75c690de2c5666b37c8e3b42eb5ebc4b7ed76"
+  },
+  {
+    "name": "tail_v1_ritsulib_sidecar",
+    "profile": "tail_v1",
+    "offer": {
+      "lanProtocolMin": 1,
+      "lanProtocolMax": 1,
+      "ritsuLibPresent": true,
+      "ritsuLibSidecarAvailable": true
+    },
+    "policy": {
+      "profile": "tail_v1",
+      "lanProtocolMin": 1,
+      "lanProtocolMax": 1,
+      "maxPlayers": 8,
+      "gameVersion": "0.110.1",
+      "wireCacheSignatureV1": "aabb"
+    },
+    "expectedDigest": "19bf340a52ff054a950df4e25670e9ee42cf4647fd1aa8ba9d5234f81575397a"
+  }
+]
