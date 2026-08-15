@@ -12,9 +12,9 @@
 
 # STS2 Lobby Service
 
-> 本文档对应正式版 **v0.5.4**。本版在保留既有节点网络、聊天与 MOD 预检协议的基础上，新增大厅敏感词过滤与可选 AI 语义审核（词库随包分发，覆盖聊天、跨消息短句、房间名与用户名，管理面板可控）。正式包见 [GitHub Release v0.5.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.4)。
+> 本文档对应测试候选 **v0.6.0-alpha.1**。客户端与服务必须同步升级；部署时重启服务进程以清除内存中的旧房间。
 
-最新已公开的正式服务端源码包仍见 [GitHub v0.5.3 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3) 中的 `sts2_lobby_service.zip`；`0.5.4` 当前仅提供源码构建。
+v0.6 新增 `compat_4_5_v1` / `tail_v1` profile、冻结的 protocol selection 与 capability digest。`tail_v1` 要求 RitsuLib presence 完全一致，mismatch 或 sidecar readiness 失败会在 slot、ticket、control binding 和 relay/transport 分配前返回结构化错误。历史客户端真实互通不属于本 alpha 的发布门禁。
 
 ## 文档定位
 

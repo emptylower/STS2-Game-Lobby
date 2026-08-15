@@ -2,6 +2,12 @@
 
 `0.6.0-alpha.1` 候选同步升级客户端与 lobby-service，引入显式房间协议选择，并移除 RC4 对 RitsuLib 私有 Harmony postfix 的卸载、调用和恢复桥。
 
+## 发布附件
+
+- `sts2_lan_connect-release.zip`：客户端 MOD，SHA-256 `81db4e16720f7574d2180dd051aa1b85ebfec9a69643226b301331620154c076`。
+- `sts2_lobby_service.zip`：Lobby 服务端，SHA-256 `da8439f4726f1c7e46e31bab27d01bf42e91d01d195ff6431c8500903438f786`。
+- 本版本仅作为 GitHub Pre-release；客户端与 lobby-service 必须配套更新。
+
 ## 房间模式
 
 - **兼容模式（默认，`compat_4_5_v1`）**：固定使用 `4/5-bit` wire profile，支持 2-8 人，不允许安装 RitsuLib 的客户端创建或加入。

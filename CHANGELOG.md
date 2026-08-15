@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-## [0.6.0-alpha.1] - 2026-08-15
+## [0.6.0-alpha.1] - 2026-08-16
 
 客户端与 lobby-service `0.6.0-alpha.1` 双协议测试候选同步准备。
 
@@ -23,6 +23,11 @@
 ### Removed
 
 - 删除 RC4 对 RitsuLib 私有 Harmony postfix 的卸载、调用与恢复桥；不再访问 RitsuLib 私有 patch state。
+
+### Verification
+
+- Android/macOS 无 Ritsu `tail_v1` 已在游戏 v0.111.0 完成真实建房、加入、准备、开局与首个 Neow 同步状态。
+- 官方 RitsuLib v0.5.12 在 Android 初始化自身 `ApplySerializePatches` 时失败并黑屏；全 Ritsu Android 路径在本测试版明确为 NO-GO，LAN Connect 保持 fail-closed 且不维护 RitsuLib 分支。
 
 ## [0.5.6-rc4] - 2026-08-12
 

@@ -81,6 +81,7 @@ import {
   type ReservedChatTicket,
 } from "./chat/ticket-store.js";
 import { installUpgradeRouter, type ChatUpgradeDecision } from "./chat/upgrade-router.js";
+import { parseProtocolOffer, type ProtocolOffer } from "./protocol-capabilities.js";
 
 const MaxLobbyPlayers = MaxSupportedRoomPlayers;
 const MaxRoomNameLength = 80;
@@ -90,6 +91,7 @@ const MaxVersionLength = 32;
 const MaxModVersionLength = 32;
 const MaxWireCacheSignatureLength = 64;
 const MaxProtocolProfileLength = 32;
+const MaxCapabilityDigestLength = 64;
 const MaxPasswordLength = 64;
 const MaxModListEntries = 128;
 const MaxModListEntryLength = 64;
@@ -170,6 +172,7 @@ interface ControlPeer {
   superseded: boolean;
   ticketId?: string;
   controlBindingId?: string;
+  protocolFlowNonce?: string;
   playerNetId?: string;
   playerName?: string;
 }
@@ -229,6 +232,11 @@ const ReservedRelayedIdentityFields = [
   "bindingId",
   "controlBindingId",
   "identityKind",
+  "clientVersion",
+  "protocolProfileV2",
+  "protocolSelection",
+  "capabilityDigest",
+  "protocolFlowNonce",
 ] as const;
 
 export function sanitizeRelayedControlEnvelope(
@@ -488,6 +496,12 @@ export async function createLobbyService(
         modSyncEnabled: serverAdminStateStore.getState().modSyncEnabled,
         modSyncMinimumClientVersion: MOD_SYNC_MINIMUM_CLIENT_VERSION,
         wireCacheSignatureV1Enforced: true,
+        dualProtocolApiVersion: 1,
+        supportedProtocolProfiles: ["compat_4_5_v1", "tail_v1"],
+        lanProtocolMin: 1,
+        lanProtocolMax: 1,
+        minimumClientVersion: "0.3.0",
+        tailV1MinimumClientVersion: "0.6.0-alpha.1",
       },
     });
   });
@@ -630,6 +644,7 @@ export async function createLobbyService(
         gameMode: boundedString(body?.gameMode, "gameMode", MaxGameModeLength),
         version: boundedString(body?.version, "version", MaxVersionLength),
         modVersion: boundedString(body?.modVersion, "modVersion", MaxModVersionLength),
+        clientVersion: optionalBoundedString(body?.clientVersion, "clientVersion", MaxVersionLength),
         modList: boundedStringArray(body?.modList, "modList", MaxModListEntries, MaxModListEntryLength),
         wireCacheSignatureV1: optionalBoundedString(
           body?.wireCacheSignatureV1,
@@ -639,7 +654,9 @@ export async function createLobbyService(
           ? undefined
           : parseModInventory(body.hostModInventory, "hostModInventory"),
         protocolProfile: optionalBoundedString(body?.protocolProfile, "protocolProfile", MaxProtocolProfileLength),
-        maxPlayers: positiveInt(body?.maxPlayers, "maxPlayers", 1, MaxLobbyPlayers),
+        protocolProfileV2: optionalBoundedString(body?.protocolProfileV2, "protocolProfileV2", MaxProtocolProfileLength),
+        protocolOffer: parseOptionalProtocolOffer(body?.protocolOffer),
+        maxPlayers: positiveInt(body?.maxPlayers, "maxPlayers", 2, MaxLobbyPlayers),
         hostConnectionInfo: {
           enetPort: positiveInt(body?.hostConnectionInfo?.enetPort, "hostConnectionInfo.enetPort", 1, 65535),
           localAddresses: boundedStringArray(
@@ -731,6 +748,8 @@ export async function createLobbyService(
         password: optionalBoundedString(body?.password, "password", MaxPasswordLength),
         version: boundedString(body?.version, "version", MaxVersionLength),
         modVersion: boundedString(body?.modVersion, "modVersion", MaxModVersionLength),
+        clientVersion: optionalBoundedString(body?.clientVersion, "clientVersion", MaxVersionLength),
+        protocolOffer: parseOptionalProtocolOffer(body?.protocolOffer),
         modList: boundedStringArray(body?.modList, "modList", MaxModListEntries, MaxModListEntryLength),
         wireCacheSignatureV1: optionalBoundedString(
           body?.wireCacheSignatureV1,
@@ -1317,10 +1336,18 @@ export async function createLobbyService(
           roomId,
           controlChannelId,
           requiredQuery(requestUrl, "token"),
+          optionalQueryString(requestUrl.searchParams.get("clientVersion") ?? undefined, "clientVersion", MaxVersionLength),
+          optionalQueryString(requestUrl.searchParams.get("capabilityDigest") ?? undefined, "capabilityDigest", MaxCapabilityDigestLength),
         )
         : undefined;
       const joinTicket = role === "client"
-        ? store.validateClientControl(roomId, controlChannelId, requiredQuery(requestUrl, "ticketId"))
+        ? store.validateClientControl(
+          roomId,
+          controlChannelId,
+          requiredQuery(requestUrl, "ticketId"),
+          optionalQueryString(requestUrl.searchParams.get("clientVersion") ?? undefined, "clientVersion", MaxVersionLength),
+          optionalQueryString(requestUrl.searchParams.get("capabilityDigest") ?? undefined, "capabilityDigest", MaxCapabilityDigestLength),
+        )
         : undefined;
       const roomContext = store.getRoomChatContext(roomId);
       if (!roomContext) {
@@ -1341,6 +1368,9 @@ export async function createLobbyService(
         ...(joinTicket?.controlBindingId === undefined
           ? {}
           : { controlBindingId: joinTicket.controlBindingId }),
+        ...(joinTicket?.protocolFlowNonce === undefined
+          ? {}
+          : { protocolFlowNonce: joinTicket.protocolFlowNonce }),
         ...(joinTicket?.playerNetId === undefined ? {} : { playerNetId: joinTicket.playerNetId }),
         ...(joinTicket?.playerName === undefined
           ? hostSession?.hostPlayerName === undefined
@@ -1391,6 +1421,7 @@ export async function createLobbyService(
             playerNetId: binding.playerNetId,
             playerName: binding.playerName,
             bindingId: binding.bindingId,
+            protocolFlowNonce: binding.protocolFlowNonce,
           });
         }
       } else if (
@@ -2061,6 +2092,7 @@ export async function createLobbyService(
           playerNetId: clientPeer.playerNetId,
           playerName: clientPeer.playerName ?? "",
           bindingId: clientPeer.controlBindingId,
+          protocolFlowNonce: clientPeer.protocolFlowNonce,
         });
       }
     }
@@ -2801,6 +2833,16 @@ export async function createLobbyService(
     }
   }
 
+  function parseOptionalProtocolOffer(value: unknown): ProtocolOffer | undefined {
+    if (value === undefined) return undefined;
+    try {
+      return parseProtocolOffer(value);
+    } catch (error) {
+      if (error instanceof TypeError) throw new InputError(error.message);
+      throw error;
+    }
+  }
+
   function assertCreateJoinRateLimit(req: Request, scope: string) {
     const ip = requestIp(req) || "unknown";
     const windowMs = Math.max(1000, env.createJoinRateLimitWindowMs);
@@ -2824,6 +2866,8 @@ export async function createLobbyService(
       version: room.version,
       modVersion: room.modVersion,
       protocolProfile: room.protocolProfile,
+      protocolProfileV2: room.protocolProfileV2,
+      protocolSelection: room.protocolSelection,
       relayState: room.relayState,
       createdAt: room.createdAt,
       lastHeartbeatAt: room.lastHeartbeatAt,

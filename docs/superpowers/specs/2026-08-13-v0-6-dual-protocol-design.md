@@ -679,7 +679,7 @@ Android <-> macOS 至少覆盖：
 |---|---|
 | STS2 不保证 vanilla reader 忽略尾部字节 | 在目标游戏版本上建立原版 reader fixture 和真实双端测试 |
 | Android 对动态闭合泛型 Harmony patch 仍有限制 | 尽量 patch 稳定非泛型 handler；必须动态闭合的入口进行 Android 真机启动门禁 |
-| RitsuLib 公开 sidecar API无法在 handler 前稳定配对 LAN container | 不发布 RitsuLib 房支持，回到设计评审；禁止私有 postfix 桥或独立双 Tail |
+| RitsuLib 公开 sidecar API 无法在 handler 前稳定配对，或第三方 RitsuLib 无法在目标平台初始化 | 该平台/组合不宣称 all-Ritsu 可用并保持 readiness fail-closed；no-Ritsu 路径单独裁决；禁止私有 postfix 桥、独立双 Tail 或维护 RitsuLib 分支 |
 | 同为 RitsuLib 但版本或第三方扩展不兼容 | LAN Connect 仅保证 presence 同质；保留原版 MOD inventory 和 RitsuLib 自身门禁，并在文档/UI 明示此边界 |
 | 旧客户端无法识别新服务端 profile 字符串 | 服务端继续投影旧 DTO；该行为仅由当前版本契约测试覆盖，不作为历史客户端互通保证 |
 | 两套 profile 增加维护成本 | 兼容 profile 只保留 0.3-0.5 所需的完整旧路径，不再增加新能力或 Ritsu 兼容 |
@@ -691,14 +691,14 @@ Android <-> macOS 至少覆盖：
 设计实施完成必须同时满足：
 
 1. 生产代码不存在 `legacy_4p=8/3-bit` 的可选运行路径。
-2. `tail_v1` 不修改 STS2 原版玩家字段位宽；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用 typed-sidecar carrier；两个允许组合通过真实双进程可行性门禁，两个 mismatch 方向在大厅流 transport 前拒绝。
+2. `tail_v1` 不修改 STS2 原版玩家字段位宽；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 只允许 typed-sidecar carrier；no-Ritsu 组合必须通过真实双进程可行性门禁，all-Ritsu 组合单独给出 PASS 或外部 BLOCKED/NO-GO，两个 mismatch 方向均在大厅流 transport 前拒绝。
 3. `compat_4_5_v1` 在 v0.6 双端固定使用 `4/5-bit`，正确投影 legacy DTO，并在任一端检测到 RitsuLib 时于 transport 前拒绝。
-4. `tail_v1` 在本轮要求的 Android、macOS 组合中完成开局和同步；Windows 由构建与包内容门禁覆盖，不要求单独实机 smoke。
+4. no-Ritsu `tail_v1` 在本轮要求的 Android、macOS 组合中完成开局和同步；all-Ritsu 若被第三方 Android 初始化阻塞，不得宣称该组合可用，但不阻塞 no-Ritsu 测试版；Windows 由构建与包内容门禁覆盖，不要求单独实机 smoke。
 5. `tail_v1` 房间的 RitsuLib presence/carrier 全员一致，内层 LAN container bytes 不因 carrier 改变；Ritsu-present 原版消息后没有 standalone LAN Tail。
 6. 任一 RitsuLib presence mismatch 在大厅 join ticket 前得到结构化拒绝；纯 direct-IP `tail_v1` 在本地 transport 创建前被拒绝。
 7. 0.2.x 客户端得到明确更新提示，不能进入游戏握手。
 8. 所有 golden vectors、服务测试、客户端单测和 Godot 测试通过。
-9. 客户端与 lobby-service 均完成 `0.6.0-alpha.1` Pre-release 候选包验证；创建 tag、推送和 GitHub Release 仍需单独授权。
+9. 客户端与 lobby-service 均完成 `0.6.0-alpha.1` Pre-release 候选包验证；维护者已于 2026-08-16 授权合并、推送、创建 tag，并要求客户端与服务端附件同步发布。
 
 ## 14. 实施前阻塞研究
 

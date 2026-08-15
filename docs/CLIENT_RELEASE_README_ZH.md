@@ -23,7 +23,7 @@
 
 本版会比较四张 ModelId net-id 表和四个位宽。`affects_gameplay: false` 的 MOD 仍可能改变线上编码；双方真实签名不一致时会在 ticket 签发或游戏 join request 之前拒绝，缺失/不可读签名则允许加入。发布默认配置已由 `test_relaxed` 改为 `strict`。
 
-本版删除 RC4 对 RitsuLib 私有 postfix 的卸载、调用和恢复桥。兼容模式固定使用 `4/5-bit` 并禁止 RitsuLib；0.6 新协议保持原版 `2/3-bit` 主体，无 RitsuLib 时使用 standalone carrier。全员 RitsuLib 的设计路径只允许公开 typed-sidecar API；在真实 sidecar/barrier gate 未通过时，客户端以 `ritsulib_sidecar_unavailable` fail-closed。有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib。
+本版删除 RC4 对 RitsuLib 私有 postfix 的卸载、调用和恢复桥。兼容模式固定使用 `4/5-bit` 并禁止 RitsuLib；0.6 新协议保持原版 `2/3-bit` 主体，无 RitsuLib 时使用 standalone carrier。全员 RitsuLib 的设计路径只允许公开 typed-sidecar API；在真实 sidecar/barrier gate 未通过时，客户端以 `ritsulib_sidecar_unavailable` fail-closed。有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib。官方 RitsuLib v0.5.12 在当前 Android v0.111.0 启动器环境初始化自身网络补丁时黑屏，因此本测试版不宣称全 Ritsu Android 联机可用；无 Ritsu Android/macOS 已完成真实开局验证。
 
 续局来源现在按 `lan` / `lobby` / 未知三态处理，未知存档只询问一次；safe-load 和修复不会再误写或删除绑定。踢出使用与存档槽位分离的安装 credential 和当前占用者 binding handle，避免槽位接管后误封原主人。
 
@@ -33,7 +33,7 @@
 
 ### v0.6.0-alpha.1 测试重点
 
-- 分别验证 no-Ritsu/no-Ritsu 与 Ritsu/Ritsu 的建房、ticket、加入、ready、begin-run 和首个同步状态。
+- no-Ritsu/no-Ritsu 的建房、ticket、加入、ready、begin-run 和首个同步状态已在 Android/macOS 通过；Ritsu/Ritsu 仅在 Ritsu framework 能完整初始化的平台继续测试，Android 当前为外部阻塞。
 - 分别验证 Ritsu/no-Ritsu 与 no-Ritsu/Ritsu 在 ticket 和 transport 前得到结构化 presence mismatch，且没有分配 slot/control/relay。
 - Ritsu 房确认原版消息没有 standalone Tail，LAN container 只出现在公开 typed-sidecar frame，原版 handler 在配对验证前不运行。
 - direct-IP 只允许兼容模式；Tail intent 或本地 Ritsu 在 initializer 创建前拒绝。
@@ -203,7 +203,7 @@ v0.6 不再支持 `0.2.x` 客户端。自建大厅需要与客户端一起升级
 
 The candidate fingerprints the four ModelId net-id tables and bit widths. A genuine peer mismatch is rejected before ticket issuance or the game join request, while missing or unreadable signatures remain fail-open. The shipped compatibility profile is now `strict`.
 
-This version removes the RC4 private RitsuLib postfix bridge. Compat uses fixed `4/5-bit` encoding and forbids RitsuLib. Tail v1 preserves the vanilla `2/3-bit` body and uses a standalone carrier when RitsuLib is absent. The all-Ritsu design path may use only the public typed-sidecar API; until the real sidecar/barrier gate passes, the client fails closed with `ritsulib_sidecar_unavailable`. Mixed presence is rejected before transport.
+This version removes the RC4 private RitsuLib postfix bridge. Compat uses fixed `4/5-bit` encoding and forbids RitsuLib. Tail v1 preserves the vanilla `2/3-bit` body and uses a standalone carrier when RitsuLib is absent. The all-Ritsu design path may use only the public typed-sidecar API; until the real sidecar/barrier gate passes, the client fails closed with `ritsulib_sidecar_unavailable`. Mixed presence is rejected before transport. Official RitsuLib v0.5.12 currently fails while initializing its own networking patches on Android v0.111.0, so this prerelease does not claim all-Ritsu Android support. The no-Ritsu Android/macOS path completed a real run-start smoke.
 
 Continue-run origin is an explicit LAN/lobby/unknown choice, with a one-time prompt for ambiguous legacy saves. Safe load and repair preserve bindings. Kick identity is separate from save slots and uses the rendered occupant's binding handle.
 
@@ -213,7 +213,7 @@ This candidate builds on top of the existing feature set; nothing from earlier v
 
 ### v0.6.0-alpha.1 Test Focus
 
-- Exercise no-Ritsu/no-Ritsu and Ritsu/Ritsu through ticket, ready, begin-run, and first synchronized state.
+- No-Ritsu/no-Ritsu has completed ticket, ready, begin-run, and first synchronized state on Android/macOS. Continue Ritsu/Ritsu testing only where the Ritsu framework initializes successfully; Android is externally blocked.
 - Exercise both mixed-presence directions and require zero slot, ticket, control, and transport allocation.
 - Verify Ritsu rooms carry LAN data only in the public sidecar frame and do not append a standalone Tail to vanilla messages.
 - Verify direct-IP rejects Tail intent and local Ritsu before creating an initializer.

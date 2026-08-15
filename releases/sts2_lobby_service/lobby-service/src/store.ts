@@ -2,18 +2,29 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import { resolveModDiff } from "./mod-sync/diff.js";
 import type { LobbyModDescriptor, ModDiffResult } from "./mod-sync/protocol.js";
 import { canonicalModInventoryJson, validateModInventory } from "./mod-sync/validator.js";
+import {
+  classifyClientVersion,
+  normalizeClientVersion,
+  type ClientApiGeneration,
+} from "./client-version.js";
+import {
+  assertJoinerCompatible,
+  selectRoomProtocol,
+  type ProtocolOffer,
+  type RoomProtocolSelection,
+} from "./protocol-capabilities.js";
+import { ProtocolContractError } from "./protocol-errors.js";
+import {
+  parseRequestedProfile,
+  projectProfile,
+  type LegacyProtocolProfile,
+  type ProtocolProfile,
+} from "./protocol-profile.js";
 
 export type RoomStatus = "open" | "starting" | "full" | "closed";
 export type RelayState = "disabled" | "planned" | "ready";
 export type ConnectionStrategy = "direct-first" | "relay-first" | "relay-only";
-export type ProtocolProfile = "legacy_4p" | "extended_8p";
-
-export const MaxSupportedRoomPlayers = 256;
-
-const Legacy4pProtocolProfile: ProtocolProfile = "legacy_4p";
-const Extended8pProtocolProfile: ProtocolProfile = "extended_8p";
-const LegacyCompatibleModVersion = "0.2.2";
-const RmpAdvertisedModId = "RemoveMultiplayerPlayerLimit";
+export const MaxSupportedRoomPlayers = 8;
 
 export interface HostConnectionInfo {
   enetPort: number;
@@ -74,14 +85,18 @@ export interface RoomSummary {
   maxPlayers: number;
   version: string;
   modVersion: string;
-  protocolProfile: ProtocolProfile;
+  protocolProfile: LegacyProtocolProfile;
+  protocolProfileV2: ProtocolProfile;
+  protocolSelection: RoomProtocolSelection;
   relayState: RelayState;
   createdAt: Date;
   lastHeartbeatAt: Date;
   savedRun?: SavedRunInfo | undefined;
 }
 
-export interface Room extends RoomSummary {
+export interface Room extends Omit<RoomSummary, "protocolProfile"> {
+  clientVersion: string;
+  clientApiGeneration: ClientApiGeneration;
   passwordHash?: string | undefined;
   hostConnectionInfo: HostConnectionInfo;
   modList: string[];
@@ -101,6 +116,12 @@ export interface JoinTicket {
   issuedAt: Date;
   expiresAt: Date;
   connectionPlan: ConnectionPlan;
+  clientVersion: string;
+  clientApiGeneration: ClientApiGeneration;
+  protocolProfileV2: ProtocolProfile;
+  protocolSelection: RoomProtocolSelection;
+  joinerCapabilityDigest: string;
+  protocolFlowNonce: string;
 }
 
 export interface ClientControlBinding {
@@ -112,6 +133,7 @@ export interface ClientControlBinding {
   clientInstallationId?: string | undefined;
   identityKind: "installation" | "legacy";
   boundAt: Date;
+  protocolFlowNonce: string;
 }
 
 export type KickPlayerResult =
@@ -137,6 +159,7 @@ export interface ClientControlBindingHandle {
   bindingId: string;
   playerNetId: string;
   playerName: string;
+  protocolFlowNonce: string;
 }
 
 export interface RoomSettings {
@@ -177,10 +200,13 @@ export interface CreateRoomInput {
   gameMode: string;
   version: string;
   modVersion: string;
+  clientVersion?: string | undefined;
   modList?: string[] | undefined;
   wireCacheSignatureV1?: string | undefined;
   hostModInventory?: LobbyModDescriptor[] | undefined;
-  protocolProfile?: ProtocolProfile | string | undefined;
+  protocolProfile?: LegacyProtocolProfile | string | undefined;
+  protocolProfileV2?: ProtocolProfile | string | undefined;
+  protocolOffer?: ProtocolOffer | undefined;
   maxPlayers: number;
   hostConnectionInfo: {
     enetPort: number;
@@ -199,6 +225,8 @@ export interface JoinRoomInput {
   password?: string | undefined;
   version: string;
   modVersion: string;
+  clientVersion?: string | undefined;
+  protocolOffer?: ProtocolOffer | undefined;
   modList?: string[] | undefined;
   wireCacheSignatureV1?: string | undefined;
   desiredSavePlayerNetId?: string | undefined;
@@ -243,6 +271,7 @@ export interface CreateRoomResult {
   hostToken: string;
   heartbeatIntervalSeconds: number;
   room: RoomSummary;
+  protocolSelection: RoomProtocolSelection;
   relayEndpoint?: RelayEndpoint | undefined;
 }
 
@@ -254,6 +283,7 @@ export interface JoinRoomResult {
   expiresAt: Date;
   room: RoomSummary;
   connectionPlan: ConnectionPlan;
+  protocolFlowNonce: string;
 }
 
 interface JoinCompatibilityContext {
@@ -345,10 +375,6 @@ export class LobbyStore {
   }
 
   createRoom(input: CreateRoomInput, remoteAddress: string, now = new Date()): CreateRoomResult {
-    const roomId = this.id();
-    const controlChannelId = this.id();
-    const roomSessionId = this.id();
-    const hostToken = randomToken();
     const password = input.password?.trim();
     const modList = normalizeModList(input.modList ?? []);
     const hostModInventory = input.hostModInventory === undefined
@@ -360,12 +386,11 @@ export class LobbyStore {
     const hostModInventoryHash = hostModInventory === undefined
       ? undefined
       : createHash("sha256").update(canonicalModInventoryJson(hostModInventory)).digest("hex");
-    const protocolProfile = normalizeProtocolProfile(
-      input.protocolProfile,
-      input.maxPlayers,
-      input.modVersion,
-      modList,
-    );
+    const { clientVersion, generation, profile, selection } = this.resolveCreateProtocol(input);
+    const roomId = this.id();
+    const controlChannelId = this.id();
+    const roomSessionId = this.id();
+    const hostToken = randomToken();
     const room: Room = {
       roomId,
       roomName: input.roomName.trim(),
@@ -378,11 +403,14 @@ export class LobbyStore {
       maxPlayers: input.maxPlayers,
       version: input.version.trim(),
       modVersion: input.modVersion.trim(),
+      clientVersion,
+      clientApiGeneration: generation,
       modList,
       wireCacheSignatureV1: normalizeWireCacheSignatureV1(input.wireCacheSignatureV1),
       hostModInventory,
       hostModInventoryHash,
-      protocolProfile,
+      protocolProfileV2: profile,
+      protocolSelection: selection,
       relayState: "disabled",
       createdAt: now,
       lastHeartbeatAt: now,
@@ -430,6 +458,7 @@ export class LobbyStore {
       hostToken,
       heartbeatIntervalSeconds: Math.max(3, Math.floor(this.config.heartbeatTimeoutMs / 3000)),
       room: this.toRoomSummary(room),
+      protocolSelection: room.protocolSelection,
     };
   }
 
@@ -496,6 +525,9 @@ export class LobbyStore {
           : "join request declared a public slot id as clientInstallationId",
       );
     }
+    const clientVersion = normalizeClientVersion(input.clientVersion, input.modVersion);
+    const clientApiGeneration = classifyClientVersion(input.clientVersion, input.modVersion);
+    const protocolFlowNonce = randomBytes(16).toString("hex");
     const ticket: JoinTicket = {
       ticketId: this.id(),
       roomId,
@@ -506,6 +538,12 @@ export class LobbyStore {
       issuedAt: now,
       expiresAt: new Date(now.getTime() + this.config.ticketTtlMs),
       connectionPlan,
+      clientVersion,
+      clientApiGeneration,
+      protocolProfileV2: room.protocolProfileV2,
+      protocolSelection: room.protocolSelection,
+      joinerCapabilityDigest: room.protocolSelection.capabilityDigest,
+      protocolFlowNonce,
     };
     this.tickets.set(ticket.ticketId, ticket);
 
@@ -517,6 +555,7 @@ export class LobbyStore {
       expiresAt: ticket.expiresAt,
       room: this.toRoomSummary(room),
       connectionPlan,
+      protocolFlowNonce,
     };
   }
 
@@ -533,6 +572,24 @@ export class LobbyStore {
     const requestedWireCacheSignatureV1 = normalizeWireCacheSignatureV1(input.wireCacheSignatureV1);
     const availableSavedRunSlots = getAvailableSavedRunSlots(room);
     const canResumeSavedRun = room.savedRun !== undefined && availableSavedRunSlots.length > 0;
+
+    const joinerGeneration = this.runProtocolValidation(() =>
+      classifyClientVersion(input.clientVersion, input.modVersion));
+    const joinerVersion = this.runProtocolValidation(() =>
+      normalizeClientVersion(input.clientVersion, input.modVersion));
+    const joinerProfile = this.runProtocolValidation(() => parseRequestedProfile({
+      generation: joinerGeneration,
+      legacyProfile: joinerGeneration === "compat_0_3_0_5" ? "extended_8p" : undefined,
+      canonicalProfile: joinerGeneration === "canonical_0_6_plus" ? room.protocolProfileV2 : undefined,
+    }));
+    if (joinerProfile !== room.protocolProfileV2) {
+      throw new LobbyStoreError(409, "protocol_profile_unsupported", "加入者不支持房间冻结的多人协议。");
+    }
+    const joinerOffer = this.resolveOffer(joinerGeneration, joinerVersion, input.protocolOffer);
+    this.runProtocolValidation(() => assertJoinerCompatible(room.protocolSelection, joinerOffer));
+    if (joinerVersion.length === 0) {
+      throw new LobbyStoreError(426, "client_update_required", "客户端版本无效。");
+    }
 
     const clientInstallationId = this.resolveClientInstallationIdentity(
       room,
@@ -702,20 +759,33 @@ export class LobbyStore {
     hostSession.relayState = relayState;
   }
 
-  validateHostControl(roomId: string, controlChannelId: string, token: string) {
+  validateHostControl(
+    roomId: string,
+    controlChannelId: string,
+    token: string,
+    clientVersion?: string,
+    capabilityDigest?: string,
+  ) {
     const hostSession = this.requireHostSession(roomId);
     if (hostSession.controlChannelId !== controlChannelId) {
       throw new LobbyStoreError(401, "invalid_control_channel", "控制通道无效。");
     }
 
     this.assertHostToken(hostSession, token);
+    this.assertControlProtocol(this.requireRoom(roomId), clientVersion, capabilityDigest);
     if (hostSession.legacyIdentityMode) {
       this.logLegacyIdentityMode(hostSession, "create request omitted clientInstallationId");
     }
     return hostSession;
   }
 
-  validateClientControl(roomId: string, controlChannelId: string, ticketId: string) {
+  validateClientControl(
+    roomId: string,
+    controlChannelId: string,
+    ticketId: string,
+    clientVersion?: string,
+    capabilityDigest?: string,
+  ) {
     const hostSession = this.requireHostSession(roomId);
     if (hostSession.controlChannelId !== controlChannelId) {
       throw new LobbyStoreError(401, "invalid_control_channel", "控制通道无效。");
@@ -733,6 +803,12 @@ export class LobbyStore {
 
     if (ticket.controlBindingId !== undefined) {
       throw new LobbyStoreError(401, "ticket_already_redeemed", "加入票据已使用。请重新加入房间获取新票据。");
+    }
+
+    if (ticket.protocolProfileV2 === "tail_v1") {
+      if (clientVersion !== ticket.clientVersion || capabilityDigest !== ticket.joinerCapabilityDigest) {
+        throw new LobbyStoreError(409, "capability_digest_mismatch", "控制通道协议能力与加入票据不一致。");
+      }
     }
 
     const room = this.requireRoom(roomId);
@@ -768,6 +844,7 @@ export class LobbyStore {
       clientInstallationId: ticket.clientInstallationId,
       identityKind: ticket.identityKind,
       boundAt: new Date(),
+      protocolFlowNonce: ticket.protocolFlowNonce,
     };
     if (binding.playerNetId !== undefined) {
       this.rememberClientControlBinding(binding);
@@ -868,6 +945,7 @@ export class LobbyStore {
           bindingId: binding.bindingId,
           playerNetId: binding.playerNetId,
           playerName: binding.playerName,
+          protocolFlowNonce: binding.protocolFlowNonce,
         });
       }
     }
@@ -1095,6 +1173,74 @@ export class LobbyStore {
     }
   }
 
+  private resolveCreateProtocol(input: CreateRoomInput) {
+    return this.runProtocolValidation(() => {
+      const generation = classifyClientVersion(input.clientVersion, input.modVersion);
+      const clientVersion = normalizeClientVersion(input.clientVersion, input.modVersion);
+      const profile = parseRequestedProfile({
+        generation,
+        legacyProfile: input.protocolProfile,
+        canonicalProfile: input.protocolProfileV2,
+      });
+      const offer = this.resolveOffer(generation, clientVersion, input.protocolOffer);
+      const selection = selectRoomProtocol(offer, {
+        profile,
+        lanProtocolMin: 1,
+        lanProtocolMax: 1,
+        maxPlayers: input.maxPlayers,
+        gameVersion: input.version,
+        wireCacheSignatureV1: normalizeWireCacheSignatureV1(input.wireCacheSignatureV1),
+      });
+      return { clientVersion, generation, profile, selection };
+    });
+  }
+
+  private resolveOffer(
+    generation: ClientApiGeneration,
+    clientVersion: string,
+    offer?: ProtocolOffer,
+  ): ProtocolOffer {
+    if (offer !== undefined) {
+      if (offer.clientVersion !== clientVersion) {
+        throw new LobbyStoreError(400, "protocol_profile_unsupported", "protocolOffer.clientVersion 与请求客户端版本不一致。", {
+          requiredClientVersion: clientVersion,
+        });
+      }
+      return offer;
+    }
+    if (generation === "compat_0_3_0_5") {
+      return Object.freeze({
+        lanProtocolMin: 0,
+        lanProtocolMax: 0,
+        clientVersion,
+        ritsuLibPresent: false,
+        ritsuLibSidecarAvailable: false,
+      });
+    }
+    throw new LobbyStoreError(400, "protocol_profile_unsupported", "0.6 客户端必须提交 protocolOffer。", {
+      requiredClientVersion: "0.6.0-alpha.1",
+    });
+  }
+
+  private runProtocolValidation<T>(callback: () => T): T {
+    try {
+      return callback();
+    } catch (error) {
+      if (error instanceof LobbyStoreError) throw error;
+      if (error instanceof ProtocolContractError) {
+        throw new LobbyStoreError(error.statusCode, error.code, error.message, error.details);
+      }
+      throw error;
+    }
+  }
+
+  private assertControlProtocol(room: Room, clientVersion?: string, capabilityDigest?: string): void {
+    if (room.protocolProfileV2 !== "tail_v1") return;
+    if (clientVersion !== room.clientVersion || capabilityDigest !== room.protocolSelection.capabilityDigest) {
+      throw new LobbyStoreError(409, "capability_digest_mismatch", "控制通道协议能力与房间不一致。");
+    }
+  }
+
   private removeRoom(roomId: string) {
     this.rooms.delete(roomId);
     this.hostSessions.delete(roomId);
@@ -1110,7 +1256,6 @@ export class LobbyStore {
   private toRoomSummary(room: Room): RoomSummary {
     const relayState = this.hostSessions.get(room.roomId)?.relayState ?? "disabled";
     const visibleStatus = getPublicRoomStatus(room);
-    const protocolProfile = resolveRoomProtocolProfile(room);
     return {
       roomId: room.roomId,
       roomName: room.roomName,
@@ -1122,7 +1267,9 @@ export class LobbyStore {
       maxPlayers: room.maxPlayers,
       version: room.version,
       modVersion: room.modVersion,
-      protocolProfile,
+      protocolProfile: projectProfile(room.protocolProfileV2, "compat_0_3_0_5") as LegacyProtocolProfile,
+      protocolProfileV2: room.protocolProfileV2,
+      protocolSelection: room.protocolSelection,
       relayState,
       createdAt: room.createdAt,
       lastHeartbeatAt: room.lastHeartbeatAt,
@@ -1287,41 +1434,6 @@ function compareComparableVersions(left: string, right: string) {
   }
 
   return 0;
-}
-
-function isLegacyCompatibleModVersion(modVersion: string) {
-  const comparison = compareComparableVersions(modVersion, LegacyCompatibleModVersion);
-  return comparison != null && comparison <= 0;
-}
-
-function advertisesRmpMod(modList: string[]) {
-  return modList.some((value) => value.localeCompare(RmpAdvertisedModId, "en", { sensitivity: "accent" }) === 0);
-}
-
-function normalizeProtocolProfile(
-  requestedProfile: string | undefined,
-  maxPlayers: number,
-  modVersion: string,
-  modList: string[],
-): ProtocolProfile {
-  const normalized = requestedProfile?.trim().toLowerCase();
-  if (normalized === Legacy4pProtocolProfile) {
-    return Legacy4pProtocolProfile;
-  }
-
-  if (normalized === Extended8pProtocolProfile) {
-    return Extended8pProtocolProfile;
-  }
-
-  if (maxPlayers === 4 && isLegacyCompatibleModVersion(modVersion) && !advertisesRmpMod(modList)) {
-    return Legacy4pProtocolProfile;
-  }
-
-  return Extended8pProtocolProfile;
-}
-
-function resolveRoomProtocolProfile(room: Pick<Room, "protocolProfile" | "maxPlayers" | "modVersion" | "modList">) {
-  return normalizeProtocolProfile(room.protocolProfile, room.maxPlayers, room.modVersion, room.modList);
 }
 
 function hashPassword(password: string) {

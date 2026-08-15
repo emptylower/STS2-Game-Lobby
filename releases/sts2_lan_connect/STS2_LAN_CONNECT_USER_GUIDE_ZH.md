@@ -10,13 +10,17 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端测试候选为 [`0.5.6-rc4`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc4)，lobby-service 继续使用 `0.5.6-rc1`；这不是正式版，最新正式客户端仍为 [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)。同房玩家必须统一客户端版本，安装或更新后必须完整重启游戏。
+当前客户端与 lobby-service 测试候选均为 `0.6.0-alpha.1`，两端必须同步升级。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
 
-## v0.5.6-rc4 RitsuLib Harmony 补丁桥测试
+## v0.6.0-alpha.1 双协议房间
 
-- RC3 用户日志确认客户端在启动时组合 RitsuLib postfix 与 LAN prefix 会触发 `InvalidProgramException`，7 个必需补丁只安装 6 个后全部回滚，实际未进入大厅联机流程。
-- RC4 会先卸载冲突的 RitsuLib postfix，再安装 LAN prefix；开局消息按 5-bit 玩家列表写完后，通过兼容桥继续追加 RitsuLib 运行数据尾部。失败时恢复 RitsuLib 原补丁。
-- 正常启动日志应出现 `patches applied=7, failed=0` 和 `ritsuTailBridge=True`。开局时房主应记录 `lobby begin-run forced at message-bus boundary`、`lobbyListBits=5` 与 `ritsuTail=True`。
+- 建房默认选择兼容模式：固定 `4/5-bit`、2-8 人、不允许 RitsuLib。
+- 0.6 新协议保持原版 `2/3-bit` 主体，以 LAN protocol v1 携带完整 roster；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用公开 typed-sidecar carrier。
+- 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合会在 ticket 与 transport 前拒绝。
+- 本版不卸载、不直接调用也不恢复 RitsuLib 私有 Harmony postfix，不维护 RitsuLib 分支。
+- 官方 RitsuLib v0.5.12 在当前 Android v0.111.0 环境初始化自身网络补丁时会黑屏；Android 玩家应保持 RitsuLib 禁用。本测试版已验证无 Ritsu 的 Android/macOS 真实开局，但不宣称全 Ritsu Android 联机可用。
+- direct-IP 在 alpha.1 中只支持兼容模式，本地 Ritsu 或 Tail intent 会在建立连接前拒绝。
+- 历史客户端真实互通不在本 alpha 的测试门禁中。
 - 加入前会比较双方实际使用的 ModelId 线上编码。内容 MOD 组合不同并改变 net-id 表或位宽时，现在会明确提示不一致并拒绝加入，而不是进入后黑屏或一方卡在等待页；这是预期行为。
 - `affects_gameplay: false` 只表示该 MOD 不进入原版 `idDatabaseHash`，不保证它不会占用 ModelId。新签名会补上这层检查；签名缺失或读取失败时仍允许加入。
 - 默认兼容配置已从测试用 relaxed 恢复为 strict。普通 MOD 差异的显式 relaxed 入口不能跳过真实线上编码或游戏版本不一致。
@@ -112,8 +116,8 @@
 ## 房主流程
 
 1. 打开 `游戏大厅`，点击 `创建房间`
-2. 填写房间名，选择类型，可选填密码；最大人数默认 8 人，上限 8 人
-3. 如需与 `0.2.2` 玩家兼容联机，请将房间人数设为 `4`；`5-8` 人房仅支持 `0.2.3+`
+2. 填写房间名，选择类型和联机协议，可选填密码；最大人数支持 2-8 人，默认 8 人
+3. 默认 `兼容旧版客户端（默认）` 支持 LAN Connect `0.3-0.5` 加入且禁止 RitsuLib；`0.6 新协议（RitsuLib 状态必须一致）` 仅支持 `0.6+`
 4. 发布成功后，客户端会自动启动本地 ENet Host、向大厅注册房间并持续发送心跳保活
 
 ## 玩家流程
@@ -190,10 +194,10 @@
 - 默认连接策略由安装包内的 `lobby-defaults.json` 决定，可选 `direct-first`、`relay-first` 或 `relay-only`
 - 公开包默认使用阿里云大厅 `47.111.146.69:8787` 作为兜底社区节点，并通过 CF 发现入口 `https://sts2-gamelobby-register.xyz` + 内置种子聚合可用服务器；测试节点 `101.35.217.99:8788` 固定排在服务器列表第一位。显示“支持 0.5.1+ MOD 同步”的服务器已实时声明加入前 gameplay MOD 预检/Workshop 同步能力；旧的 `47.111.146.69:18787` 公开目录在 v0.4.0 中不再参与运行时发现
 - 兼容矩阵当前统一规则为：
-  - `4` 人房发布 `legacy_4p`，用于兼容 `0.2.2`
-  - `5-8` 人房发布 `extended_8p`，仅支持 `0.2.3+`
-  - 客户端实际日志 / 调试报告会同时记录 `compatibilityProfile`、`connectionStrategy`、`effectiveMaxPlayers`、`publishedProtocolProfile`
-- MOD 内置 5-8 人支持；`4` 人房自动启用 `legacy_4p` 兼容协议，可与 `0.2.2` 联机；`5-8` 人房仅支持 `0.2.3+`
+  - `compat_4_5_v1` 固定使用历史 `4/5-bit`，支持 2-8 人，禁止 RitsuLib
+  - `tail_v1` 固定使用原版 `2/3-bit` 主体和 LAN protocol v1；无 RitsuLib 使用 standalone carrier，有 RitsuLib 必须全员一致并等待公开 sidecar gate
+  - 客户端实际日志 / 调试报告会同时记录 `compatibilityProfile`、`connectionStrategy`、`effectiveMaxPlayers`、`publishedProtocolProfile`、`carrier` 和 `capabilityDigest`
+- MOD 内置 2-8 人支持；房间人数不再决定协议，建房时选择的协议在房间生命周期内冻结
 - 检测到 RMP 等外部扩展人数 MOD 时，内置补丁会自动跳过以避免冲突
 - `切换服务器` 从 CF 发现入口、本地缓存与内置种子聚合可用大厅，并将选择写入客户端的 HTTP 覆盖设置
 - 大厅显示的服务延迟来自独立探测，不是房间列表接口总耗时
@@ -230,7 +234,7 @@
 - `version_mismatch` 通常表示游戏版本、协议版本或关键数据版本不一致
 - `mod_mismatch` / `mod_version_mismatch` 表示双方 STS2 LAN Connect 或相关联机 MOD 组合不一致
 - 所有联机玩家应尽量使用同一批 release，并核对 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号
-- `4` 人房兼容 `0.2.2` 的 `legacy_4p`；`5-8` 人房要求 `0.2.3+` 的 `extended_8p`
+- `0.2.x` 客户端不再支持；`0.3-0.5` 只能加入兼容房，`tail_v1` 房间要求 `0.6+`
 
 ### 提示房间已满 / 已关闭 / 已开局
 
@@ -279,13 +283,15 @@
 
 # STS2 LAN Connect User Guide
 
-The current client test candidate is [`0.5.6-rc4`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.6-rc4), while lobby-service remains on `0.5.6-rc1`. This is not a final release; the latest stable client remains [`0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5). Every player in a room must use the same client version and fully restart the game after updating.
+The current client and lobby-service candidate is `0.6.0-alpha.1`. Both sides must upgrade together. This is not a final release; every player must use the same client and game version and fully restart after updating.
 
-## v0.5.6-rc4 RitsuLib Harmony Patch Bridge Testing
+## v0.6.0-alpha.1 Dual-Protocol Rooms
 
-- RC3 user logs confirmed that composing the RitsuLib postfix with the LAN prefix throws `InvalidProgramException` during startup. Only 6 of 7 required patches were installed before the entire set was rolled back, so the client never entered the lobby flow.
-- RC4 detaches the conflicting RitsuLib postfix before installing the LAN prefix. After writing the 5-bit begin-run body, the compatibility bridge invokes the RitsuLib run-data tail writer directly. A failed initialization restores the original RitsuLib patch.
-- Healthy startup logs show `patches applied=7, failed=0` and `ritsuTailBridge=True`. When the host starts the run, logs show `lobby begin-run forced at message-bus boundary`, `lobbyListBits=5`, and `ritsuTail=True`.
+- Compat is the default: fixed `4/5-bit`, 2-8 players, and no RitsuLib.
+- Tail v1 preserves the vanilla `2/3-bit` body and carries the full roster in LAN protocol v1. No-Ritsu rooms use standalone Tail; all-Ritsu rooms use the public typed-sidecar API.
+- Ritsu-present peers can connect only to Ritsu-present peers; Ritsu-absent peers can connect only to Ritsu-absent peers. Mixed presence is rejected before ticket and transport allocation.
+- The RC4 private-postfix bridge is removed. LAN Connect does not detach, invoke, or restore private RitsuLib Harmony patches.
+- Direct IP is compat-only in alpha.1. Historical-client interoperability is outside this release gate.
 - The join flow now compares the actual ModelId wire encoding. Content-MOD sets that change net-id tables or bit widths are intentionally rejected before a black screen or stuck waiting room.
 - `affects_gameplay: false` only excludes a MOD from vanilla `idDatabaseHash`; it does not guarantee that the MOD takes no ModelIds. The new signature covers that gap and remains fail-open when unavailable.
 - The shipped profile is `strict` again. Explicit relaxed handling for ordinary MOD differences cannot bypass a genuine wire-signature or game-version mismatch.
@@ -381,8 +387,8 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 ## Host Flow
 
 1. Open `Game Lobby` and click `Create Room`
-2. Enter a room name, choose a room type, and optionally set a password; max players defaults to 8 (upper limit: 8)
-3. To allow `0.2.2` players to join, set max players to `4`; rooms of `5-8` require `0.2.3+`
+2. Enter a room name, choose a room type and protocol, and optionally set a password; max players supports 2-8 and defaults to 8
+3. The default compat mode supports LAN Connect `0.3-0.5` and forbids RitsuLib; Tail v1 requires `0.6+` and matching RitsuLib presence
 4. After a successful publish, the client automatically starts the local ENet Host, registers the room with the lobby, and sends periodic heartbeats
 
 ## Player Flow
@@ -458,10 +464,10 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 - The default connection strategy is determined by `lobby-defaults.json` in the installation package: `direct-first`, `relay-first`, or `relay-only`
 - The public release defaults to the Alibaba Cloud lobby at `47.111.146.69:8787` as a fallback community node and aggregates available servers through the CF discovery worker `https://sts2-gamelobby-register.xyz` plus bundled seed peers. Test node `101.35.217.99:8788` is always pinned first. Servers tagged `Supports 0.5.1+ MOD Sync` have declared live gameplay-MOD preflight/Workshop sync capability. The legacy `47.111.146.69:18787` directory is no longer used for runtime discovery in v0.4.0
 - The compatibility matrix is currently unified as:
-  - `4`-player rooms publish `legacy_4p` for `0.2.2` compatibility
-  - `5-8`-player rooms publish `extended_8p` and require `0.2.3+`
-  - Client runtime logs and debug reports record `compatibilityProfile`, `connectionStrategy`, `effectiveMaxPlayers`, and `publishedProtocolProfile`
-- MOD supports 2-8 players natively; 4-player rooms automatically use the `legacy_4p` compatibility protocol for `0.2.2` clients; 5-8 player rooms require `0.2.3+`
+  - `compat_4_5_v1` always uses fixed historical `4/5-bit`, supports 2-8 players, and forbids RitsuLib
+  - `tail_v1` keeps the vanilla `2/3-bit` body and LAN protocol v1; no-Ritsu rooms use standalone carrier, while Ritsu rooms require homogeneous presence and the public sidecar gate
+  - Client runtime logs and debug reports record `compatibilityProfile`, `connectionStrategy`, `effectiveMaxPlayers`, `publishedProtocolProfile`, `carrier`, and `capabilityDigest`
+- MOD supports 2-8 players natively; player count no longer selects the wire protocol, and the selected protocol is frozen for the room lifetime
 - If external player-count expansion MODs such as RMP are detected, the built-in patch skips automatically to avoid conflicts
 - `Switch Server` aggregates available lobbies from the CF discovery worker, local cache, and bundled seed peers, then writes the selected lobby to client override settings
 - The latency shown in the lobby comes from an independent probe, not the total round-trip time of the room list request
@@ -498,7 +504,7 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 - `version_mismatch` usually means the game version, protocol layer, or critical data version does not line up
 - `mod_mismatch` / `mod_version_mismatch` means the STS2 LAN Connect build or related multiplayer MOD set differs between peers
 - All players should use the same release batch whenever possible, and verify the version in `mods/sts2_lan_connect/sts2_lan_connect.json`
-- `4`-player rooms use the `legacy_4p` compatibility path for `0.2.2`; `5-8`-player rooms require `0.2.3+` with `extended_8p`
+- `0.2.x` clients are no longer supported; `0.3-0.5` clients can only join compat rooms, while `tail_v1` requires `0.6+`
 
 ### Room full / closed / already started
 

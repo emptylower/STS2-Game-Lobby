@@ -18,6 +18,7 @@
 - 0.6 新协议保持原版 `2/3-bit` 主体，以 LAN protocol v1 携带完整 roster；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用公开 typed-sidecar carrier。
 - 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合会在 ticket 与 transport 前拒绝。
 - 本版不卸载、不直接调用也不恢复 RitsuLib 私有 Harmony postfix，不维护 RitsuLib 分支。
+- 官方 RitsuLib v0.5.12 在当前 Android v0.111.0 环境初始化自身网络补丁时会黑屏；Android 玩家应保持 RitsuLib 禁用。本测试版已验证无 Ritsu 的 Android/macOS 真实开局，但不宣称全 Ritsu Android 联机可用。
 - direct-IP 在 alpha.1 中只支持兼容模式，本地 Ritsu 或 Tail intent 会在建立连接前拒绝。
 - 历史客户端真实互通不在本 alpha 的测试门禁中。
 - 加入前会比较双方实际使用的 ModelId 线上编码。内容 MOD 组合不同并改变 net-id 表或位宽时，现在会明确提示不一致并拒绝加入，而不是进入后黑屏或一方卡在等待页；这是预期行为。

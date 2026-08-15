@@ -399,7 +399,7 @@ The evidence document must contain this exact decision table:
 | Private resolver bridge removal | PASS/BLOCKED | direct `INetGameService` runtime result |
 ```
 
-If the all-Ritsu sidecar/barrier, Android, or bridge-removal gate is `BLOCKED`, explicitly state: “RitsuLib homogeneous-room support is removed from the executable alpha scope pending design review; the RC4 private bridge and independent double-Tail remain prohibited.” Record Task 2's pre-ticket mismatch gate as a required downstream gate, not Task 0 PASS evidence. Extension inventory/classification is not a gate and must not be inspected.
+If the all-Ritsu sidecar/barrier or Android Ritsu gate is `BLOCKED`, give that path a separate `NO-GO / EXTERNALLY BLOCKED` verdict, keep public-sidecar readiness fail-closed, and do not advertise cross-platform all-Ritsu support. The completed no-Ritsu path and presence-mismatch gate may still enter the alpha when their own evidence passes. The RC4 private bridge and independent double-Tail remain prohibited. Record Task 2's pre-ticket Ritsu presence-mismatch gate as a required downstream gate, not Task 0 PASS evidence. Extension inventory/classification is not a gate and must not be inspected.
 
 - [ ] **Step 10: Commit prototype source and evidence only**
 
@@ -1566,7 +1566,8 @@ Required smoke cases for this user-authorized alpha scope (Windows-specific real
 
 ```text
 Android <-> macOS
-Tail success: no Ritsu/no Ritsu and Ritsu/Ritsu
+Tail success required for alpha: no Ritsu/no Ritsu
+Separate all-Ritsu verdict: Ritsu/Ritsu; external Ritsu initialization failure is BLOCKED/NO-GO for that path and does not authorize a compatibility workaround
 Tail rejection: Ritsu host/no-Ritsu joiner and no-Ritsu host/Ritsu joiner before ticket
 Tail readiness rejection: Ritsu host or joiner with sidecar unavailable before transport
 Direct-IP: compat only; local Ritsu and any Tail intent rejected before transport

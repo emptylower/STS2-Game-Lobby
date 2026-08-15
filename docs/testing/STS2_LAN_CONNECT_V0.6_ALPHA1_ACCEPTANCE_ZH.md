@@ -8,10 +8,10 @@
 
 | 门禁 | 状态 | 证据 |
 |---|---|---|
-| lobby-service typecheck/tests | PASS | 2026-08-15 最终 `verify-release.sh`：604 pass / 0 fail |
+| lobby-service typecheck/tests | PASS | 2026-08-16 最终 `verify-release.sh`：604 pass / 0 fail |
 | xUnit 全量 | PASS | 1084 pass / 1 skip / 0 fail |
 | GdUnit 全量（真实 RitsuLib 程序集） | PASS | 348 pass / 0 fail；测试程序集显式传入官方 RitsuLib v0.5.12 DLL |
-| 临时包 release gate | PASS | client SHA-256 `56b661d0ac356954612e297188a4b77af675850ec744aae03e06efad956235a3`；service SHA-256 `da8439f4726f1c7e46e31bab27d01bf42e91d01d195ff6431c8500903438f786` |
+| 临时包 release gate | PASS | client SHA-256 `81db4e16720f7574d2180dd051aa1b85ebfec9a69643226b301331620154c076`；service SHA-256 `da8439f4726f1c7e46e31bab27d01bf42e91d01d195ff6431c8500903438f786` |
 | 包内无 Ritsu/game/prototype DLL | PASS | 包内容 allowlist、installer dry-run、法律文件和 forbidden DLL 扫描通过 |
 
 ## 行为门禁
@@ -50,6 +50,14 @@
 - Ritsu/Ritsu runtime carrier：BLOCKED（外部依赖）。RitsuLib v0.5.12 在 Android 自身网络 patch 初始化阶段无响应，早于 LAN Connect sidecar flow；不通过维护 RitsuLib 分支规避。
 - Windows：WAIVED。按维护者明确决定不要求单独实机验证，构建和包门禁继续通过。
 
+## 2026-08-16 发布复核
+
+- RitsuLib 本地仓库已快进到官方 `v0.5.12`（commit `7eb1c68112166fdb1f08316616bb1c32eee66692`）；GitHub 单版本发布 ZIP SHA-256 为 `b7eed47d1570129ab028839a01eefc5721f4571eee2f49b07c2820e01853ebb8`，v0.111.0 DLL SHA-256 为 `7303da3eba870a68b6b76821c52d9f5b86e220a1464da2b3deef2007642be5f1`。
+- macOS Ritsu 启动：PASS。framework 完整初始化，3 个动态消息补丁成功，游戏进入主菜单；这只证明启动，不冒充 macOS/macOS 双端联机。
+- Android Ritsu 启动：BLOCKED。`RitsuNetMessageBusTailPatches.ApplySerializePatches` 调用 Harmony detour 时报告 `BUG: Unreferenced static string to 0: _initialize`，90 秒后仍为黑屏，未进入 sidecar flow。
+- 最终完整 `verify-release.sh`：PASS。Lobby service 604/604；xUnit 1084 pass / 1 intentional skip；真实 Ritsu v0.5.12 程序集 GdUnit 348/348；客户端构建 0 warning / 0 error；双包 allowlist、法律文件与安装器 dry-run 全部通过。
+- 本次发布已获维护者明确授权，客户端和 lobby-service 均有源码/版本更新，因此 GitHub Pre-release 必须同时附带两个 ZIP。
+
 ## 结论
 
-**分路径结论**：no-Ritsu `tail_v1` 的实现、Android / macOS 真实联机和发布自动化均为 **GO**。presence mismatch 的大厅门禁为 **GO**。全 Ritsu Android 路径因 RitsuLib v0.5.12 自身初始化问题为 **NO-GO / EXTERNALLY BLOCKED**；LAN Connect 保持 fail-closed，且不承担 RitsuLib 分支维护。未创建 tag、推送或 GitHub Release。
+**分路径结论**：no-Ritsu `tail_v1` 的实现、Android / macOS 真实联机和发布自动化均为 **GO**。presence mismatch 的大厅门禁为 **GO**。全 Ritsu Android 路径因 RitsuLib v0.5.12 自身初始化问题为 **NO-GO / EXTERNALLY BLOCKED**；LAN Connect 保持 fail-closed，且不承担 RitsuLib 分支维护。`v0.6.0-alpha.1` 只作为 GitHub Pre-release 发布，不改变 `v0.5.5` 的稳定版定位。

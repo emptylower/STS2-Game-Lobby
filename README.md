@@ -48,6 +48,7 @@
 - 0.6 新协议保持原版 `2/3-bit` 消息主体，完整 roster 由 LAN protocol v1 携带
 - 无 RitsuLib 房间使用 standalone carrier；全员 RitsuLib 房间只使用公开 typed-sidecar API
 - 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合在 ticket 和 transport 前拒绝
+- Android 上的官方 RitsuLib v0.5.12 在自身网络补丁初始化阶段黑屏，因此本测试版不宣称全 Ritsu Android 联机可用；无 Ritsu Android/macOS 已完成真实开局验证
 - 删除 RC4 对 RitsuLib 私有 postfix 的卸载、直接调用和恢复逻辑，不维护 RitsuLib 分支
 - direct-IP 在 alpha.1 中只允许兼容模式，本地 Ritsu 或 Tail intent 在创建 transport 前拒绝
 - 客户端与 lobby-service 必须同步升级到 `0.6.0-alpha.1`
@@ -57,7 +58,7 @@
 
 - 客户端源码 / 构建版本：`0.6.0-alpha.1`（测试候选）
 - 大厅服务源码 / 构建版本：`0.6.0-alpha.1`（测试候选）
-- 当前测试候选：`v0.6.0-alpha.1`（尚未发布）
+- 当前测试候选：[`v0.6.0-alpha.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.1)（GitHub Pre-release）
 - 最新 GitHub 稳定版：[`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
 - Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（候选版测试公告见 `docs/STEAM_WORKSHOP_UPDATE_V0.5.6_ZH.txt`）
 
@@ -228,6 +229,7 @@ Each `lobby-service` node advertises itself to peers via the built-in peer-annou
 - Tail v1 preserves the vanilla `2/3-bit` body and carries the complete roster in LAN protocol v1.
 - No-Ritsu rooms use the standalone carrier; all-Ritsu rooms use only the public typed-sidecar API.
 - Ritsu-present peers connect only to Ritsu-present peers, while Ritsu-absent peers connect only to Ritsu-absent peers. Mixed presence is rejected before ticket and transport allocation.
+- Official RitsuLib v0.5.12 currently fails while initializing its own networking patches on Android. This prerelease does not claim all-Ritsu Android support; no-Ritsu Android/macOS has completed a real two-player run-start smoke.
 - The RC4 private-postfix detach/invoke/restore bridge is removed. LAN Connect does not maintain a RitsuLib fork.
 - Direct IP is compat-only in alpha.1. Historical-client interoperability is not part of this alpha gate.
 
@@ -235,7 +237,7 @@ Each `lobby-service` node advertises itself to peers via the built-in peer-annou
 
 - Client source/build version: `0.6.0-alpha.1` (prerelease candidate)
 - Lobby service source/build version: `0.6.0-alpha.1` (prerelease candidate)
-- Current release candidate: `v0.6.0-alpha.1` (not published)
+- Current release candidate: [`v0.6.0-alpha.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.1) (GitHub prerelease)
 - Latest stable GitHub release: [`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
 - Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 
