@@ -8,7 +8,6 @@ CLIENT_DIR="$ROOT_DIR/sts2-lan-connect/release/sts2_lan_connect"
 CLIENT_ZIP="$ROOT_DIR/sts2-lan-connect/release/sts2_lan_connect-release.zip"
 SERVICE_DIR="$ROOT_DIR/lobby-service/release/sts2_lobby_service"
 SERVICE_ZIP="$ROOT_DIR/lobby-service/release/sts2_lobby_service.zip"
-PUBLIC_RELEASES_DIR="$REPO_DIR/releases"
 
 usage() {
   cat <<'EOF'
@@ -88,6 +87,8 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+PUBLIC_RELEASES_DIR="$REPO_DIR/releases"
 
 [[ -d "$REPO_DIR/.git" ]] || die "Public repo '$REPO_DIR' is not a git clone."
 [[ -d "$CLIENT_DIR" ]] || die "Client release directory not found: $CLIENT_DIR"

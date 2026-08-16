@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.6.0-alpha.4] - 2026-08-16
+
+客户端与 lobby-service `0.6.0-alpha.4` SL 协议身份修复测试版。
+
+### Fixed
+
+- 修复保存房间绑定时只保留基础字段、静默丢失 profile、carrier、RitsuLib presence、WireCache 签名与 capability digest，导致 SL/读档重新发布时协商成错误协议的问题。
+- 续局重新发布会优先复用存档冻结的协议选择；无已保存选择时按当前 RitsuLib presence 选择安全的兼容或 Tail fallback。
+- lobby-service 不再把区分大小写的 Base64URL WireCache 签名转为小写；客户端比较旧服务返回值时保持兼容，避免对已部署服务产生 `capability_digest_mismatch`。
+
+### Verification
+
+- 新增协议绑定完整持久化与续局发布选择回归测试。
+- macOS 使用 `--force-steam=off` 真实读取先前失败的多人存档并重新发布，Android 无 Ritsu 客户端成功以原槽位加入，服务端显示 2 个已连接存档槽位。
+- macOS 官方 RitsuLib v0.5.12 完成 415/415 核心补丁与 3/3 动态补丁并成功创建 `tail_v1` 房间，sidecar 绑定为 `Host, netId=1`。
+- Android 官方 RitsuLib v0.5.12 仍在自身 `ApplySerializePatches` 初始化阶段失败；本版不宣称 Android Ritsu 可用。
+
 ## [0.6.0-alpha.3] - 2026-08-16
 
 客户端 `0.6.0-alpha.3` RitsuLib 联机时序修复测试版；lobby-service 继续使用 `0.6.0-alpha.1`。

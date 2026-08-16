@@ -51,6 +51,13 @@ test("strictly parses bounded capability offers", () => {
   assert.throws(() => parseProtocolOffer({ ...offer(false), clientVersion: "" }));
 });
 
+test("preserves case-sensitive Base64URL wire cache signatures", () => {
+  const signature = "wcv1:D5-qRxko7ywoZJWzaOM9Q49NNOWP1Jr2qXc_Nk204uU";
+  const selection = selectRoomProtocol(offer(false), policy("tail_v1", `  ${signature}  `));
+
+  assert.equal(selection.wireCacheSignature, signature);
+});
+
 test("matches reviewed capability digest vectors", () => {
   const url = new URL("../../test-fixtures/protocol/v0.6/capability-digest-v1.json", import.meta.url);
   const vectors = JSON.parse(readFileSync(url, "utf8")) as Array<{

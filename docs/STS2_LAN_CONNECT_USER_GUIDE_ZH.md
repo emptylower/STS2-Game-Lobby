@@ -10,12 +10,13 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端测试版为 `0.6.0-alpha.3`，lobby-service 继续使用 `0.6.0-alpha.1`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+当前客户端与 lobby-service 测试版均为 `0.6.0-alpha.4`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。自建服务建议同步升级，alpha.4 客户端仍兼容尚未升级的旧服务。
 
-## v0.6.0-alpha.3 双协议房间
+## v0.6.0-alpha.4 双协议房间
 
-- RitsuLib `tail_v1` 联机已修复真实玩家 ID 和首包/控制绑定竞态；若仍停在等待页，请提交双方完整日志。
-- SL/读档续局会复用存档冻结的协议身份，不再因 `capability_digest_mismatch` 删除刚发布的房间。
+- SL/读档续局会完整保留存档冻结的 profile、carrier、RitsuLib presence、WireCache 签名和 capability digest，不会重新协商成错误协议。
+- lobby-service 不再改变区分大小写的 Base64URL WireCache 签名；alpha.4 客户端对尚未升级的旧服务也做了兼容。
+- RitsuLib `tail_v1` 保留 alpha.3 的真实玩家 ID、首包/控制绑定竞态和连接后 sidecar 激活修复；请确认所有玩家不是仍在使用 alpha.2。
 - 建房默认选择兼容模式：固定 `4/5-bit`、2-8 人、不允许 RitsuLib。
 - 0.6 新协议保持原版 `2/3-bit` 主体，以 LAN protocol v1 携带完整 roster；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用公开 typed-sidecar carrier。
 - 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合会在 ticket 与 transport 前拒绝。
@@ -285,12 +286,13 @@
 
 # STS2 LAN Connect User Guide
 
-The current client candidate is `0.6.0-alpha.3`; lobby-service remains on `0.6.0-alpha.1`. This is not a final release. Every player must use the same client and game version and fully restart after updating.
+The current client and lobby-service candidates are both `0.6.0-alpha.4`. This is not a final release. Every player must use the same client and game version and fully restart after updating. Self-hosted services should upgrade, while the alpha.4 client remains compatible with older services.
 
-## v0.6.0-alpha.3 Dual-Protocol Rooms
+## v0.6.0-alpha.4 Dual-Protocol Rooms
 
-- The RitsuLib `tail_v1` flow now uses the real player ID and tolerates the first game packet arriving before its control binding.
-- Continue-run publication reuses the protocol identity frozen in the save and no longer deletes the new room with `capability_digest_mismatch`.
+- Continue-run publication preserves the profile, carrier, RitsuLib presence, WireCache signature, and capability digest frozen in the save.
+- Lobby-service preserves case-sensitive Base64URL WireCache signatures; the alpha.4 client also tolerates the legacy service result.
+- RitsuLib `tail_v1` retains alpha.3's real-player-ID, first-packet/control-binding, and post-connect sidecar activation fixes. Confirm that no peer is still using alpha.2.
 - Compat is the default: fixed `4/5-bit`, 2-8 players, and no RitsuLib.
 - Tail v1 preserves the vanilla `2/3-bit` body and carries the full roster in LAN protocol v1. No-Ritsu rooms use standalone Tail; all-Ritsu rooms use the public typed-sidecar API.
 - Ritsu-present peers can connect only to Ritsu-present peers; Ritsu-absent peers can connect only to Ritsu-absent peers. Mixed presence is rejected before ticket and transport allocation.

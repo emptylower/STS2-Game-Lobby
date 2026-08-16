@@ -66,7 +66,16 @@ public sealed class LanConnectHostChannelBindingTests
                     SchemaVersion = LanConnectSavedRoomBinding.CurrentSchemaVersion,
                     SaveKey = "save-1",
                     RoomName = "房间",
-                    HostChannel = LanConnectHostChannels.Lan
+                    HostChannel = LanConnectHostChannels.Lan,
+                    ProtocolProfileV2 = "tail_v1",
+                    SelectedLanProtocolVersion = 1,
+                    ProtocolCarrier = "standalone_tail_v1",
+                    ProtocolMaxPlayers = 8,
+                    MinimumClientVersion = "0.6.0-alpha.1",
+                    ProtocolGameVersion = "0.111.0",
+                    WireCacheSignatureV1 = "aabb",
+                    RitsuLibPresent = false,
+                    CapabilityDigest = new string('a', 64)
                 }
             ]
         };
@@ -87,6 +96,15 @@ public sealed class LanConnectHostChannelBindingTests
             Assert.Equal(LanConnectSavedRoomBinding.CurrentSchemaVersion, roundTripped.SchemaVersion);
             Assert.Equal("房间", roundTripped.RoomName);
             Assert.Equal(LanConnectHostChannels.Lan, roundTripped.HostChannel);
+            Assert.Equal("tail_v1", roundTripped.ProtocolProfileV2);
+            Assert.Equal(1, roundTripped.SelectedLanProtocolVersion);
+            Assert.Equal("standalone_tail_v1", roundTripped.ProtocolCarrier);
+            Assert.Equal(8, roundTripped.ProtocolMaxPlayers);
+            Assert.Equal("0.6.0-alpha.1", roundTripped.MinimumClientVersion);
+            Assert.Equal("0.111.0", roundTripped.ProtocolGameVersion);
+            Assert.Equal("aabb", roundTripped.WireCacheSignatureV1);
+            Assert.False(roundTripped.RitsuLibPresent);
+            Assert.Equal(new string('a', 64), roundTripped.CapabilityDigest);
         }
         finally
         {

@@ -14,12 +14,12 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.6.0-alpha.3`（测试候选） |
+| 客户端版本 | `0.6.0-alpha.4`（测试候选） |
 | 默认大厅 | `sts2-test.43.133.192.249.nip.io`（可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `strict + relay-only` |
 
-`0.6.0-alpha.3` 是客户端联机修复测试版，不是正式版；lobby-service 继续使用 `0.6.0-alpha.1`。更新客户端后必须完整重启游戏，服务端无需重新部署。
+`0.6.0-alpha.4` 是客户端与 lobby-service 联机修复测试版，不是正式版。更新客户端后必须完整重启游戏；自建服务建议同步升级到 `0.6.0-alpha.4`，但 alpha.4 客户端仍兼容尚未升级的旧服务。
 
 本版会比较四张 ModelId net-id 表和四个位宽。`affects_gameplay: false` 的 MOD 仍可能改变线上编码；双方真实签名不一致时会在 ticket 签发或游戏 join request 之前拒绝，缺失/不可读签名则允许加入。发布默认配置已由 `test_relaxed` 改为 `strict`。
 
@@ -27,14 +27,15 @@
 
 续局来源现在按 `lan` / `lobby` / 未知三态处理，未知存档只询问一次；safe-load 和修复不会再误写或删除绑定。踢出使用与存档槽位分离的安装 credential 和当前占用者 binding handle，避免槽位接管后误封原主人。
 
-同一房间内所有玩家必须使用完全相同的游戏版本，并在本轮测试中统一使用客户端 `0.6.0-alpha.3`；lobby-service 使用 `0.6.0-alpha.1`。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。历史 `0.3.x-0.5.x` 客户端真实互通不属于本 alpha 的测试范围。
+同一房间内所有玩家必须使用完全相同的游戏版本，并在本轮测试中统一使用客户端 `0.6.0-alpha.4`；自建 lobby-service 建议使用 `0.6.0-alpha.4`。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。历史 `0.3.x-0.5.x` 客户端真实互通不属于本 alpha 的测试范围。
 
 本候选版是在既有功能之上叠加的，先前版本的能力全部保留：`0.5.5` 的游戏 ABI 向下兼容（运行时识别旧版平铺握手与 `0.110.x` 的 `PeerVersionInfo` 结构，并按运行时类型选择 `LobbyPlayer` 或 `StartRunLobbyPlayer` 的扩容序列化补丁）、`0.5.4` 的 AI 审核交互，以及 `0.5.3` 的 LAN/大厅续局通道拆分、续局身份码、存档保护和聊天 HUD。
 
-### v0.6.0-alpha.3 测试重点
+### v0.6.0-alpha.4 测试重点
 
-- 验证全员 RitsuLib 的 `tail_v1` 房间不再把客户端 sidecar 会话绑定为 `netId=0`，并能收到初始游戏信息进入大厅。
-- 进行 SL/读档后由房主重新发布大厅房间，确认不会再出现 `capability_digest_mismatch`，队友能够重新看到并加入房间。
+- 进行 SL/读档后由房主按存档冻结的 profile、carrier、RitsuLib presence、WireCache 签名和 capability digest 重新发布房间，确认队友能够看到并加入。
+- 验证 Base64URL WireCache 签名大小写不会被服务端改变；连接尚未升级的旧服务时也不应误报 `capability_digest_mismatch`。
+- 全员 RitsuLib 的 `tail_v1` 房间应使用 alpha.4 客户端完整重启后复测；alpha.2 不包含连接后激活 sidecar 的修复。
 - 房主执行重开后，确认加入者返回主菜单时会自动重新进入房间；即使多人子菜单已在当前进程中打开过，也不应静默停在大厅列表。
 - 检查 LAN 调试建房和大厅建房的大尺寸选择弹窗，确认桌面与竖屏触控区域均在视口内。
 - no-Ritsu/no-Ritsu 的建房、ticket、加入、ready、begin-run 和首个同步状态已在 Android/macOS 通过；Ritsu/Ritsu 仅在 Ritsu framework 能完整初始化的平台继续测试，Android 当前为外部阻塞。
@@ -182,7 +183,7 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 ## 自建大厅服说明
 
-v0.6 不再支持 `0.2.x` 客户端。自建大厅保持 lobby-service `0.6.0-alpha.1` 并把客户端升级到 `0.6.0-alpha.3`；`0.3-0.5` 客户端只能加入兼容房，不能加入 `tail_v1` 房间。
+v0.6 不再支持 `0.2.x` 客户端。自建大厅建议把客户端和 lobby-service 一并升级到 `0.6.0-alpha.4`；alpha.4 客户端暂时兼容旧服务，`0.3-0.5` 客户端只能加入兼容房，不能加入 `tail_v1` 房间。
 
 ---
 
@@ -198,12 +199,12 @@ v0.6 不再支持 `0.2.x` 客户端。自建大厅保持 lobby-service `0.6.0-al
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.6.0-alpha.3` (prerelease candidate) |
+| Client version | `0.6.0-alpha.4` (prerelease candidate) |
 | Default lobby | `sts2-test.43.133.192.249.nip.io` |
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `strict + relay-only` |
 
-`0.6.0-alpha.3` is a client networking-fix candidate, not a final release. Keep lobby-service on `0.6.0-alpha.1`; restart the game after updating the client. No service redeploy is required.
+`0.6.0-alpha.4` is a client and lobby-service networking-fix candidate, not a final release. Restart the game after updating the client. Self-hosted services should upgrade to `0.6.0-alpha.4`, while the alpha.4 client remains compatible with older services.
 
 The candidate fingerprints the four ModelId net-id tables and bit widths. A genuine peer mismatch is rejected before ticket issuance or the game join request, while missing or unreadable signatures remain fail-open. The shipped compatibility profile is now `strict`.
 
@@ -211,14 +212,15 @@ This version removes the RC4 private RitsuLib postfix bridge. Compat uses fixed 
 
 Continue-run origin is an explicit LAN/lobby/unknown choice, with a one-time prompt for ambiguous legacy saves. Safe load and repair preserve bindings. Kick identity is separate from save slots and uses the rendered occupant's binding handle.
 
-Every participant must use the exact same game version and client `0.6.0-alpha.3`; the lobby service remains on `0.6.0-alpha.1`. Historical-client interoperability is outside this alpha gate.
+Every participant must use the exact same game version and client `0.6.0-alpha.4`; self-hosted lobby services should use `0.6.0-alpha.4`. Historical-client interoperability is outside this alpha gate.
 
 This candidate builds on top of the existing feature set; nothing from earlier versions was removed. It still carries `0.5.5`'s backward-compatible game ABI handling (detecting the legacy flat handshake or the `0.110.x` `PeerVersionInfo` handshake at runtime and selecting the old `LobbyPlayer` or new `StartRunLobbyPlayer` serialization carrier), `0.5.4`'s AI moderation flow, and `0.5.3`'s LAN/lobby continue-run channel split, resume identity code, save protection, and chat HUD.
 
-### v0.6.0-alpha.3 Test Focus
+### v0.6.0-alpha.4 Test Focus
 
-- Verify that all-Ritsu `tail_v1` rooms no longer stall while waiting for initial game info, including when the control binding arrives after the first game packet.
-- Resume after save/load and confirm the host republishes without `capability_digest_mismatch` and teammates can see and join the room again.
+- Resume after save/load and confirm the host republishes the profile, carrier, RitsuLib presence, WireCache signature, and capability digest frozen in the save.
+- Confirm Base64URL WireCache signature casing is preserved by the service and that older services do not cause a false `capability_digest_mismatch`.
+- Retest all-Ritsu `tail_v1` rooms only after every peer installs alpha.4 and fully restarts; alpha.2 did not contain the post-connect sidecar activation fix.
 - Exercise the larger LAN-host and lobby-create choice dialogs on desktop and portrait touch viewports.
 - No-Ritsu/no-Ritsu has completed ticket, ready, begin-run, and first synchronized state on Android/macOS. Continue Ritsu/Ritsu testing only where the Ritsu framework initializes successfully; Android is externally blocked.
 - Exercise both mixed-presence directions and require zero slot, ticket, control, and transport allocation.
@@ -352,4 +354,4 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 ## Self-Hosted Lobby Notes
 
-v0.6 no longer supports `0.2.x` clients. Self-hosted lobbies keep lobby-service `0.6.0-alpha.1` and upgrade clients to `0.6.0-alpha.3`; `0.3-0.5` clients can only join compat rooms and cannot join `tail_v1` rooms.
+v0.6 no longer supports `0.2.x` clients. Self-hosted lobbies should upgrade both clients and lobby-service to `0.6.0-alpha.4`; the alpha.4 client temporarily remains compatible with older services. Clients `0.3-0.5` can only join compat rooms and cannot join `tail_v1` rooms.

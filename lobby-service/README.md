@@ -12,7 +12,9 @@
 
 # STS2 Lobby Service
 
-> 本文档对应测试候选 **v0.6.0-alpha.1**。客户端与服务必须同步升级；部署时重启服务进程以清除内存中的旧房间。
+> 本文档对应测试候选 **v0.6.0-alpha.4**。客户端与服务建议同步升级；部署时重启服务进程以清除内存中的旧房间。
+
+alpha.4 保留 Base64URL WireCache 签名的原始大小写，避免服务端选择结果与客户端 capability digest 不一致。alpha.4 客户端仍兼容尚未升级的旧服务。
 
 v0.6 新增 `compat_4_5_v1` / `tail_v1` profile、冻结的 protocol selection 与 capability digest。`tail_v1` 要求 RitsuLib presence 完全一致，mismatch 或 sidecar readiness 失败会在 slot、ticket、control binding 和 relay/transport 分配前返回结构化错误。历史客户端真实互通不属于本 alpha 的发布门禁。
 

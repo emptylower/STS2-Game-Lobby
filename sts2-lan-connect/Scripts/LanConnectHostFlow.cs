@@ -295,6 +295,7 @@ internal static class LanConnectHostFlow
         LobbySavedRunInfo? savedRunInfo,
         int maxPlayers,
         bool notifyOnFailure,
+        LanConnectProtocolSelection? persistedSelection = null,
         bool throwOnCreateGuardRejection = false)
     {
         string trimmedRoomName = LanConnectConfig.SanitizeRoomName(roomName);
@@ -314,23 +315,15 @@ internal static class LanConnectHostFlow
         {
             LanConnectProtocolOffer offer = LanConnectProtocolOffer.CreateCurrent();
             LanConnectSessionProtocolSnapshot activeSnapshot = LanConnectSessionProtocolState.Shared.Current;
-            LanConnectProtocolSelection requestedSelection =
+            LanConnectProtocolSelection? requiredSelection =
                 activeSnapshot.Role == LanConnectSessionProtocolRole.Host && activeSnapshot.Selection != null
                     ? activeSnapshot.Selection
-                    : LanConnectProtocolSelection.CreateLocalCompat(
-                        maxPlayers,
-                        LanConnectBuildInfo.GetGameVersion(),
-                        LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
-            LanConnectCreateRoomIntent intent = new(
-                requestedSelection.Profile,
-                requestedSelection.MaxPlayers,
-                offer);
+                    : persistedSelection;
+            LanConnectCreateRoomIntent intent = ResolveExistingHostPublishIntent(
+                offer,
+                requiredSelection,
+                maxPlayers);
             intent.Validate();
-            protocolLease = LanConnectSessionProtocolState.Shared.FreezeHost(
-                requestedSelection,
-                activeSnapshot.Role == LanConnectSessionProtocolRole.Host
-                    ? activeSnapshot.OwnerId!
-                    : BuildHostLeaseOwner(netService));
             apiClient = LobbyApiClient.CreateConfigured();
             registration = await apiClient.CreateRoomAsync(
                 BuildCreateRoomRequest(
@@ -339,19 +332,26 @@ internal static class LanConnectHostFlow
                     lobbyGameMode,
                     intent,
                     savedRunInfo,
-                    requestedSelection));
+                    requiredSelection));
             LobbyProtocolSelectionDto selectionDto = registration.ProtocolSelection
                 ?? registration.Room.ProtocolSelection
                 ?? throw LanConnectProtocolFailureMapper.FromLocalException(
                     "lan_protocol_version_mismatch",
                     "The create response did not include a frozen protocol selection.");
             LanConnectProtocolSelection serverSelection = selectionDto.ToValidatedValue(offer);
-            if (serverSelection != requestedSelection)
+            if (requiredSelection != null && !ArePublishSelectionsEquivalent(requiredSelection, serverSelection))
             {
+                GD.Print(
+                    $"sts2_lan_connect host_flow: publish selection mismatch source={publishSource}, required={DescribeProtocolSelection(requiredSelection)}, server={DescribeProtocolSelection(serverSelection)}");
                 throw LanConnectProtocolFailureMapper.FromLocalException(
                     "capability_digest_mismatch",
                     "Continue-run publication cannot replace the already frozen selection.");
             }
+            protocolLease = LanConnectSessionProtocolState.Shared.FreezeHost(
+                requiredSelection ?? serverSelection,
+                activeSnapshot.Role == LanConnectSessionProtocolRole.Host
+                    ? activeSnapshot.OwnerId!
+                    : BuildHostLeaseOwner(netService));
 
             GD.Print(
                 $"sts2_lan_connect host_flow: lobby room registered roomId={registration.RoomId}, controlChannelId={registration.ControlChannelId}, heartbeat={registration.HeartbeatIntervalSeconds}s, source={publishSource}");
@@ -499,6 +499,35 @@ internal static class LanConnectHostFlow
         frozenSelection == null
             ? (currentGameVersion, currentWireCacheSignature)
             : (frozenSelection.GameVersion, frozenSelection.WireCacheSignature);
+
+    internal static LanConnectCreateRoomIntent ResolveExistingHostPublishIntent(
+        LanConnectProtocolOffer offer,
+        LanConnectProtocolSelection? requiredSelection,
+        int fallbackMaxPlayers) =>
+        new(
+            requiredSelection?.Profile
+                ?? (offer.RitsuLibPresent
+                    ? LanConnectProtocolProfile.TailV1
+                    : LanConnectProtocolProfile.Compat4x5V1),
+            requiredSelection?.MaxPlayers ?? fallbackMaxPlayers,
+            offer);
+
+    private static string DescribeProtocolSelection(LanConnectProtocolSelection selection) =>
+        $"profile={selection.Profile.ToCanonical()},version={selection.SelectedLanProtocolVersion},carrier={selection.Carrier.ToWireValue()},maxPlayers={selection.MaxPlayers},minimumClientVersion={selection.MinimumClientVersion},gameVersion={selection.GameVersion},wireCache={selection.WireCacheSignature ?? "<none>"},ritsuLibPresent={selection.RitsuLibPresent},digest={selection.CapabilityDigest}";
+
+    internal static bool ArePublishSelectionsEquivalent(
+        LanConnectProtocolSelection required,
+        LanConnectProtocolSelection server) =>
+        required.Profile == server.Profile
+        && required.SelectedLanProtocolVersion == server.SelectedLanProtocolVersion
+        && required.Carrier == server.Carrier
+        && string.Equals(required.MinimumClientVersion, server.MinimumClientVersion, StringComparison.Ordinal)
+        && required.MaxPlayers == server.MaxPlayers
+        && string.Equals(required.GameVersion, server.GameVersion, StringComparison.Ordinal)
+        // The deployed service historically lowercased this Base64URL token while
+        // computing its digest. Keep the original client token for save/preflight use.
+        && string.Equals(required.WireCacheSignature, server.WireCacheSignature, StringComparison.OrdinalIgnoreCase)
+        && required.RitsuLibPresent == server.RitsuLibPresent;
 
     private static async Task DeleteRegisteredRoomSafeAsync(
         LobbyApiClient apiClient,

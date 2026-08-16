@@ -229,7 +229,7 @@ function normalizeBoundedUtf8(value: string, name: string, maxBytes: number): st
 }
 
 function normalizeSignature(value: string): string {
-  const normalized = value.trim().toLowerCase();
+  const normalized = value.trim();
   if (!/^[\x21-\x7e]{1,64}$/.test(normalized)) throw new TypeError("wireCacheSignatureV1 必须是 1-64 bytes ASCII。");
   return normalized;
 }

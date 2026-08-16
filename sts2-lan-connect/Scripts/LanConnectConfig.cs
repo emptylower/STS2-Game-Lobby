@@ -641,7 +641,16 @@ internal static class LanConnectConfig
             PlayerNames = binding.PlayerNames,
             UpdatedAtUnixSeconds = binding.UpdatedAtUnixSeconds,
             // Preserve empty HostChannel for legacy bindings; do not rewrite to lobby.
-            HostChannel = binding.HostChannel ?? string.Empty
+            HostChannel = binding.HostChannel ?? string.Empty,
+            ProtocolProfileV2 = binding.ProtocolProfileV2 ?? string.Empty,
+            SelectedLanProtocolVersion = binding.SelectedLanProtocolVersion,
+            ProtocolCarrier = binding.ProtocolCarrier ?? string.Empty,
+            ProtocolMaxPlayers = binding.ProtocolMaxPlayers,
+            MinimumClientVersion = binding.MinimumClientVersion ?? string.Empty,
+            ProtocolGameVersion = binding.ProtocolGameVersion ?? string.Empty,
+            WireCacheSignatureV1 = binding.WireCacheSignatureV1,
+            RitsuLibPresent = binding.RitsuLibPresent,
+            CapabilityDigest = binding.CapabilityDigest ?? string.Empty
         };
     }
 

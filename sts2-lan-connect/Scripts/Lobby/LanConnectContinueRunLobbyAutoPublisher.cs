@@ -285,7 +285,8 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                 boundSaveKey: binding.SaveKey,
                 savedRunInfo: savedRunInfo,
                 maxPlayers: LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
-                notifyOnFailure: false);
+                notifyOnFailure: false,
+                persistedSelection: binding.ProtocolSelection);
             if (!published.Succeeded)
             {
                 if (published.ProtocolFailure != null)
