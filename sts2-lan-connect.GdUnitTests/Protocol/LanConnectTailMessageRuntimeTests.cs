@@ -327,6 +327,40 @@ public sealed class LanConnectTailMessageRuntimeTests
     }
 
     [TestCase]
+    public void Ritsu_initial_game_info_sidecar_waits_for_the_control_binding_then_flushes()
+    {
+        _ = LoadOfficialRitsuAssembly();
+        InitializeSts2Serialization();
+        LanConnectRitsuLibSidecarCarrier.Shared.ResetForTesting();
+        using RuntimePair pair = new(ritsu: true, bindRitsuFlows: false);
+        InitialGameInfoMessage message = new();
+        LanConnectPreparedTailMessage prepared = pair.Runtime.PrepareOutgoing(
+            pair.HostBus,
+            LanConnectSidecarMessageKind.InitialGameInfo,
+            pair.HostId,
+            message,
+            pair.Selection);
+
+        using (LanConnectTailMessageRuntime.PushOutgoingSidecarRecipientsForCurrentThread([pair.ClientId]))
+        {
+            pair.Runtime.SubmitSidecarBeforeVanilla(
+                pair.HostBus,
+                LanConnectSidecarMessageKind.InitialGameInfo,
+                pair.HostId,
+                message,
+                prepared.Container,
+                pair.Selection);
+        }
+
+        AssertThat(pair.HostTransport.SentToClients.Count).IsEqual(0);
+
+        pair.Runtime.BindHostTrustedSidecarFlow(pair.Host, pair.ClientId, pair.ProtocolFlowNonce);
+
+        AssertThat(pair.HostTransport.SentToClients.Count).IsEqual(1);
+        AssertThat(pair.HostTransport.SentToClients[0].PeerId).IsEqual(pair.ClientId);
+    }
+
+    [TestCase]
     public void Ritsu_broadcast_preflight_rejects_three_peer_partial_delivery_before_any_send()
     {
         _ = LoadOfficialRitsuAssembly();
@@ -728,7 +762,7 @@ public sealed class LanConnectTailMessageRuntimeTests
         internal const ulong DefaultHostId = 1;
         internal const ulong DefaultClientId = 22;
 
-        internal RuntimePair(bool ritsu = false)
+        internal RuntimePair(bool ritsu = false, bool bindRitsuFlows = true)
         {
             HostTransport = new TestNetHost(Host, DefaultHostId);
             typeof(NetHostGameService).GetField("_netHost", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -741,7 +775,7 @@ public sealed class LanConnectTailMessageRuntimeTests
             Selection = CreateSelection(ritsu);
             Runtime.BindHost(Host, Offer, Selection);
             Runtime.BindClient(Client, Offer, Selection, ProtocolFlowNonce);
-            if (ritsu)
+            if (ritsu && bindRitsuFlows)
             {
                 Runtime.BindHostTrustedSidecarFlow(Host, ClientId, ProtocolFlowNonce);
                 Runtime.BindClientHostSidecarFlow(Client);

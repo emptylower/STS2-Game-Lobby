@@ -175,7 +175,7 @@ internal static class LanConnectDirectJoinFlow
     internal static LanConnectProtocolFailure? ValidateCompatOnlyPreTransport(bool ritsuLibPresent) =>
         ritsuLibPresent
             ? LanConnectProtocolFailure.RitsuLibNotAllowedInCompat(
-                "Pure direct-IP is compat-only in 0.6.0-alpha.1.")
+                "Pure direct-IP is compat-only in the 0.6 prerelease series.")
             : null;
 
     private static string DescribeFailure(Exception exception)

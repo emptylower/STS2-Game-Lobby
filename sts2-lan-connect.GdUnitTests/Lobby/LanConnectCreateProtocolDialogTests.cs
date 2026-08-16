@@ -11,6 +11,80 @@ namespace Sts2LanConnect.GdUnitTests.Lobby;
 public sealed class LanConnectCreateProtocolDialogTests
 {
     [TestCase]
+    public async Task Create_dialog_wraps_its_content_instead_of_filling_the_viewport()
+    {
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1920, 1080),
+            LanConnectServerChatPresentation.Ready);
+
+        fixture.Overlay.OpenCreateDialogForTests();
+        await fixture.Runner.AwaitIdleFrame();
+
+        Rect2 card = fixture.Overlay.CreateDialogCardRectForTests;
+        Rect2 body = fixture.Overlay.CreateDialogBodyRectForTests;
+        AssertThat(card.Size.X).IsLessEqual(760f);
+        AssertThat(card.Size.Y).IsLessEqual(820f);
+        AssertThat(body.Size.X).IsGreaterEqual(700f);
+        AssertThat(card.Size.Y - body.Size.Y).IsLessEqual(100f);
+    }
+
+    [TestCase]
+    public async Task Create_dialog_stays_inside_a_small_landscape_viewport()
+    {
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(960, 540),
+            LanConnectServerChatPresentation.Ready);
+
+        fixture.Overlay.OpenCreateDialogForTests();
+        await fixture.Runner.AwaitIdleFrame();
+
+        Rect2 card = fixture.Overlay.CreateDialogCardRectForTests;
+        AssertThat(card.Position.X).IsGreaterEqual(0f);
+        AssertThat(card.Position.Y).IsGreaterEqual(0f);
+        AssertThat(card.End.X).IsLessEqual(960f);
+        AssertThat(card.End.Y).IsLessEqual(540f);
+        AssertThat(fixture.Overlay.CreateProtocolChoiceRectsForTests()
+            .All(static rect => rect.Size.Y >= 76f)).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Locked_create_modes_show_a_prompt_and_keep_the_last_valid_selection()
+    {
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1280, 720),
+            LanConnectServerChatPresentation.Ready);
+        fixture.Overlay.SetCreateGameModeAvailabilityForTests(new(
+            Standard: true,
+            Daily: false,
+            Custom: false));
+        string popupTitle = string.Empty;
+        string popupMessage = string.Empty;
+        fixture.Overlay.SetCreateGameModePopupForTests((title, message) =>
+        {
+            popupTitle = title;
+            popupMessage = message;
+        });
+        fixture.Overlay.OpenCreateDialogForTests();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Overlay.CreateGameModeOptionLabelsForTests())
+            .Contains("多人每日挑战（未解锁）")
+            .Contains("自定义模式（未解锁）");
+
+        fixture.Overlay.SelectCreateGameModeForTests(1);
+
+        AssertThat(fixture.Overlay.SelectedCreateGameModeIdForTests).IsEqual(0);
+        AssertThat(popupTitle).IsEqual("模式尚未解锁");
+        AssertThat(popupMessage).Contains("多人每日挑战尚未解锁");
+
+        fixture.Overlay.SelectCreateGameModeForTests(2);
+
+        AssertThat(fixture.Overlay.SelectedCreateGameModeIdForTests).IsEqual(0);
+        AssertThat(popupTitle).IsEqual("模式尚未解锁");
+        AssertThat(popupMessage).Contains("自定义模式尚未解锁");
+    }
+
+    [TestCase]
     public async Task Create_dialog_defaults_to_compat_without_Ritsu_and_exposes_tail_warning()
     {
         using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
@@ -26,10 +100,12 @@ public sealed class LanConnectCreateProtocolDialogTests
             .Contains("0.6 新协议（RitsuLib 状态必须一致）");
         AssertThat(fixture.Overlay.CreateProtocolOptionDisabledStatesForTests())
             .IsEqual(new[] { false, false });
+        AssertThat(fixture.Overlay.CreateProtocolChoiceRectsForTests()
+            .All(static rect => rect.Size.Y >= 76f)).IsTrue();
         AssertThat(fixture.Overlay.CreateProtocolDescriptionForTests)
             .IsEqual("支持 0.3-0.5，不支持 RitsuLib");
 
-        fixture.Overlay.SelectCreateProtocolForTests(301);
+        fixture.Overlay.PressCreateProtocolForTests(301);
         await fixture.Runner.AwaitIdleFrame();
 
         AssertThat(fixture.Overlay.CreateProtocolDescriptionForTests)

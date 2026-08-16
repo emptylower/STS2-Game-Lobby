@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.6.0-alpha.2] - 2026-08-16
+
+客户端 `0.6.0-alpha.2` 联机修复测试版；lobby-service 继续使用 `0.6.0-alpha.1`，本次不改变服务端 API、中继或房间协议。
+
+### Fixed
+
+- RitsuLib sidecar 连接改用 ticket 分配的真实玩家 ID，不再在 ENet 连接建立前把本地 ID 绑定为 `0`。
+- 房主首个游戏信息早于控制通道绑定时先暂存 sidecar，并在可信绑定到达后补发，避免加入者长期停在“等待初始游戏信息”。
+- SL/读档续局重新发布房间时复用存档冻结的游戏版本与 WireCache 签名，包括合法的空签名，避免创建成功后因 `capability_digest_mismatch` 自行删除房间。
+
+### Changed
+
+- LAN 调试建房模式选择器和大厅建房协议选择改为更大的触控友好弹窗，并为未解锁模式显示明确提示。
+
+### Verification
+
+- 客户端 xUnit：1086 通过，1 个既有原型测试跳过。
+- Godot/GdUnit（含真实 RitsuLib 程序集）：354 通过。
+- lobby-service：TypeScript 检查通过，604 项测试通过。
+
 ## [0.6.0-alpha.1] - 2026-08-16
 
 客户端与 lobby-service `0.6.0-alpha.1` 双协议测试候选同步准备。

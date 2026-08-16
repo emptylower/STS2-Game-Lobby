@@ -47,7 +47,7 @@ public sealed class LanConnectLobbyWireCacheRequestTests
 
         string hostFlow = File.ReadAllText(Path.Combine(scriptsRoot, "LanConnectHostFlow.cs"));
         Assert.Contains(
-            "WireCacheSignatureV1 = LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature",
+            "WireCacheSignatureV1 = wireCacheSignature",
             hostFlow,
             StringComparison.Ordinal);
 
@@ -64,6 +64,30 @@ public sealed class LanConnectLobbyWireCacheRequestTests
             "WireCacheSignatureV1 = request.WireCacheSignatureV1",
             preflight,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Continue_run_publication_preserves_a_frozen_missing_signature()
+    {
+        LanConnectProtocolSelection frozenSelection = new(
+            LanConnectProtocolProfile.Compat4x5V1,
+            SelectedLanProtocolVersion: 0,
+            LanConnectProtocolCarrier.None,
+            MinimumClientVersion: "0.6.0-alpha.1",
+            MaxPlayers: 4,
+            GameVersion: "saved-game-version",
+            WireCacheSignature: null,
+            RitsuLibPresent: false,
+            CapabilityDigest: string.Empty);
+
+        (string gameVersion, string? wireCacheSignature) =
+            LanConnectHostFlow.ResolveCreateRoomProtocolIdentity(
+                frozenSelection,
+                currentGameVersion: "current-game-version",
+                currentWireCacheSignature: "wcv1:current");
+
+        Assert.Equal("saved-game-version", gameVersion);
+        Assert.Null(wireCacheSignature);
     }
 
     [Fact]

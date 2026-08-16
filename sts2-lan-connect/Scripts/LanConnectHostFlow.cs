@@ -338,7 +338,8 @@ internal static class LanConnectHostFlow
                     trimmedPassword,
                     lobbyGameMode,
                     intent,
-                    savedRunInfo));
+                    savedRunInfo,
+                    requestedSelection));
             LobbyProtocolSelectionDto selectionDto = registration.ProtocolSelection
                 ?? registration.Room.ProtocolSelection
                 ?? throw LanConnectProtocolFailureMapper.FromLocalException(
@@ -458,30 +459,46 @@ internal static class LanConnectHostFlow
         string? password,
         string lobbyGameMode,
         LanConnectCreateRoomIntent intent,
-        LobbySavedRunInfo? savedRunInfo) => new LobbyCreateRoomRequest
+        LobbySavedRunInfo? savedRunInfo,
+        LanConnectProtocolSelection? frozenSelection = null)
     {
-        RoomName = roomName,
-        Password = password,
-        HostPlayerName = LanConnectConfig.GetEffectivePlayerDisplayName(),
-        ClientInstallationId = LanConnectConfig.GetOrCreateClientInstallationId(),
-        GameMode = lobbyGameMode,
-        Version = LanConnectBuildInfo.GetGameVersion(),
-        ModVersion = intent.Offer.ClientVersion,
-        ClientVersion = intent.Offer.ClientVersion,
-        ModList = LanConnectBuildInfo.GetModList(),
-        WireCacheSignatureV1 = LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature,
-        HostModInventory = LanConnectBuildInfo.GetModInventory(),
-        ProtocolProfile = LanConnectProtocolProfiles.Extended8p,
-        ProtocolProfileV2 = intent.Profile.ToCanonical(),
-        ProtocolOffer = LobbyProtocolOfferDto.FromValue(intent.Offer),
-        MaxPlayers = intent.MaxPlayers,
-        HostConnectionInfo = new LobbyHostConnectionInfo
+        (string gameVersion, string? wireCacheSignature) = ResolveCreateRoomProtocolIdentity(
+            frozenSelection,
+            LanConnectBuildInfo.GetGameVersion(),
+            LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
+        return new LobbyCreateRoomRequest
         {
-            EnetPort = LanConnectConstants.DefaultPort,
-            LocalAddresses = LanConnectNetUtil.GetLanAddressStrings().ToList()
-        },
-        SavedRun = savedRunInfo
-    };
+            RoomName = roomName,
+            Password = password,
+            HostPlayerName = LanConnectConfig.GetEffectivePlayerDisplayName(),
+            ClientInstallationId = LanConnectConfig.GetOrCreateClientInstallationId(),
+            GameMode = lobbyGameMode,
+            Version = gameVersion,
+            ModVersion = intent.Offer.ClientVersion,
+            ClientVersion = intent.Offer.ClientVersion,
+            ModList = LanConnectBuildInfo.GetModList(),
+            WireCacheSignatureV1 = wireCacheSignature,
+            HostModInventory = LanConnectBuildInfo.GetModInventory(),
+            ProtocolProfile = LanConnectProtocolProfiles.Extended8p,
+            ProtocolProfileV2 = intent.Profile.ToCanonical(),
+            ProtocolOffer = LobbyProtocolOfferDto.FromValue(intent.Offer),
+            MaxPlayers = intent.MaxPlayers,
+            HostConnectionInfo = new LobbyHostConnectionInfo
+            {
+                EnetPort = LanConnectConstants.DefaultPort,
+                LocalAddresses = LanConnectNetUtil.GetLanAddressStrings().ToList()
+            },
+            SavedRun = savedRunInfo
+        };
+    }
+
+    internal static (string GameVersion, string? WireCacheSignature) ResolveCreateRoomProtocolIdentity(
+        LanConnectProtocolSelection? frozenSelection,
+        string currentGameVersion,
+        string? currentWireCacheSignature) =>
+        frozenSelection == null
+            ? (currentGameVersion, currentWireCacheSignature)
+            : (frozenSelection.GameVersion, frozenSelection.WireCacheSignature);
 
     private static async Task DeleteRegisteredRoomSafeAsync(
         LobbyApiClient apiClient,

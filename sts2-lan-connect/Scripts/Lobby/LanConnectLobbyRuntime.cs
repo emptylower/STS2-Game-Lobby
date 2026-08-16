@@ -2386,10 +2386,10 @@ internal sealed partial class LanConnectLobbyRuntime :
                                 sidecarPeerId,
                                 flowNonce);
                         }
-                        catch (InvalidDataException exception)
+                        catch (Exception exception) when (exception is InvalidDataException or LanConnectProtocolException)
                         {
                             Log.Warn(
-                                $"sts2_lan_connect ignored invalid Ritsu control binding nonce for playerNetId={envelope.PlayerNetId}: {exception.Message}");
+                                $"sts2_lan_connect rejected or failed Ritsu control binding for playerNetId={envelope.PlayerNetId}: {exception.Message}");
                         }
                     }
                     LanConnectRemoteLobbyPlayerPatches.QueueRefreshAll();

@@ -10,15 +10,19 @@ namespace Sts2LanConnect.GdUnitTests.LanHost;
 public sealed class LanConnectLanHostModePickerTests
 {
     [TestCase]
-    public async Task Picker_has_three_stable_mode_items()
+    public async Task Picker_has_three_large_stable_mode_choices()
     {
         using PickerFixture fixture = await PickerFixture.Create();
 
-        AssertThat(fixture.Picker.ItemCount).IsEqual(3);
-        AssertThat(Items(fixture.Picker)).ContainsExactly(
-            new MenuItem(0, "标准模式"),
-            new MenuItem(1, "多人每日挑战"),
-            new MenuItem(2, "自定义模式"));
+        fixture.Picker.Open();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Picker.ChoiceCountForTests).IsEqual(3);
+        AssertThat(fixture.Picker.ChoiceLabelsForTests).ContainsExactly(
+            "标准模式",
+            "多人每日挑战",
+            "自定义模式");
+        AssertThat(fixture.Picker.PanelRectForTests.Size.X).IsGreaterEqual(700f);
     }
 
     [TestCase]
@@ -32,9 +36,9 @@ public sealed class LanConnectLanHostModePickerTests
             availability: () => availability);
 
         fixture.Picker.Open();
-        AssertThat(fixture.Picker.IsItemDisabled(0)).IsFalse();
-        AssertThat(fixture.Picker.IsItemDisabled(1)).IsTrue();
-        AssertThat(fixture.Picker.IsItemDisabled(2)).IsTrue();
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Picker.ChoiceDisabledStatesForTests)
+            .IsEqual(new[] { false, true, true });
 
         fixture.Picker.Hide();
         availability = new(
@@ -43,10 +47,9 @@ public sealed class LanConnectLanHostModePickerTests
             Custom: true);
         fixture.Picker.Open();
 
-        AssertThat(fixture.Picker.IsItemDisabled(0)).IsTrue();
-        AssertThat(fixture.Picker.IsItemDisabled(1)).IsFalse();
-        AssertThat(fixture.Picker.IsItemDisabled(2)).IsFalse();
-        AssertThat(fixture.Picker.GetFocusedItem()).IsEqual(1);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Picker.ChoiceDisabledStatesForTests)
+            .IsEqual(new[] { true, false, false });
     }
 
     [TestCase]
@@ -61,7 +64,7 @@ public sealed class LanConnectLanHostModePickerTests
             });
         fixture.Picker.Open();
 
-        fixture.Picker.EmitSignal(PopupMenu.SignalName.IdPressed, 2L);
+        fixture.Picker.ActivateChoiceForTests(2);
         await fixture.Runner.AwaitIdleFrame();
 
         AssertThat(selected).ContainsExactly(LanConnectLanHostMode.Custom);
@@ -82,8 +85,8 @@ public sealed class LanConnectLanHostModePickerTests
             });
         fixture.Picker.Open();
 
-        fixture.Picker.EmitSignal(PopupMenu.SignalName.IdPressed, 2L);
-        fixture.Picker.EmitSignal(PopupMenu.SignalName.IdPressed, 2L);
+        fixture.Picker.ActivateChoiceForTests(2);
+        fixture.Picker.ActivateChoiceForTests(2);
         await fixture.Runner.AwaitIdleFrame();
 
         AssertThat(starts).IsEqual(1);
@@ -91,7 +94,7 @@ public sealed class LanConnectLanHostModePickerTests
         completion.SetResult();
         await fixture.Runner.AwaitIdleFrame();
         fixture.Picker.Open();
-        fixture.Picker.EmitSignal(PopupMenu.SignalName.IdPressed, 0L);
+        fixture.Picker.ActivateChoiceForTests(0);
         await fixture.Runner.AwaitIdleFrame();
 
         AssertThat(starts).IsEqual(2);
@@ -113,8 +116,8 @@ public sealed class LanConnectLanHostModePickerTests
             });
         fixture.Picker.Open();
 
-        fixture.Picker.EmitSignal(PopupMenu.SignalName.IdPressed, 2L);
-        fixture.Picker.EmitSignal(PopupMenu.SignalName.IdPressed, 99L);
+        fixture.Picker.ActivateChoiceForTests(2);
+        fixture.Picker.ActivateChoiceForTests(99);
         await fixture.Runner.AwaitIdleFrame();
 
         AssertThat(starts).IsEqual(0);
@@ -134,7 +137,7 @@ public sealed class LanConnectLanHostModePickerTests
         fixture.Picker.Open();
 
         fixture.Picker.Hide();
-        fixture.Picker.EmitSignal(PopupMenu.SignalName.IdPressed, 2L);
+        fixture.Picker.ActivateChoiceForTests(2);
         await fixture.Runner.AwaitIdleFrame();
 
         AssertThat(starts).IsEqual(0);
@@ -174,26 +177,17 @@ public sealed class LanConnectLanHostModePickerTests
         AssertThat(ReferenceEquals(first, second)).IsTrue();
         AssertThat(root.FindChildren(
             LanConnectConstants.LanHostModePickerName,
-            nameof(PopupMenu),
+            string.Empty,
             recursive: true,
             owned: false).Count).IsEqual(1);
 
         second.Open();
-        second.EmitSignal(PopupMenu.SignalName.IdPressed, 2L);
+        second.ActivateChoiceForTests(2);
         await runner.AwaitIdleFrame();
 
         AssertThat(firstCallbackStarts).IsEqual(0);
         AssertThat(secondCallbackStarts).IsEqual(1);
     }
-
-    private static MenuItem[] Items(PopupMenu picker) => Enumerable
-        .Range(0, picker.ItemCount)
-        .Select(index => new MenuItem(
-            picker.GetItemId(index),
-            picker.GetItemText(index)))
-        .ToArray();
-
-    private readonly record struct MenuItem(int Id, string Label);
 
     private sealed class PickerFixture : IDisposable
     {

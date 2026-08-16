@@ -130,7 +130,7 @@ internal static class HostSubmenuPatches
         picker.Open();
     }
 
-    private static LanConnectLanHostModeAvailability GetModeAvailability(
+    internal static LanConnectLanHostModeAvailability GetModeAvailability(
         NMultiplayerHostSubmenu submenu) => new(
         submenu.GetNode<NSubmenuButton>("StandardButton").IsEnabled,
         submenu.GetNode<NSubmenuButton>("DailyButton").IsEnabled,

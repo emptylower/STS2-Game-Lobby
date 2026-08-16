@@ -10,16 +10,18 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端与 lobby-service 测试候选均为 `0.6.0-alpha.1`，两端必须同步升级。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+当前客户端测试版为 `0.6.0-alpha.2`，lobby-service 继续使用 `0.6.0-alpha.1`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
 
-## v0.6.0-alpha.1 双协议房间
+## v0.6.0-alpha.2 双协议房间
 
+- RitsuLib `tail_v1` 联机已修复真实玩家 ID 和首包/控制绑定竞态；若仍停在等待页，请提交双方完整日志。
+- SL/读档续局会复用存档冻结的协议身份，不再因 `capability_digest_mismatch` 删除刚发布的房间。
 - 建房默认选择兼容模式：固定 `4/5-bit`、2-8 人、不允许 RitsuLib。
 - 0.6 新协议保持原版 `2/3-bit` 主体，以 LAN protocol v1 携带完整 roster；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用公开 typed-sidecar carrier。
 - 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合会在 ticket 与 transport 前拒绝。
 - 本版不卸载、不直接调用也不恢复 RitsuLib 私有 Harmony postfix，不维护 RitsuLib 分支。
 - 官方 RitsuLib v0.5.12 在当前 Android v0.111.0 环境初始化自身网络补丁时会黑屏；Android 玩家应保持 RitsuLib 禁用。本测试版已验证无 Ritsu 的 Android/macOS 真实开局，但不宣称全 Ritsu Android 联机可用。
-- direct-IP 在 alpha.1 中只支持兼容模式，本地 Ritsu 或 Tail intent 会在建立连接前拒绝。
+- direct-IP 在 v0.6 测试系列中只支持兼容模式，本地 Ritsu 或 Tail intent 会在建立连接前拒绝。
 - 历史客户端真实互通不在本 alpha 的测试门禁中。
 - 加入前会比较双方实际使用的 ModelId 线上编码。内容 MOD 组合不同并改变 net-id 表或位宽时，现在会明确提示不一致并拒绝加入，而不是进入后黑屏或一方卡在等待页；这是预期行为。
 - `affects_gameplay: false` 只表示该 MOD 不进入原版 `idDatabaseHash`，不保证它不会占用 ModelId。新签名会补上这层检查；签名缺失或读取失败时仍允许加入。
@@ -283,15 +285,17 @@
 
 # STS2 LAN Connect User Guide
 
-The current client and lobby-service candidate is `0.6.0-alpha.1`. Both sides must upgrade together. This is not a final release; every player must use the same client and game version and fully restart after updating.
+The current client candidate is `0.6.0-alpha.2`; lobby-service remains on `0.6.0-alpha.1`. This is not a final release. Every player must use the same client and game version and fully restart after updating.
 
-## v0.6.0-alpha.1 Dual-Protocol Rooms
+## v0.6.0-alpha.2 Dual-Protocol Rooms
 
+- The RitsuLib `tail_v1` flow now uses the real player ID and tolerates the first game packet arriving before its control binding.
+- Continue-run publication reuses the protocol identity frozen in the save and no longer deletes the new room with `capability_digest_mismatch`.
 - Compat is the default: fixed `4/5-bit`, 2-8 players, and no RitsuLib.
 - Tail v1 preserves the vanilla `2/3-bit` body and carries the full roster in LAN protocol v1. No-Ritsu rooms use standalone Tail; all-Ritsu rooms use the public typed-sidecar API.
 - Ritsu-present peers can connect only to Ritsu-present peers; Ritsu-absent peers can connect only to Ritsu-absent peers. Mixed presence is rejected before ticket and transport allocation.
 - The RC4 private-postfix bridge is removed. LAN Connect does not detach, invoke, or restore private RitsuLib Harmony patches.
-- Direct IP is compat-only in alpha.1. Historical-client interoperability is outside this release gate.
+- Direct IP is compat-only throughout the v0.6 prerelease series. Historical-client interoperability is outside this release gate.
 - The join flow now compares the actual ModelId wire encoding. Content-MOD sets that change net-id tables or bit widths are intentionally rejected before a black screen or stuck waiting room.
 - `affects_gameplay: false` only excludes a MOD from vanilla `idDatabaseHash`; it does not guarantee that the MOD takes no ModelIds. The new signature covers that gap and remains fail-open when unavailable.
 - The shipped profile is `strict` again. Explicit relaxed handling for ordinary MOD differences cannot bypass a genuine wire-signature or game-version mismatch.

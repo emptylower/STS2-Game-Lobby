@@ -295,37 +295,20 @@ internal static class LanConnectMultiplayerSaveCompatibility
 
     private static async Task<bool> ConfirmPermanentAbandonAsync(NMultiplayerSubmenu submenu)
     {
-        ConfirmationDialog confirmation = new()
-        {
-            Name = "LanConnectSafeAbandonConfirmation",
-            Title = "确认永久放弃多人存档",
-            DialogText =
-                "此操作会结束当前多人进度，并删除游戏使用的 current_run_mp.save。\n\n" +
-                "LAN Connect 会先在 user://sts2_lan_connect/save-backups/ 创建可恢复备份；如果读取或备份失败，删除会自动取消。",
-            OkButtonText = "备份并永久放弃",
-            CancelButtonText = "保留存档",
-            Exclusive = true,
-            Unresizable = false,
-            MinSize = new Vector2I(560, 300)
-        };
-        TaskCompletionSource<bool> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        confirmation.Confirmed += () => completion.TrySetResult(true);
-        confirmation.Canceled += () => completion.TrySetResult(false);
-        confirmation.CloseRequested += () => completion.TrySetResult(false);
-        submenu.AddChild(confirmation);
-        try
-        {
-            confirmation.PopupCenteredClamped(new Vector2I(680, 380), 0.9f);
-            confirmation.GetCancelButton().GrabFocus();
-            return await completion.Task;
-        }
-        finally
-        {
-            if (GodotObject.IsInstanceValid(confirmation))
-            {
-                confirmation.QueueFree();
-            }
-        }
+        int? choice = await LanConnectLobbyChoiceDialog.ShowAsync(
+            submenu,
+            "确认永久放弃多人存档",
+            "此操作会结束当前多人进度，并删除游戏使用的 current_run_mp.save。\n\n" +
+            "LAN Connect 会先在 user://sts2_lan_connect/save-backups/ 创建可恢复备份；如果读取或备份失败，删除会自动取消。",
+            [
+                new LanConnectLobbyDialogChoice(
+                    1,
+                    "备份并永久放弃",
+                    "先创建可恢复备份，再结束当前多人进度。",
+                    Danger: true)
+            ],
+            "保留存档");
+        return choice == 1;
     }
 
     private static bool TryLoadSafeCurrentRun(out SerializableRun? run, out string failureReason)

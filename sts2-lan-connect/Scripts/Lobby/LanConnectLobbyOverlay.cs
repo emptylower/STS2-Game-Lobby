@@ -162,11 +162,16 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Button? _repairSaveButton;
     private Button? _copyDebugReportButton;
     private Control? _createDialogContainer;
+    private PanelContainer? _createDialogCard;
+    private VBoxContainer? _createDialogBody;
     private Label? _createDialogErrorLabel;
     private LineEdit? _roomNameInput;
     private OptionButton? _roomTypeOption;
-    private OptionButton? _protocolProfileOption;
+    private int _selectedCreateGameModeId;
+    private Button? _protocolCompatButton;
+    private Button? _protocolTailButton;
     private Label? _protocolProfileHintLabel;
+    private int _selectedCreateProtocolId = CreateProtocolCompatId;
     private LineEdit? _roomPasswordInput;
     private SpinBox? _maxPlayersSpinBox;
     private Label? _maxPlayersHintLabel;
@@ -247,6 +252,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private long _serverChatPresentationRevision = -1;
     private bool _testMode;
     private float? _uiScaleOverride;
+    private LanConnectLanHostModeAvailability? _testCreateGameModeAvailability;
+    private Action<string, string>? _testCreateGameModePopup;
 
     internal LanConnectLobbyOverlayTestState TestState => new(
         RectForTests(_roomStagePanel),
@@ -512,15 +519,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     internal string CreateProtocolDescriptionForTests => GetSelectedCreateProtocolDescription();
 
+    internal int SelectedCreateGameModeIdForTests => _selectedCreateGameModeId;
+
+    internal Rect2 CreateDialogCardRectForTests => RectForTests(_createDialogCard);
+
+    internal Rect2 CreateDialogBodyRectForTests => RectForTests(_createDialogBody);
+
     internal void SelectCreateProtocolForTests(int protocolId)
     {
-        if (_protocolProfileOption == null)
-        {
-            return;
-        }
-
-        SelectOptionById(_protocolProfileOption, protocolId);
-        UpdateProtocolProfileHint();
+        SelectCreateProtocol(protocolId);
     }
 
     internal void OpenCreateDialogForTests()
@@ -531,7 +538,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         _roomNameInput.Text = GetSuggestedRoomName();
-        _roomTypeOption.Select(0);
+        ResetCreateGameModeSelection();
+        RefreshCreateGameModeAvailability();
         SelectDefaultCreateProtocol();
         RefreshProtocolProfileOptionAvailability();
         _roomPasswordInput.Text = string.Empty;
@@ -543,6 +551,47 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         ShowCreateDialogError(string.Empty, visible: false);
         _createDialogContainer.Visible = true;
+    }
+
+    internal void SetCreateGameModeAvailabilityForTests(
+        LanConnectLanHostModeAvailability availability)
+    {
+        _testCreateGameModeAvailability = availability;
+        RefreshCreateGameModeAvailability();
+    }
+
+    internal void SetCreateGameModePopupForTests(Action<string, string> showPopup)
+    {
+        _testCreateGameModePopup = showPopup;
+    }
+
+    internal IReadOnlyList<string> CreateGameModeOptionLabelsForTests()
+    {
+        if (_roomTypeOption == null)
+        {
+            return [];
+        }
+
+        return Enumerable.Range(0, _roomTypeOption.ItemCount)
+            .Select(_roomTypeOption.GetItemText)
+            .ToArray();
+    }
+
+    internal void SelectCreateGameModeForTests(int gameModeId)
+    {
+        if (_roomTypeOption == null)
+        {
+            return;
+        }
+
+        int index = FindCreateGameModeIndex(gameModeId);
+        if (index < 0)
+        {
+            return;
+        }
+
+        _roomTypeOption.Select(index);
+        _roomTypeOption.EmitSignal(OptionButton.SignalName.ItemSelected, index);
     }
 
     internal static string CreateProtocolDescriptionForTestsStatic(int protocolId) =>
@@ -568,35 +617,23 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             .ToArray();
 
     internal IReadOnlyList<string> CreateProtocolOptionLabelsForTests()
-    {
-        if (_protocolProfileOption == null)
-        {
-            return [];
-        }
-
-        List<string> labels = [];
-        for (var index = 0; index < _protocolProfileOption.ItemCount; index++)
-        {
-            labels.Add(_protocolProfileOption.GetItemText(index));
-        }
-
-        return labels;
-    }
+        => ["兼容旧版客户端", "0.6 新协议（RitsuLib 状态必须一致）"];
 
     internal IReadOnlyList<bool> CreateProtocolOptionDisabledStatesForTests()
+        => [_protocolCompatButton?.Disabled ?? true, _protocolTailButton?.Disabled ?? true];
+
+    internal IReadOnlyList<Rect2> CreateProtocolChoiceRectsForTests() =>
+        new[] { _protocolCompatButton, _protocolTailButton }
+            .Where(static button => button != null)
+            .Select(static button => button!.GetGlobalRect())
+            .ToArray();
+
+    internal void PressCreateProtocolForTests(int protocolId)
     {
-        if (_protocolProfileOption == null)
-        {
-            return [];
-        }
-
-        List<bool> states = [];
-        for (var index = 0; index < _protocolProfileOption.ItemCount; index++)
-        {
-            states.Add(_protocolProfileOption.IsItemDisabled(index));
-        }
-
-        return states;
+        Button? button = protocolId == CreateProtocolTailId
+            ? _protocolTailButton
+            : _protocolCompatButton;
+        button?.EmitSignal(Button.SignalName.Pressed);
     }
 
     internal bool HasPendingInviteForTests => _pendingInvitePayload != null;
@@ -2348,18 +2385,20 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private Control BuildCreateDialog()
     {
-        Control shell = CreateDialogShell(out VBoxContainer body);
+        Control shell = CreateDialogShell(out VBoxContainer body, spacious: true);
         _createDialogContainer = shell;
 
         body.AddChild(CreateSectionLabel("创建房间"));
 
         body.AddChild(BuildLabeledInputRow("房间名", GetSuggestedRoomName(), out _roomNameInput, "房间列表里展示的名称", showLengthCounter: true, maxLength: LanConnectConfig.MaxRoomNameLength));
-        body.AddChild(BuildLabeledOptionRow(
+        Control roomTypeRow = BuildLabeledOptionRow(
             "房间类型",
             out _roomTypeOption,
             ("标准模式", 0),
             ("多人每日挑战", 1),
-            ("自定义模式", 2)));
+            ("自定义模式", 2));
+        body.AddChild(roomTypeRow);
+        _roomTypeOption.ItemSelected += OnCreateGameModeSelected;
         body.AddChild(BuildProtocolProfileRow());
         body.AddChild(BuildLabeledInputRow("可选密码", string.Empty, out _roomPasswordInput, "留空表示公开房间", showLengthCounter: true, maxLength: LanConnectConfig.MaxRoomPasswordLength));
         body.AddChild(BuildMaxPlayersRow());
@@ -2705,7 +2744,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         RestoreDialogReturnFocus();
     }
 
-    private Control CreateDialogShell(out VBoxContainer body)
+    private Control CreateDialogShell(out VBoxContainer body, bool spacious = false)
     {
         Control shell = new()
         {
@@ -2723,25 +2762,71 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         veil.SetAnchorsPreset(LayoutPreset.FullRect);
         shell.AddChild(veil);
 
-        CenterContainer center = new();
-        center.SetAnchorsPreset(LayoutPreset.FullRect);
-        shell.AddChild(center);
-
-        MarginContainer margin = new();
-        margin.SetAnchorsPreset(LayoutPreset.Center);
-        margin.OffsetLeft = -300f;
-        margin.OffsetTop = -180f;
-        margin.OffsetRight = 300f;
-        margin.OffsetBottom = 180f;
-        center.AddChild(margin);
-
         PanelContainer card = CreatePixelBorderPanel(background: CardColor, padding: 22);
-        card.CustomMinimumSize = new Vector2(560f, 0f);
-        margin.AddChild(card);
-
-        body = new VBoxContainer();
+        body = new VBoxContainer
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
         body.AddThemeConstantOverride("separation", 14);
-        card.AddChild(body);
+
+        if (spacious)
+        {
+            VBoxContainer dialogBody = body;
+            _createDialogCard = card;
+            _createDialogBody = dialogBody;
+            shell.AddChild(card);
+            ScrollContainer scroll = new()
+            {
+                SizeFlagsHorizontal = SizeFlags.ExpandFill,
+                SizeFlagsVertical = SizeFlags.ExpandFill,
+                HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
+                VerticalScrollMode = ScrollContainer.ScrollMode.Auto,
+                FollowFocus = true
+            };
+            card.AddChild(scroll);
+            scroll.AddChild(body);
+
+            void UpdateLayout()
+            {
+                Vector2 viewport = shell.Size;
+                if (viewport.X <= 0f || viewport.Y <= 0f)
+                {
+                    viewport = shell.GetViewportRect().Size;
+                }
+
+                float margin = Math.Clamp(Math.Min(viewport.X, viewport.Y) * 0.04f, 14f, 36f);
+                float availableWidth = Math.Max(1f, viewport.X - margin * 2f);
+                float availableHeight = Math.Max(1f, viewport.Y - margin * 2f);
+                float width = Math.Min(760f, availableWidth);
+                float desiredHeight = Math.Min(dialogBody.GetCombinedMinimumSize().Y + 44f, 820f);
+                float height = Math.Min(Math.Max(420f, desiredHeight), availableHeight);
+                card.Position = new Vector2(
+                    MathF.Round((viewport.X - width) * 0.5f),
+                    MathF.Round((viewport.Y - height) * 0.5f));
+                card.Size = new Vector2(MathF.Round(width), MathF.Round(height));
+            }
+
+            shell.Resized += UpdateLayout;
+            Callable.From(UpdateLayout).CallDeferred();
+        }
+        else
+        {
+            CenterContainer center = new();
+            center.SetAnchorsPreset(LayoutPreset.FullRect);
+            shell.AddChild(center);
+
+            MarginContainer margin = new();
+            margin.SetAnchorsPreset(LayoutPreset.Center);
+            margin.OffsetLeft = -300f;
+            margin.OffsetTop = -180f;
+            margin.OffsetRight = 300f;
+            margin.OffsetBottom = 180f;
+            center.AddChild(margin);
+
+            card.CustomMinimumSize = new Vector2(560f, 0f);
+            margin.AddChild(card);
+            card.AddChild(body);
+        }
         return shell;
     }
 
@@ -2837,19 +2922,24 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         label.AddThemeColorOverride("font_color", TextStrongColor);
         row.AddChild(label);
 
-        _protocolProfileOption = new OptionButton
+        VBoxContainer choices = new()
         {
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            FitToLongestItem = false
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
         };
-        _protocolProfileOption.AddItem(UiText("兼容旧版客户端"), CreateProtocolCompatId);
-        _protocolProfileOption.AddItem(UiText("0.6 新协议（RitsuLib 状态必须一致）"), CreateProtocolTailId);
-        _protocolProfileOption.Select(0);
-        _protocolProfileOption.Connect(
-            OptionButton.SignalName.ItemSelected,
-            Callable.From<long>(_ => UpdateProtocolProfileHint()));
-        ApplyInputStyle(_protocolProfileOption);
-        row.AddChild(_protocolProfileOption);
+        choices.AddThemeConstantOverride("separation", 10);
+        row.AddChild(choices);
+
+        _protocolCompatButton = CreateProtocolChoiceButton(
+            "兼容旧版客户端",
+            "支持 0.3-0.5，不支持 RitsuLib",
+            CreateProtocolCompatId);
+        choices.AddChild(_protocolCompatButton);
+
+        _protocolTailButton = CreateProtocolChoiceButton(
+            "0.6 新协议",
+            "仅支持 0.6+；RitsuLib 状态必须一致",
+            CreateProtocolTailId);
+        choices.AddChild(_protocolTailButton);
 
         _protocolProfileHintLabel = CreateBodyLabel(string.Empty);
         _protocolProfileHintLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
@@ -2858,6 +2948,22 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         RefreshProtocolProfileOptionAvailability();
 
         return row;
+    }
+
+    private Button CreateProtocolChoiceButton(string title, string description, int protocolId)
+    {
+        Button button = new()
+        {
+            Text = UiText($"{title}\n{description}"),
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(0f, 76f),
+            FocusMode = FocusModeEnum.All,
+            Alignment = HorizontalAlignment.Left,
+            TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
+            AccessibilityName = UiText($"{title}。{description}")
+        };
+        button.Pressed += () => SelectCreateProtocol(protocolId);
+        return button;
     }
 
     private Control BuildMaxPlayersRow()
@@ -3904,6 +4010,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             _roomNameInput.Text = roomName;
         }
         GameMode gameMode = GetSelectedCreateGameMode();
+        if (!IsCreateGameModeAvailable(gameMode, GetCreateGameModeAvailability()))
+        {
+            string message = GetLockedCreateGameModeMessage(gameMode);
+            ResetCreateGameModeSelection();
+            ShowLockedCreateGameModePopup(message);
+            ShowCreateDialogError(message);
+            return;
+        }
+
         string? password = string.IsNullOrWhiteSpace(_roomPasswordInput?.Text) ? null : LanConnectConfig.SanitizeRoomPassword(_roomPasswordInput.Text);
         if (_roomPasswordInput != null && (_roomPasswordInput.Text?.Trim() ?? string.Empty) != (password ?? string.Empty))
         {
@@ -4463,7 +4578,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _roomNameInput.Text = string.IsNullOrWhiteSpace(LanConnectConfig.LastRoomName)
             ? GetSuggestedRoomName()
             : LanConnectConfig.LastRoomName;
-        _roomTypeOption.Select(0);
+        ResetCreateGameModeSelection();
+        RefreshCreateGameModeAvailability();
         SelectDefaultCreateProtocol();
         RefreshProtocolProfileOptionAvailability();
         _roomPasswordInput.Text = string.Empty;
@@ -4538,12 +4654,153 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private GameMode GetSelectedCreateGameMode()
     {
-        return _roomTypeOption?.GetSelectedId() switch
+        return _selectedCreateGameModeId switch
         {
             1 => GameMode.Daily,
             2 => GameMode.Custom,
             _ => GameMode.Standard
         };
+    }
+
+    private void ResetCreateGameModeSelection()
+    {
+        _selectedCreateGameModeId = 0;
+        int standardIndex = FindCreateGameModeIndex(_selectedCreateGameModeId);
+        if (standardIndex >= 0)
+        {
+            _roomTypeOption?.Select(standardIndex);
+        }
+    }
+
+    private void RefreshCreateGameModeAvailability()
+    {
+        if (_roomTypeOption == null)
+        {
+            return;
+        }
+
+        LanConnectLanHostModeAvailability availability = GetCreateGameModeAvailability();
+        SetCreateGameModeOptionText(0, "标准模式", availability.Standard);
+        SetCreateGameModeOptionText(1, "多人每日挑战", availability.Daily);
+        SetCreateGameModeOptionText(2, "自定义模式", availability.Custom);
+
+        GameMode selectedMode = GetSelectedCreateGameMode();
+        if (!IsCreateGameModeAvailable(selectedMode, availability))
+        {
+            ResetCreateGameModeSelection();
+        }
+    }
+
+    private void OnCreateGameModeSelected(long selectedIndex)
+    {
+        if (_roomTypeOption == null || selectedIndex < 0 || selectedIndex >= _roomTypeOption.ItemCount)
+        {
+            return;
+        }
+
+        int selectedId = _roomTypeOption.GetItemId((int)selectedIndex);
+        GameMode selectedMode = GameModeFromCreateId(selectedId);
+        LanConnectLanHostModeAvailability availability = GetCreateGameModeAvailability();
+        if (!IsCreateGameModeAvailable(selectedMode, availability))
+        {
+            int previousIndex = FindCreateGameModeIndex(_selectedCreateGameModeId);
+            if (previousIndex >= 0)
+            {
+                _roomTypeOption.Select(previousIndex);
+            }
+
+            ShowLockedCreateGameModePopup(GetLockedCreateGameModeMessage(selectedMode));
+            return;
+        }
+
+        _selectedCreateGameModeId = selectedId;
+    }
+
+    private LanConnectLanHostModeAvailability GetCreateGameModeAvailability()
+    {
+        if (_testCreateGameModeAvailability is { } testAvailability)
+        {
+            return testAvailability;
+        }
+
+        if (_stack == null)
+        {
+            return new LanConnectLanHostModeAvailability(true, true, true);
+        }
+
+        try
+        {
+            NMultiplayerHostSubmenu hostSubmenu = _stack.GetSubmenuType<NMultiplayerHostSubmenu>();
+            return HostSubmenuPatches.GetModeAvailability(hostSubmenu);
+        }
+        catch (Exception exception)
+        {
+            GD.Print($"sts2_lan_connect overlay: could not read room mode unlock state: {exception.Message}");
+            return new LanConnectLanHostModeAvailability(true, true, true);
+        }
+    }
+
+    private void SetCreateGameModeOptionText(int id, string label, bool available)
+    {
+        int index = FindCreateGameModeIndex(id);
+        if (index >= 0)
+        {
+            _roomTypeOption!.SetItemText(index, UiText(available ? label : $"{label}（未解锁）"));
+        }
+    }
+
+    private int FindCreateGameModeIndex(int id)
+    {
+        if (_roomTypeOption == null)
+        {
+            return -1;
+        }
+
+        for (int index = 0; index < _roomTypeOption.ItemCount; index++)
+        {
+            if (_roomTypeOption.GetItemId(index) == id)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static GameMode GameModeFromCreateId(int id) => id switch
+    {
+        1 => GameMode.Daily,
+        2 => GameMode.Custom,
+        _ => GameMode.Standard
+    };
+
+    private static bool IsCreateGameModeAvailable(
+        GameMode gameMode,
+        LanConnectLanHostModeAvailability availability) => gameMode switch
+    {
+        GameMode.Standard => availability.Standard,
+        GameMode.Daily => availability.Daily,
+        GameMode.Custom => availability.Custom,
+        _ => false
+    };
+
+    private static string GetLockedCreateGameModeMessage(GameMode gameMode) => gameMode switch
+    {
+        GameMode.Daily => "多人每日挑战尚未解锁，当前不能创建该类型房间。",
+        GameMode.Custom => "自定义模式尚未解锁，当前不能创建该类型房间。",
+        _ => "该模式尚未解锁，当前不能创建房间。"
+    };
+
+    private void ShowLockedCreateGameModePopup(string message)
+    {
+        const string title = "模式尚未解锁";
+        if (_testCreateGameModePopup != null)
+        {
+            _testCreateGameModePopup(title, message);
+            return;
+        }
+
+        LanConnectPopupUtil.ShowInfo(title, message);
     }
 
     private void CloseCreateDialog()
@@ -5941,7 +6198,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void RefreshProtocolProfileOptionAvailability()
     {
-        if (_protocolProfileOption == null)
+        if (_protocolCompatButton == null || _protocolTailButton == null)
         {
             UpdateProtocolProfileHint();
             return;
@@ -5949,22 +6206,22 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         LanConnectProtocolOffer offer = LanConnectProtocolOffer.CreateCurrent();
         bool standaloneTailRuntimeAvailable = IsStandaloneTailRuntimeAvailable();
-        for (var index = 0; index < _protocolProfileOption.ItemCount; index++)
-        {
-            int protocolId = _protocolProfileOption.GetItemId(index);
-            _protocolProfileOption.SetItemDisabled(
-                index,
-                !IsCreateProtocolSelectable(protocolId, offer, standaloneTailRuntimeAvailable));
-        }
+        _protocolCompatButton.Disabled = !IsCreateProtocolSelectable(
+            CreateProtocolCompatId,
+            offer,
+            standaloneTailRuntimeAvailable);
+        _protocolTailButton.Disabled = !IsCreateProtocolSelectable(
+            CreateProtocolTailId,
+            offer,
+            standaloneTailRuntimeAvailable);
 
         int selected = GetSelectedCreateProtocolId();
         if (!IsCreateProtocolSelectable(selected, offer, standaloneTailRuntimeAvailable))
         {
-            SelectOptionById(
-                _protocolProfileOption,
-                GetDefaultCreateProtocolId(offer, standaloneTailRuntimeAvailable));
+            _selectedCreateProtocolId = GetDefaultCreateProtocolId(offer, standaloneTailRuntimeAvailable);
         }
 
+        UpdateProtocolChoiceStyles();
         UpdateProtocolProfileHint();
     }
 
@@ -5983,13 +6240,43 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private int GetSelectedCreateProtocolId()
     {
-        if (_protocolProfileOption == null)
+        return _selectedCreateProtocolId == CreateProtocolTailId
+            ? CreateProtocolTailId
+            : CreateProtocolCompatId;
+    }
+
+    private void SelectCreateProtocol(int protocolId)
+    {
+        Button? button = protocolId == CreateProtocolTailId
+            ? _protocolTailButton
+            : protocolId == CreateProtocolCompatId
+                ? _protocolCompatButton
+                : null;
+        if (button == null || button.Disabled)
         {
-            return CreateProtocolCompatId;
+            return;
         }
 
-        int selected = _protocolProfileOption.GetSelectedId();
-        return selected == CreateProtocolTailId ? CreateProtocolTailId : CreateProtocolCompatId;
+        _selectedCreateProtocolId = protocolId;
+        UpdateProtocolChoiceStyles();
+        UpdateProtocolProfileHint();
+    }
+
+    private void UpdateProtocolChoiceStyles()
+    {
+        if (_protocolCompatButton != null)
+        {
+            ApplyProtocolChoiceStyle(
+                _protocolCompatButton,
+                _selectedCreateProtocolId == CreateProtocolCompatId);
+        }
+
+        if (_protocolTailButton != null)
+        {
+            ApplyProtocolChoiceStyle(
+                _protocolTailButton,
+                _selectedCreateProtocolId == CreateProtocolTailId);
+        }
     }
 
     private static string GetProtocolProfileDescription(LanConnectProtocolProfile profile) => profile switch
@@ -6027,9 +6314,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private void SelectDefaultCreateProtocol()
     {
         LanConnectProtocolOffer offer = LanConnectProtocolOffer.CreateCurrent();
-        SelectOptionById(
-            _protocolProfileOption,
-            GetDefaultCreateProtocolId(offer, IsStandaloneTailRuntimeAvailable()));
+        _selectedCreateProtocolId = GetDefaultCreateProtocolId(
+            offer,
+            IsStandaloneTailRuntimeAvailable());
+        UpdateProtocolChoiceStyles();
+        UpdateProtocolProfileHint();
     }
 
     internal static int GetDefaultCreateProtocolIdForTests(
@@ -6062,23 +6351,6 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             ProtocolProfileFromCreateId(protocolId),
             maxPlayers,
             offer);
-
-    private static void SelectOptionById(OptionButton? option, int id)
-    {
-        if (option == null)
-        {
-            return;
-        }
-
-        for (var index = 0; index < option.ItemCount; index++)
-        {
-            if (option.GetItemId(index) == id)
-            {
-                option.Select(index);
-                return;
-            }
-        }
-    }
 
     private void ReplaceJoinCancellationSource(CancellationTokenSource cancellationTokenSource)
     {
@@ -7345,6 +7617,29 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         input.AddThemeColorOverride("font_focus_color", TextStrongColor);
         input.AddThemeColorOverride("modulate_arrow", AccentColor);
         input.AddThemeFontSizeOverride("font_size", 16);
+    }
+
+    private static void ApplyProtocolChoiceStyle(Button button, bool selected)
+    {
+        Color background = selected ? AccentMutedColor : InputBgColor;
+        Color border = selected ? AccentColor : BorderColor;
+        int borderWidth = selected ? 3 : 2;
+        button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(background, border, borderWidth, 14, 3, 0));
+        button.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(CardColor, AccentColor, 3, 14, 3, 1));
+        button.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(SecondaryColor, AccentColor, 3, 14, 3, 3));
+        button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(background, AccentColor, 3, 14, 3, 1));
+        button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(
+            WithAlpha(InputBgColor, 0.48f),
+            WithAlpha(BorderColor, 0.45f),
+            borderWidth: 2,
+            padding: 14,
+            shadowSize: 0));
+        button.AddThemeColorOverride("font_color", selected ? AccentColor : TextStrongColor);
+        button.AddThemeColorOverride("font_hover_color", TextStrongColor);
+        button.AddThemeColorOverride("font_pressed_color", TextStrongColor);
+        button.AddThemeColorOverride("font_focus_color", selected ? AccentColor : TextStrongColor);
+        button.AddThemeColorOverride("font_disabled_color", WithAlpha(TextMutedColor, 0.58f));
+        button.AddThemeFontSizeOverride("font_size", 17);
     }
 
     private static (ColorRect Dot, Label Value) BuildActionStatusRow(VBoxContainer parent, string keyText)

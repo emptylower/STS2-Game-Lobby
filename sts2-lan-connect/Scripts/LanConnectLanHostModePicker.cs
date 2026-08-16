@@ -3,7 +3,7 @@ using MegaCrit.Sts2.Core.Helpers;
 
 namespace Sts2LanConnect.Scripts;
 
-internal sealed partial class LanConnectLanHostModePicker : PopupMenu
+internal sealed partial class LanConnectLanHostModePicker : LanConnectLobbyChoiceDialog
 {
     private Func<LanConnectLanHostModeAvailability>? _availability;
     private Func<LanConnectLanHostMode, Task>? _onSelected;
@@ -12,13 +12,8 @@ internal sealed partial class LanConnectLanHostModePicker : PopupMenu
 
     public LanConnectLanHostModePicker()
     {
-        Exclusive = true;
-        foreach (LanConnectLanHostModeOption option in LanConnectLanHostModeSelection.Options)
-        {
-            AddItem(option.Label, option.Id);
-        }
-
-        IdPressed += OnIdPressed;
+        Visible = false;
+        ChoiceSelected += OnChoiceSelected;
     }
 
     internal void Initialize(
@@ -31,7 +26,7 @@ internal sealed partial class LanConnectLanHostModePicker : PopupMenu
         _onSelected = onSelected;
     }
 
-    internal void Open()
+    internal new void Open()
     {
         if (_availability == null || _onSelected == null ||
             _selectionInFlight || _exitedTree || !IsInsideTree())
@@ -40,22 +35,19 @@ internal sealed partial class LanConnectLanHostModePicker : PopupMenu
         }
 
         LanConnectLanHostModeAvailability availability = _availability();
-        int firstAvailableIndex = -1;
-        for (int index = 0; index < ItemCount; index++)
-        {
-            bool available = LanConnectLanHostModeSelection.TryResolve(
-                GetItemId(index),
-                availability,
-                out _);
-            SetItemDisabled(index, !available);
-            if (available && firstAvailableIndex < 0)
-            {
-                firstAvailableIndex = index;
-            }
-        }
-
-        PopupCentered(new Vector2I(420, 0));
-        SetFocusedItem(firstAvailableIndex);
+        Configure(
+            "LAN 调试建房",
+            "选择要启动的游戏模式。不可用的模式会保持禁用。",
+            LanConnectLanHostModeSelection.Options
+                .Select(option => new LanConnectLobbyDialogChoice(
+                    option.Id,
+                    option.Label,
+                    Describe(option.Mode),
+                    IsAvailable(option.Mode, availability),
+                    Primary: option.Mode == LanConnectLanHostMode.Standard))
+                .ToArray(),
+            "返回");
+        base.Open();
     }
 
     public override void _EnterTree()
@@ -66,12 +58,12 @@ internal sealed partial class LanConnectLanHostModePicker : PopupMenu
     public override void _ExitTree()
     {
         _exitedTree = true;
-        Hide();
+        base._ExitTree();
     }
 
-    private void OnIdPressed(long id)
+    private void OnChoiceSelected(int id)
     {
-        if (!Visible || _selectionInFlight || _exitedTree ||
+        if (_selectionInFlight || _exitedTree ||
             _availability == null || _onSelected == null ||
             !LanConnectLanHostModeSelection.TryResolve(
                 id,
@@ -82,7 +74,6 @@ internal sealed partial class LanConnectLanHostModePicker : PopupMenu
         }
 
         _selectionInFlight = true;
-        Hide();
         TaskHelper.RunSafely(StartSelectedModeAsync(mode));
     }
 
@@ -97,4 +88,22 @@ internal sealed partial class LanConnectLanHostModePicker : PopupMenu
             _selectionInFlight = false;
         }
     }
+
+    private static bool IsAvailable(
+        LanConnectLanHostMode mode,
+        LanConnectLanHostModeAvailability availability) => mode switch
+    {
+        LanConnectLanHostMode.Standard => availability.Standard,
+        LanConnectLanHostMode.Daily => availability.Daily,
+        LanConnectLanHostMode.Custom => availability.Custom,
+        _ => false
+    };
+
+    private static string Describe(LanConnectLanHostMode mode) => mode switch
+    {
+        LanConnectLanHostMode.Standard => "按标准规则创建 ENet LAN Host。",
+        LanConnectLanHostMode.Daily => "启动多人每日挑战的 LAN Host。",
+        LanConnectLanHostMode.Custom => "进入自定义规则设置后创建 LAN Host。",
+        _ => string.Empty
+    };
 }

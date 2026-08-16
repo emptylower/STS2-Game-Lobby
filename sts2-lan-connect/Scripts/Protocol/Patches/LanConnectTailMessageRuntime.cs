@@ -100,6 +100,11 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
 
         binding.BindBidirectionalSidecarFlow(service.NetId, peerNetId, protocolFlowNonce);
         LanConnectRitsuLibSidecarCarrier.Shared.SetPeerSupported(peerNetId);
+        PendingOutgoingSidecar? pending = binding.TakePendingOutgoingSidecar(peerNetId);
+        if (pending != null)
+        {
+            SendDeferredHostSidecar(binding, peerNetId, pending);
+        }
     }
 
     internal void BindClientHostSidecarFlow(NetClientGameService service)
@@ -212,19 +217,30 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         ValidateBinding(binding, senderPeerId, selection);
         EnsureSidecarReady(binding);
 
-        IReadOnlyList<ulong> recipients = ResolveOutgoingRecipients(binding);
-        (ulong RecipientPeerId, SidecarFlow Flow, byte[] Encoded)[] submissions = recipients
-            .Select(recipientPeerId =>
+        bool mayDeferUntilControlBinding = binding.IsHost
+                                           && messageKind is LanConnectSidecarMessageKind.InitialGameInfo
+                                               or LanConnectSidecarMessageKind.ConnectionFailed;
+        IReadOnlyList<ulong> recipients = ResolveOutgoingRecipients(binding, mayDeferUntilControlBinding);
+        List<(ulong RecipientPeerId, SidecarFlow Flow, byte[] Encoded)> submissions = [];
+        foreach (ulong recipientPeerId in recipients)
+        {
+            if (mayDeferUntilControlBinding
+                && !binding.CanSendSidecarTo(senderPeerId, recipientPeerId))
             {
-                SidecarFlow flow = binding.RequireOutgoingSidecarFlow(senderPeerId, recipientPeerId);
-                LanConnectSidecarFrame frame = new(
-                    messageKind,
-                    flow.FlowNonce,
-                    flow.NextOutgoingSequence,
-                    container);
-                return (recipientPeerId, flow, LanConnectSidecarFrameCodec.Encode(frame));
-            })
-            .ToArray();
+                binding.RememberPendingOutgoingSidecar(
+                    recipientPeerId,
+                    new PendingOutgoingSidecar(messageKind, senderPeerId, container.ToArray()));
+                continue;
+            }
+
+            SidecarFlow flow = binding.RequireOutgoingSidecarFlow(senderPeerId, recipientPeerId);
+            LanConnectSidecarFrame frame = new(
+                messageKind,
+                flow.FlowNonce,
+                flow.NextOutgoingSequence,
+                container);
+            submissions.Add((recipientPeerId, flow, LanConnectSidecarFrameCodec.Encode(frame)));
+        }
 
         List<SidecarFlow> deliveredFlows = [];
         foreach ((ulong recipientPeerId, SidecarFlow flow, byte[] encoded) in submissions)
@@ -877,7 +893,9 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         }
     }
 
-    private static IReadOnlyList<ulong> ResolveOutgoingRecipients(Binding binding)
+    private static IReadOnlyList<ulong> ResolveOutgoingRecipients(
+        Binding binding,
+        bool permitUnboundRecipients = false)
     {
         if (!binding.IsHost)
         {
@@ -889,7 +907,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             IReadOnlyList<ulong> requested = stack.Peek();
             ulong[] recipients = requested.Distinct().ToArray();
             if (recipients.Length != requested.Count
-                || recipients.Any(peerId => !binding.HasSidecarPeer(peerId)))
+                || (!permitUnboundRecipients && recipients.Any(peerId => !binding.HasSidecarPeer(peerId))))
             {
                 throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
             }
@@ -904,6 +922,42 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         }
 
         throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+    }
+
+    private static void SendDeferredHostSidecar(
+        Binding binding,
+        ulong recipientPeerId,
+        PendingOutgoingSidecar pending)
+    {
+        SidecarFlow flow = binding.RequireOutgoingSidecarFlow(pending.SenderPeerId, recipientPeerId);
+        LanConnectSidecarFrame frame = new(
+            pending.MessageKind,
+            flow.FlowNonce,
+            flow.NextOutgoingSequence,
+            pending.Container);
+        bool sent;
+        try
+        {
+            sent = LanConnectRitsuLibSidecarCarrier.Shared.SendToPeer(
+                binding.Service,
+                recipientPeerId,
+                LanConnectSidecarFrameCodec.Encode(frame));
+        }
+        catch
+        {
+            sent = false;
+        }
+
+        if (!sent)
+        {
+            if (binding.Service is NetHostGameService host)
+            {
+                host.DisconnectClient(recipientPeerId, NetError.ModMismatch);
+            }
+            throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+        }
+
+        flow.AdvanceOutgoing();
     }
 
     private static LanConnectRosterSnapshot RequireRoster(LanConnectTailMessagePayload payload) =>
@@ -1054,6 +1108,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         internal NetMessageBus MessageBus { get; }
         internal LanConnectSidecarPairingCache SidecarPairing { get; } = new();
         private readonly Dictionary<SidecarFlowKey, SidecarFlow> _sidecarFlows = [];
+        private readonly Dictionary<ulong, PendingOutgoingSidecar> _pendingOutgoingSidecars = [];
         private LanConnectRosterAuthorityState? _roster;
         internal LanConnectRosterAuthorityState RequireRoster()
         {
@@ -1087,6 +1142,41 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             {
                 return _sidecarFlows.Keys.Any(key =>
                     key.SenderPeerId == peerNetId || key.RecipientPeerId == peerNetId);
+            }
+        }
+
+        internal bool CanSendSidecarTo(ulong senderPeerId, ulong recipientPeerId)
+        {
+            lock (Sync)
+            {
+                return _sidecarFlows.ContainsKey(new SidecarFlowKey(senderPeerId, recipientPeerId))
+                       && LanConnectRitsuLibSidecarCarrier.Shared.CanSendToPeer(recipientPeerId);
+            }
+        }
+
+        internal void RememberPendingOutgoingSidecar(
+            ulong recipientPeerId,
+            PendingOutgoingSidecar pending)
+        {
+            lock (Sync)
+            {
+                if (!_pendingOutgoingSidecars.ContainsKey(recipientPeerId)
+                    && _pendingOutgoingSidecars.Count >= LanConnectConstants.ProtocolMaxPlayers)
+                {
+                    throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+                }
+
+                _pendingOutgoingSidecars[recipientPeerId] = pending;
+            }
+        }
+
+        internal PendingOutgoingSidecar? TakePendingOutgoingSidecar(ulong recipientPeerId)
+        {
+            lock (Sync)
+            {
+                return _pendingOutgoingSidecars.Remove(recipientPeerId, out PendingOutgoingSidecar? pending)
+                    ? pending
+                    : null;
             }
         }
 
@@ -1159,6 +1249,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                     _sidecarFlows.Remove(key);
                 }
                 SidecarPairing.ClearPeer(peerNetId);
+                _pendingOutgoingSidecars.Remove(peerNetId);
             }
         }
 
@@ -1167,6 +1258,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             lock (Sync)
             {
                 _sidecarFlows.Clear();
+                _pendingOutgoingSidecars.Clear();
                 SidecarPairing.Clear();
             }
         }
@@ -1202,6 +1294,11 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     }
 
     private readonly record struct SidecarFlowKey(ulong SenderPeerId, ulong RecipientPeerId);
+
+    private sealed record PendingOutgoingSidecar(
+        LanConnectSidecarMessageKind MessageKind,
+        ulong SenderPeerId,
+        byte[] Container);
 
     private sealed class SidecarFlow
     {
