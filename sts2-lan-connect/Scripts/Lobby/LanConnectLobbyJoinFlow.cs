@@ -128,9 +128,12 @@ internal static class LanConnectLobbyJoinFlow
                             netId,
                             candidate.Host,
                             candidate.Port,
-                            service => LanConnectTailMessageRuntime.Shared.BindClientHostSidecarFlow(
+                            service => LanConnectTailMessageRuntime.Shared.PrepareClientHostSidecarFlow(
                                 service,
                                 netId,
+                                service.HostNetId),
+                            service => LanConnectTailMessageRuntime.Shared.ActivateClientHostSidecarFlow(
+                                service,
                                 service.HostNetId))
                         : new ENetClientConnectionInitializer(netId, candidate.Host, candidate.Port);
                     Log.Info($"sts2_lan_connect attempting lobby join via {candidate.Host}:{candidate.Port} ({candidate.Label}) using netId={netId}.");
@@ -402,7 +405,8 @@ internal static class LanConnectLobbyJoinFlow
         ulong netId,
         string ip,
         ushort port,
-        Action<NetClientGameService> afterInitialize) : IClientConnectionInitializer
+        Action<NetClientGameService> beforeConnect,
+        Action<NetClientGameService> afterConnect) : IClientConnectionInitializer
     {
         public async Task<NetErrorInfo?> Connect(
             INetClientGameService netService,
@@ -421,8 +425,13 @@ internal static class LanConnectLobbyJoinFlow
 
             ENetClient client = new(concrete);
             netService.Initialize(client, PlatformType.None);
-            afterInitialize(concrete);
-            return await client.ConnectToHost(netId, ip, port, cancelToken);
+            beforeConnect(concrete);
+            NetErrorInfo? error = await client.ConnectToHost(netId, ip, port, cancelToken);
+            if (error == null)
+            {
+                afterConnect(concrete);
+            }
+            return error;
         }
     }
 

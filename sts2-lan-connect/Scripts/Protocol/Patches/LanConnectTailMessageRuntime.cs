@@ -114,6 +114,12 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
 
     internal void BindClientHostSidecarFlow(NetClientGameService service, ulong localNetId, ulong hostNetId)
     {
+        PrepareClientHostSidecarFlow(service, localNetId, hostNetId);
+        ActivateClientHostSidecarFlow(service, hostNetId);
+    }
+
+    internal void PrepareClientHostSidecarFlow(NetClientGameService service, ulong localNetId, ulong hostNetId)
+    {
         Binding binding = RequireBinding(GetMessageBus(service));
         if (binding.Selection.Carrier != LanConnectProtocolCarrier.RitsuLibSidecarV1)
         {
@@ -122,7 +128,18 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
 
         byte[] nonce = binding.ProtocolFlowNonce
             ?? throw new InvalidOperationException("Tail client sidecar binding has no protocol flow nonce.");
+        EnsureSidecarReady(binding);
         binding.BindBidirectionalSidecarFlow(localNetId, hostNetId, nonce);
+    }
+
+    internal void ActivateClientHostSidecarFlow(NetClientGameService service, ulong hostNetId)
+    {
+        Binding binding = RequireBinding(GetMessageBus(service));
+        if (binding.Selection.Carrier != LanConnectProtocolCarrier.RitsuLibSidecarV1)
+        {
+            return;
+        }
+
         LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(service);
         LanConnectRitsuLibSidecarCarrier.Shared.SetPeerSupported(hostNetId);
     }

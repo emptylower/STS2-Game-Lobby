@@ -3,7 +3,7 @@
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-![Client](https://img.shields.io/badge/client-v0.6.0--alpha.2-orange)
+![Client](https://img.shields.io/badge/client-v0.6.0--alpha.3-orange)
 ![Service](https://img.shields.io/badge/service-v0.6.0--alpha.1-orange)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
@@ -17,7 +17,7 @@
 
 ## 中文
 
-**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端测试版为 **v0.6.0-alpha.2**，大厅服务继续使用 **v0.6.0-alpha.1**。本候选版主要服务对象是：
+**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端测试版为 **v0.6.0-alpha.3**，大厅服务继续使用 **v0.6.0-alpha.1**。本候选版主要服务对象是：
 
 - 想自行部署大厅服务的服主 / 运维
 - 想构建或分发客户端 MOD 的维护者
@@ -41,10 +41,11 @@
 - 客户端通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）拿到聚合节点列表
 - 不再有任何"母面板"或中心化审核后台；`SERVER_REGISTRY_*` 一组环境变量自 v0.4.0 起已从 lobby-service 中完全移除
 
-### v0.6.0-alpha.2 双协议候选
+### v0.6.0-alpha.3 双协议候选
 
-- 修复 RitsuLib sidecar 的真实玩家 ID 和首个游戏信息/控制绑定竞态，避免新协议加入后长期等待。
+- 修复 RitsuLib 在 ENet 分配真实玩家 ID 前把客户端会话永久绑定到 `netId=0` 的问题；公开 sidecar 会话现在只在连接成功后激活。
 - 修复 SL/读档续局混入当前运行时身份并触发 `capability_digest_mismatch` 的问题。
+- 修复房主重开后加入者复用缓存多人子菜单时自动重连未启动的问题。
 - 建房显式选择兼容模式或 0.6 新协议；选择结果、carrier、RitsuLib presence 和 capability digest 在房间生命周期内冻结
 - 兼容模式固定使用 `4/5-bit`，支持 2-8 人并拒绝 RitsuLib
 - 0.6 新协议保持原版 `2/3-bit` 消息主体，完整 roster 由 LAN protocol v1 携带
@@ -53,14 +54,14 @@
 - Android 上的官方 RitsuLib v0.5.12 在自身网络补丁初始化阶段黑屏，因此本测试版不宣称全 Ritsu Android 联机可用；无 Ritsu Android/macOS 已完成真实开局验证
 - 删除 RC4 对 RitsuLib 私有 postfix 的卸载、直接调用和恢复逻辑，不维护 RitsuLib 分支
 - direct-IP 在 v0.6 测试系列中只允许兼容模式，本地 Ritsu 或 Tail intent 在创建 transport 前拒绝
-- 客户端升级到 `0.6.0-alpha.2`，lobby-service 继续使用 `0.6.0-alpha.1`
+- 客户端升级到 `0.6.0-alpha.3`，lobby-service 继续使用 `0.6.0-alpha.1`
 - 历史客户端真实互通不属于本 alpha 的测试或发布门禁
 
 ### 当前版本
 
-- 客户端源码 / 构建版本：`0.6.0-alpha.2`（测试候选）
+- 客户端源码 / 构建版本：`0.6.0-alpha.3`（测试候选）
 - 大厅服务源码 / 构建版本：`0.6.0-alpha.1`（测试候选）
-- 当前测试候选：[`v0.6.0-alpha.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.2)（GitHub Pre-release）
+- 当前测试候选：[`v0.6.0-alpha.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.3)（GitHub Pre-release）
 - 最新 GitHub 稳定版：[`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
 - Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（候选版测试公告见 `docs/STEAM_WORKSHOP_UPDATE_V0.5.6_ZH.txt`）
 
@@ -208,7 +209,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 ## English
 
-**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current client candidate is **v0.6.0-alpha.2**; lobby-service remains on **v0.6.0-alpha.1**.
+**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current client candidate is **v0.6.0-alpha.3**; lobby-service remains on **v0.6.0-alpha.1**.
 
 ### What is in this repository
 
@@ -224,10 +225,11 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 Each `lobby-service` node advertises itself to peers via the built-in peer-announce protocol. Clients aggregate the public node list through a Cloudflare discovery worker (`https://sts2-gamelobby-register.xyz`). There is no master panel and no central review backend; the `SERVER_REGISTRY_*` env vars from v0.3.x have been removed from `lobby-service` and have been inert since v0.4.0.
 
-### v0.6.0-alpha.2 dual-protocol candidate
+### v0.6.0-alpha.3 dual-protocol candidate
 
-- Fixes the real player ID and initial-game-info/control-binding race in the RitsuLib sidecar join path.
+- Defers the first RitsuLib client-session observation until ENet has assigned the real player ID, preventing a permanent `netId=0` sidecar binding.
 - Fixes continue-run publication mixing current runtime identity into a frozen save and raising `capability_digest_mismatch`.
+- Resumes client auto-reconnect explicitly when restart navigation reuses an already-created multiplayer submenu.
 - Room creation explicitly selects compat or Tail v1 and freezes the profile, carrier, RitsuLib presence, and capability digest.
 - Compat uses fixed `4/5-bit` encoding for 2-8 players and rejects RitsuLib.
 - Tail v1 preserves the vanilla `2/3-bit` body and carries the complete roster in LAN protocol v1.
@@ -239,9 +241,9 @@ Each `lobby-service` node advertises itself to peers via the built-in peer-annou
 
 ### Current versions
 
-- Client source/build version: `0.6.0-alpha.2` (prerelease candidate)
+- Client source/build version: `0.6.0-alpha.3` (prerelease candidate)
 - Lobby service source/build version: `0.6.0-alpha.1` (prerelease candidate)
-- Current release candidate: [`v0.6.0-alpha.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.2) (GitHub prerelease)
+- Current release candidate: [`v0.6.0-alpha.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.3) (GitHub prerelease)
 - Latest stable GitHub release: [`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
 - Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 

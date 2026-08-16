@@ -2824,11 +2824,29 @@ internal sealed partial class LanConnectLobbyRuntime :
             _lastRestartSubmenuOpenAtUnixMs = now;
             mainMenu.OpenMultiplayerSubmenu();
             GD.Print($"sts2_lan_connect restart_nav: open multiplayer submenu source={source}");
+            Callable.From(() => ResumePendingRestartFromCachedSubmenu(mainMenu, source)).CallDeferred();
         }
         catch (Exception ex)
         {
             Log.Warn($"sts2_lan_connect restart_nav: failed to open multiplayer submenu source={source}: {ex.Message}");
         }
+    }
+
+    private void ResumePendingRestartFromCachedSubmenu(NMainMenu mainMenu, string source)
+    {
+        if (_pendingHostRestart == null && _pendingClientReconnect == null)
+        {
+            return;
+        }
+
+        NMultiplayerSubmenu? submenu = FindNodeByType<NMultiplayerSubmenu>(mainMenu);
+        if (submenu == null || !GodotObject.IsInstanceValid(submenu) || !submenu.IsInsideTree())
+        {
+            return;
+        }
+
+        GD.Print($"sts2_lan_connect restart_nav: resume pending restart from multiplayer submenu source={source}");
+        OnMultiplayerSubmenuReady(submenu);
     }
 
     private NMainMenu? FindMainMenuNode()

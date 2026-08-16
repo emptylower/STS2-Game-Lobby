@@ -47,11 +47,11 @@ public sealed class LanConnectPackageContentTests
 
         using JsonDocument manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
-        Assert.Equal("0.6.0-alpha.2", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("0.6.0-alpha.3", manifest.RootElement.GetProperty("version").GetString());
         FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
             Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
         Assert.Equal("0.6.0.0", assemblyVersion.FileVersion);
-        Assert.StartsWith("0.6.0-alpha.2", assemblyVersion.ProductVersion, StringComparison.Ordinal);
+        Assert.StartsWith("0.6.0-alpha.3", assemblyVersion.ProductVersion, StringComparison.Ordinal);
 
         foreach (string packagePath in ExpectedFiles)
         {
@@ -101,8 +101,8 @@ public sealed class LanConnectPackageContentTests
             Assert.Contains("0.5.3", text, StringComparison.Ordinal);
             Assert.Contains("续局", text, StringComparison.Ordinal);
         }
-        Assert.Contains("0.6.0-alpha.2", workshop, StringComparison.Ordinal);
-        Assert.Contains("当前版本：0.6.0-alpha.2", workshop, StringComparison.Ordinal);
+        Assert.Contains("0.6.0-alpha.3", workshop, StringComparison.Ordinal);
+        Assert.Contains("当前版本：0.6.0-alpha.3", workshop, StringComparison.Ordinal);
         Assert.Contains("STS2LANRESUME:", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("HostChannel", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("Android", releaseNotes, StringComparison.Ordinal);
@@ -152,13 +152,41 @@ public sealed class LanConnectPackageContentTests
             "docs",
             "CLIENT_RELEASE_README_ZH.md"));
 
-        foreach (string text in new[] { releaseNotes, changelog, clientReadme })
+        foreach (string text in new[] { releaseNotes, changelog })
         {
             Assert.Contains("0.6.0-alpha.2", text, StringComparison.Ordinal);
+        }
+        foreach (string text in new[] { releaseNotes, changelog, clientReadme })
+        {
             Assert.Contains("RitsuLib", text, StringComparison.Ordinal);
             Assert.Contains("续局", text, StringComparison.Ordinal);
         }
+        Assert.Contains("0.6.0-alpha.3", clientReadme, StringComparison.Ordinal);
         Assert.Contains("capability_digest_mismatch", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("0.6.0-alpha.1", releaseNotes, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Client_v060_alpha3_documents_post_connect_Ritsu_session_binding()
+    {
+        using Fixture fixture = new();
+        string releaseNotes = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "RELEASE_NOTES_V0.6.0_ALPHA3_ZH.md"));
+        string changelog = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "CHANGELOG.md"));
+        string clientReadme = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "CLIENT_RELEASE_README_ZH.md"));
+
+        foreach (string text in new[] { releaseNotes, changelog, clientReadme })
+        {
+            Assert.Contains("0.6.0-alpha.3", text, StringComparison.Ordinal);
+            Assert.Contains("netId=0", text, StringComparison.Ordinal);
+            Assert.Contains("RitsuLib", text, StringComparison.Ordinal);
+        }
+        Assert.Contains("ConnectToHost", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("0.6.0-alpha.1", releaseNotes, StringComparison.Ordinal);
     }
 

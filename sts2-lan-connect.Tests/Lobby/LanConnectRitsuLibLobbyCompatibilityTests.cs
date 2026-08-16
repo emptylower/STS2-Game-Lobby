@@ -20,6 +20,29 @@ public sealed class LanConnectRitsuLibLobbyCompatibilityTests
         Assert.DoesNotContain("RunManager send fallback", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Ritsu_client_session_binding_waits_for_ENet_to_assign_the_real_net_id()
+    {
+        string source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "sts2-lan-connect",
+            "Scripts",
+            "Lobby",
+            "LanConnectLobbyJoinFlow.cs"));
+
+        int prepareIndex = source.IndexOf("beforeConnect(concrete);", StringComparison.Ordinal);
+        int connectIndex = source.IndexOf(
+            "await client.ConnectToHost(netId, ip, port, cancelToken)",
+            StringComparison.Ordinal);
+        int activateIndex = source.IndexOf("afterConnect(concrete);", StringComparison.Ordinal);
+
+        Assert.True(prepareIndex >= 0, "Ritsu sidecar flow must be prepared before ENet connects.");
+        Assert.True(connectIndex > prepareIndex, "ENet must connect after sidecar flow preparation.");
+        Assert.True(
+            activateIndex > connectIndex,
+            "RitsuLib must first observe the client service after ENet assigns its real net id.");
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);

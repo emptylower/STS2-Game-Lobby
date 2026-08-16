@@ -10,9 +10,9 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端测试版为 `0.6.0-alpha.2`，lobby-service 继续使用 `0.6.0-alpha.1`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+当前客户端测试版为 `0.6.0-alpha.3`，lobby-service 继续使用 `0.6.0-alpha.1`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
 
-## v0.6.0-alpha.2 双协议房间
+## v0.6.0-alpha.3 双协议房间
 
 - RitsuLib `tail_v1` 联机已修复真实玩家 ID 和首包/控制绑定竞态；若仍停在等待页，请提交双方完整日志。
 - SL/读档续局会复用存档冻结的协议身份，不再因 `capability_digest_mismatch` 删除刚发布的房间。
@@ -285,9 +285,9 @@
 
 # STS2 LAN Connect User Guide
 
-The current client candidate is `0.6.0-alpha.2`; lobby-service remains on `0.6.0-alpha.1`. This is not a final release. Every player must use the same client and game version and fully restart after updating.
+The current client candidate is `0.6.0-alpha.3`; lobby-service remains on `0.6.0-alpha.1`. This is not a final release. Every player must use the same client and game version and fully restart after updating.
 
-## v0.6.0-alpha.2 Dual-Protocol Rooms
+## v0.6.0-alpha.3 Dual-Protocol Rooms
 
 - The RitsuLib `tail_v1` flow now uses the real player ID and tolerates the first game packet arriving before its control binding.
 - Continue-run publication reuses the protocol identity frozen in the save and no longer deletes the new room with `capability_digest_mismatch`.

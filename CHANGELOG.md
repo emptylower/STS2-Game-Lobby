@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.6.0-alpha.3] - 2026-08-16
+
+客户端 `0.6.0-alpha.3` RitsuLib 联机时序修复测试版；lobby-service 继续使用 `0.6.0-alpha.1`。
+
+### Fixed
+
+- RitsuLib 客户端会话不再于 ENet 连接前以 `netId=0` 完成首次绑定。客户端现在先准备 LAN sidecar 流，待 `ConnectToHost` 成功并分配真实玩家 ID 后再激活 RitsuLib 会话和主机可达状态。
+- SL/房主重开时，加入者返回主菜单后即使复用的是已经创建过的多人子菜单，也会显式启动自动重连，不再因缓存节点不重复触发 `_Ready` 而静默停在主菜单。
+
+### Verification
+
+- 新增连接初始化顺序回归测试，约束 RitsuLib 会话激活必须发生在 ENet 连接成功之后。
+- 新增缓存多人子菜单的重连导航回归测试。
+- 现场 `0.6.0-alpha.2` 日志已确认大厅 API、票据、Relay、ENet 和原版握手均成功，剩余阻塞点为 RitsuLib `Session bound ... netId=0`。
+
 ## [0.6.0-alpha.2] - 2026-08-16
 
 客户端 `0.6.0-alpha.2` 联机修复测试版；lobby-service 继续使用 `0.6.0-alpha.1`，本次不改变服务端 API、中继或房间协议。
