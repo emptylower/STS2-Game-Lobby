@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.6.0-alpha.5] - 2026-08-17
+
+客户端与 lobby-service `0.6.0-alpha.5` WireCache capability digest 修复测试版。
+
+### Fixed
+
+- 修复 alpha.4 服务端虽保留 `wireCacheSignature` 原始大小写、却仍在计算 capability digest 时将签名转为小写的问题。真实 Base64URL 签名包含大写字符时，建房响应会因此自相矛盾并被客户端拒绝。
+- alpha.5 客户端接受 alpha.4 服务端产生的旧式小写签名摘要，避免服务端滚动升级期间继续出现 `capability_digest_mismatch`；其他摘要不一致仍然拒绝。
+- 新增包含真实混合大小写 WireCache 签名的跨运行时 digest fixture，防止仅用全小写测试值再次漏检。
+
+### Verification
+
+- macOS 使用 `--force-steam=off` 启动 alpha.5 客户端，对本地 alpha.5 完整 lobby-service 分别完成 `compat_4_5_v1` 与 `tail_v1` 普通建房；服务端返回原始混合大小写签名及对应 canonical digest。
+- 同一客户端从真实多人存档执行 SL/读档，成功按冻结协议重新发布房间，未再出现“联机协议不支持”。
+- macOS 官方 RitsuLib v0.5.12 复现启动后黑屏；升级到官方 v0.5.13 后完整启动并成功创建 `tail_v1` 房间，服务端使用 `ritsulib_sidecar_v1`，客户端绑定为 `Host, netId=1`。Android v0.5.13 尚未完成实机验证。
+- 正式发布包仅在本地完整服务端端到端验证和全部自动化门禁通过后生成；生产服务器不作为发布前测试环境。
+
 ## [0.6.0-alpha.4] - 2026-08-16
 
 客户端与 lobby-service `0.6.0-alpha.4` SL 协议身份修复测试版。

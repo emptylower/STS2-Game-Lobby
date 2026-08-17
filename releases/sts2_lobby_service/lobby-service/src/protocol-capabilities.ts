@@ -215,7 +215,7 @@ function pushLengthPrefixed(
   name: string,
   encoding: BufferEncoding = "utf8",
 ): void {
-  const normalized = name === "wireCacheSignature" ? value.toLowerCase() : normalizeBoundedUtf8(value, name, maxBytes);
+  const normalized = name === "wireCacheSignature" ? value : normalizeBoundedUtf8(value, name, maxBytes);
   const encoded = Buffer.from(normalized, encoding);
   if (encoded.length > maxBytes) throw new TypeError(`${name} 超过 ${maxBytes} bytes。`);
   output.push(Buffer.from([encoded.length]), encoded);

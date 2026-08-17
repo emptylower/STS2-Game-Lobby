@@ -55,6 +55,97 @@ public sealed class LanConnectCapabilityDigestTests
             LanConnectCapabilityDigest.Compute(sidecar));
     }
 
+    [Theory]
+    [InlineData(
+        "compat_4_5_v1",
+        0,
+        "none",
+        "0.3.0",
+        "64d24fb637bf6e55ec8f486c4dc9ebaec554defe68f54be0da5a73ffd71bf8cd")]
+    [InlineData(
+        "tail_v1",
+        1,
+        "standalone_tail_v1",
+        "0.6.0-alpha.1",
+        "0acaf09bc69874c88a01bac7c5cdb7b464331da7ebad5b78f516a2d83036a0fd")]
+    public void Accepts_alpha4_legacy_lowercase_digest_response(
+        string profile,
+        int protocolVersion,
+        string carrier,
+        string minimumClientVersion,
+        string capabilityDigest)
+    {
+        LobbyProtocolSelectionDto dto = CreateResponseDto(
+            profile,
+            protocolVersion,
+            carrier,
+            minimumClientVersion,
+            capabilityDigest);
+        LanConnectProtocolOffer offer = new(1, 1, "0.6.0-alpha.5", false, false);
+
+        LanConnectProtocolSelection selection = dto.ToValidatedValue(offer);
+
+        Assert.Equal(profile, selection.Profile.ToCanonical());
+        Assert.Equal(capabilityDigest, selection.CapabilityDigest);
+    }
+
+    [Theory]
+    [InlineData(
+        "compat_4_5_v1",
+        0,
+        "none",
+        "0.3.0",
+        "9aceddb15255e3b925ea37d438614a71317d9d86c5dd66df2ffada45355643b3")]
+    [InlineData(
+        "tail_v1",
+        1,
+        "standalone_tail_v1",
+        "0.6.0-alpha.1",
+        "9c6b6fdb3aebd6ddb8b27ddb2fe69106291ed4e7efbe4acb1fb71930b0002789")]
+    public void Validates_case_sensitive_create_response(
+        string profile,
+        int protocolVersion,
+        string carrier,
+        string minimumClientVersion,
+        string capabilityDigest)
+    {
+        LobbyProtocolSelectionDto dto = CreateResponseDto(
+            profile,
+            protocolVersion,
+            carrier,
+            minimumClientVersion,
+            capabilityDigest);
+        LanConnectProtocolOffer offer = new(1, 1, "0.6.0-alpha.5", false, false);
+
+        LanConnectProtocolSelection selection = dto.ToValidatedValue(offer);
+
+        Assert.Equal(profile, selection.Profile.ToCanonical());
+        Assert.Equal(capabilityDigest, selection.CapabilityDigest);
+    }
+
+    private static LobbyProtocolSelectionDto CreateResponseDto(
+        string profile,
+        int protocolVersion,
+        string carrier,
+        string minimumClientVersion,
+        string capabilityDigest)
+    {
+        string json = $$"""
+        {
+          "profile": "{{profile}}",
+          "selectedLanProtocolVersion": {{protocolVersion}},
+          "carrier": "{{carrier}}",
+          "maxPlayers": 8,
+          "minimumClientVersion": "{{minimumClientVersion}}",
+          "gameVersion": "v0.111.0",
+          "wireCacheSignature": "wcv1:D5-qRxko7ywoZJWzaOM9Q49NNOWP1Jr2qXc_Nk204uU",
+          "ritsuLibPresent": false,
+          "capabilityDigest": "{{capabilityDigest}}"
+        }
+        """;
+        return JsonSerializer.Deserialize<LobbyProtocolSelectionDto>(json, LanConnectJson.Options)!;
+    }
+
     private static IReadOnlyList<DigestVector> ReadVectors()
     {
         string path = Path.Combine(FindRepositoryRoot(), "test-fixtures", "protocol", "v0.6", "capability-digest-v1.json");

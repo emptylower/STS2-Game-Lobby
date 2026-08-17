@@ -10,18 +10,19 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端与 lobby-service 测试版均为 `0.6.0-alpha.4`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。自建服务建议同步升级，alpha.4 客户端仍兼容尚未升级的旧服务。
+当前客户端与 lobby-service 测试版均为 `0.6.0-alpha.5`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。自建服务建议同步升级，alpha.5 客户端仍兼容尚未升级的旧服务。
 
-## v0.6.0-alpha.4 双协议房间
+## v0.6.0-alpha.5 双协议房间
 
 - SL/读档续局会完整保留存档冻结的 profile、carrier、RitsuLib presence、WireCache 签名和 capability digest，不会重新协商成错误协议。
-- lobby-service 不再改变区分大小写的 Base64URL WireCache 签名；alpha.4 客户端对尚未升级的旧服务也做了兼容。
+- lobby-service 不再改变区分大小写的 Base64URL WireCache 签名；alpha.5 客户端对尚未升级的旧服务也做了兼容。
 - RitsuLib `tail_v1` 保留 alpha.3 的真实玩家 ID、首包/控制绑定竞态和连接后 sidecar 激活修复；请确认所有玩家不是仍在使用 alpha.2。
 - 建房默认选择兼容模式：固定 `4/5-bit`、2-8 人、不允许 RitsuLib。
 - 0.6 新协议保持原版 `2/3-bit` 主体，以 LAN protocol v1 携带完整 roster；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用公开 typed-sidecar carrier。
 - 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合会在 ticket 与 transport 前拒绝。
 - 本版不卸载、不直接调用也不恢复 RitsuLib 私有 Harmony postfix，不维护 RitsuLib 分支。
-- 官方 RitsuLib v0.5.12 在当前 Android v0.111.0 环境初始化自身网络补丁时会黑屏；Android 玩家应保持 RitsuLib 禁用。本测试版已验证无 Ritsu 的 Android/macOS 真实开局，但不宣称全 Ritsu Android 联机可用。
+- macOS 使用 RitsuLib 时请统一安装官方 v0.5.13；该版本已完成本地完整启动和 `tail_v1` 建房。官方 v0.5.12 在同一环境复现启动后黑屏，不应继续使用。
+- Android 的 RitsuLib v0.5.13 尚未完成实机验证；Android 玩家应保持 RitsuLib 禁用，本测试版不宣称全 Ritsu Android 联机可用。
 - direct-IP 在 v0.6 测试系列中只支持兼容模式，本地 Ritsu 或 Tail intent 会在建立连接前拒绝。
 - 历史客户端真实互通不在本 alpha 的测试门禁中。
 - 加入前会比较双方实际使用的 ModelId 线上编码。内容 MOD 组合不同并改变 net-id 表或位宽时，现在会明确提示不一致并拒绝加入，而不是进入后黑屏或一方卡在等待页；这是预期行为。
@@ -286,17 +287,19 @@
 
 # STS2 LAN Connect User Guide
 
-The current client and lobby-service candidates are both `0.6.0-alpha.4`. This is not a final release. Every player must use the same client and game version and fully restart after updating. Self-hosted services should upgrade, while the alpha.4 client remains compatible with older services.
+The current client and lobby-service candidates are both `0.6.0-alpha.5`. This is not a final release. Every player must use the same client and game version and fully restart after updating. Self-hosted services should upgrade, while the alpha.5 client remains compatible with older services.
 
-## v0.6.0-alpha.4 Dual-Protocol Rooms
+## v0.6.0-alpha.5 Dual-Protocol Rooms
 
 - Continue-run publication preserves the profile, carrier, RitsuLib presence, WireCache signature, and capability digest frozen in the save.
-- Lobby-service preserves case-sensitive Base64URL WireCache signatures; the alpha.4 client also tolerates the legacy service result.
+- Lobby-service preserves case-sensitive Base64URL WireCache signatures; the alpha.5 client also tolerates the legacy service result.
 - RitsuLib `tail_v1` retains alpha.3's real-player-ID, first-packet/control-binding, and post-connect sidecar activation fixes. Confirm that no peer is still using alpha.2.
 - Compat is the default: fixed `4/5-bit`, 2-8 players, and no RitsuLib.
 - Tail v1 preserves the vanilla `2/3-bit` body and carries the full roster in LAN protocol v1. No-Ritsu rooms use standalone Tail; all-Ritsu rooms use the public typed-sidecar API.
 - Ritsu-present peers can connect only to Ritsu-present peers; Ritsu-absent peers can connect only to Ritsu-absent peers. Mixed presence is rejected before ticket and transport allocation.
 - The RC4 private-postfix bridge is removed. LAN Connect does not detach, invoke, or restore private RitsuLib Harmony patches.
+- On macOS, all RitsuLib peers must use official v0.5.13. It passed a full local startup and `tail_v1` room creation; v0.5.12 reproduced a post-startup black screen and should not be used.
+- RitsuLib v0.5.13 has not completed Android device validation. Android players should keep RitsuLib disabled; this prerelease does not claim all-Ritsu Android support.
 - Direct IP is compat-only throughout the v0.6 prerelease series. Historical-client interoperability is outside this release gate.
 - The join flow now compares the actual ModelId wire encoding. Content-MOD sets that change net-id tables or bit widths are intentionally rejected before a black screen or stuck waiting room.
 - `affects_gameplay: false` only excludes a MOD from vanilla `idDatabaseHash`; it does not guarantee that the MOD takes no ModelIds. The new signature covers that gap and remains fail-open when unavailable.

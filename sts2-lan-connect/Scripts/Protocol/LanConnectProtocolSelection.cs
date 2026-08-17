@@ -87,7 +87,15 @@ internal sealed record LanConnectProtocolSelection(
         }
 
         string expectedDigest = LanConnectCapabilityDigest.Compute(this with { CapabilityDigest = string.Empty });
-        if (!string.Equals(CapabilityDigest, expectedDigest, StringComparison.Ordinal))
+        string? legacyLowercaseDigest = WireCacheSignature is null
+            ? null
+            : LanConnectCapabilityDigest.Compute(this with
+            {
+                WireCacheSignature = WireCacheSignature.ToLowerInvariant(),
+                CapabilityDigest = string.Empty
+            });
+        if (!string.Equals(CapabilityDigest, expectedDigest, StringComparison.Ordinal)
+            && !string.Equals(CapabilityDigest, legacyLowercaseDigest, StringComparison.Ordinal))
         {
             throw LanConnectProtocolFailureMapper.FromLocalException(
                 "lan_protocol_version_mismatch",
