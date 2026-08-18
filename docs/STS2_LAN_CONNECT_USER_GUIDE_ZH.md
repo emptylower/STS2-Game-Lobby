@@ -10,10 +10,15 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端与 lobby-service 测试版均为 `0.6.0-alpha.5`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。自建服务建议同步升级，alpha.5 客户端仍兼容尚未升级的旧服务。
+当前客户端与 lobby-service 测试版均为 `0.6.0-alpha.6`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏，自建服务也必须同步升级并重启。
 
-## v0.6.0-alpha.5 双协议房间
+## v0.6.0-alpha.6 双协议房间
 
+- Android 端不再尝试安装只能在桌面环境安全编译的闭合泛型消息总线补丁；LAN Connect 保留 6 个 Android 必需的线上位宽补丁，因此初始化不会再中止，主页可以正常显示“联机大厅”。
+- Tail 出站消息改用 9 个非泛型具体 Harmony 前缀，RitsuLib v0.5.13 在 Android 的动态补丁阶段不再因重新编译 LAN Connect 泛型前缀而触发 Mono 原生断言。
+- “放弃多人存档”确认弹窗为选项区保留固定的最小可视高度，横屏和竖屏下都能完整显示“删除存档”与“保留存档”。
+- lobby-service 不再因 Android 开局加载暂时超过房间心跳窗口而删除仍有活跃房主的中继；中继空闲超时仍会在游戏连接真正停止后回收资源。
+- Tail 房主控制通道会提交建房时冻结的客户端版本与 capability digest，平台/房间消息和玩家控制绑定不再因协议身份缺失而加载失败。
 - SL/读档续局会完整保留存档冻结的 profile、carrier、RitsuLib presence、WireCache 签名和 capability digest，不会重新协商成错误协议。
 - lobby-service 不再改变区分大小写的 Base64URL WireCache 签名；alpha.5 客户端对尚未升级的旧服务也做了兼容。
 - RitsuLib `tail_v1` 保留 alpha.3 的真实玩家 ID、首包/控制绑定竞态和连接后 sidecar 激活修复；请确认所有玩家不是仍在使用 alpha.2。
@@ -21,8 +26,7 @@
 - 0.6 新协议保持原版 `2/3-bit` 主体，以 LAN protocol v1 携带完整 roster；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用公开 typed-sidecar carrier。
 - 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合会在 ticket 与 transport 前拒绝。
 - 本版不卸载、不直接调用也不恢复 RitsuLib 私有 Harmony postfix，不维护 RitsuLib 分支。
-- macOS 使用 RitsuLib 时请统一安装官方 v0.5.13；该版本已完成本地完整启动和 `tail_v1` 建房。官方 v0.5.12 在同一环境复现启动后黑屏，不应继续使用。
-- Android 的 RitsuLib v0.5.13 尚未完成实机验证；Android 玩家应保持 RitsuLib 禁用，本测试版不宣称全 Ritsu Android 联机可用。
+- macOS 与 Android 使用 RitsuLib 时请统一安装官方 v0.5.13。最终候选包已完成跨端建房、加入、准备、开局、持续中继与 SL 冷启动续局验收；官方 v0.5.12 不应继续使用。
 - direct-IP 在 v0.6 测试系列中只支持兼容模式，本地 Ritsu 或 Tail intent 会在建立连接前拒绝。
 - 历史客户端真实互通不在本 alpha 的测试门禁中。
 - 加入前会比较双方实际使用的 ModelId 线上编码。内容 MOD 组合不同并改变 net-id 表或位宽时，现在会明确提示不一致并拒绝加入，而不是进入后黑屏或一方卡在等待页；这是预期行为。
@@ -287,10 +291,14 @@
 
 # STS2 LAN Connect User Guide
 
-The current client and lobby-service candidates are both `0.6.0-alpha.5`. This is not a final release. Every player must use the same client and game version and fully restart after updating. Self-hosted services should upgrade, while the alpha.5 client remains compatible with older services.
+The current client and lobby-service candidates are both `0.6.0-alpha.6`. This is not a final release. Every player must use the same client and game version and fully restart after updating; self-hosted services must also be upgraded and restarted.
 
-## v0.6.0-alpha.5 Dual-Protocol Rooms
+## v0.6.0-alpha.6 Dual-Protocol Rooms
 
+- Android no longer attempts the closed-generic message-bus patch that can only be compiled safely on desktop. LAN Connect keeps the six required Android wire-width patches, so initialization completes and the Game Lobby entry can appear on the main page.
+- The abandon-multiplayer-save confirmation now reserves a stable minimum viewport for its choices, keeping both Delete Save and Keep Save fully visible in landscape and portrait layouts.
+- Lobby-service no longer removes an authenticated active relay when an Android run load temporarily exceeds the room-heartbeat window. Relay idle cleanup still reclaims the session after game traffic actually stops.
+- Tail host control connections now submit the frozen client version and capability digest, preventing room messages and player-control bindings from failing due to missing protocol identity.
 - Continue-run publication preserves the profile, carrier, RitsuLib presence, WireCache signature, and capability digest frozen in the save.
 - Lobby-service preserves case-sensitive Base64URL WireCache signatures; the alpha.5 client also tolerates the legacy service result.
 - RitsuLib `tail_v1` retains alpha.3's real-player-ID, first-packet/control-binding, and post-connect sidecar activation fixes. Confirm that no peer is still using alpha.2.
@@ -298,8 +306,8 @@ The current client and lobby-service candidates are both `0.6.0-alpha.5`. This i
 - Tail v1 preserves the vanilla `2/3-bit` body and carries the full roster in LAN protocol v1. No-Ritsu rooms use standalone Tail; all-Ritsu rooms use the public typed-sidecar API.
 - Ritsu-present peers can connect only to Ritsu-present peers; Ritsu-absent peers can connect only to Ritsu-absent peers. Mixed presence is rejected before ticket and transport allocation.
 - The RC4 private-postfix bridge is removed. LAN Connect does not detach, invoke, or restore private RitsuLib Harmony patches.
-- On macOS, all RitsuLib peers must use official v0.5.13. It passed a full local startup and `tail_v1` room creation; v0.5.12 reproduced a post-startup black screen and should not be used.
-- RitsuLib v0.5.13 has not completed Android device validation. Android players should keep RitsuLib disabled; this prerelease does not claim all-Ritsu Android support.
+- Tail outgoing messages now use nine concrete, non-generic Harmony prefixes, preventing RitsuLib v0.5.13's Android dynamic-patch pass from recompiling LAN Connect's generic prefix and triggering a native Mono assertion.
+- All macOS and Android RitsuLib peers must use official v0.5.13. The final candidate completed cross-platform room creation, join, ready, begin-run, sustained relay, and cold-start save/load recovery; v0.5.12 should not be used.
 - Direct IP is compat-only throughout the v0.6 prerelease series. Historical-client interoperability is outside this release gate.
 - The join flow now compares the actual ModelId wire encoding. Content-MOD sets that change net-id tables or bit widths are intentionally rejected before a black screen or stuck waiting room.
 - `affects_gameplay: false` only excludes a MOD from vanilla `idDatabaseHash`; it does not guarantee that the MOD takes no ModelIds. The new signature covers that gap and remains fail-open when unavailable.

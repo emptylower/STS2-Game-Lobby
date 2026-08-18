@@ -57,9 +57,17 @@ internal sealed class LobbyApiClient : IDisposable
             LanConnectConfig.LobbyCreateRoomToken);
     }
 
-    public Uri BuildHostControlUri(string controlChannelId, string roomId, string hostToken)
+    public Uri BuildHostControlUri(
+        string controlChannelId,
+        string roomId,
+        string hostToken,
+        string? clientVersion = null,
+        string? capabilityDigest = null)
     {
-        return BuildControlUri(controlChannelId, "host", roomId, "token", hostToken);
+        return AppendProtocolIdentity(
+            BuildControlUri(controlChannelId, "host", roomId, "token", hostToken),
+            clientVersion,
+            capabilityDigest);
     }
 
     public Uri BuildClientControlUri(
@@ -69,7 +77,17 @@ internal sealed class LobbyApiClient : IDisposable
         string? clientVersion = null,
         string? capabilityDigest = null)
     {
-        Uri baseUri = BuildControlUri(controlChannelId, "client", roomId, "ticketId", ticketId);
+        return AppendProtocolIdentity(
+            BuildControlUri(controlChannelId, "client", roomId, "ticketId", ticketId),
+            clientVersion,
+            capabilityDigest);
+    }
+
+    private static Uri AppendProtocolIdentity(
+        Uri baseUri,
+        string? clientVersion,
+        string? capabilityDigest)
+    {
         if (string.IsNullOrWhiteSpace(clientVersion) && string.IsNullOrWhiteSpace(capabilityDigest))
         {
             return baseUri;

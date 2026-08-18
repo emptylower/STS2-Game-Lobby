@@ -8,6 +8,7 @@ using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Saves;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -100,7 +101,7 @@ internal static class LanConnectLobbyCapacityPatches
         ref int maxClients,
         out LanConnectSessionProtocolLease? __state)
     {
-        __state = FreezeCompatGuardIfNeeded(__instance, maxClients);
+        __state = FreezeHostGuardIfNeeded(__instance, maxClients);
         maxClients = ResolveRoomScopedMaxPlayers(maxClients);
     }
 
@@ -109,7 +110,7 @@ internal static class LanConnectLobbyCapacityPatches
         ref int maxClients,
         out LanConnectSessionProtocolLease? __state)
     {
-        __state = FreezeCompatGuardIfNeeded(__instance, maxClients);
+        __state = FreezeHostGuardIfNeeded(__instance, maxClients);
         maxClients = ResolveRoomScopedMaxPlayers(maxClients);
     }
 
@@ -133,7 +134,7 @@ internal static class LanConnectLobbyCapacityPatches
         GuardedLeases.Add(__instance, new GuardedProtocolLease(__instance, __state));
     }
 
-    private static LanConnectSessionProtocolLease? FreezeCompatGuardIfNeeded(
+    private static LanConnectSessionProtocolLease? FreezeHostGuardIfNeeded(
         NetHostGameService netService,
         int requestedMaxPlayers)
     {
@@ -142,16 +143,54 @@ internal static class LanConnectLobbyCapacityPatches
             return null;
         }
 
-        LanConnectProtocolSelection selection = LanConnectProtocolSelection.CreateLocalCompat(
+        LanConnectProtocolSelection? savedSelection = TryResolveCurrentSavedRunSelection();
+        LanConnectProtocolSelection selection = ResolveHostGuardSelection(
+            savedSelection,
+            requestedMaxPlayers,
+            LanConnectBuildInfo.GetGameVersion(),
+            LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
+        Log.Info(
+            $"sts2_lan_connect gameplay: host protocol guard source={(savedSelection == null ? "compat_fallback" : "saved_run")}, profile={selection.Profile.ToCanonical()}, carrier={selection.Carrier.ToWireValue()}.");
+        return LanConnectSessionProtocolState.Shared.FreezeHost(
+            selection,
+            $"host:{netService.GetHashCode():x8}");
+    }
+
+    internal static LanConnectProtocolSelection ResolveHostGuardSelection(
+        LanConnectProtocolSelection? savedSelection,
+        int requestedMaxPlayers,
+        string gameVersion,
+        string? wireCacheSignature) =>
+        savedSelection
+        ?? LanConnectProtocolSelection.CreateLocalCompat(
             Math.Clamp(
                 requestedMaxPlayers,
                 LanConnectConstants.ProtocolMinPlayers,
                 LanConnectConstants.ProtocolMaxPlayers),
-            LanConnectBuildInfo.GetGameVersion(),
-            LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
-        return LanConnectSessionProtocolState.Shared.FreezeHost(
-            selection,
-            $"host:{netService.GetHashCode():x8}");
+            gameVersion,
+            wireCacheSignature);
+
+    private static LanConnectProtocolSelection? TryResolveCurrentSavedRunSelection()
+    {
+        if (!LanConnectMultiplayerSaveRoomBinding.TryLoadCurrentMultiplayerRun(
+                out SerializableRun? run,
+                out string failureReason)
+            || run == null)
+        {
+            Log.Info(
+                $"sts2_lan_connect gameplay: no saved protocol selection for host guard, reason={failureReason}.");
+            return null;
+        }
+
+        LanConnectResolvedRoomBinding binding = LanConnectMultiplayerSaveRoomBinding.Resolve(run);
+        if (binding.ProtocolFailure != null)
+        {
+            Log.Warn(
+                $"sts2_lan_connect gameplay: saved protocol selection rejected for host guard, code={binding.ProtocolFailure.Code}.");
+            return null;
+        }
+
+        return binding.ProtocolSelection;
     }
 
     private static void StartRunLobbyCtorPostfix(StartRunLobby __instance, INetGameService netService)

@@ -497,6 +497,35 @@ test("cleanupExpired deletes rooms after heartbeat timeout", () => {
   assert.equal(store.listRooms().length, 0);
 });
 
+test("cleanupExpired retains an expired room while its authenticated relay host is active", () => {
+  const store = new LobbyStore(baseConfig);
+  const now = new Date("2026-03-10T00:00:00.000Z");
+  const created = store.createRoom(
+    {
+      roomName: "中继进行中房间",
+      hostPlayerName: "Host",
+      gameMode: "standard",
+      version: "1.2.3",
+      modVersion: "0.5.0",
+      maxPlayers: 4,
+      hostConnectionInfo: {
+        enetPort: 33771,
+      },
+    },
+    "203.0.113.10",
+    now,
+  );
+  const expiredAt = new Date(now.getTime() + 40_000);
+
+  const retained = store.cleanupExpired(expiredAt, (roomId) => roomId === created.roomId);
+  assert.deepEqual(retained, []);
+  assert.equal(store.listRooms().length, 1);
+
+  const deleted = store.cleanupExpired(expiredAt);
+  assert.deepEqual(deleted, [created.roomId]);
+  assert.equal(store.listRooms().length, 0);
+});
+
 test("saved run rooms expose slot occupancy and allow selecting an available slot", () => {
   const store = new LobbyStore(baseConfig);
   const created = store.createRoom(

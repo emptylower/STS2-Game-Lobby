@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+## [0.6.0-alpha.6] - 2026-08-18
+
+客户端与 lobby-service `0.6.0-alpha.6` Android 启动、存档确认弹窗和活跃中继生命周期修复测试版。
+
+### Fixed
+
+- Android gshared 环境不再安装 `NetMessageBus.SerializeMessage<LobbyBeginRunMessage>` 的闭合泛型 Harmony wrapper。该边界补丁只用于桌面端保护 RitsuLib 尾部；Android 保留 6 个必需线上位宽补丁，避免兼容初始化中止后主页缺少“联机大厅”。
+- Tail 出站消息不再把闭合后的泛型 `SerializePrefix<T>` 注册为 Harmony 前缀，而是为 9 种真实消息注册非泛型具体方法；RitsuLib v0.5.13 在 Android 执行 3 个动态补丁时不再触发 Mono `method-to-ir` 原生断言。
+- “放弃多人存档”确认弹窗为选项滚动区保留最小可视高度，横屏与竖屏下的“删除存档”危险操作按钮不再被裁切成一条红线。
+- 必需序列化补丁安装失败时，日志会保留回滚前的成功数与失败数，不再误报 `applied=0` / `failed=0`。
+- lobby-service 清理心跳超时房间时会保留仍有已认证活跃房主的中继会话，避免 Android 开局加载超过心跳窗口后误删房间、释放中继并断开已进入游戏的客机。中继自身的空闲超时仍负责最终回收。
+- Tail 房主控制通道现在携带建房时冻结的客户端版本与 capability digest，不再被服务端以 `capability_digest_mismatch` 拒绝；房间聊天、玩家控制绑定和相关平台消息可正常建立。
+
+### Investigation
+
+- 用户 macOS 日志中的首次建房请求与第二次成功请求使用相同的 `tail_v1`、客户端版本和 WireCache capability。首次失败为 HTTP 响应提前结束，第二次相同请求返回 `201`；公告请求也正常返回 `200`。没有证据表明这是协议摘要不一致，因此本版不加入可能重复建房的盲目 POST 重试。
+- 在 Android 启动器明确显示 RitsuLib v0.5.13 与 LAN Connect `2/2 Enabled` 的复现中，Ritsu 的 3 个动态补丁会重新编译 LAN Connect 已注册的 `SerializePrefix<T>`，随后 Mono 在 `method-to-ir.c:7969` 触发原生断言。改为具体前缀后，日志已出现 `Shared framework initialization complete`、Ritsu 初始化完成、LAN Connect runtime ready，并正常显示“游戏大厅”。
+
+### Compatibility
+
+- 所有同房玩家应统一使用客户端 `0.6.0-alpha.6` 并完整重启游戏。
+- lobby-service 必须同步升级到 `0.6.0-alpha.6` 并重启，旧服务端仍可能在移动端开局加载期间误删活跃中继。
+
+### Verification
+
+- 最终候选客户端与服务端包在 Android Studio 管理的 Android 15 ARM64 设备和以 `--force-steam=off` 启动的 macOS 客户端上完成官方 RitsuLib v0.5.13 全流程互联：建房、加入、ready、begin-run、进入地图、约 2 分钟持续中继、SL 冷启动、原槽位重连和再次进入地图。
+- 发布门禁通过 lobby-service 607 项、客户端 xUnit 1107 项（另有 1 项既有原型测试跳过）和 GdUnit 356 项；确定性打包验证通过。
+
 ## [0.6.0-alpha.5] - 2026-08-17
 
 客户端与 lobby-service `0.6.0-alpha.5` WireCache capability digest 修复测试版。

@@ -18,7 +18,6 @@ internal static class LanConnectSerializationPatches
     private const string LobbyBeginRunTypeName =
         "MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.LobbyBeginRunMessage";
     private const string PlayersInLobbyFieldName = "playersInLobby";
-    private const int RequiredWirePatchCount = 7;
     private const int ByteBits = 8;
 
     private static readonly Harmony HarmonyInstance = new(LanConnectProtocolPatchDispatcher.HarmonyId);
@@ -72,10 +71,14 @@ internal static class LanConnectSerializationPatches
         _patchedCount = 0;
         _failedCount = 0;
 
+        bool includeBeginRunMessageBusBoundary = ShouldPatchBeginRunMessageBusBoundary(
+            OperatingSystem.IsAndroid());
         WirePatchPlan patchPlan;
         try
         {
-            patchPlan = ResolveRequiredPatchPlan(typeof(PacketWriter).Assembly);
+            patchPlan = ResolveRequiredPatchPlan(
+                typeof(PacketWriter).Assembly,
+                includeBeginRunMessageBusBoundary);
         }
         catch (Exception ex)
         {
@@ -93,17 +96,30 @@ internal static class LanConnectSerializationPatches
             TrySafePatch(target);
         }
 
-        TrySafeBeginRunPrefixPatch(
-            patchPlan.BeginRunMessageBusSerialize,
-            nameof(SerializeBeginRunAtMessageBusPrefix),
-            $"NetMessageBus.SerializeMessage<{patchPlan.BeginRunMessageType.Name}>");
-
-        if (_patchedCount != RequiredWirePatchCount || _failedCount != 0)
+        if (patchPlan.BeginRunMessageBusSerialize != null)
         {
+            TrySafeBeginRunPrefixPatch(
+                patchPlan.BeginRunMessageBusSerialize,
+                nameof(SerializeBeginRunAtMessageBusPrefix),
+                $"NetMessageBus.SerializeMessage<{patchPlan.BeginRunMessageType.Name}>");
+        }
+        else
+        {
+            Log.Info(
+                "sts2_lan_connect serialization: skipped the begin-run message-bus boundary patch " +
+                "on Android because Harmony cannot compile closed generic wrappers under gshared.");
+        }
+
+        int requiredWirePatchCount = patchPlan.Targets.Count
+                                     + (patchPlan.BeginRunMessageBusSerialize == null ? 0 : 1);
+        if (_patchedCount != requiredWirePatchCount || _failedCount != 0)
+        {
+            int patchedCount = _patchedCount;
+            int failedCount = _failedCount;
             RollBackIncompletePatches();
             string message =
                 $"sts2_lan_connect serialization: required wire patches incomplete " +
-                $"(applied={_patchedCount}/{RequiredWirePatchCount}, failed={_failedCount}); " +
+                $"(applied={patchedCount}/{requiredWirePatchCount}, failed={failedCount}); " +
                 "extended multiplayer is unsafe and compatibility initialization was aborted.";
             Log.Error(message);
             throw new InvalidOperationException(message);
@@ -114,7 +130,8 @@ internal static class LanConnectSerializationPatches
         Log.Info(
             $"sts2_lan_connect serialization: patches applied={_patchedCount}, failed={_failedCount}. " +
             $"runtimePlayerType={patchPlan.SlotIdCarrierType.FullName}, " +
-            $"activeProfile={LanConnectProtocolProfiles.GetActiveProfile()}, slotId=dynamic, lobbyList=dynamic");
+            $"activeProfile={LanConnectProtocolProfiles.GetActiveProfile()}, slotId=dynamic, lobbyList=dynamic, " +
+            $"beginRunMessageBusBoundary={(patchPlan.BeginRunMessageBusSerialize == null ? "android_gshared_skip" : "patched")}");
     }
 
     private static void TrySafePatch(WirePatchTarget target)
@@ -147,7 +164,11 @@ internal static class LanConnectSerializationPatches
         }
     }
 
-    private static WirePatchPlan ResolveRequiredPatchPlan(Assembly sts2Assembly)
+    internal static bool ShouldPatchBeginRunMessageBusBoundary(bool isAndroid) => !isAndroid;
+
+    private static WirePatchPlan ResolveRequiredPatchPlan(
+        Assembly sts2Assembly,
+        bool includeBeginRunMessageBusBoundary)
     {
         Type joinResponseType = RequireType(sts2Assembly, ClientLobbyJoinResponseTypeName);
         Type beginRunType = RequireType(sts2Assembly, LobbyBeginRunTypeName);
@@ -156,9 +177,13 @@ internal static class LanConnectSerializationPatches
         ValidateBeginRunWireSchema(beginRunType);
         _ = NetMessageBusWriter
             ?? throw new MissingFieldException(typeof(NetMessageBus).FullName, "_writer");
-        MethodInfo beginRunMessageBusSerialize = ResolveGenericSerializeMessageMethod(
-            typeof(NetMessageBus),
-            beginRunType);
+        MethodInfo? beginRunMessageBusSerialize = null;
+        if (includeBeginRunMessageBusBoundary)
+        {
+            beginRunMessageBusSerialize = ResolveGenericSerializeMessageMethod(
+                typeof(NetMessageBus),
+                beginRunType);
+        }
 
         WirePatchTarget[] targets =
         {
@@ -451,6 +476,6 @@ internal static class LanConnectSerializationPatches
     private readonly record struct WirePatchPlan(
         Type SlotIdCarrierType,
         Type BeginRunMessageType,
-        MethodInfo BeginRunMessageBusSerialize,
+        MethodInfo? BeginRunMessageBusSerialize,
         IReadOnlyList<WirePatchTarget> Targets);
 }

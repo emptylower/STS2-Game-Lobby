@@ -315,10 +315,9 @@ internal static class LanConnectHostFlow
         {
             LanConnectProtocolOffer offer = LanConnectProtocolOffer.CreateCurrent();
             LanConnectSessionProtocolSnapshot activeSnapshot = LanConnectSessionProtocolState.Shared.Current;
-            LanConnectProtocolSelection? requiredSelection =
-                activeSnapshot.Role == LanConnectSessionProtocolRole.Host && activeSnapshot.Selection != null
-                    ? activeSnapshot.Selection
-                    : persistedSelection;
+            LanConnectProtocolSelection? requiredSelection = ResolveExistingHostRequiredSelection(
+                activeSnapshot,
+                persistedSelection);
             LanConnectCreateRoomIntent intent = ResolveExistingHostPublishIntent(
                 offer,
                 requiredSelection,
@@ -511,6 +510,14 @@ internal static class LanConnectHostFlow
                     : LanConnectProtocolProfile.Compat4x5V1),
             requiredSelection?.MaxPlayers ?? fallbackMaxPlayers,
             offer);
+
+    internal static LanConnectProtocolSelection? ResolveExistingHostRequiredSelection(
+        LanConnectSessionProtocolSnapshot activeSnapshot,
+        LanConnectProtocolSelection? persistedSelection) =>
+        persistedSelection
+        ?? (activeSnapshot.Role == LanConnectSessionProtocolRole.Host
+            ? activeSnapshot.Selection
+            : null);
 
     private static string DescribeProtocolSelection(LanConnectProtocolSelection selection) =>
         $"profile={selection.Profile.ToCanonical()},version={selection.SelectedLanProtocolVersion},carrier={selection.Carrier.ToWireValue()},maxPlayers={selection.MaxPlayers},minimumClientVersion={selection.MinimumClientVersion},gameVersion={selection.GameVersion},wireCache={selection.WireCacheSignature ?? "<none>"},ritsuLibPresent={selection.RitsuLibPresent},digest={selection.CapabilityDigest}";

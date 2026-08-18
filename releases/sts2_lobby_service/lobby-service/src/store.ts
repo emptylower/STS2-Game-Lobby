@@ -722,7 +722,10 @@ export class LobbyStore {
     this.removeRoom(roomId);
   }
 
-  cleanupExpired(now = new Date()) {
+  cleanupExpired(
+    now = new Date(),
+    shouldRetainRoom: (roomId: string) => boolean = () => false,
+  ) {
     const deletedRoomIds: string[] = [];
     for (const room of this.rooms.values()) {
       const hostSession = this.hostSessions.get(room.roomId);
@@ -730,7 +733,7 @@ export class LobbyStore {
       const hostExpired = hostSession
         ? now.getTime() - hostSession.lastSeenAt.getTime() > this.config.heartbeatTimeoutMs
         : true;
-      if (roomExpired || hostExpired) {
+      if ((roomExpired || hostExpired) && !shouldRetainRoom(room.roomId)) {
         this.removeRoom(room.roomId);
         deletedRoomIds.push(room.roomId);
       }

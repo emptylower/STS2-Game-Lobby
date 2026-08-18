@@ -969,6 +969,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             registration,
             metadata,
             protocolLease,
+            protocolOffer,
             protocolSelection);
         session.SetEnvelopeHandler(envelope => OnHostedControlEnvelope(session, envelope));
         session.ControlClient.RoomChatReadyReceived += envelope =>
@@ -1331,7 +1332,12 @@ internal sealed partial class LanConnectLobbyRuntime :
     {
         try
         {
-            Uri uri = session.ApiClient.BuildHostControlUri(session.ControlChannelId, session.RoomId, session.HostToken);
+            Uri uri = session.ApiClient.BuildHostControlUri(
+                session.ControlChannelId,
+                session.RoomId,
+                session.HostToken,
+                session.ProtocolOffer.ClientVersion,
+                session.ProtocolSelection.CapabilityDigest);
             GD.Print($"sts2_lan_connect lobby runtime: connecting host control channel roomId={session.RoomId}");
             await session.ControlClient.ConnectHostAsync(
                 uri,
@@ -3481,6 +3487,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             LobbyCreateRoomResponse registration,
             LanConnectHostedRoomMetadata metadata,
             LanConnectSessionProtocolLease protocolLease,
+            LanConnectProtocolOffer protocolOffer,
             LanConnectProtocolSelection protocolSelection)
         {
             NetService = netService;
@@ -3488,6 +3495,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             Registration = registration;
             Metadata = metadata;
             ProtocolLease = protocolLease;
+            ProtocolOffer = protocolOffer;
             ProtocolSelection = protocolSelection;
             BoundSaveKey = metadata.SaveKey;
             ControlClient = new LobbyControlClient();
@@ -3508,6 +3516,8 @@ internal sealed partial class LanConnectLobbyRuntime :
         public LanConnectHostedRoomMetadata Metadata { get; }
 
         public LanConnectSessionProtocolLease ProtocolLease { get; }
+
+        public LanConnectProtocolOffer ProtocolOffer { get; }
 
         public LanConnectProtocolSelection ProtocolSelection { get; }
 

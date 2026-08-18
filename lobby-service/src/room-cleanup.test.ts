@@ -2,13 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { cleanupExpiredRooms } from "./room-cleanup.js";
 
-test("cleanupExpiredRooms removes relay sessions and closes sockets for every expired room", () => {
+test("cleanupExpiredRooms retains active relay rooms and tears down only idle expired rooms", () => {
   const removedRelayRooms: string[] = [];
   const closedSockets: Array<{ roomId: string; code: number; reason: string }> = [];
   const logLines: string[] = [];
 
   const deletedRoomIds = cleanupExpiredRooms({
-    cleanupExpired: () => ["room-a", "room-b"],
+    cleanupExpired: (_now, shouldRetainRoom) => ["room-active", "room-idle"]
+      .filter((roomId) => !shouldRetainRoom(roomId)),
+    hasActiveRelayHost: (roomId) => roomId === "room-active",
     removeRelayRoom: (roomId) => {
       removedRelayRooms.push(roomId);
     },
@@ -20,14 +22,12 @@ test("cleanupExpiredRooms removes relay sessions and closes sockets for every ex
     },
   });
 
-  assert.deepEqual(deletedRoomIds, ["room-a", "room-b"]);
-  assert.deepEqual(removedRelayRooms, ["room-a", "room-b"]);
+  assert.deepEqual(deletedRoomIds, ["room-idle"]);
+  assert.deepEqual(removedRelayRooms, ["room-idle"]);
   assert.deepEqual(closedSockets, [
-    { roomId: "room-a", code: 4001, reason: "room_expired" },
-    { roomId: "room-b", code: 4001, reason: "room_expired" },
+    { roomId: "room-idle", code: 4001, reason: "room_expired" },
   ]);
   assert.deepEqual(logLines, [
-    "[lobby] room expired roomId=room-a",
-    "[lobby] room expired roomId=room-b",
+    "[lobby] room expired roomId=room-idle",
   ]);
 });

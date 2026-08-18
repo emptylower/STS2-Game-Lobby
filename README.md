@@ -3,8 +3,8 @@
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-![Client](https://img.shields.io/badge/client-v0.6.0--alpha.5-orange)
-![Service](https://img.shields.io/badge/service-v0.6.0--alpha.5-orange)
+![Client](https://img.shields.io/badge/client-v0.6.0--alpha.6-orange)
+![Service](https://img.shields.io/badge/service-v0.6.0--alpha.6-orange)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
 **[中文](#中文) · [English](#english)**
@@ -17,7 +17,7 @@
 
 ## 中文
 
-**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端与大厅服务测试版均为 **v0.6.0-alpha.5**。本候选版主要服务对象是：
+**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端与大厅服务测试版均为 **v0.6.0-alpha.6**。本候选版主要服务对象是：
 
 - 想自行部署大厅服务的服主 / 运维
 - 想构建或分发客户端 MOD 的维护者
@@ -41,8 +41,13 @@
 - 客户端通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）拿到聚合节点列表
 - 不再有任何"母面板"或中心化审核后台；`SERVER_REGISTRY_*` 一组环境变量自 v0.4.0 起已从 lobby-service 中完全移除
 
-### v0.6.0-alpha.5 双协议候选
+### v0.6.0-alpha.6 双协议候选
 
+- 修复 Android gshared 环境无法编译闭合泛型 Harmony wrapper，导致 LAN Connect 初始化中止且主页不显示“联机大厅”的问题；Android 保留 6 个必需位宽补丁，并跳过仅桌面需要的消息总线边界补丁。
+- 将 Tail 出站消息的 9 个 Harmony 前缀改为具体消息类型，避免 RitsuLib v0.5.13 在 Android 动态补丁阶段重新编译 LAN Connect 泛型前缀并触发 Mono 原生断言。
+- 修复“放弃多人存档”确认弹窗的危险操作按钮被滚动视口裁切成一条红线的问题。
+- 修复 Android 开局加载超过房间心跳窗口时，lobby-service 误删仍有活跃房主的中继并断开客机的问题；活跃中继由独立空闲超时负责最终回收。
+- 修复 Tail 房主控制通道缺少客户端版本与 capability digest、导致房间消息和控制绑定无法建立的问题。
 - 修复协议绑定持久化时丢失 profile、carrier、RitsuLib presence、WireCache 签名和 capability digest，导致 SL/读档重新协商错误协议的问题。
 - 修复 lobby-service 把区分大小写的 Base64URL WireCache 签名转为小写的问题；alpha.5 客户端也兼容尚未升级的旧服务。
 - 保留 alpha.3 的 RitsuLib 连接后 sidecar 激活修复；用户反馈日志所用 alpha.2 尚不包含该修复。
@@ -52,18 +57,17 @@
 - 0.6 新协议保持原版 `2/3-bit` 消息主体，完整 roster 由 LAN protocol v1 携带
 - 无 RitsuLib 房间使用 standalone carrier；全员 RitsuLib 房间只使用公开 typed-sidecar API
 - 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合在 ticket 和 transport 前拒绝
-- macOS 的 RitsuLib 路径要求官方 v0.5.13；本地完整启动与 `tail_v1` 建房已通过。官方 v0.5.12 在同一环境复现启动后黑屏，不应继续用于本轮测试
-- Android 上的官方 RitsuLib v0.5.12 在自身网络补丁初始化阶段黑屏；v0.5.13 尚未完成 Android 实机验证，因此本测试版不宣称全 Ritsu Android 联机可用
+- macOS 与 Android 的 RitsuLib 路径统一要求官方 v0.5.13；最终候选包已完成跨端建房、加入、准备、开局、持续中继与 SL 冷启动续局验收。官方 v0.5.12 不应继续用于本轮测试
 - 删除 RC4 对 RitsuLib 私有 postfix 的卸载、直接调用和恢复逻辑，不维护 RitsuLib 分支
 - direct-IP 在 v0.6 测试系列中只允许兼容模式，本地 Ritsu 或 Tail intent 在创建 transport 前拒绝
-- 客户端与自建 lobby-service 均升级到 `0.6.0-alpha.5`
+- 客户端与 lobby-service 均升级到 `0.6.0-alpha.6`；服主必须同步更新并重启服务
 - 历史客户端真实互通不属于本 alpha 的测试或发布门禁
 
 ### 当前版本
 
-- 客户端源码 / 构建版本：`0.6.0-alpha.5`（测试候选）
-- 大厅服务源码 / 构建版本：`0.6.0-alpha.5`（测试候选）
-- 当前测试候选：[`v0.6.0-alpha.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.5)（GitHub Pre-release）
+- 客户端源码 / 构建版本：`0.6.0-alpha.6`（测试候选）
+- 大厅服务源码 / 构建版本：`0.6.0-alpha.6`（测试候选）
+- 当前测试候选：[`v0.6.0-alpha.6`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.6)（GitHub Pre-release）
 - 最新 GitHub 稳定版：[`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
 - Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（候选版测试公告见 `docs/STEAM_WORKSHOP_UPDATE_V0.5.6_ZH.txt`）
 
@@ -211,7 +215,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 ## English
 
-**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current client and lobby-service candidates are both **v0.6.0-alpha.5**.
+**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current client and lobby-service candidates are both **v0.6.0-alpha.6**.
 
 ### What is in this repository
 
@@ -227,8 +231,13 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 Each `lobby-service` node advertises itself to peers via the built-in peer-announce protocol. Clients aggregate the public node list through a Cloudflare discovery worker (`https://sts2-gamelobby-register.xyz`). There is no master panel and no central review backend; the `SERVER_REGISTRY_*` env vars from v0.3.x have been removed from `lobby-service` and have been inert since v0.4.0.
 
-### v0.6.0-alpha.5 dual-protocol candidate
+### v0.6.0-alpha.6 dual-protocol candidate
 
+- Fixes LAN Connect initialization on Android gshared, where Harmony cannot compile a closed-generic wrapper. Android keeps the six required bit-width patches and skips the desktop-only message-bus boundary patch.
+- Replaces the nine Tail outgoing Harmony prefixes with concrete message-specific methods, preventing RitsuLib v0.5.13's Android dynamic-patch pass from recompiling a LAN Connect generic prefix and triggering a native Mono assertion.
+- Fixes the destructive abandon-save action being clipped to a thin red line in the confirmation dialog.
+- Keeps an authenticated active relay host alive when an Android run load exceeds the room-heartbeat window, preventing lobby cleanup from cutting an in-progress relay; the relay idle timeout still performs final reclamation.
+- Adds the frozen client version and capability digest to Tail host control-channel connections, so room messaging and control bindings are no longer rejected.
 - Preserves the frozen profile, carrier, RitsuLib presence, WireCache signature, and capability digest when a save binding is persisted, preventing incorrect SL/load renegotiation.
 - Stops lobby-service from lowercasing case-sensitive Base64URL WireCache signatures; the alpha.5 client also tolerates the legacy service result.
 - Retains alpha.3's post-connect RitsuLib sidecar activation fix; the reported failing log was still running alpha.2.
@@ -238,16 +247,15 @@ Each `lobby-service` node advertises itself to peers via the built-in peer-annou
 - Tail v1 preserves the vanilla `2/3-bit` body and carries the complete roster in LAN protocol v1.
 - No-Ritsu rooms use the standalone carrier; all-Ritsu rooms use only the public typed-sidecar API.
 - Ritsu-present peers connect only to Ritsu-present peers, while Ritsu-absent peers connect only to Ritsu-absent peers. Mixed presence is rejected before ticket and transport allocation.
-- The macOS RitsuLib path requires official v0.5.13, which passed a full local startup and `tail_v1` room creation. Official v0.5.12 reproduced a post-startup black screen in the same environment and should not be used for this test cycle.
-- Official RitsuLib v0.5.12 also fails during its own networking-patch initialization on Android. v0.5.13 has not completed Android device validation, so this prerelease does not claim all-Ritsu Android support.
+- Both macOS and Android RitsuLib paths require official v0.5.13. Android passed a real `2/2 Enabled` startup, complete Ritsu initialization, and lobby-entry check. Official v0.5.12 should not be used for this test cycle.
 - The RC4 private-postfix detach/invoke/restore bridge is removed. LAN Connect does not maintain a RitsuLib fork.
 - Direct IP is compat-only throughout the v0.6 prerelease series. Historical-client interoperability is not part of this alpha gate.
 
 ### Current versions
 
-- Client source/build version: `0.6.0-alpha.5` (prerelease candidate)
-- Lobby service source/build version: `0.6.0-alpha.5` (prerelease candidate)
-- Current release candidate: [`v0.6.0-alpha.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.5) (GitHub prerelease)
+- Client source/build version: `0.6.0-alpha.6` (prerelease candidate)
+- Lobby service source/build version: `0.6.0-alpha.6` (prerelease candidate)
+- Current release candidate: [`v0.6.0-alpha.6`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.6) (GitHub prerelease)
 - Latest stable GitHub release: [`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
 - Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 

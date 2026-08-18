@@ -12,9 +12,9 @@
 
 # STS2 Lobby Service
 
-> 本文档对应测试候选 **v0.6.0-alpha.5**。客户端与服务建议同步升级；部署时重启服务进程以清除内存中的旧房间。
+> 本文档对应测试候选 **v0.6.0-alpha.6**。客户端与服务必须同步升级；部署时重启服务进程以清除内存中的旧房间。
 
-alpha.5 保留 Base64URL WireCache 签名的原始大小写，避免服务端选择结果与客户端 capability digest 不一致。alpha.5 客户端仍兼容尚未升级的旧服务。
+alpha.6 保留 alpha.5 的 Base64URL WireCache 大小写修复，并在房间心跳超时时保留仍有已认证活跃房主的 relay，避免移动端开局加载期间误断开正在进行的游戏。relay 自身的空闲超时仍负责最终回收。
 
 v0.6 新增 `compat_4_5_v1` / `tail_v1` profile、冻结的 protocol selection 与 capability digest。`tail_v1` 要求 RitsuLib presence 完全一致，mismatch 或 sidecar readiness 失败会在 slot、ticket、control binding 和 relay/transport 分配前返回结构化错误。历史客户端真实互通不属于本 alpha 的发布门禁。
 

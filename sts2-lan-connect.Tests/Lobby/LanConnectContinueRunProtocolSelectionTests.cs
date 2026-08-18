@@ -21,6 +21,55 @@ public sealed class LanConnectContinueRunProtocolSelectionTests
     }
 
     [Fact]
+    public void Persisted_tail_selection_wins_over_temporary_compat_host_guard()
+    {
+        LanConnectProtocolSelection temporaryCompat = LanConnectProtocolSelection.CreateLocalCompat(
+            4,
+            "0.111.0",
+            "wcv1:test");
+        LanConnectProtocolSelection persistedTail = TailSelection(ritsuLibPresent: true);
+        LanConnectSessionProtocolSnapshot activeSnapshot = new(
+            LanConnectSessionProtocolPhase.Frozen,
+            LanConnectSessionProtocolRole.Host,
+            "host:temporary",
+            1,
+            temporaryCompat);
+
+        LanConnectProtocolSelection? required = LanConnectHostFlow.ResolveExistingHostRequiredSelection(
+            activeSnapshot,
+            persistedTail);
+
+        Assert.Same(persistedTail, required);
+    }
+
+    [Fact]
+    public void Official_load_host_guard_uses_persisted_tail_selection()
+    {
+        LanConnectProtocolSelection persistedTail = TailSelection(ritsuLibPresent: true);
+
+        LanConnectProtocolSelection guarded = LanConnectLobbyCapacityPatches.ResolveHostGuardSelection(
+            persistedTail,
+            requestedMaxPlayers: 4,
+            gameVersion: "0.111.0",
+            wireCacheSignature: "wcv1:current");
+
+        Assert.Same(persistedTail, guarded);
+    }
+
+    [Fact]
+    public void Host_guard_without_saved_selection_remains_compat()
+    {
+        LanConnectProtocolSelection guarded = LanConnectLobbyCapacityPatches.ResolveHostGuardSelection(
+            savedSelection: null,
+            requestedMaxPlayers: 6,
+            gameVersion: "0.111.0",
+            wireCacheSignature: "wcv1:current");
+
+        Assert.Equal(LanConnectProtocolProfile.Compat4x5V1, guarded.Profile);
+        Assert.Equal(6, guarded.MaxPlayers);
+    }
+
+    [Fact]
     public void Missing_legacy_selection_with_ritsulib_renegotiates_tail()
     {
         LanConnectProtocolOffer offer = new(1, 1, "0.6.0-alpha.4", true, true);

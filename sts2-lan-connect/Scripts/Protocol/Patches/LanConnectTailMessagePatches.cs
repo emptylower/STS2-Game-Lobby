@@ -77,10 +77,6 @@ internal static class LanConnectTailMessagePatches
             .ToArray();
         MethodInfo serializePostfix = AccessTools.Method(typeof(LanConnectTailMessagePatches), nameof(SerializePostfix))
             ?? throw new MissingMethodException(nameof(SerializePostfix));
-        MethodInfo serializePrefixDefinition = AccessTools.Method(
-            typeof(LanConnectTailMessagePatches),
-            nameof(SerializePrefix))
-            ?? throw new MissingMethodException(nameof(SerializePrefix));
         MethodInfo deserializePostfix = AccessTools.Method(typeof(LanConnectTailMessagePatches), nameof(DeserializePostfix))
             ?? throw new MissingMethodException(nameof(DeserializePostfix));
         MethodInfo deserialize = AccessTools.Method(
@@ -94,7 +90,7 @@ internal static class LanConnectTailMessagePatches
             MethodInfo serialize = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
                 typeof(NetMessageBus),
                 messageType);
-            MethodInfo serializePrefix = serializePrefixDefinition.MakeGenericMethod(messageType);
+            MethodInfo serializePrefix = ResolveSerializePrefix(messageType);
             harmony.Patch(
                 serialize,
                 prefix: new HarmonyMethod(serializePrefix) { priority = Priority.First + 100 },
@@ -159,6 +155,32 @@ internal static class LanConnectTailMessagePatches
         }
     }
 
+    private static MethodInfo ResolveSerializePrefix(Type messageType)
+    {
+        string methodName = messageType == typeof(InitialGameInfoMessage)
+            ? nameof(SerializeInitialGameInfoPrefix)
+            : messageType == typeof(ClientLobbyJoinRequestMessage)
+                ? nameof(SerializeLobbyJoinRequestPrefix)
+                : messageType == typeof(ClientLobbyJoinResponseMessage)
+                    ? nameof(SerializeLobbyJoinResponsePrefix)
+                    : messageType == typeof(ClientLoadJoinRequestMessage)
+                        ? nameof(SerializeLoadJoinRequestPrefix)
+                        : messageType == typeof(ClientLoadJoinResponseMessage)
+                            ? nameof(SerializeLoadJoinResponsePrefix)
+                            : messageType == typeof(ClientRejoinRequestMessage)
+                                ? nameof(SerializeRejoinRequestPrefix)
+                                : messageType == typeof(ClientRejoinResponseMessage)
+                                    ? nameof(SerializeRejoinResponsePrefix)
+                                    : messageType == typeof(PlayerJoinedMessage)
+                                        ? nameof(SerializePlayerJoinedPrefix)
+                                        : messageType == typeof(LobbyBeginRunMessage)
+                                            ? nameof(SerializeLobbyBeginRunPrefix)
+                                            : throw new InvalidDataException(
+                                                $"Message type {messageType.FullName} has no concrete tail serializer prefix.");
+        return AccessTools.Method(typeof(LanConnectTailMessagePatches), methodName)
+            ?? throw new MissingMethodException(typeof(LanConnectTailMessagePatches).FullName, methodName);
+    }
+
     internal static byte[] EncodePeerOfferMessage(
         LanConnectSidecarMessageKind messageKind,
         LanConnectProtocolOffer offer) =>
@@ -190,47 +212,175 @@ internal static class LanConnectTailMessagePatches
     private static Stack<ulong>? _transportSenders;
 
     // ReSharper disable UnusedMember.Local -- invoked by Harmony.
-    private static void SerializePrefix<T>(
+    private static void SerializeInitialGameInfoPrefix(
         NetMessageBus __instance,
         ulong senderId,
-        ref T message,
+        ref InitialGameInfoMessage message,
         out LanConnectPreparedTailMessage? __state)
-        where T : struct, INetMessage
     {
-        __state = null;
+        message = (InitialGameInfoMessage)PrepareSerializeMessage(
+            __instance,
+            senderId,
+            message,
+            typeof(InitialGameInfoMessage),
+            out __state);
+    }
+
+    private static void SerializeLobbyJoinRequestPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientLobbyJoinRequestMessage message,
+        out LanConnectPreparedTailMessage? __state)
+    {
+        message = (ClientLobbyJoinRequestMessage)PrepareSerializeMessage(
+            __instance,
+            senderId,
+            message,
+            typeof(ClientLobbyJoinRequestMessage),
+            out __state);
+    }
+
+    private static void SerializeLobbyJoinResponsePrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientLobbyJoinResponseMessage message,
+        out LanConnectPreparedTailMessage? __state)
+    {
+        message = (ClientLobbyJoinResponseMessage)PrepareSerializeMessage(
+            __instance,
+            senderId,
+            message,
+            typeof(ClientLobbyJoinResponseMessage),
+            out __state);
+    }
+
+    private static void SerializeLoadJoinRequestPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientLoadJoinRequestMessage message,
+        out LanConnectPreparedTailMessage? __state)
+    {
+        message = (ClientLoadJoinRequestMessage)PrepareSerializeMessage(
+            __instance,
+            senderId,
+            message,
+            typeof(ClientLoadJoinRequestMessage),
+            out __state);
+    }
+
+    private static void SerializeLoadJoinResponsePrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientLoadJoinResponseMessage message,
+        out LanConnectPreparedTailMessage? __state)
+    {
+        message = (ClientLoadJoinResponseMessage)PrepareSerializeMessage(
+            __instance,
+            senderId,
+            message,
+            typeof(ClientLoadJoinResponseMessage),
+            out __state);
+    }
+
+    private static void SerializeRejoinRequestPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientRejoinRequestMessage message,
+        out LanConnectPreparedTailMessage? __state)
+    {
+        message = (ClientRejoinRequestMessage)PrepareSerializeMessage(
+            __instance,
+            senderId,
+            message,
+            typeof(ClientRejoinRequestMessage),
+            out __state);
+    }
+
+    private static void SerializeRejoinResponsePrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientRejoinResponseMessage message,
+        out LanConnectPreparedTailMessage? __state)
+    {
+        message = (ClientRejoinResponseMessage)PrepareSerializeMessage(
+            __instance,
+            senderId,
+            message,
+            typeof(ClientRejoinResponseMessage),
+            out __state);
+    }
+
+    private static void SerializePlayerJoinedPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref PlayerJoinedMessage message,
+        out LanConnectPreparedTailMessage? __state)
+    {
+        message = (PlayerJoinedMessage)PrepareSerializeMessage(
+            __instance,
+            senderId,
+            message,
+            typeof(PlayerJoinedMessage),
+            out __state);
+    }
+
+    private static void SerializeLobbyBeginRunPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref LobbyBeginRunMessage message,
+        out LanConnectPreparedTailMessage? __state)
+    {
+        message = (LobbyBeginRunMessage)PrepareSerializeMessage(
+            __instance,
+            senderId,
+            message,
+            typeof(LobbyBeginRunMessage),
+            out __state);
+    }
+
+    private static object PrepareSerializeMessage(
+        NetMessageBus messageBus,
+        ulong senderId,
+        object message,
+        Type messageType,
+        out LanConnectPreparedTailMessage? state)
+    {
+        state = null;
         LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
         LanConnectProtocolSelection? selection = snapshot.Selection;
         if (selection?.Profile != LanConnectProtocolProfile.TailV1 || !snapshot.IsActive)
         {
-            return;
+            return message;
         }
 
         ILanConnectTailMessageRuntime runtime = Volatile.Read(ref _runtime)
             ?? throw new InvalidOperationException("Tail protocol message runtime is not configured.");
-        LanConnectSidecarMessageKind kind = GetMessageKind(typeof(T));
+        LanConnectSidecarMessageKind kind = GetMessageKind(messageType);
         if (kind == LanConnectSidecarMessageKind.InitialGameInfo
             && LanConnectTailMessageRuntime.HasPendingOutgoingRejectionForCurrentThread)
         {
             kind = LanConnectSidecarMessageKind.ConnectionFailed;
         }
         LanConnectPreparedTailMessage prepared = runtime.PrepareOutgoing(
-            __instance,
+            messageBus,
             kind,
             senderId,
             message,
             selection);
-        if (prepared.Message is not T projected)
+        if (!messageType.IsInstanceOfType(prepared.Message))
         {
             throw new InvalidOperationException(
-                $"Tail runtime returned {prepared.Message.GetType().FullName} for {typeof(T).FullName}.");
+                $"Tail runtime returned {prepared.Message.GetType().FullName} for {messageType.FullName}.");
         }
 
-        message = projected;
-        __state = prepared;
+        object projected = prepared.Message;
+        state = prepared;
         if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
         {
-            runtime.SubmitSidecarBeforeVanilla(__instance, kind, senderId, message, prepared.Container, selection);
+            runtime.SubmitSidecarBeforeVanilla(messageBus, kind, senderId, projected, prepared.Container, selection);
         }
+
+        return projected;
     }
 
     private static void SerializePostfix(

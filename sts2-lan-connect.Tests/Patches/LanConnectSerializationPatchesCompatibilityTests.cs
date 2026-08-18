@@ -66,6 +66,18 @@ public sealed class LanConnectSerializationPatchesCompatibilityTests
                 typeof(PlayerListMessage<StartRunLobbyPlayer>)));
     }
 
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void Closed_generic_message_bus_boundary_is_disabled_only_for_android_gshared(
+        bool isAndroid,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            LanConnectSerializationPatches.ShouldPatchBeginRunMessageBusBoundary(isAndroid));
+    }
+
     [Fact]
     public void Production_serialization_source_contains_no_private_Ritsu_composition_bridge()
     {

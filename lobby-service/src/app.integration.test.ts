@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import dgram from "node:dgram";
 import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect as netConnect, type AddressInfo } from "node:net";
@@ -435,6 +436,84 @@ test("GET /probe returns exact current chat capabilities", async () => {
     assert.equal(healthBody.ok, true);
     assert.equal("capabilities" in healthBody, false);
   } finally {
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("active authenticated relay survives room heartbeat timeout and accepts a delayed heartbeat", async () => {
+  const config = testConfig({
+    port: 0,
+    heartbeatTimeoutMs: 300,
+    relayBindHost: "127.0.0.1",
+    relayPortStart: 43255,
+    relayPortEnd: 43255,
+    relayHostIdleMs: 5_000,
+    relayClientIdleMs: 5_000,
+    publicRoomListEnabled: true,
+    publicDetailedHealthEnabled: true,
+  });
+  const service = await createLobbyService(config);
+  const hostSocket = dgram.createSocket("udp4");
+  const address = await service.start();
+  const httpBase = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const createResponse = await fetch(`${httpBase}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "active-relay-load-gap",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "0.5.5",
+        maxPlayers: 4,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as {
+      roomId: string;
+      hostToken: string;
+      relayEndpoint: { host: string; port: number };
+    };
+
+    const token = Buffer.from(created.hostToken, "utf8");
+    const registration = Buffer.alloc(6 + 3 + token.length);
+    Buffer.from("STS2R1", "ascii").copy(registration, 0);
+    registration.writeUInt8(1, 6);
+    registration.writeUInt16BE(token.length, 7);
+    token.copy(registration, 9);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      hostSocket.send(registration, created.relayEndpoint.port, created.relayEndpoint.host);
+      await sleep(30);
+    }
+
+    const activeHealth = await fetch(`${httpBase}/health`);
+    assert.equal(activeHealth.status, 200);
+    assert.equal((await activeHealth.json() as { relayActiveHosts: number }).relayActiveHosts, 1);
+
+    await sleep(350);
+    const rooms = await fetch(`${httpBase}/rooms`);
+    assert.equal(rooms.status, 200);
+    assert.deepEqual(
+      (await rooms.json() as Array<{ roomId: string }>).map((room) => room.roomId),
+      [created.roomId],
+    );
+
+    const heartbeat = await fetch(`${httpBase}/rooms/${created.roomId}/heartbeat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        hostToken: created.hostToken,
+        currentPlayers: 2,
+        status: "starting",
+      }),
+    });
+    assert.equal(heartbeat.status, 200);
+  } finally {
+    hostSocket.close();
     await service.close();
     cleanupTempDir(config);
   }

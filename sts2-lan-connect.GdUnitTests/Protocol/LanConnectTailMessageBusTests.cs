@@ -15,6 +15,43 @@ namespace Sts2LanConnect.GdUnitTests.Protocol;
 public sealed class LanConnectTailMessageBusTests
 {
     [TestCase]
+    public void Outgoing_tail_prefixes_are_concrete_for_android_ritsu_compatibility()
+    {
+        Harmony harmony = new($"sts2_lan_connect.tests.tail_prefixes.{Guid.NewGuid():N}");
+
+        try
+        {
+            LanConnectTailMessagePatches.Apply(harmony);
+            Assembly assembly = typeof(PacketWriter).Assembly;
+            Type[] messageTypes = Enum.GetValues<LanConnectSidecarMessageKind>()
+                .Select(kind => assembly.GetType(
+                    $"MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.{LanConnectTailMessageTypeMatrix.GetTypeName(kind)}",
+                    throwOnError: true,
+                    ignoreCase: false)!)
+                .Distinct()
+                .ToArray();
+
+            foreach (Type messageType in messageTypes)
+            {
+                MethodInfo serialize = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
+                    typeof(NetMessageBus),
+                    messageType);
+                Patch[] prefixes = Harmony.GetPatchInfo(serialize)!.Prefixes
+                    .Where(patch => patch.owner == harmony.Id)
+                    .ToArray();
+
+                AssertThat(prefixes.Length).IsEqual(1);
+                AssertThat(prefixes[0].PatchMethod.IsGenericMethod).IsFalse();
+                AssertThat(prefixes[0].PatchMethod.ContainsGenericParameters).IsFalse();
+            }
+        }
+        finally
+        {
+            harmony.UnpatchAll(harmony.Id);
+        }
+    }
+
+    [TestCase]
     public void Standalone_tail_uses_authenticated_transport_sender_before_dispatch()
     {
         Harmony harmony = new($"sts2_lan_connect.tests.tail_bus.{Guid.NewGuid():N}");

@@ -2100,7 +2100,8 @@ export async function createLobbyService(
 
   function cleanupExpiredRoomsNow(now = new Date()) {
     const deletedRoomIds = cleanupExpiredRooms({
-      cleanupExpired: (cleanupNow) => store.cleanupExpired(cleanupNow),
+      cleanupExpired: (cleanupNow, shouldRetainRoom) => store.cleanupExpired(cleanupNow, shouldRetainRoom),
+      hasActiveRelayHost: (roomId) => relayManager.getRoomStatus(roomId).hasActiveHost,
       removeRelayRoom: (roomId) => relayManager.removeRoom(roomId),
       closeRoomSockets,
       log: (message) => console.log(message),

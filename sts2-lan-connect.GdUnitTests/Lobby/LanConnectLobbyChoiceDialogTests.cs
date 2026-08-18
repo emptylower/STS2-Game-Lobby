@@ -30,6 +30,31 @@ public sealed class LanConnectLobbyChoiceDialogTests
     }
 
     [TestCase]
+    public async Task Permanent_abandon_choice_is_fully_visible_with_the_production_copy()
+    {
+        foreach (Vector2I size in new[] { new Vector2I(1280, 720), new Vector2I(720, 1280) })
+        {
+            using ChoiceDialogFixture fixture = await ChoiceDialogFixture.Create(
+                size,
+                "确认永久放弃多人存档",
+                "此操作会结束当前多人进度，并删除游戏使用的 current_run_mp.save。\n\n" +
+                "LAN Connect 会先在 user://sts2_lan_connect/save-backups/ 创建可恢复备份；如果读取或备份失败，删除会自动取消。",
+                [
+                    new LanConnectLobbyDialogChoice(
+                        1,
+                        "备份并永久放弃",
+                        "先创建可恢复备份，再结束当前多人进度。",
+                        Danger: true)
+                ],
+                "保留存档");
+
+            Rect2 choice = fixture.Dialog.ChoiceRectsForTests.Single();
+            Rect2 visibleChoice = choice.Intersection(fixture.Dialog.ChoiceViewportRectForTests);
+            AssertThat(visibleChoice.Size.Y).IsGreaterEqual(88f);
+        }
+    }
+
+    [TestCase]
     public async Task Button_pressed_signal_selects_once_and_closes_dialog()
     {
         using ChoiceDialogFixture fixture = await ChoiceDialogFixture.Create(new Vector2I(1280, 720));
@@ -72,6 +97,25 @@ public sealed class LanConnectLobbyChoiceDialogTests
 
         internal static async Task<ChoiceDialogFixture> Create(Vector2I size)
         {
+            return await Create(
+                size,
+                "LAN 调试建房",
+                "选择要启动的游戏模式。不可用的模式会保持禁用。",
+                [
+                    new(0, "标准模式", "按标准规则创建 ENet LAN Host。", Primary: true),
+                    new(1, "多人每日挑战", "启动多人每日挑战的 LAN Host。"),
+                    new(2, "自定义模式", "进入自定义规则设置后创建 LAN Host。")
+                ],
+                "返回");
+        }
+
+        internal static async Task<ChoiceDialogFixture> Create(
+            Vector2I size,
+            string title,
+            string message,
+            IReadOnlyList<LanConnectLobbyDialogChoice> choices,
+            string cancelText)
+        {
             SubViewport root = AutoFree(new SubViewport
             {
                 Size = size,
@@ -89,14 +133,10 @@ public sealed class LanConnectLobbyChoiceDialogTests
                 Theme = new Theme { DefaultFont = font }
             };
             dialog.Configure(
-                "LAN 调试建房",
-                "选择要启动的游戏模式。不可用的模式会保持禁用。",
-                [
-                    new(0, "标准模式", "按标准规则创建 ENet LAN Host。", Primary: true),
-                    new(1, "多人每日挑战", "启动多人每日挑战的 LAN Host。"),
-                    new(2, "自定义模式", "进入自定义规则设置后创建 LAN Host。")
-                ],
-                "返回");
+                title,
+                message,
+                choices,
+                cancelText);
             root.AddChild(dialog);
             dialog.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
             ISceneRunner runner = ISceneRunner.Load(root, autoFree: true);

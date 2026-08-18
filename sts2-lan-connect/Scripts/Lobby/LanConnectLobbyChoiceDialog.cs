@@ -31,6 +31,7 @@ internal partial class LanConnectLobbyChoiceDialog : Control
     private VBoxContainer? _choiceList;
     private Label? _title;
     private Label? _message;
+    private ScrollContainer? _choiceScroll;
     private Button? _cancelButton;
     private bool _built;
 
@@ -49,6 +50,8 @@ internal partial class LanConnectLobbyChoiceDialog : Control
 
     internal IReadOnlyList<Rect2> ChoiceRectsForTests =>
         _choiceButtons.Select(static button => button.GetGlobalRect()).ToArray();
+
+    internal Rect2 ChoiceViewportRectForTests => _choiceScroll?.GetGlobalRect() ?? new Rect2();
 
     public override void _Ready()
     {
@@ -192,22 +195,25 @@ internal partial class LanConnectLobbyChoiceDialog : Control
         separator.AddThemeStyleboxOverride("separator", CreatePixelStyle(BorderColor, BorderColor, 0, 0, 0));
         body.AddChild(separator);
 
-        ScrollContainer scroll = new()
+        _choiceScroll = new ScrollContainer
         {
+            Name = "LobbyChoiceScroll",
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill,
             HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
             VerticalScrollMode = ScrollContainer.ScrollMode.Auto,
-            FollowFocus = true
+            FollowFocus = true,
+            ClipContents = true,
+            CustomMinimumSize = new Vector2(0f, 104f)
         };
-        body.AddChild(scroll);
+        body.AddChild(_choiceScroll);
 
         _choiceList = new VBoxContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill
         };
         _choiceList.AddThemeConstantOverride("separation", 12);
-        scroll.AddChild(_choiceList);
+        _choiceScroll.AddChild(_choiceList);
 
         _cancelButton = new Button
         {
