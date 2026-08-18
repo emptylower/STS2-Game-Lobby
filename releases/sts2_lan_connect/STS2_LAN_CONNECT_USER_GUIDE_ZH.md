@@ -10,10 +10,13 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端与 lobby-service 测试版均为 `0.6.0-alpha.6`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏，自建服务也必须同步升级并重启。
+当前客户端测试版为 `0.6.0-alpha.7`，lobby-service 继续使用 `0.6.0-alpha.6`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
 
-## v0.6.0-alpha.6 双协议房间
+## v0.6.0-alpha.7 双协议房间
 
+- 房主端会把大厅认证的玩家昵称同步到原生多人等待页和局内玩家列表，不再把客机显示为数字平台 ID。
+- 自动 SL 后从房间管理点击“重开一局”，房主与客机会清理已断开的旧网络服务；客机按原存档槽位自动加入房主重新发布的房间。
+- RitsuLib sidecar 会等待玩家控制绑定与 ENet 连接都就绪后再激活，避免连接先后顺序造成首包或重开会话错绑。
 - Android 端不再尝试安装只能在桌面环境安全编译的闭合泛型消息总线补丁；LAN Connect 保留 6 个 Android 必需的线上位宽补丁，因此初始化不会再中止，主页可以正常显示“联机大厅”。
 - Tail 出站消息改用 9 个非泛型具体 Harmony 前缀，RitsuLib v0.5.13 在 Android 的动态补丁阶段不再因重新编译 LAN Connect 泛型前缀而触发 Mono 原生断言。
 - “放弃多人存档”确认弹窗为选项区保留固定的最小可视高度，横屏和竖屏下都能完整显示“删除存档”与“保留存档”。
@@ -291,10 +294,13 @@
 
 # STS2 LAN Connect User Guide
 
-The current client and lobby-service candidates are both `0.6.0-alpha.6`. This is not a final release. Every player must use the same client and game version and fully restart after updating; self-hosted services must also be upgraded and restarted.
+The current client candidate is `0.6.0-alpha.7`; lobby-service remains at `0.6.0-alpha.6`. This is not a final release. Every player must use the same client and game version and fully restart after updating.
 
-## v0.6.0-alpha.6 Dual-Protocol Rooms
+## v0.6.0-alpha.7 Dual-Protocol Rooms
 
+- Authenticated lobby player names now propagate to the host's native multiplayer load screen and in-run roster instead of appearing as numeric platform IDs.
+- After automatic save/load, **Restart Run** clears disconnected network services on both peers; the guest automatically reclaims its original slot in the host's republished room.
+- RitsuLib sidecar activation now waits for both the player-control binding and the ENet connection, preventing ordering-dependent first-packet and restart-session failures.
 - Android no longer attempts the closed-generic message-bus patch that can only be compiled safely on desktop. LAN Connect keeps the six required Android wire-width patches, so initialization completes and the Game Lobby entry can appear on the main page.
 - The abandon-multiplayer-save confirmation now reserves a stable minimum viewport for its choices, keeping both Delete Save and Keep Save fully visible in landscape and portrait layouts.
 - Lobby-service no longer removes an authenticated active relay when an Android run load temporarily exceeds the room-heartbeat window. Relay idle cleanup still reclaims the session after game traffic actually stops.

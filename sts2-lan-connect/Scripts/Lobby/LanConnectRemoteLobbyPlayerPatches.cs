@@ -50,15 +50,23 @@ internal static class LanConnectRemoteLobbyPlayerPatches
     {
         lock (RegistrySync)
         {
-            if (_refreshQueued)
+            _refreshQueued = true;
+        }
+    }
+
+    internal static void FlushQueuedRefresh()
+    {
+        lock (RegistrySync)
+        {
+            if (!_refreshQueued)
             {
                 return;
             }
 
-            _refreshQueued = true;
+            _refreshQueued = false;
         }
 
-        Callable.From(RefreshAllRegistered).CallDeferred();
+        RefreshAllRegistered();
     }
 
     internal static void RefreshNameplate(NRemoteLobbyPlayer player)
@@ -86,7 +94,6 @@ internal static class LanConnectRemoteLobbyPlayerPatches
         List<KeyValuePair<ulong, NRemoteLobbyPlayer>> players;
         lock (RegistrySync)
         {
-            _refreshQueued = false;
             players = RegisteredPlayers.ToList();
         }
 

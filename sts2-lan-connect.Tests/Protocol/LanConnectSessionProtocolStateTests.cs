@@ -69,6 +69,25 @@ public sealed class LanConnectSessionProtocolStateTests
         Assert.Equal(LanConnectSessionProtocolPhase.Closing, state.Current.Phase);
     }
 
+    [Fact]
+    public void Host_origin_handoff_preserves_the_owning_lease()
+    {
+        LanConnectSessionProtocolState state = new();
+        LanConnectProtocolSelection selection = Selection(LanConnectProtocolProfile.TailV1);
+        LanConnectSessionProtocolLease owner = state.FreezeHost(selection, "host-a");
+        LanConnectSessionProtocolLease observer = state.FreezeHost(selection, "host-a");
+
+        LanConnectSessionProtocolLease? preserved =
+            LanConnectHostOriginProtocolLeaseHandoff.PreserveExistingOwner(owner, observer);
+
+        Assert.Same(owner, preserved);
+        Assert.True(observer.IsDisposed);
+        Assert.Equal(selection, state.Current.Selection);
+
+        preserved!.Dispose();
+        Assert.Equal(LanConnectSessionProtocolPhase.Empty, state.Current.Phase);
+    }
+
     private static LanConnectProtocolSelection Selection(LanConnectProtocolProfile profile)
     {
         LanConnectProtocolCarrier carrier = profile == LanConnectProtocolProfile.Compat4x5V1

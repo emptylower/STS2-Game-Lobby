@@ -31,6 +31,15 @@ internal static class LanConnectMultiplayerSaveCompatibility
     private static bool _cachedHasRunSave;
     private static long _cachedSaveWriteTicks = long.MinValue;
 
+    private static class RunManagerReflectionHolder
+    {
+        // RunManager.CleanUp clears State but intentionally retains its disconnected NetService.
+        // RitsuLib observes that stale property while a replacement lobby service is connecting.
+        internal static readonly FieldInfo? NetServiceField = typeof(RunManager).GetField(
+            "<NetService>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+    }
+
     private static class MultiplayerSubmenuReflectionHolder
     {
         // The explicit cctor prevents beforefieldinit from resolving sts2 types until first use.
@@ -103,6 +112,34 @@ internal static class LanConnectMultiplayerSaveCompatibility
             && run.Players.All(player => player.NetId != steamLocalPlayerId);
         _cachedInterceptDecision = missingSteamPlayerId;
         return _cachedInterceptDecision;
+    }
+
+    internal static bool ShouldClearStaleRunNetServiceForRestart(
+        bool isRunInProgress,
+        object? runNetService) =>
+        !isRunInProgress && runNetService != null;
+
+    internal static bool TryClearStaleRunNetServiceForRestart()
+    {
+        FieldInfo? field = RunManagerReflectionHolder.NetServiceField;
+        if (field == null)
+        {
+            Log.Warn("sts2_lan_connect restart_net_service: RunManager.NetService backing field was not found.");
+            return false;
+        }
+
+        RunManager runManager = RunManager.Instance;
+        object? staleService = field.GetValue(runManager);
+        if (!ShouldClearStaleRunNetServiceForRestart(runManager.IsInProgress, staleService))
+        {
+            return false;
+        }
+
+        field.SetValue(runManager, null);
+        LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(null);
+        GD.Print(
+            $"sts2_lan_connect restart_net_service: cleared stale RunManager service type={staleService!.GetType().Name}");
+        return true;
     }
 
     public static Task StartLoadedRunAsLanHostAsync(Control loadingOverlay, NSubmenuStack stack)

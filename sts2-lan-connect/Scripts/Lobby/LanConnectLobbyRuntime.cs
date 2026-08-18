@@ -518,6 +518,7 @@ internal sealed partial class LanConnectLobbyRuntime :
 
     public override void _Process(double delta)
     {
+        LanConnectRemoteLobbyPlayerPatches.FlushQueuedRefresh();
         DrivePendingRestartNavigation(delta);
         SynchronizeReferenceMode();
         LanConnectRitsuLibLobbyCompatibility.Tick(
@@ -879,6 +880,13 @@ internal sealed partial class LanConnectLobbyRuntime :
             _pendingSaveBindingCoordinator.AttachJoinedClient();
         }
 
+        LanConnectSessionProtocolLease? existingProtocolLease =
+            ReferenceEquals(_hostOrigin?.NetService, netService)
+                ? _hostOrigin.TakeProtocolLease()
+                : null;
+        protocolLease = LanConnectHostOriginProtocolLeaseHandoff.PreserveExistingOwner(
+            existingProtocolLease,
+            protocolLease);
         ClearHostOrigin();
         _hostOrigin = new HostOriginState(
             netService,
@@ -2080,6 +2088,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             return;
         }
 
+        LanConnectMultiplayerSaveCompatibility.TryClearStaleRunNetServiceForRestart();
         Callable.From(() =>
         {
             TryOpenMultiplayerSubmenu(mainMenu, "main_menu_ready");
@@ -2387,10 +2396,16 @@ internal sealed partial class LanConnectLobbyRuntime :
                         try
                         {
                             byte[] flowNonce = LanConnectSidecarFrameCodec.ParseFlowNonce(envelope.ProtocolFlowNonce);
-                            LanConnectTailMessageRuntime.Shared.BindHostTrustedSidecarFlow(
+                            LanConnectTailMessageRuntime.Shared.PrepareHostTrustedSidecarFlow(
                                 session.NetService,
                                 sidecarPeerId,
                                 flowNonce);
+                            if (session.ObserveSidecarControlBinding(sidecarPeerId))
+                            {
+                                LanConnectTailMessageRuntime.Shared.ActivateHostTrustedSidecarFlow(
+                                    session.NetService,
+                                    sidecarPeerId);
+                            }
                         }
                         catch (Exception exception) when (exception is InvalidDataException or LanConnectProtocolException)
                         {
@@ -2398,7 +2413,17 @@ internal sealed partial class LanConnectLobbyRuntime :
                                 $"sts2_lan_connect rejected or failed Ritsu control binding for playerNetId={envelope.PlayerNetId}: {exception.Message}");
                         }
                     }
-                    LanConnectRemoteLobbyPlayerPatches.QueueRefreshAll();
+                    if (TryApplyAuthenticatedPlayerName(
+                            session.RoomId,
+                            envelope.PlayerNetId,
+                            envelope.PlayerName))
+                    {
+                        BroadcastHostedPlayerNameSnapshot(session);
+                    }
+                    else
+                    {
+                        LanConnectRemoteLobbyPlayerPatches.QueueRefreshAll();
+                    }
                 }
 
                 break;
@@ -3357,6 +3382,20 @@ internal sealed partial class LanConnectLobbyRuntime :
         };
     }
 
+    internal static bool TryApplyAuthenticatedPlayerName(
+        string roomId,
+        string? playerNetId,
+        string? playerName)
+    {
+        if (!ulong.TryParse(playerNetId, out ulong netId) || string.IsNullOrWhiteSpace(playerName))
+        {
+            return false;
+        }
+
+        LanConnectLobbyPlayerNameDirectory.Upsert(roomId, netId, playerName);
+        return true;
+    }
+
     internal static List<LobbyPlayerNameEntry> FilterCurrentRoomPeerNames(
         IEnumerable<LobbyPlayerNameEntry> entries,
         IEnumerable<ulong> currentPeerIds)
@@ -3445,11 +3484,18 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         public string GameMode { get; }
 
-        public LanConnectSessionProtocolLease? ProtocolLease { get; }
+        public LanConnectSessionProtocolLease? ProtocolLease { get; private set; }
 
         public bool HasPersisted { get; set; }
 
         public string? SaveKey { get; set; }
+
+        public LanConnectSessionProtocolLease? TakeProtocolLease()
+        {
+            LanConnectSessionProtocolLease? lease = ProtocolLease;
+            ProtocolLease = null;
+            return lease;
+        }
 
         public void Detach()
         {
@@ -3474,12 +3520,22 @@ internal sealed partial class LanConnectLobbyRuntime :
         private readonly Action<ulong, NetErrorInfo> _clientDisconnectedHandler;
         private Action<LobbyControlEnvelope>? _controlEnvelopeHandler;
         internal readonly HashSet<ulong> _connectedPeerIds = new();
+        private readonly LanConnectHostSidecarActivationGate _sidecarActivationGate = new();
         private readonly LanConnectLobbyKickTargetDirectory _kickTargets = new();
         private readonly object _pendingKickSync = new();
         private readonly Dictionary<string, TaskCompletionSource<LobbyControlEnvelope>> _pendingKicks =
             new(StringComparer.Ordinal);
 
-        public IReadOnlyCollection<ulong> ConnectedPeerIds => _connectedPeerIds;
+        public IReadOnlyCollection<ulong> ConnectedPeerIds
+        {
+            get
+            {
+                lock (_connectedPeerIds)
+                {
+                    return _connectedPeerIds.ToArray();
+                }
+            }
+        }
 
         public HostedRoomSession(
             NetHostGameService netService,
@@ -3545,7 +3601,10 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         public int GetCurrentPlayers()
         {
-            return 1 + _connectedPeerIds.Count;
+            lock (_connectedPeerIds)
+            {
+                return 1 + _connectedPeerIds.Count;
+            }
         }
 
         public List<string> GetConnectedPlayerNetIds()
@@ -3554,9 +3613,12 @@ internal sealed partial class LanConnectLobbyRuntime :
             {
                 NetService.NetId.ToString()
             };
-            foreach (ulong peerId in _connectedPeerIds)
+            lock (_connectedPeerIds)
             {
-                connected.Add(peerId.ToString());
+                foreach (ulong peerId in _connectedPeerIds)
+                {
+                    connected.Add(peerId.ToString());
+                }
             }
 
             return connected;
@@ -3564,12 +3626,18 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         public IReadOnlyCollection<ulong> GetCurrentPeerIds()
         {
-            HashSet<ulong> current = new(_connectedPeerIds)
+            lock (_connectedPeerIds)
             {
-                NetService.NetId
-            };
-            return current;
+                HashSet<ulong> current = new(_connectedPeerIds)
+                {
+                    NetService.NetId
+                };
+                return current;
+            }
         }
+
+        public bool ObserveSidecarControlBinding(ulong peerNetId) =>
+            _sidecarActivationGate.ObserveControlBinding(peerNetId);
 
         public bool RememberKickBinding(string playerNetId, string bindingId)
         {
@@ -3629,8 +3697,16 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         public void OnClientCountChanged(ulong _)
         {
-            _connectedPeerIds.Add(_);
+            lock (_connectedPeerIds)
+            {
+                _connectedPeerIds.Add(_);
+            }
             _kickTargets.ObserveConnected(_.ToString());
+            if (ProtocolSelection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1 &&
+                _sidecarActivationGate.ObservePeerConnected(_))
+            {
+                LanConnectTailMessageRuntime.Shared.ActivateHostTrustedSidecarFlow(NetService, _);
+            }
             if (LanConnectLobbyRuntime.Instance != null)
             {
                 LanConnectLobbyRuntime.Instance._timeUntilHeartbeat = 0d;
@@ -3640,7 +3716,11 @@ internal sealed partial class LanConnectLobbyRuntime :
 
         public void OnClientDisconnected(ulong _, NetErrorInfo __)
         {
-            _connectedPeerIds.Remove(_);
+            lock (_connectedPeerIds)
+            {
+                _connectedPeerIds.Remove(_);
+            }
+            _sidecarActivationGate.ObservePeerDisconnected(_);
             _kickTargets.ObserveDisconnected(_.ToString());
             if (ProtocolSelection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
             {

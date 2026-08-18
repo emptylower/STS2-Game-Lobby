@@ -13,12 +13,12 @@ public sealed class LanConnectLobbyControlUriTests
             "channel id",
             "room/id",
             "host+token",
-            "0.6.0-alpha.6",
+            "0.6.0-alpha.7",
             "sha256:AbC+/=");
 
         Assert.Equal(
             "wss://lobby.example/control?controlChannelId=channel%20id&role=host&roomId=room%2Fid" +
-            "&token=host%2Btoken&clientVersion=0.6.0-alpha.6&capabilityDigest=sha256%3AAbC%2B%2F%3D",
+            "&token=host%2Btoken&clientVersion=0.6.0-alpha.7&capabilityDigest=sha256%3AAbC%2B%2F%3D",
             uri.AbsoluteUri);
     }
 

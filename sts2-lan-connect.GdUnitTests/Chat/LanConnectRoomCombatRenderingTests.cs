@@ -240,6 +240,30 @@ public sealed class LanConnectRoomCombatRenderingTests
     }
 
     [TestCase]
+    public void Authenticated_control_binding_projects_the_guest_name_into_the_game_name_directory()
+    {
+        const string roomId = "authenticated-player-name-room";
+        const ulong guestNetId = 6321410324222093731UL;
+        try
+        {
+            LanConnectLobbyPlayerNameDirectory.BeginRoom(roomId);
+
+            bool applied = LanConnectLobbyRuntime.TryApplyAuthenticatedPlayerName(
+                roomId,
+                guestNetId.ToString(),
+                "鬼神易");
+
+            AssertThat(applied).IsTrue();
+            AssertThat(LanConnectLobbyPlayerNameDirectory.TryGetPlayerName(guestNetId)).IsEqual("鬼神易");
+            AssertThat(NullPlatformProjectionFingerprint()).Contains($"{guestNetId}:鬼神易");
+        }
+        finally
+        {
+            LanConnectLobbyPlayerNameDirectory.ClearRoom(roomId);
+        }
+    }
+
+    [TestCase]
     public void Replace_snapshot_exception_leaves_directory_lookup_and_projection_unchanged()
     {
         const string roomId = "replace-snapshot-exception-room";

@@ -327,7 +327,7 @@ public sealed class LanConnectTailMessageRuntimeTests
     }
 
     [TestCase]
-    public void Ritsu_initial_game_info_sidecar_waits_for_the_control_binding_then_flushes()
+    public void Ritsu_initial_game_info_sidecar_waits_for_control_binding_and_peer_activation_then_flushes()
     {
         _ = LoadOfficialRitsuAssembly();
         InitializeSts2Serialization();
@@ -354,7 +354,11 @@ public sealed class LanConnectTailMessageRuntimeTests
 
         AssertThat(pair.HostTransport.SentToClients.Count).IsEqual(0);
 
-        pair.Runtime.BindHostTrustedSidecarFlow(pair.Host, pair.ClientId, pair.ProtocolFlowNonce);
+        pair.Runtime.PrepareHostTrustedSidecarFlow(pair.Host, pair.ClientId, pair.ProtocolFlowNonce);
+
+        AssertThat(pair.HostTransport.SentToClients.Count).IsEqual(0);
+
+        pair.Runtime.ActivateHostTrustedSidecarFlow(pair.Host, pair.ClientId);
 
         AssertThat(pair.HostTransport.SentToClients.Count).IsEqual(1);
         AssertThat(pair.HostTransport.SentToClients[0].PeerId).IsEqual(pair.ClientId);
@@ -371,8 +375,10 @@ public sealed class LanConnectTailMessageRuntimeTests
         const ulong thirdPeerId = 24;
         byte[] secondNonce = Enumerable.Repeat((byte)0x22, LanConnectSidecarFrameCodec.FlowNonceBytes).ToArray();
         byte[] thirdNonce = Enumerable.Repeat((byte)0x33, LanConnectSidecarFrameCodec.FlowNonceBytes).ToArray();
-        pair.Runtime.BindHostTrustedSidecarFlow(pair.Host, secondPeerId, secondNonce);
-        pair.Runtime.BindHostTrustedSidecarFlow(pair.Host, thirdPeerId, thirdNonce);
+        pair.Runtime.PrepareHostTrustedSidecarFlow(pair.Host, secondPeerId, secondNonce);
+        pair.Runtime.ActivateHostTrustedSidecarFlow(pair.Host, secondPeerId);
+        pair.Runtime.PrepareHostTrustedSidecarFlow(pair.Host, thirdPeerId, thirdNonce);
+        pair.Runtime.ActivateHostTrustedSidecarFlow(pair.Host, thirdPeerId);
         LanConnectRitsuLibSidecarCarrier.Shared.SetPeerUnknown(thirdPeerId);
 
         LanConnectProtocolException? failure = null;
@@ -409,7 +415,8 @@ public sealed class LanConnectTailMessageRuntimeTests
         using RuntimePair pair = new(ritsu: true);
         const ulong secondPeerId = 23;
         byte[] secondNonce = Enumerable.Repeat((byte)0x22, LanConnectSidecarFrameCodec.FlowNonceBytes).ToArray();
-        pair.Runtime.BindHostTrustedSidecarFlow(pair.Host, secondPeerId, secondNonce);
+        pair.Runtime.PrepareHostTrustedSidecarFlow(pair.Host, secondPeerId, secondNonce);
+        pair.Runtime.ActivateHostTrustedSidecarFlow(pair.Host, secondPeerId);
         LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(pair.Host);
         LanConnectRitsuLibSidecarCarrier.Shared.SetPeerSupported(pair.ClientId);
         LanConnectRitsuLibSidecarCarrier.Shared.SetPeerSupported(secondPeerId);
@@ -681,7 +688,7 @@ public sealed class LanConnectTailMessageRuntimeTests
             return Assembly.Load(File.ReadAllBytes(localCopy));
         }
 
-        throw new FileNotFoundException("Official STS2-RitsuLib v0.5.12 assembly was not found.", localCopy);
+        throw new FileNotFoundException("Official STS2-RitsuLib v0.5.13 assembly was not found.", localCopy);
     }
 
     private static List<StartRunLobbyPlayer> StartRunPlayers(int count)
@@ -777,7 +784,8 @@ public sealed class LanConnectTailMessageRuntimeTests
             Runtime.BindClient(Client, Offer, Selection, ProtocolFlowNonce);
             if (ritsu && bindRitsuFlows)
             {
-                Runtime.BindHostTrustedSidecarFlow(Host, ClientId, ProtocolFlowNonce);
+                Runtime.PrepareHostTrustedSidecarFlow(Host, ClientId, ProtocolFlowNonce);
+                Runtime.ActivateHostTrustedSidecarFlow(Host, ClientId);
                 Runtime.BindClientHostSidecarFlow(Client);
             }
         }

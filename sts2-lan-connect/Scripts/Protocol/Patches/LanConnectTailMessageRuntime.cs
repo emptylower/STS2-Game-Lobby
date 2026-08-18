@@ -87,7 +87,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         }
     }
 
-    internal void BindHostTrustedSidecarFlow(
+    internal void PrepareHostTrustedSidecarFlow(
         NetHostGameService service,
         ulong peerNetId,
         ReadOnlySpan<byte> protocolFlowNonce)
@@ -99,6 +99,18 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         }
 
         binding.BindBidirectionalSidecarFlow(service.NetId, peerNetId, protocolFlowNonce);
+    }
+
+    internal void ActivateHostTrustedSidecarFlow(NetHostGameService service, ulong peerNetId)
+    {
+        Binding binding = RequireBinding(GetMessageBus(service));
+        if (binding.Selection.Carrier != LanConnectProtocolCarrier.RitsuLibSidecarV1 ||
+            !binding.HasSidecarPeer(peerNetId))
+        {
+            return;
+        }
+
+        LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(service);
         LanConnectRitsuLibSidecarCarrier.Shared.SetPeerSupported(peerNetId);
         PendingOutgoingSidecar? pending = binding.TakePendingOutgoingSidecar(peerNetId);
         if (pending != null)
