@@ -149,6 +149,7 @@ if [[ "$ARTIFACTS_ONLY" -eq 0 ]]; then
     "$(command -v dotnet || true)" \
     "$HOME/.dotnet/dotnet")" || release_die "dotnet executable not found"
   export DOTNET_BIN
+  "$DOTNET_BIN" test "$ROOT_DIR/sts2-lan-connect.ProtocolPlanTests/sts2_lan_connect.ProtocolPlanTests.csproj" -m:1
   "$DOTNET_BIN" test "$ROOT_DIR/sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj" -m:1
   "$DOTNET_BIN" test "$ROOT_DIR/sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj" \
     --settings "$ROOT_DIR/sts2-lan-connect.GdUnitTests/gdunit4.runsettings" \

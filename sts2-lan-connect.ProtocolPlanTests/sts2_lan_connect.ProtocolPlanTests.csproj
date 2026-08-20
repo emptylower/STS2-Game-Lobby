@@ -1,51 +1,40 @@
-<Project Sdk="Godot.NET.Sdk/4.5.1">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <AssemblyName>sts2_lan_connect</AssemblyName>
     <TargetFramework>net9.0</TargetFramework>
-    <EnableDynamicLoading>true</EnableDynamicLoading>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <LangVersion>12.0</LangVersion>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>0.6.0-alpha.8</Version>
-    <AssemblyVersion>0.6.0.0</AssemblyVersion>
-    <FileVersion>0.6.0.0</FileVersion>
-    <InformationalVersion>0.6.0-alpha.8</InformationalVersion>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>sts2_lan_connect.ProtocolPlanTests</AssemblyName>
+    <RootNamespace>Sts2LanConnect.ProtocolPlanTests</RootNamespace>
 
     <UserHome>$([System.Environment]::GetFolderPath(System.Environment+SpecialFolder.UserProfile))</UserHome>
-
     <Sts2Root Condition="'$(Sts2Root)' == '' and '$(OS)' == 'Windows_NT'">C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2</Sts2Root>
     <Sts2Root Condition="'$(Sts2Root)' == '' and '$(OS)' != 'Windows_NT'">$(UserHome)/Library/Application Support/Steam/steamapps/common/Slay the Spire 2</Sts2Root>
-
     <Sts2MacApp>$(Sts2Root)/SlayTheSpire2.app</Sts2MacApp>
-
     <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and '$(OS)' == 'Windows_NT'">$(Sts2Root)\data_sts2_windows_x86_64</Sts2DataDir>
     <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and '$(OS)' != 'Windows_NT' and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">$(Sts2MacApp)/Contents/Resources/data_sts2_macos_arm64</Sts2DataDir>
     <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and '$(OS)' != 'Windows_NT' and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' != 'Arm64'">$(Sts2MacApp)/Contents/Resources/data_sts2_macos_x86_64</Sts2DataDir>
-
-    <Sts2BuildOutputRoot Condition="'$(Sts2BuildOutputRoot)' == ''">$(MSBuildProjectDirectory)/release/.build_mod_output</Sts2BuildOutputRoot>
-    <Sts2ModsDir Condition="'$(Sts2ModsDir)' == ''">$(Sts2BuildOutputRoot)/$(AssemblyName)</Sts2ModsDir>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\sts2-lan-connect\sts2_lan_connect.csproj" />
     <Reference Include="sts2">
       <HintPath>$(Sts2DataDir)/sts2.dll</HintPath>
-      <Private>false</Private>
+      <Private>true</Private>
     </Reference>
     <Reference Include="0Harmony">
       <HintPath>$(Sts2DataDir)/0Harmony.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Steamworks.NET">
-      <HintPath>$(Sts2DataDir)/Steamworks.NET.dll</HintPath>
-      <Private>false</Private>
+      <Private>true</Private>
     </Reference>
   </ItemGroup>
-
-  <Target Name="CopyModDll" AfterTargets="Build">
-    <MakeDir Directories="$(Sts2ModsDir)" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(Sts2ModsDir)" />
-    <Delete Files="$(Sts2ModsDir)/mod_manifest.json" Condition="Exists('$(Sts2ModsDir)/mod_manifest.json')" />
-    <Copy SourceFiles="$(MSBuildProjectDirectory)/sts2_lan_connect.json" DestinationFolder="$(Sts2ModsDir)" Condition="Exists('$(MSBuildProjectDirectory)/sts2_lan_connect.json')" />
-  </Target>
 </Project>

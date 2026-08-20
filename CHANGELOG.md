@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+## [0.6.0-alpha.8] - 2026-08-20
+
+客户端 `0.6.0-alpha.8` Android gshared 非泛型补丁与启动诊断候选；lobby-service 继续使用 `0.6.0-alpha.6`。
+
+### Fixed
+
+- Android Tail 出站链路改用固定 15 项 `android_non_generic_v2` 补丁计划，9 个具体消息 serializer 与所有 hook 均在应用前验证为非泛型，避免向 gshared 注册闭合泛型 Harmony 目标。
+- concrete serializer 在已绑定 writer 上复用既有 Tail 投影与字节格式；writer/header 不匹配、sidecar 重复消费和 transport 失败均 fail closed，并终止整个活动 binding，避免不同 peer 进入分裂协议状态。
+- RitsuLib v0.5.13 sidecar 按真实 peer 与 vanilla 包交错发送并保持 sidecar-before-vanilla；定向发送不再可能退化为向全部已绑定 peer 广播。
+- 补丁 dispatcher 在失败时只回滚本 MOD owner，并始终通过原始异常堆栈重抛首因，即使回滚自身失败也不会覆盖产品错误。
+
+### Diagnostics
+
+- `Entry.Init` 的 10 个阶段以及每个稳定 patch ID 都同步记录到私有 JSONL、原子 sentinel 与普通游戏/logcat 日志，包含耗时、目标/钩子签名、程序集指纹和脱敏异常指纹。
+- 初始化期间临时启用 Harmony DEBUG、私有 `harmony.log` 与 `DMDDumpTo`，结束后恢复原有全局状态；不设置 `DMDType` 或 `DMDDebug`。
+- 完成启动后保留最近 3 个诊断 session，并按 64 MiB 总量清理旧证据；诊断写盘、hash 或清理失败不会改变补丁结果。
+
+### Compatibility
+
+- 非 Android 环境继续使用既有 30 项 `desktop_generic_v1`，协议字节、standalone Tail 与官方 RitsuLib v0.5.13 typed-sidecar 行为不变。
+- 同一房间所有成员必须统一安装客户端 `0.6.0-alpha.8`；lobby-service 继续使用 `0.6.0-alpha.6`，Steam Workshop 继续停留在 alpha.7。
+- 本版仅作为 GitHub Pre-release 诊断候选。原失败 Android 设备尚未完成连续冷启动复测，因此修复状态保持 `PENDING`，不宣称已解决。
+
+### Verification
+
+- 发布门禁通过 lobby-service 607 项、独立 patch-plan xUnit 7 项、客户端主 xUnit 1123 项（另有 1 项既有原型测试跳过）和真实 `sts2.dll`/官方 RitsuLib v0.5.13 的 GdUnit 371 项。
+- Android standalone 的 9 类完整消息与既有 golden vector 逐字节一致；Ritsu transport 覆盖三人广播、定向发送、Reset、重入、错配、重复 peer 及 sidecar/vanilla 失败后的全 binding 断开。
+
 ## [0.6.0-alpha.7] - 2026-08-18
 
 客户端 `0.6.0-alpha.7` 玩家昵称与 RitsuLib 自动 SL 重开返回修复测试版；lobby-service 继续使用 `0.6.0-alpha.6`。

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Logging;
@@ -5,6 +6,7 @@ using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
+using MegaCrit.Sts2.Core.Multiplayer.Transport.ENet;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -47,9 +49,46 @@ internal interface ILanConnectTailMessageRuntime
         LanConnectProtocolSelection selection);
 }
 
+internal interface ILanConnectAndroidTailMessageRuntime : ILanConnectTailMessageRuntime
+{
+    bool TryPrepareConcreteOutgoing(
+        PacketWriter writer,
+        LanConnectSidecarMessageKind messageKind,
+        object message,
+        out LanConnectAndroidPreparedMessage? prepared);
+
+    void CompleteConcreteOutgoing(LanConnectAndroidPreparedMessage prepared);
+
+    void ClearPendingOutgoing(PacketWriter writer);
+
+    LanConnectAndroidTransportState? SubmitPendingSidecarBeforeVanilla(
+        object transport,
+        bool isHostTransport,
+        ulong recipientPeerId,
+        byte[] buffer,
+        int length);
+
+    void HandleVanillaTransportFailure(
+        LanConnectAndroidTransportState state,
+        Exception exception);
+}
+
 internal sealed record LanConnectPreparedTailMessage(object Message, byte[] Container);
 
-internal static class LanConnectTailMessagePatches
+internal sealed record LanConnectAndroidPreparedMessage(
+    NetMessageBus MessageBus,
+    PacketWriter Writer,
+    LanConnectSidecarMessageKind MessageKind,
+    ulong SenderPeerId,
+    LanConnectProtocolSelection Selection,
+    LanConnectPreparedTailMessage Prepared);
+
+internal sealed record LanConnectAndroidTransportState(
+    NetMessageBus MessageBus,
+    long Sequence,
+    ulong RecipientPeerId);
+
+internal static partial class LanConnectTailMessagePatches
 {
     private static readonly FieldInfo? NetMessageBusWriter =
         AccessTools.Field(typeof(NetMessageBus), "_writer");
@@ -63,96 +102,166 @@ internal static class LanConnectTailMessagePatches
     internal static void ResetRuntime() => Volatile.Write(ref _runtime, null);
 
     internal static void Apply(Harmony harmony)
+        => ApplyResolvedPlan(harmony, ResolvePatchPlan(typeof(PacketWriter).Assembly, OperatingSystem.IsAndroid()));
+
+    internal static void ApplyForTesting(Harmony harmony, bool isAndroid)
+        => ApplyResolvedPlan(harmony, ResolvePatchPlan(typeof(PacketWriter).Assembly, isAndroid));
+
+    internal static void ApplyPlanWithInjectedPatcherForTesting(
+        Harmony harmony,
+        LanConnectTailPatchPlan plan,
+        Action<Harmony, LanConnectTailPatchStep> patcher)
+        => ApplyResolvedPlan(harmony, plan, patcher, emitProductLog: false);
+
+    private static void ApplyResolvedPlan(
+        Harmony harmony,
+        LanConnectTailPatchPlan plan,
+        Action<Harmony, LanConnectTailPatchStep>? patcher = null,
+        bool emitProductLog = true)
     {
         ArgumentNullException.ThrowIfNull(harmony);
-        Assembly assembly = typeof(PacketWriter).Assembly;
-        Type[] messageTypes = Enum.GetValues<LanConnectSidecarMessageKind>()
-            .Select(kind => assembly.GetType(
-                $"MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.{LanConnectTailMessageTypeMatrix.GetTypeName(kind)}",
-                throwOnError: false,
-                ignoreCase: false))
-            .Where(static type => type != null)
-            .Cast<Type>()
-            .Distinct()
-            .ToArray();
-        MethodInfo serializePostfix = AccessTools.Method(typeof(LanConnectTailMessagePatches), nameof(SerializePostfix))
-            ?? throw new MissingMethodException(nameof(SerializePostfix));
-        MethodInfo deserializePostfix = AccessTools.Method(typeof(LanConnectTailMessagePatches), nameof(DeserializePostfix))
-            ?? throw new MissingMethodException(nameof(DeserializePostfix));
-        MethodInfo deserialize = AccessTools.Method(
-            typeof(NetMessageBus),
-            nameof(NetMessageBus.TryDeserializeMessage),
-            [typeof(byte[]), typeof(INetMessage).MakeByRefType(), typeof(ulong?).MakeByRefType()])
-            ?? throw new MissingMethodException(typeof(NetMessageBus).FullName, nameof(NetMessageBus.TryDeserializeMessage));
-
-        foreach (Type messageType in messageTypes)
+        ArgumentNullException.ThrowIfNull(plan);
+        int applied = 0;
+        if (emitProductLog)
         {
-            MethodInfo serialize = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
-                typeof(NetMessageBus),
-                messageType);
-            MethodInfo serializePrefix = ResolveSerializePrefix(messageType);
-            harmony.Patch(
-                serialize,
-                prefix: new HarmonyMethod(serializePrefix) { priority = Priority.First + 100 },
-                postfix: new HarmonyMethod(serializePostfix));
+            Log.Info(
+                $"sts2_lan_connect patch_diag: event=plan_begin profile={plan.Profile} " +
+                $"total={plan.Steps.Count} generic_target_count={plan.GenericTargetCount}");
+        }
+        foreach (LanConnectTailPatchStep step in plan.Steps)
+        {
+            int ordinal = applied + 1;
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            LanConnectPatchDiagnosticDescriptor diagnosticDescriptor =
+                CreateDiagnosticDescriptor(harmony, plan, step, ordinal);
+            LanConnectStartupDiagnostics? diagnostics = LanConnectStartupDiagnostics.Current;
+            long diagnosticStarted = diagnostics?.RecordPatchBegin(diagnosticDescriptor)
+                                     ?? Stopwatch.GetTimestamp();
+            if (emitProductLog)
+            {
+                Log.Info(
+                    $"sts2_lan_connect patch_diag: event=patch_begin profile={plan.Profile} " +
+                    $"patch_id={step.Id} ordinal={ordinal}/{plan.Steps.Count} category={step.Category} " +
+                    $"target={FormatMethod(step.Target)}");
+            }
+            try
+            {
+                if (patcher == null)
+                {
+                    harmony.Patch(
+                        step.Target,
+                        prefix: CreateHarmonyMethod(step.Prefix, step.PrefixPriority),
+                        postfix: CreateHarmonyMethod(step.Postfix, step.PostfixPriority),
+                        finalizer: CreateHarmonyMethod(step.Finalizer, step.FinalizerPriority));
+                }
+                else
+                {
+                    patcher(harmony, step);
+                }
+                applied++;
+                diagnostics?.RecordPatchSuccess(diagnosticDescriptor, diagnosticStarted);
+                if (emitProductLog)
+                {
+                    Log.Info(
+                        $"sts2_lan_connect patch_diag: event=patch_success profile={plan.Profile} " +
+                        $"patch_id={step.Id} ordinal={ordinal}/{plan.Steps.Count} elapsed_ms={stopwatch.ElapsedMilliseconds}");
+                }
+            }
+            catch (Exception exception)
+            {
+                diagnostics?.RecordPatchFailure(diagnosticDescriptor, diagnosticStarted, exception);
+                if (emitProductLog)
+                {
+                    Log.Error(
+                        $"sts2_lan_connect patch_diag: event=patch_failure profile={plan.Profile} " +
+                        $"patch_id={step.Id} ordinal={ordinal}/{plan.Steps.Count} elapsed_ms={stopwatch.ElapsedMilliseconds} " +
+                        $"exception={exception.GetType().FullName} hresult={exception.HResult}");
+                }
+                throw;
+            }
         }
 
-        harmony.Patch(deserialize, postfix: new HarmonyMethod(deserializePostfix));
-
-        MethodInfo receivePrefix = AccessTools.Method(
-            typeof(LanConnectTailMessagePatches),
-            nameof(ReceivePrefix))
-            ?? throw new MissingMethodException(nameof(ReceivePrefix));
-        MethodInfo receiveFinalizer = AccessTools.Method(
-            typeof(LanConnectTailMessagePatches),
-            nameof(ReceiveFinalizer))
-            ?? throw new MissingMethodException(nameof(ReceiveFinalizer));
-        foreach (Type serviceType in new[] { typeof(NetHostGameService), typeof(NetClientGameService) })
+        if (emitProductLog)
         {
-            MethodInfo receive = AccessTools.Method(
-                serviceType,
-                "OnPacketReceived",
-                [typeof(ulong), typeof(byte[]),
-                    typeof(MegaCrit.Sts2.Core.Multiplayer.Transport.NetTransferMode), typeof(int)])
-                ?? throw new MissingMethodException(serviceType.FullName, "OnPacketReceived");
-            harmony.Patch(
-                receive,
-                prefix: new HarmonyMethod(receivePrefix),
-                finalizer: new HarmonyMethod(receiveFinalizer));
+            Log.Info(
+                $"sts2_lan_connect patch_diag: event=plan_success profile={plan.Profile} " +
+                $"applied={applied}/{plan.Steps.Count} generic_target_count={plan.GenericTargetCount}");
+        }
+    }
+
+    private static LanConnectPatchDiagnosticDescriptor CreateDiagnosticDescriptor(
+        Harmony harmony,
+        LanConnectTailPatchPlan plan,
+        LanConnectTailPatchStep step,
+        int ordinal)
+    {
+        (MethodInfo Hook, int Priority)[] hooks = GetHooksWithPriorities(step).ToArray();
+        if (hooks.Length == 0)
+        {
+            throw new InvalidDataException($"Tail patch {step.Id} has no Harmony hook.");
         }
 
-        MethodInfo hostBroadcastDefinition = typeof(NetHostGameService).GetMethods(BindingFlags.Instance | BindingFlags.Public)
-            .Single(method => method.Name == nameof(NetHostGameService.SendMessage)
-                              && method.IsGenericMethodDefinition
-                              && method.GetParameters().Length == 1);
-        MethodInfo hostSendInternalDefinition = typeof(NetHostGameService)
-            .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
-            .Single(method => method.Name == "SendMessageToClientInternal"
-                              && method.IsGenericMethodDefinition
-                              && method.GetParameters().Length == 4);
-        MethodInfo hostBroadcastPrefix = AccessTools.Method(
-            typeof(LanConnectTailMessagePatches),
-            nameof(HostBroadcastPrefix))
-            ?? throw new MissingMethodException(nameof(HostBroadcastPrefix));
-        MethodInfo hostSendInternalPrefix = AccessTools.Method(
-            typeof(LanConnectTailMessagePatches),
-            nameof(HostSendInternalPrefix))
-            ?? throw new MissingMethodException(nameof(HostSendInternalPrefix));
-        MethodInfo hostSendFinalizer = AccessTools.Method(
-            typeof(LanConnectTailMessagePatches),
-            nameof(HostSendFinalizer))
-            ?? throw new MissingMethodException(nameof(HostSendFinalizer));
-        foreach (Type messageType in messageTypes)
+        return new LanConnectPatchDiagnosticDescriptor(
+            step.Id,
+            ordinal,
+            plan.Steps.Count,
+            step.Category,
+            step.MessageType?.FullName,
+            step.Target,
+            hooks[0].Hook,
+            harmony.Id,
+            hooks[0].Priority)
         {
-            harmony.Patch(
-                hostBroadcastDefinition.MakeGenericMethod(messageType),
-                prefix: new HarmonyMethod(hostBroadcastPrefix),
-                finalizer: new HarmonyMethod(hostSendFinalizer));
-            harmony.Patch(
-                hostSendInternalDefinition.MakeGenericMethod(messageType),
-                prefix: new HarmonyMethod(hostSendInternalPrefix),
-                finalizer: new HarmonyMethod(hostSendFinalizer));
+            PlanProfile = plan.Profile,
+            AdditionalHooks = hooks.Skip(1).Select(static item => item.Hook).ToArray(),
+            AdditionalHookPriorities = hooks.Skip(1).Select(static item => item.Priority).ToArray()
+        };
+    }
+
+    private static IEnumerable<(MethodInfo Hook, int Priority)> GetHooksWithPriorities(
+        LanConnectTailPatchStep step)
+    {
+        if (step.Prefix != null)
+        {
+            yield return (step.Prefix, step.PrefixPriority ?? Priority.Normal);
         }
+
+        if (step.Postfix != null)
+        {
+            yield return (step.Postfix, step.PostfixPriority ?? Priority.Normal);
+        }
+
+        if (step.Finalizer != null)
+        {
+            yield return (step.Finalizer, step.FinalizerPriority ?? Priority.Normal);
+        }
+    }
+
+    private static HarmonyMethod? CreateHarmonyMethod(MethodInfo? method, int? priority)
+    {
+        if (method == null)
+        {
+            return null;
+        }
+
+        HarmonyMethod harmonyMethod = new(method);
+        if (priority.HasValue)
+        {
+            harmonyMethod.priority = priority.Value;
+        }
+
+        return harmonyMethod;
+    }
+
+    internal static string FormatMethod(MethodInfo method)
+    {
+        string genericArguments = method.IsGenericMethod
+            ? $"<{string.Join(",", method.GetGenericArguments().Select(static type => type.FullName ?? type.Name))}>"
+            : string.Empty;
+        string parameters = string.Join(
+            ",",
+            method.GetParameters().Select(static parameter => parameter.ParameterType.FullName ?? parameter.ParameterType.Name));
+        return $"{method.DeclaringType?.FullName}.{method.Name}{genericArguments}({parameters})";
     }
 
     private static MethodInfo ResolveSerializePrefix(Type messageType)
@@ -336,6 +445,203 @@ internal static class LanConnectTailMessagePatches
             message,
             typeof(LobbyBeginRunMessage),
             out __state);
+    }
+
+    private static void AndroidSerializeInitialGameInfoPrefix(
+        ref InitialGameInfoMessage __instance,
+        PacketWriter __0,
+        out LanConnectAndroidPreparedMessage? __state) =>
+        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+
+    private static void AndroidSerializeLobbyJoinRequestPrefix(
+        ref ClientLobbyJoinRequestMessage __instance,
+        PacketWriter __0,
+        out LanConnectAndroidPreparedMessage? __state) =>
+        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+
+    private static void AndroidSerializeLobbyJoinResponsePrefix(
+        ref ClientLobbyJoinResponseMessage __instance,
+        PacketWriter __0,
+        out LanConnectAndroidPreparedMessage? __state) =>
+        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+
+    private static void AndroidSerializeLoadJoinRequestPrefix(
+        ref ClientLoadJoinRequestMessage __instance,
+        PacketWriter __0,
+        out LanConnectAndroidPreparedMessage? __state) =>
+        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+
+    private static void AndroidSerializeLoadJoinResponsePrefix(
+        ref ClientLoadJoinResponseMessage __instance,
+        PacketWriter __0,
+        out LanConnectAndroidPreparedMessage? __state) =>
+        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+
+    private static void AndroidSerializeRejoinRequestPrefix(
+        ref ClientRejoinRequestMessage __instance,
+        PacketWriter __0,
+        out LanConnectAndroidPreparedMessage? __state) =>
+        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+
+    private static void AndroidSerializeRejoinResponsePrefix(
+        ref ClientRejoinResponseMessage __instance,
+        PacketWriter __0,
+        out LanConnectAndroidPreparedMessage? __state) =>
+        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+
+    private static void AndroidSerializePlayerJoinedPrefix(
+        ref PlayerJoinedMessage __instance,
+        PacketWriter __0,
+        out LanConnectAndroidPreparedMessage? __state) =>
+        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+
+    private static void AndroidSerializeLobbyBeginRunPrefix(
+        ref LobbyBeginRunMessage __instance,
+        PacketWriter __0,
+        out LanConnectAndroidPreparedMessage? __state) =>
+        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+
+    private static T PrepareAndroidConcreteMessage<T>(
+        PacketWriter writer,
+        T message,
+        out LanConnectAndroidPreparedMessage? state)
+        where T : struct, INetMessage
+    {
+        state = null;
+        LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
+        if (!snapshot.IsActive || snapshot.Selection?.Profile != LanConnectProtocolProfile.TailV1)
+        {
+            return message;
+        }
+
+        ILanConnectAndroidTailMessageRuntime runtime = Volatile.Read(ref _runtime)
+            as ILanConnectAndroidTailMessageRuntime
+            ?? throw new InvalidOperationException("Android Tail protocol message runtime is not configured.");
+        LanConnectSidecarMessageKind kind = GetMessageKind(typeof(T));
+        if (kind == LanConnectSidecarMessageKind.InitialGameInfo
+            && LanConnectTailMessageRuntime.HasPendingOutgoingRejectionForCurrentThread)
+        {
+            kind = LanConnectSidecarMessageKind.ConnectionFailed;
+        }
+
+        if (!runtime.TryPrepareConcreteOutgoing(writer, kind, message, out state))
+        {
+            return message;
+        }
+
+        if (state?.Prepared.Message is not T projected)
+        {
+            throw new InvalidOperationException(
+                $"Tail runtime returned {state?.Prepared.Message.GetType().FullName ?? "null"} for {typeof(T).FullName}.");
+        }
+
+        return projected;
+    }
+
+    private static void AndroidConcreteSerializePostfix(LanConnectAndroidPreparedMessage? __state)
+    {
+        if (__state == null)
+        {
+            return;
+        }
+
+        ILanConnectAndroidTailMessageRuntime runtime = Volatile.Read(ref _runtime)
+            as ILanConnectAndroidTailMessageRuntime
+            ?? throw new InvalidOperationException("Android Tail protocol message runtime is not configured.");
+        runtime.CompleteConcreteOutgoing(__state);
+    }
+
+    private static void AndroidWriterResetPrefix(PacketWriter __instance)
+    {
+        if (Volatile.Read(ref _runtime) is ILanConnectAndroidTailMessageRuntime runtime)
+        {
+            runtime.ClearPendingOutgoing(__instance);
+        }
+    }
+
+    private static void AndroidHostTransportPrefix(
+        ENetHost __instance,
+        ulong peerId,
+        byte[] bytes,
+        int length,
+        out LanConnectAndroidTransportState? __state)
+    {
+        __state = PrepareAndroidTransport(
+            __instance,
+            isHostTransport: true,
+            peerId,
+            bytes,
+            length);
+    }
+
+    private static void AndroidClientTransportPrefix(
+        ENetClient __instance,
+        byte[] bytes,
+        int length,
+        out LanConnectAndroidTransportState? __state)
+    {
+        __state = PrepareAndroidTransport(
+            __instance,
+            isHostTransport: false,
+            recipientPeerId: 0,
+            bytes,
+            length);
+    }
+
+    private static LanConnectAndroidTransportState? PrepareAndroidTransport(
+        object transport,
+        bool isHostTransport,
+        ulong recipientPeerId,
+        byte[] bytes,
+        int length)
+    {
+        if (Volatile.Read(ref _runtime) is not ILanConnectAndroidTailMessageRuntime runtime)
+        {
+            return null;
+        }
+
+        return runtime.SubmitPendingSidecarBeforeVanilla(
+            transport,
+            isHostTransport,
+            recipientPeerId,
+            bytes,
+            length);
+    }
+
+    private static Exception? AndroidHostTransportFinalizer(
+        Exception? __exception,
+        LanConnectAndroidTransportState? __state) =>
+        CompleteAndroidTransport(__exception, __state);
+
+    private static Exception? AndroidClientTransportFinalizer(
+        Exception? __exception,
+        LanConnectAndroidTransportState? __state) =>
+        CompleteAndroidTransport(__exception, __state);
+
+    private static Exception? CompleteAndroidTransport(
+        Exception? exception,
+        LanConnectAndroidTransportState? state)
+    {
+        if (exception == null || state == null)
+        {
+            return exception;
+        }
+
+        try
+        {
+            if (Volatile.Read(ref _runtime) is ILanConnectAndroidTailMessageRuntime runtime)
+            {
+                runtime.HandleVanillaTransportFailure(state, exception);
+            }
+        }
+        catch (Exception abortException)
+        {
+            Log.Error(
+                "sts2_lan_connect tail: failed to terminate Android Tail binding after vanilla transport failure: " +
+                $"{abortException.GetType().Name}: {abortException.Message}");
+        }
+
+        return exception;
     }
 
     private static object PrepareSerializeMessage(

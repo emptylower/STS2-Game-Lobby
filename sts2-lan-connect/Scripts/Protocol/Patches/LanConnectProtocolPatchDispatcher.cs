@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Logging;
 
@@ -32,17 +34,18 @@ internal static class LanConnectProtocolPatchDispatcher
                 LanConnectTailMessagePatches.Apply(harmony);
                 _applied = true;
             }
-            catch
+            catch (Exception exception)
             {
-                harmony.UnpatchAll(HarmonyId);
-                TryResetSerializationPatchesAfterRollback();
-                _applied = false;
-                throw;
+                RollBackAndRethrowOriginal(harmony, HarmonyId, exception);
             }
         }
     }
 
-    internal static void ApplyAtomicForTesting(Harmony harmony, IReadOnlyList<Action<Harmony>> patchSteps)
+    internal static void ApplyAtomicForTesting(
+        Harmony harmony,
+        IReadOnlyList<Action<Harmony>> patchSteps,
+        Action<Harmony, string>? rollback = null,
+        bool emitRollbackDiagnostics = true)
     {
         ArgumentNullException.ThrowIfNull(harmony);
         ArgumentNullException.ThrowIfNull(patchSteps);
@@ -53,12 +56,14 @@ internal static class LanConnectProtocolPatchDispatcher
                 (step ?? throw new InvalidOperationException("Atomic patch plan contains null."))(harmony);
             }
         }
-        catch
+        catch (Exception exception)
         {
-            harmony.UnpatchAll(harmony.Id);
-            TryResetSerializationPatchesAfterRollback();
-            _applied = false;
-            throw;
+            RollBackAndRethrowOriginal(
+                harmony,
+                harmony.Id,
+                exception,
+                rollback,
+                emitRollbackDiagnostics);
         }
     }
 
@@ -76,5 +81,112 @@ internal static class LanConnectProtocolPatchDispatcher
         {
             // Some non-Godot xUnit runs do not copy sts2.dll. Rollback must still clear dispatcher state.
         }
+    }
+
+    private static void RollBackAndRethrowOriginal(
+        Harmony harmony,
+        string owner,
+        Exception originalException,
+        Action<Harmony, string>? rollback = null,
+        bool emitDiagnostics = true)
+    {
+        ExceptionDispatchInfo original = ExceptionDispatchInfo.Capture(originalException);
+        if (emitDiagnostics)
+        {
+            Log.Error(
+                "sts2_lan_connect patch_diag: event=rollback_begin " +
+                $"owner={owner} original_exception={originalException.GetType().FullName} " +
+                $"hresult={originalException.HResult}");
+        }
+
+        try
+        {
+            if (rollback == null)
+            {
+                harmony.UnpatchAll(owner);
+            }
+            else
+            {
+                rollback(harmony, owner);
+            }
+        }
+        catch (Exception rollbackException)
+        {
+            if (emitDiagnostics)
+            {
+                Log.Error(
+                    "sts2_lan_connect patch_diag: event=rollback_failure " +
+                    $"owner={owner} exception={rollbackException.GetType().FullName} " +
+                    $"hresult={rollbackException.HResult}");
+            }
+        }
+
+        try
+        {
+            TryResetSerializationPatchesAfterRollback();
+        }
+        catch (Exception resetException)
+        {
+            if (emitDiagnostics)
+            {
+                Log.Error(
+                    "sts2_lan_connect patch_diag: event=rollback_state_reset_failure " +
+                    $"owner={owner} exception={resetException.GetType().FullName} " +
+                    $"hresult={resetException.HResult}");
+            }
+        }
+
+        _applied = false;
+        if (emitDiagnostics)
+        {
+            try
+            {
+                (int remainingOwnPatches, string[] externalOwners) = InspectPatchOwners(owner);
+                Log.Info(
+                    "sts2_lan_connect patch_diag: event=rollback_complete " +
+                    $"owner={owner} remaining_owner_patch_count={remainingOwnPatches} " +
+                    $"external_owners_preserved={string.Join(",", externalOwners)}");
+            }
+            catch (Exception inspectionException)
+            {
+                Log.Warn(
+                    "sts2_lan_connect patch_diag: event=rollback_inspection_failure " +
+                    $"owner={owner} exception={inspectionException.GetType().FullName}");
+            }
+        }
+
+        original.Throw();
+        throw new UnreachableException();
+    }
+
+    private static (int RemainingOwnPatches, string[] ExternalOwners) InspectPatchOwners(string owner)
+    {
+        int remainingOwnPatches = 0;
+        HashSet<string> externalOwners = new(StringComparer.Ordinal);
+        foreach (System.Reflection.MethodBase method in Harmony.GetAllPatchedMethods())
+        {
+            Patches? patches = Harmony.GetPatchInfo(method);
+            if (patches == null)
+            {
+                continue;
+            }
+
+            foreach (Patch patch in patches.Prefixes
+                         .Concat(patches.Postfixes)
+                         .Concat(patches.Transpilers)
+                         .Concat(patches.Finalizers))
+            {
+                if (string.Equals(patch.owner, owner, StringComparison.Ordinal))
+                {
+                    remainingOwnPatches++;
+                }
+                else if (!string.IsNullOrWhiteSpace(patch.owner))
+                {
+                    externalOwners.Add(patch.owner);
+                }
+            }
+        }
+
+        return (remainingOwnPatches, externalOwners.OrderBy(static value => value, StringComparer.Ordinal).ToArray());
     }
 }

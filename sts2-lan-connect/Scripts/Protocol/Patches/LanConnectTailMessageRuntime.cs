@@ -1,26 +1,39 @@
+using System.Buffers.Binary;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using Godot;
 using MegaCrit.Sts2.Core.Entities.Multiplayer;
+using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
+using MegaCrit.Sts2.Core.Multiplayer.Transport.ENet;
 using MegaCrit.Sts2.Core.Saves.Runs;
 
 namespace Sts2LanConnect.Scripts;
 
-internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRuntime
+internal sealed class LanConnectTailMessageRuntime : ILanConnectAndroidTailMessageRuntime
 {
     private static readonly FieldInfo HostMessageBus = RequireMessageBus(typeof(NetHostGameService));
     private static readonly FieldInfo ClientMessageBus = RequireMessageBus(typeof(NetClientGameService));
+    private static readonly FieldInfo NetMessageBusWriter =
+        typeof(NetMessageBus).GetField("_writer", BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new MissingFieldException(typeof(NetMessageBus).FullName, "_writer");
     private readonly object _sync = new();
     private readonly Dictionary<NetMessageBus, Binding> _bindings = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<PacketWriter, Binding> _writerBindings = new(ReferenceEqualityComparer.Instance);
+    private long _androidOutgoingSequence;
 
     [ThreadStatic]
     private static Stack<LanConnectProtocolFailure>? _outgoingRejections;
     [ThreadStatic]
     private static Stack<IReadOnlyList<ulong>>? _outgoingSidecarRecipients;
+    [ThreadStatic]
+    private static Dictionary<PacketWriter, AndroidPendingOutgoing>? _androidPendingOutgoing;
+    [ThreadStatic]
+    private static int _androidSidecarSubmitDepth;
 
     internal static LanConnectTailMessageRuntime Shared { get; } = new();
 
@@ -69,8 +82,15 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         NetMessageBus bus = GetMessageBus(service);
         lock (_sync)
         {
-            if (_bindings.Remove(bus, out Binding? binding)
-                && binding.Selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
+            if (!_bindings.Remove(bus, out Binding? binding))
+            {
+                return;
+            }
+
+            binding.MarkTerminated();
+            _writerBindings.Remove(binding.Writer);
+            ClearPendingOutgoing(binding.Writer);
+            if (binding.Selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
             {
                 ulong[] peers = binding.BoundPeerIds.ToArray();
                 binding.ClearSidecar();
@@ -167,6 +187,243 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     {
         (_outgoingSidecarRecipients ??= new Stack<IReadOnlyList<ulong>>()).Push(recipientPeerIds.ToArray());
         return new OutgoingSidecarRecipientScope();
+    }
+
+    public bool TryPrepareConcreteOutgoing(
+        PacketWriter writer,
+        LanConnectSidecarMessageKind messageKind,
+        object message,
+        out LanConnectAndroidPreparedMessage? prepared)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(message);
+        prepared = null;
+
+        Binding? binding;
+        lock (_sync)
+        {
+            _writerBindings.TryGetValue(writer, out binding);
+        }
+
+        if (binding == null)
+        {
+            return false;
+        }
+
+        LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
+        if (!snapshot.IsActive || snapshot.Selection?.Profile != LanConnectProtocolProfile.TailV1)
+        {
+            return false;
+        }
+
+        try
+        {
+            binding.ThrowIfTerminated();
+            if (snapshot.Selection != binding.Selection)
+            {
+                throw new InvalidDataException(
+                    "Bound PacketWriter selection differs from the active Tail session.");
+            }
+
+            ValidateAndroidWriterHeader(writer, binding, message);
+            LanConnectPreparedTailMessage runtimePrepared = PrepareOutgoing(
+                binding.MessageBus,
+                messageKind,
+                binding.Service.NetId,
+                message,
+                binding.Selection);
+            prepared = new LanConnectAndroidPreparedMessage(
+                binding.MessageBus,
+                writer,
+                messageKind,
+                binding.Service.NetId,
+                binding.Selection,
+                runtimePrepared);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            AbortActiveBinding(binding, "android_concrete_prepare_failure", exception);
+            throw;
+        }
+    }
+
+    public void CompleteConcreteOutgoing(LanConnectAndroidPreparedMessage prepared)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        Binding binding = RequireWriterBinding(prepared.Writer, prepared.MessageBus);
+        try
+        {
+            binding.ThrowIfTerminated();
+            if (prepared.Selection != binding.Selection)
+            {
+                throw new InvalidDataException(
+                    "Android concrete serializer completed under a different Tail selection.");
+            }
+
+            if (binding.Selection.Carrier == LanConnectProtocolCarrier.StandaloneTailV1)
+            {
+                _ = LanConnectStandaloneTailCarrier.Write(
+                    prepared.Writer,
+                    prepared.Prepared.Container,
+                    prepared.Selection);
+                return;
+            }
+
+            if (binding.Selection.Carrier != LanConnectProtocolCarrier.RitsuLibSidecarV1)
+            {
+                throw new InvalidDataException("Android Tail serializer has an unsupported carrier.");
+            }
+
+            ValidateAndroidWriterHeader(
+                prepared.Writer,
+                binding,
+                prepared.Prepared.Message,
+                requireSerializeBoundary: false);
+            Dictionary<PacketWriter, AndroidPendingOutgoing> pending =
+                _androidPendingOutgoing ??= new Dictionary<PacketWriter, AndroidPendingOutgoing>(
+                    ReferenceEqualityComparer.Instance);
+            if (pending.ContainsKey(prepared.Writer))
+            {
+                throw new InvalidDataException(
+                    "Android Tail writer published a second sidecar context before PacketWriter.Reset.");
+            }
+
+            byte[] buffer = prepared.Writer.Buffer;
+            int length = prepared.Writer.BytePosition;
+            pending.Add(
+                prepared.Writer,
+                new AndroidPendingOutgoing(
+                    this,
+                    binding,
+                    prepared.MessageKind,
+                    prepared.SenderPeerId,
+                    prepared.Prepared.Message,
+                    prepared.Prepared.Container.ToArray(),
+                    buffer,
+                    length,
+                    ComputeHeaderFingerprint(buffer, length),
+                    Interlocked.Increment(ref _androidOutgoingSequence)));
+        }
+        catch (Exception exception)
+        {
+            AbortActiveBinding(binding, "android_concrete_complete_failure", exception);
+            throw;
+        }
+    }
+
+    public void ClearPendingOutgoing(PacketWriter writer)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        if (_androidPendingOutgoing is not { } pending
+            || !pending.TryGetValue(writer, out AndroidPendingOutgoing? context)
+            || !ReferenceEquals(context.Owner, this))
+        {
+            return;
+        }
+
+        pending.Remove(writer);
+    }
+
+    public LanConnectAndroidTransportState? SubmitPendingSidecarBeforeVanilla(
+        object transport,
+        bool isHostTransport,
+        ulong recipientPeerId,
+        byte[] buffer,
+        int length)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        ArgumentNullException.ThrowIfNull(buffer);
+        if (_androidSidecarSubmitDepth > 0)
+        {
+            return null;
+        }
+
+        AndroidPendingOutgoing? context = ResolvePendingTransportContext(buffer);
+        if (context == null)
+        {
+            return null;
+        }
+
+        Binding binding = context.Binding;
+        try
+        {
+            binding.ThrowIfTerminated();
+            ValidateTransportMatch(context, transport, isHostTransport, buffer, length);
+            ulong resolvedRecipient = isHostTransport
+                ? recipientPeerId
+                : GetHostPeerId(binding.Service);
+            if (resolvedRecipient == 0)
+            {
+                throw new InvalidDataException("Android Tail transport has no authenticated recipient.");
+            }
+
+            if (!context.ProcessedPeerIds.Add(resolvedRecipient))
+            {
+                throw new InvalidDataException(
+                    "Android Tail sidecar context was consumed twice for the same transport peer.");
+            }
+
+            _androidSidecarSubmitDepth++;
+            try
+            {
+                if (isHostTransport)
+                {
+                    using IDisposable recipients =
+                        PushOutgoingSidecarRecipientsForCurrentThread([resolvedRecipient]);
+                    SubmitSidecarBeforeVanilla(
+                        binding.MessageBus,
+                        context.MessageKind,
+                        context.SenderPeerId,
+                        context.Message,
+                        context.Container,
+                        binding.Selection);
+                }
+                else
+                {
+                    SubmitSidecarBeforeVanilla(
+                        binding.MessageBus,
+                        context.MessageKind,
+                        context.SenderPeerId,
+                        context.Message,
+                        context.Container,
+                        binding.Selection);
+                }
+            }
+            finally
+            {
+                _androidSidecarSubmitDepth--;
+            }
+
+            ValidateTransportBuffer(context, buffer, length);
+            return new LanConnectAndroidTransportState(
+                binding.MessageBus,
+                context.Sequence,
+                resolvedRecipient);
+        }
+        catch (Exception exception)
+        {
+            AbortActiveBinding(binding, "android_sidecar_transport_failure", exception);
+            throw;
+        }
+    }
+
+    public void HandleVanillaTransportFailure(
+        LanConnectAndroidTransportState state,
+        Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(exception);
+        Binding? binding;
+        lock (_sync)
+        {
+            _bindings.TryGetValue(state.MessageBus, out binding);
+        }
+
+        if (binding != null)
+        {
+            AbortActiveBinding(binding, "android_vanilla_transport_failure", exception);
+        }
     }
 
     internal bool TryTakeValidatedRejection(
@@ -1038,11 +1295,222 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         Binding binding = new(service, offer, selection, isHost, protocolFlowNonce);
         lock (_sync)
         {
+            if (_bindings.Remove(bus, out Binding? previous))
+            {
+                previous.MarkTerminated();
+                _writerBindings.Remove(previous.Writer);
+                ClearPendingOutgoing(previous.Writer);
+            }
+
             _bindings[bus] = binding;
+            _writerBindings[binding.Writer] = binding;
         }
         if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1 && isHost)
         {
             LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(service);
+        }
+    }
+
+    private Binding RequireWriterBinding(PacketWriter writer, NetMessageBus expectedBus)
+    {
+        lock (_sync)
+        {
+            if (_writerBindings.TryGetValue(writer, out Binding? binding)
+                && ReferenceEquals(binding.MessageBus, expectedBus))
+            {
+                return binding;
+            }
+        }
+
+        throw new InvalidOperationException("Tail PacketWriter has no active ticket/session binding.");
+    }
+
+    private static void ValidateAndroidWriterHeader(
+        PacketWriter writer,
+        Binding binding,
+        object message,
+        bool requireSerializeBoundary = true)
+    {
+        const int HeaderBits = 72;
+        const int HeaderBytes = HeaderBits / 8;
+        if (requireSerializeBoundary && writer.BitPosition != HeaderBits)
+        {
+            throw new InvalidDataException(
+                $"Bound Android Tail writer expected BitPosition={HeaderBits}, actual={writer.BitPosition}.");
+        }
+
+        if (writer.BitPosition < HeaderBits || writer.Buffer.Length < HeaderBytes)
+        {
+            throw new InvalidDataException("Bound Android Tail writer has a truncated message header.");
+        }
+
+        if (message is not INetMessage netMessage)
+        {
+            throw new InvalidDataException("Android Tail concrete serializer received a non-network message.");
+        }
+
+        byte expectedMessageId = (byte)netMessage.ToId();
+        if (writer.Buffer[0] != expectedMessageId)
+        {
+            throw new InvalidDataException("Bound Android Tail writer message ID does not match the concrete serializer.");
+        }
+
+        ulong headerSender = BinaryPrimitives.ReadUInt64LittleEndian(writer.Buffer.AsSpan(1, sizeof(ulong)));
+        if (headerSender != binding.Service.NetId)
+        {
+            throw new InvalidDataException(
+                "Bound Android Tail writer sender header differs from the authenticated local service.");
+        }
+    }
+
+    private AndroidPendingOutgoing? ResolvePendingTransportContext(byte[] buffer)
+    {
+        if (_androidPendingOutgoing is not { Count: > 0 } pending)
+        {
+            return null;
+        }
+
+        AndroidPendingOutgoing[] owned = pending.Values
+            .Where(context => ReferenceEquals(context.Owner, this))
+            .OrderByDescending(static context => context.Sequence)
+            .ToArray();
+        if (owned.Length == 0)
+        {
+            return null;
+        }
+
+        return owned.FirstOrDefault(context => ReferenceEquals(context.Buffer, buffer)) ?? owned[0];
+    }
+
+    private static void ValidateTransportMatch(
+        AndroidPendingOutgoing context,
+        object transport,
+        bool isHostTransport,
+        byte[] buffer,
+        int length)
+    {
+        Binding binding = context.Binding;
+        bool transportMatches = isHostTransport
+            ? binding.Service is NetHostGameService host
+              && transport is ENetHost
+              && ReferenceEquals(host.NetHost, transport)
+            : binding.Service is NetClientGameService client
+              && transport is ENetClient
+              && ReferenceEquals(client.NetClient, transport);
+        if (binding.IsHost != isHostTransport || !transportMatches)
+        {
+            throw new InvalidDataException(
+                "Android Tail pending context reached a different ENet transport binding.");
+        }
+
+        ValidateTransportBuffer(context, buffer, length);
+    }
+
+    private static void ValidateTransportBuffer(
+        AndroidPendingOutgoing context,
+        byte[] buffer,
+        int length)
+    {
+        if (!ReferenceEquals(context.Buffer, buffer) || context.Length != length)
+        {
+            throw new InvalidDataException(
+                "Android Tail pending context buffer reference or length does not match the vanilla transport.");
+        }
+
+        byte[] fingerprint = ComputeHeaderFingerprint(buffer, length);
+        if (!CryptographicOperations.FixedTimeEquals(context.HeaderFingerprint, fingerprint))
+        {
+            throw new InvalidDataException(
+                "Android Tail pending context header fingerprint does not match the vanilla transport.");
+        }
+    }
+
+    private static byte[] ComputeHeaderFingerprint(byte[] buffer, int length)
+    {
+        const int HeaderBytes = 9;
+        if (length < HeaderBytes || length > buffer.Length)
+        {
+            throw new InvalidDataException("Android Tail transport length cannot contain the authenticated header.");
+        }
+
+        return SHA256.HashData(buffer.AsSpan(0, HeaderBytes));
+    }
+
+    private void AbortActiveBinding(Binding binding, string reason, Exception exception)
+    {
+        ulong[] peerIds;
+        bool clearObservedService;
+        lock (_sync)
+        {
+            if (!binding.TryMarkTerminated())
+            {
+                return;
+            }
+
+            if (_bindings.TryGetValue(binding.MessageBus, out Binding? current)
+                && ReferenceEquals(current, binding))
+            {
+                _bindings.Remove(binding.MessageBus);
+            }
+            if (_writerBindings.TryGetValue(binding.Writer, out current)
+                && ReferenceEquals(current, binding))
+            {
+                _writerBindings.Remove(binding.Writer);
+            }
+            ClearPendingOutgoing(binding.Writer);
+
+            IEnumerable<ulong> peers = binding.BoundPeerIds;
+            if (binding.Service is NetHostGameService host)
+            {
+                peers = peers.Concat(host.ConnectedPeers.Select(static peer => peer.peerId));
+            }
+            peerIds = peers.Distinct().ToArray();
+            binding.ClearSidecar();
+            clearObservedService = binding.Selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1
+                                   && _bindings.Values.All(static value =>
+                                       value.Selection.Carrier != LanConnectProtocolCarrier.RitsuLibSidecarV1);
+        }
+
+        foreach (ulong peerId in peerIds)
+        {
+            LanConnectRitsuLibSidecarCarrier.Shared.SetPeerUnknown(peerId);
+        }
+        if (clearObservedService)
+        {
+            LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(null);
+        }
+
+        Log.Error(
+            $"sts2_lan_connect tail: terminating active Android Tail binding reason={reason} " +
+            $"exception={exception.GetType().FullName} hresult={exception.HResult}.");
+        if (binding.Service is NetHostGameService netHost)
+        {
+            foreach (ulong peerId in peerIds)
+            {
+                try
+                {
+                    netHost.DisconnectClient(peerId, NetError.ModMismatch);
+                }
+                catch (Exception disconnectException)
+                {
+                    Log.Warn(
+                        "sts2_lan_connect tail: host peer disconnect failed during binding termination: " +
+                        disconnectException.GetType().Name);
+                }
+            }
+        }
+        else
+        {
+            try
+            {
+                binding.Service.Disconnect(NetError.ModMismatch);
+            }
+            catch (Exception disconnectException)
+            {
+                Log.Warn(
+                    "sts2_lan_connect tail: client disconnect failed during binding termination: " +
+                    disconnectException.GetType().Name);
+            }
         }
     }
 
@@ -1125,6 +1593,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             IsHost = isHost;
             ProtocolFlowNonce = protocolFlowNonce?.ToArray();
             MessageBus = GetMessageBus(service);
+            Writer = NetMessageBusWriter.GetValue(MessageBus) as PacketWriter
+                ?? throw new InvalidOperationException("NetMessageBus._writer is unavailable.");
             _roster = isHost ? new LanConnectRosterAuthorityState(service.NetId) : null;
         }
 
@@ -1135,10 +1605,25 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         internal bool IsHost { get; }
         internal byte[]? ProtocolFlowNonce { get; }
         internal NetMessageBus MessageBus { get; }
+        internal PacketWriter Writer { get; }
         internal LanConnectSidecarPairingCache SidecarPairing { get; } = new();
         private readonly Dictionary<SidecarFlowKey, SidecarFlow> _sidecarFlows = [];
         private readonly Dictionary<ulong, PendingOutgoingSidecar> _pendingOutgoingSidecars = [];
         private LanConnectRosterAuthorityState? _roster;
+        private int _terminated;
+
+        internal void MarkTerminated() => Interlocked.Exchange(ref _terminated, 1);
+
+        internal bool TryMarkTerminated() => Interlocked.Exchange(ref _terminated, 1) == 0;
+
+        internal void ThrowIfTerminated()
+        {
+            if (Volatile.Read(ref _terminated) != 0)
+            {
+                throw new InvalidOperationException("Tail ticket/session binding has already terminated.");
+            }
+        }
+
         internal LanConnectRosterAuthorityState RequireRoster()
         {
             lock (Sync)
@@ -1328,6 +1813,45 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         LanConnectSidecarMessageKind MessageKind,
         ulong SenderPeerId,
         byte[] Container);
+
+    private sealed class AndroidPendingOutgoing
+    {
+        internal AndroidPendingOutgoing(
+            LanConnectTailMessageRuntime owner,
+            Binding binding,
+            LanConnectSidecarMessageKind messageKind,
+            ulong senderPeerId,
+            object message,
+            byte[] container,
+            byte[] buffer,
+            int length,
+            byte[] headerFingerprint,
+            long sequence)
+        {
+            Owner = owner;
+            Binding = binding;
+            MessageKind = messageKind;
+            SenderPeerId = senderPeerId;
+            Message = message;
+            Container = container;
+            Buffer = buffer;
+            Length = length;
+            HeaderFingerprint = headerFingerprint;
+            Sequence = sequence;
+        }
+
+        internal LanConnectTailMessageRuntime Owner { get; }
+        internal Binding Binding { get; }
+        internal LanConnectSidecarMessageKind MessageKind { get; }
+        internal ulong SenderPeerId { get; }
+        internal object Message { get; }
+        internal byte[] Container { get; }
+        internal byte[] Buffer { get; }
+        internal int Length { get; }
+        internal byte[] HeaderFingerprint { get; }
+        internal long Sequence { get; }
+        internal HashSet<ulong> ProcessedPeerIds { get; } = [];
+    }
 
     private sealed class SidecarFlow
     {

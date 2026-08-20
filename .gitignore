@@ -6,6 +6,8 @@ sts2-lan-connect/build/
 sts2-lan-connect/release/
 sts2-lan-connect.Tests/bin/
 sts2-lan-connect.Tests/obj/
+sts2-lan-connect.ProtocolPlanTests/bin/
+sts2-lan-connect.ProtocolPlanTests/obj/
 sts2-lan-connect.GdUnitTests/.godot/
 sts2-lan-connect.GdUnitTests/bin/
 sts2-lan-connect.GdUnitTests/obj/

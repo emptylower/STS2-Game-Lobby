@@ -15,6 +15,42 @@ namespace Sts2LanConnect.GdUnitTests.Protocol;
 public sealed class LanConnectTailMessageBusTests
 {
     [TestCase]
+    public void Forced_android_plan_installs_all_concrete_non_generic_serializer_hooks()
+    {
+        Harmony harmony = new($"sts2_lan_connect.tests.android_tail_plan.{Guid.NewGuid():N}");
+
+        try
+        {
+            LanConnectTailMessagePatches.ApplyForTesting(harmony, isAndroid: true);
+            LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
+                typeof(PacketWriter).Assembly,
+                isAndroid: true);
+
+            AssertInt(plan.Steps.Count).IsEqual(15);
+            AssertInt(plan.GenericTargetCount).IsEqual(0);
+            foreach (LanConnectTailPatchStep step in plan.Steps.Take(9))
+            {
+                Patch[] prefixes = Harmony.GetPatchInfo(step.Target)!.Prefixes
+                    .Where(patch => patch.owner == harmony.Id)
+                    .ToArray();
+                Patch[] postfixes = Harmony.GetPatchInfo(step.Target)!.Postfixes
+                    .Where(patch => patch.owner == harmony.Id)
+                    .ToArray();
+                AssertInt(prefixes.Length).IsEqual(1);
+                AssertInt(postfixes.Length).IsEqual(1);
+                AssertBool(prefixes[0].PatchMethod.IsGenericMethod).IsFalse();
+                AssertBool(prefixes[0].PatchMethod.ContainsGenericParameters).IsFalse();
+                AssertBool(postfixes[0].PatchMethod.IsGenericMethod).IsFalse();
+                AssertBool(postfixes[0].PatchMethod.ContainsGenericParameters).IsFalse();
+            }
+        }
+        finally
+        {
+            harmony.UnpatchAll(harmony.Id);
+        }
+    }
+
+    [TestCase]
     public void Outgoing_tail_prefixes_are_concrete_for_android_ritsu_compatibility()
     {
         Harmony harmony = new($"sts2_lan_connect.tests.tail_prefixes.{Guid.NewGuid():N}");

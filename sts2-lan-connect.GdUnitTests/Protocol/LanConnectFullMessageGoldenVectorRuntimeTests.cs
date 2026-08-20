@@ -29,8 +29,9 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
     private static readonly object InitializationSync = new();
     private static bool _initialized;
 
-    [TestCase]
-    public void Full_message_golden_vectors_match_real_v01110_netmessagebus_packets()
+    [TestCase(true)]
+    [TestCase(false)]
+    public void Full_message_golden_vectors_match_real_v01110_netmessagebus_packets(bool forceAndroidPlan)
     {
         InitializeSts2Serialization();
         string fixtureRoot = Path.Combine(FindRepositoryRoot(), "test-fixtures", "protocol", "v0.6");
@@ -38,7 +39,14 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         using RuntimePair pair = new();
         Harmony harmony = new($"sts2_lan_connect.tests.full_message_golden.{Guid.NewGuid():N}");
         LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
-        LanConnectTailMessagePatches.Apply(harmony);
+        if (forceAndroidPlan)
+        {
+            LanConnectTailMessagePatches.ApplyForTesting(harmony, isAndroid: true);
+        }
+        else
+        {
+            LanConnectTailMessagePatches.ApplyForTesting(harmony, isAndroid: false);
+        }
         try
         {
             foreach (MessageSpec spec in Specs())
