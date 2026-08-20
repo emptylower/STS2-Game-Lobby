@@ -86,11 +86,14 @@ adb logcat -d > sts2-alpha8-logcat.txt
 
 ## 发布门禁
 
-- 使用官方 RitsuLib v0.5.13 DLL 执行 `RITSULIB_ASSEMBLY=<official-v0.5.13-dll> ./scripts/verify-release.sh`。
-- 回归 macOS `desktop_generic_v1`、Android standalone、Android 全员 Ritsu、混合 Ritsu 拒绝和 compat profile。
-- 门禁通过后记录 ZIP、DLL 与 PCK 的 SHA-256，再创建 `v0.6.0-alpha.8` GitHub Pre-release。
+- 已使用官方 RitsuLib v0.5.13 DLL 执行 `RITSULIB_ASSEMBLY=<official-v0.5.13-dll> ./scripts/verify-release.sh`。
+- 门禁通过 lobby-service 607 项、独立 patch-plan xUnit 7 项、客户端主 xUnit 1123 项（另有 1 项既有原型测试跳过），以及真实 `sts2.dll`/官方 RitsuLib v0.5.13 的 GdUnit 371 项。
+- GdUnit 覆盖 macOS `desktop_generic_v1`、Android standalone、Android 全员 Ritsu、混合 Ritsu 拒绝和 compat profile；最终客户端构建为 0 warning / 0 error。
+- 最终 DLL 内嵌源码 revision `8a00629d3cb20f06bcc4b9bdfff4f950c13bc710`。
 - 不直接编辑 `releases/` 镜像，不发布或更新 Steam Workshop。
 
 ## 下载校验
 
-ZIP、DLL 与 PCK 的 SHA-256 在最终构建和自动门禁完成后填写。任何未由本次 alpha.8 构建产出的旧 hash 都不得沿用。
+- `sts2_lan_connect-release.zip`: `0e9c445db4b592ea2d70a73b674d4ef6f6a5df7e310617e1a1fec12516ff86e3`
+- 客户端运行时 `sts2_lan_connect.dll`: `de45b602d22795a3eaecd47c41bf5c486b036eeb38a53fc3e0146ce7e85352b6`
+- 客户端运行时 `sts2_lan_connect.pck`: `b9907bd5a1e2afc1609d589fc3f43c9943f6f0900792ca68fafc154028720597`
