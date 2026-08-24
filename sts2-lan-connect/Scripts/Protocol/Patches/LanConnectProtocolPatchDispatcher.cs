@@ -159,6 +159,29 @@ internal static class LanConnectProtocolPatchDispatcher
         throw new UnreachableException();
     }
 
+    internal static string[] GetAllExternalPatchOwners() => InspectPatchOwners(HarmonyId).ExternalOwners;
+
+    internal static string[] GetExternalPatchOwners(System.Reflection.MethodBase method)
+    {
+        ArgumentNullException.ThrowIfNull(method);
+        Patches? patches = Harmony.GetPatchInfo(method);
+        if (patches == null)
+        {
+            return [];
+        }
+
+        return patches.Prefixes
+            .Concat(patches.Postfixes)
+            .Concat(patches.Transpilers)
+            .Concat(patches.Finalizers)
+            .Select(static patch => patch.owner)
+            .Where(owner => !string.IsNullOrWhiteSpace(owner)
+                            && !string.Equals(owner, HarmonyId, StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static owner => owner, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     private static (int RemainingOwnPatches, string[] ExternalOwners) InspectPatchOwners(string owner)
     {
         int remainingOwnPatches = 0;

@@ -29,9 +29,114 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
     private static readonly object InitializationSync = new();
     private static bool _initialized;
 
-    [TestCase(true)]
-    [TestCase(false)]
-    public void Full_message_golden_vectors_match_real_v01110_netmessagebus_packets(bool forceAndroidPlan)
+    // The legacy desktop-generic case must run in a separate Godot process from every test
+    // that relies on the concrete-serialize path: detouring SerializeMessage<T> and then
+    // restoring it can leave the concrete Serialize inlined in the restored native code,
+    // bypassing concrete-method patches for the rest of the process. verify-release.sh runs
+    // this method in its own invocation.
+    [TestCase]
+    public void Full_message_golden_vectors_match_real_v01110_netmessagebus_packets_legacy_desktop_generic_plan()
+    {
+        RunGoldenVectors(forceLegacyDesktopGenericPlan: true);
+    }
+
+    [TestCase]
+    public void Full_message_golden_vectors_match_real_v01110_netmessagebus_packets()
+    {
+        RunGoldenVectors(forceLegacyDesktopGenericPlan: false);
+    }
+
+    // alpha.9 audit A1-T1: production applies LanConnectSerializationPatches.Apply() together
+    // with the default tail plan. This combination was never covered before (the golden cases
+    // only apply the tail plan), which is how the begin-run tail loss slipped through.
+    [TestCase]
+    public void Full_message_golden_vectors_match_with_serialization_patches_and_default_plan()
+    {
+        InitializeSts2Serialization();
+        string fixtureRoot = Path.Combine(FindRepositoryRoot(), "test-fixtures", "protocol", "v0.6");
+
+        using RuntimePair pair = new();
+        Harmony harmony = new($"sts2_lan_connect.tests.full_message_golden.wire.{Guid.NewGuid():N}");
+        Harmony productionCleanup = new(LanConnectProtocolPatchDispatcher.HarmonyId);
+        LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
+        try
+        {
+            LanConnectSerializationPatches.Apply();
+            AssertThat(LanConnectSerializationPatches.BeginRunBoundaryStateForTesting)
+                .IsEqual("skipped_non_generic_plan");
+            LanConnectTailMessagePatches.Apply(harmony);
+            AssertAllGoldenVectors(pair, fixtureRoot);
+        }
+        finally
+        {
+            harmony.UnpatchAll(harmony.Id);
+            productionCleanup.UnpatchAll(LanConnectProtocolPatchDispatcher.HarmonyId);
+            LanConnectSerializationPatches.ResetAppliedAfterExternalRollback();
+            LanConnectTailMessagePatches.ConfigureRuntime(LanConnectTailMessageRuntime.Shared);
+        }
+    }
+
+    // alpha.9 audit A1-T2: with both patch sets applied, a begin-run serialize must execute
+    // the concrete LobbyBeginRunMessage.Serialize (where the tail hooks live). If the JIT
+    // ever inlines it into SerializeMessage<T>, the tail would silently vanish. The roster
+    // snapshot in the container is sequence-dependent, so this case asserts execution and
+    // tail presence only; byte equality is covered by the golden cases above.
+    [TestCase]
+    public void Begin_run_executes_the_concrete_serialize_method_under_the_default_plan()
+    {
+        InitializeSts2Serialization();
+
+        using RuntimePair pair = new();
+        Harmony harmony = new($"sts2_lan_connect.tests.begin_run_concrete.{Guid.NewGuid():N}");
+        Harmony counter = new($"sts2_lan_connect.tests.begin_run_concrete_counter.{Guid.NewGuid():N}");
+        Harmony productionCleanup = new(LanConnectProtocolPatchDispatcher.HarmonyId);
+        _beginRunConcreteSerializeCalls = 0;
+        LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
+        try
+        {
+            LanConnectSerializationPatches.Apply();
+            LanConnectTailMessagePatches.Apply(harmony);
+            MethodInfo concreteSerialize = AccessTools.Method(
+                typeof(LobbyBeginRunMessage),
+                "Serialize",
+                [typeof(PacketWriter)])!;
+            counter.Patch(
+                concreteSerialize,
+                postfix: new HarmonyMethod(AccessTools.Method(
+                    typeof(LanConnectFullMessageGoldenVectorRuntimeTests),
+                    nameof(CountBeginRunConcreteSerialize))));
+
+            using LanConnectSessionProtocolLease lease =
+                LanConnectSessionProtocolState.Shared.FreezeHost(pair.Selection, "begin-run-concrete-path");
+            LobbyBeginRunMessage message = new()
+            {
+                playersInLobby = StartRunPlayers([0, 1, 2, 3]),
+                seed = "seed-4",
+                modifiers = [],
+                act1 = "Act1"
+            };
+            byte[] generated = SerializeMessage(pair.HostBus, pair.HostId, message, out int length)
+                .AsSpan(0, length)
+                .ToArray();
+
+            AssertThat(_beginRunConcreteSerializeCalls).IsEqual(1);
+            AssertThat(IndexOf(generated, "STSLAN01"u8.ToArray()) >= 0).IsTrue();
+        }
+        finally
+        {
+            counter.UnpatchAll(counter.Id);
+            harmony.UnpatchAll(harmony.Id);
+            productionCleanup.UnpatchAll(LanConnectProtocolPatchDispatcher.HarmonyId);
+            LanConnectSerializationPatches.ResetAppliedAfterExternalRollback();
+            LanConnectTailMessagePatches.ConfigureRuntime(LanConnectTailMessageRuntime.Shared);
+        }
+    }
+
+    private static int _beginRunConcreteSerializeCalls;
+
+    private static void CountBeginRunConcreteSerialize() => _beginRunConcreteSerializeCalls++;
+
+    private static void RunGoldenVectors(bool forceLegacyDesktopGenericPlan)
     {
         InitializeSts2Serialization();
         string fixtureRoot = Path.Combine(FindRepositoryRoot(), "test-fixtures", "protocol", "v0.6");
@@ -39,75 +144,77 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         using RuntimePair pair = new();
         Harmony harmony = new($"sts2_lan_connect.tests.full_message_golden.{Guid.NewGuid():N}");
         LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
-        if (forceAndroidPlan)
-        {
-            LanConnectTailMessagePatches.ApplyForTesting(harmony, isAndroid: true);
-        }
-        else
-        {
-            LanConnectTailMessagePatches.ApplyForTesting(harmony, isAndroid: false);
-        }
+        LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
+            typeof(PacketWriter).Assembly,
+            isAndroid: false,
+            preferLegacyDesktopGenericPlan: forceLegacyDesktopGenericPlan);
+        LanConnectTailMessagePatches.ApplyPlanForTesting(harmony, plan);
         try
         {
-            foreach (MessageSpec spec in Specs())
-            {
-                using LanConnectSessionProtocolLease lease = spec.Direction == Direction.HostToClient
-                    ? LanConnectSessionProtocolState.Shared.FreezeHost(pair.Selection, spec.Name)
-                    : LanConnectSessionProtocolState.Shared.FreezeClient(pair.Selection, spec.Name);
-                IDisposable? rejectionScope = spec.Rejection == null ? null : PushOutgoingRejection(spec.Rejection);
-                try
-                {
-                    object message = spec.CreateMessage();
-                    NetMessageBus senderBus = spec.Direction == Direction.HostToClient ? pair.HostBus : pair.ClientBus;
-                    ulong sender = spec.Direction == Direction.HostToClient ? pair.HostId : pair.ClientId;
-                    byte[] generated = SerializeMessage(senderBus, sender, message, out int length)
-                        .AsSpan(0, length)
-                        .ToArray();
-                    Fixture fixture = BuildFixture(spec, generated, sender, message.GetType());
-
-                    string binPath = Path.Combine(fixtureRoot, $"{spec.Name}.bin");
-                    string jsonPath = Path.Combine(fixtureRoot, $"{spec.Name}.json");
-
-                    byte[] expected = File.ReadAllBytes(binPath);
-                    AssertThat(Convert.ToHexString(generated)).IsEqual(Convert.ToHexString(expected));
-                    using JsonDocument document = JsonDocument.Parse(File.ReadAllText(jsonPath));
-                    JsonElement root = document.RootElement;
-                    AssertThat(root.GetProperty("schema").GetString()).IsEqual("sts2-v0.111.0-netmessagebus-tail-full-v1");
-                    AssertThat(root.GetProperty("messageTypeId").GetInt32()).IsEqual(fixture.MessageTypeId);
-                    AssertThat(root.GetProperty("senderPeerId").GetUInt64()).IsEqual(sender);
-                    AssertThat(root.GetProperty("vanillaBodyEndBit").GetInt32()).IsEqual(fixture.VanillaBodyEndBit);
-                    AssertThat(root.GetProperty("containerStartBit").GetInt32()).IsEqual(fixture.ContainerStartBit);
-                    AssertThat(root.GetProperty("sha256").GetString()).IsEqual(fixture.Sha256);
-                    AssertThat(root.GetProperty("containerSha256").GetString()).IsEqual(fixture.ContainerSha256);
-
-                    NetMessageBus receiverBus = new(new PacketReader(), new PacketWriter());
-                    RecordingRuntime recordingRuntime = new(pair.Selection, sender, pair.HostId);
-                    LanConnectTailMessagePatches.ConfigureRuntime(recordingRuntime);
-                    using (LanConnectTailMessagePatches.PushTransportSenderForTesting(sender))
-                    {
-                        bool decoded = receiverBus.TryDeserializeMessage(
-                            expected,
-                            out INetMessage? decodedMessage,
-                            out ulong? decodedSender);
-                        AssertThat(decoded).IsTrue();
-                        AssertThat(decodedSender.HasValue).IsTrue();
-                        AssertThat(decodedSender!.Value).IsEqual(sender);
-                        AssertBodySemantics(spec, decodedMessage!);
-                        AssertTailSemantics(spec, recordingRuntime.Payload!);
-                    }
-                    LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
-                }
-                finally
-                {
-                    LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
-                    rejectionScope?.Dispose();
-                }
-            }
+            AssertAllGoldenVectors(pair, fixtureRoot);
         }
         finally
         {
             harmony.UnpatchAll(harmony.Id);
             LanConnectTailMessagePatches.ConfigureRuntime(LanConnectTailMessageRuntime.Shared);
+        }
+    }
+
+    private static void AssertAllGoldenVectors(RuntimePair pair, string fixtureRoot)
+    {
+        foreach (MessageSpec spec in Specs())
+        {
+            using LanConnectSessionProtocolLease lease = spec.Direction == Direction.HostToClient
+                ? LanConnectSessionProtocolState.Shared.FreezeHost(pair.Selection, spec.Name)
+                : LanConnectSessionProtocolState.Shared.FreezeClient(pair.Selection, spec.Name);
+            IDisposable? rejectionScope = spec.Rejection == null ? null : PushOutgoingRejection(spec.Rejection);
+            try
+            {
+                object message = spec.CreateMessage();
+                NetMessageBus senderBus = spec.Direction == Direction.HostToClient ? pair.HostBus : pair.ClientBus;
+                ulong sender = spec.Direction == Direction.HostToClient ? pair.HostId : pair.ClientId;
+                byte[] generated = SerializeMessage(senderBus, sender, message, out int length)
+                    .AsSpan(0, length)
+                    .ToArray();
+                Fixture fixture = BuildFixture(spec, generated, sender, message.GetType());
+
+                string binPath = Path.Combine(fixtureRoot, $"{spec.Name}.bin");
+                string jsonPath = Path.Combine(fixtureRoot, $"{spec.Name}.json");
+
+                byte[] expected = File.ReadAllBytes(binPath);
+                AssertThat(Convert.ToHexString(generated)).IsEqual(Convert.ToHexString(expected));
+                using JsonDocument document = JsonDocument.Parse(File.ReadAllText(jsonPath));
+                JsonElement root = document.RootElement;
+                AssertThat(root.GetProperty("schema").GetString()).IsEqual("sts2-v0.111.0-netmessagebus-tail-full-v1");
+                AssertThat(root.GetProperty("messageTypeId").GetInt32()).IsEqual(fixture.MessageTypeId);
+                AssertThat(root.GetProperty("senderPeerId").GetUInt64()).IsEqual(sender);
+                AssertThat(root.GetProperty("vanillaBodyEndBit").GetInt32()).IsEqual(fixture.VanillaBodyEndBit);
+                AssertThat(root.GetProperty("containerStartBit").GetInt32()).IsEqual(fixture.ContainerStartBit);
+                AssertThat(root.GetProperty("sha256").GetString()).IsEqual(fixture.Sha256);
+                AssertThat(root.GetProperty("containerSha256").GetString()).IsEqual(fixture.ContainerSha256);
+
+                NetMessageBus receiverBus = new(new PacketReader(), new PacketWriter());
+                RecordingRuntime recordingRuntime = new(pair.Selection, sender, pair.HostId);
+                LanConnectTailMessagePatches.ConfigureRuntime(recordingRuntime);
+                using (LanConnectTailMessagePatches.PushTransportSenderForTesting(sender))
+                {
+                    bool decoded = receiverBus.TryDeserializeMessage(
+                        expected,
+                        out INetMessage? decodedMessage,
+                        out ulong? decodedSender);
+                    AssertThat(decoded).IsTrue();
+                    AssertThat(decodedSender.HasValue).IsTrue();
+                    AssertThat(decodedSender!.Value).IsEqual(sender);
+                    AssertBodySemantics(spec, decodedMessage!);
+                    AssertTailSemantics(spec, recordingRuntime.Payload!);
+                }
+                LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
+            }
+            finally
+            {
+                LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
+                rejectionScope?.Dispose();
+            }
         }
     }
 

@@ -10,7 +10,14 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端诊断候选为 `0.6.0-alpha.8`，lobby-service 继续使用 `0.6.0-alpha.6`。这是仅通过 GitHub 发布的 Pre-release，不更新 Steam 创意工坊。原失败 Android 设备尚未复测，gshared 修复状态为 **PENDING / 修复待验证**，不能宣称已经解决。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+当前客户端修复候选为 `0.6.0-alpha.9`，lobby-service 继续使用 `0.6.0-alpha.6`。这是仅通过 GitHub 发布的 Pre-release，不更新 Steam 创意工坊。本版修复「安装/更新后大厅不显示」：任意 MOD 加载顺序下大厅都会正常出现。Android 端回归复测为 **PENDING**。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+
+## v0.6.0-alpha.9 「大厅不显示」修复
+
+- 修复 RitsuLib 先于本 MOD 初始化时大厅不出现（`InvalidProgramException` 中断初始化）的问题；旧版「关 RitsuLib 再开」的绕过办法在本版不再需要。
+- Tail 补丁全平台默认使用 15 项 `non_generic_v2` 非泛型计划；`desktop_generic_v1` 保留为紧急回滚分支（桌面环境变量 `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`）。
+- 协议补丁失败时大厅仍然可见可浏览，但建房 / 加入会被拒绝，并通过游戏原生弹窗说明原因与恢复步骤。
+- 启动日志可自查：`beginRunMessageBusBoundary=skipped_non_generic_plan` 或 `skipped_foreign_owner` 均为正常值。
 
 ## v0.6.0-alpha.8 双协议房间
 
@@ -304,7 +311,14 @@
 
 # STS2 LAN Connect User Guide
 
-The current GitHub-only diagnostic client candidate is `0.6.0-alpha.8`; lobby-service remains at `0.6.0-alpha.6`, and Steam Workshop is not updated. Retesting on the originally failing Android device is still **PENDING**, so the gshared issue must not be described as resolved. Every player must use the same client and game version and fully restart after updating.
+The current GitHub-only client fix candidate is `0.6.0-alpha.9`; lobby-service remains at `0.6.0-alpha.6`, and Steam Workshop is not updated. This candidate fixes the "lobby never appears" load-order race: the lobby shows up regardless of mod load order. The Android regression retest is **PENDING**. Every player must use the same client and game version and fully restart after updating.
+
+## v0.6.0-alpha.9 "Lobby Never Appears" Fix
+
+- Fixes the race where RitsuLib initializing first made our protocol patches throw `InvalidProgramException` and the lobby UI was never installed. The old workaround (toggle RitsuLib off, launch once, re-enable) is no longer needed.
+- The Tail patch plan now defaults to the 15-step, non-generic `non_generic_v2` plan on every platform; `desktop_generic_v1` remains available as an emergency rollback branch (desktop environment variable `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`).
+- When protocol patches fail, the lobby stays visible and browsable, but hosting/joining is refused and a native in-game popup explains the cause and the recovery steps.
+- Startup log self-check: `beginRunMessageBusBoundary=skipped_non_generic_plan` or `skipped_foreign_owner` are both expected values.
 
 ## v0.6.0-alpha.8 Dual-Protocol Rooms
 

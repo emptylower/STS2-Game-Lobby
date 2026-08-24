@@ -37,6 +37,12 @@ internal static class LanConnectHostFlow
 
     public static async Task StartLanHostAsync(GameMode gameMode, Control loadingOverlay, NSubmenuStack stack)
     {
+        if (LanConnectDegradedMode.CreateBlockingFailure() is { } degradedFailure)
+        {
+            LanConnectProtocolUiMessages.Present(degradedFailure);
+            return;
+        }
+
         LanConnectProtocolFailure? localFailure = ValidateDirectCompatHostPreTransport(
             LanConnectExternalCapabilityCollector.Collect().RitsuLibPresent);
         if (localFailure != null)
@@ -141,6 +147,12 @@ internal static class LanConnectHostFlow
         NSubmenuStack stack,
         LanConnectCreateRoomIntent intent)
     {
+        if (LanConnectDegradedMode.CreateBlockingFailure() is { } degradedFailure)
+        {
+            LanConnectProtocolUiMessages.Present(degradedFailure);
+            return LanConnectHostAttemptResult.Failed(degradedFailure);
+        }
+
         loadingOverlay.Visible = true;
         NetHostGameService netService = new(PeerVersionInfo.LocalDefault());
         LobbyApiClient? apiClient = null;
@@ -298,6 +310,18 @@ internal static class LanConnectHostFlow
         LanConnectProtocolSelection? persistedSelection = null,
         bool throwOnCreateGuardRejection = false)
     {
+        if (LanConnectDegradedMode.CreateBlockingFailure() is { } degradedFailure)
+        {
+            GD.Print(
+                $"sts2_lan_connect host_flow: publish blocked by degraded mode source={publishSource}, reason={degradedFailure.Code}");
+            if (notifyOnFailure)
+            {
+                LanConnectProtocolUiMessages.Present(degradedFailure);
+            }
+
+            return LanConnectHostAttemptResult.Failed(degradedFailure);
+        }
+
         string trimmedRoomName = LanConnectConfig.SanitizeRoomName(roomName);
         string? trimmedPassword = string.IsNullOrWhiteSpace(password) ? null : LanConnectConfig.SanitizeRoomPassword(password);
         LobbyApiClient? apiClient = null;

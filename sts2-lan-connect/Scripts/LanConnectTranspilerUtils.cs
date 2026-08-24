@@ -14,6 +14,17 @@ internal static class LanConnectTranspilerUtils
     private static readonly int LdcI4SOpcodeValue = OpCodes.Ldc_I4_S.Value;
     private static readonly int LdcI4OpcodeValue = OpCodes.Ldc_I4.Value;
 
+    // Test seam: transpilers run at patch time, and xUnit hosts cannot enter Godot's
+    // GD-based logging (native bootstrap is absent outside the game process).
+    internal static Action<string> LogInfoSink = static message => Log.Info(message);
+    internal static Action<string> LogWarnSink = static message => Log.Warn(message);
+
+    internal static void ResetLogSinksForTesting()
+    {
+        LogInfoSink = static message => Log.Info(message);
+        LogWarnSink = static message => Log.Warn(message);
+    }
+
     internal static IEnumerable<CodeInstruction> ReplaceBitWidthBeforeCall(
         IEnumerable<CodeInstruction> instructions,
         MethodInfo? targetMethod,
@@ -46,11 +57,11 @@ internal static class LanConnectTranspilerUtils
 
         if (count == 0)
         {
-            Log.Warn($"sts2_lan_connect transpiler [{patchName}]: no bit-width operand replaced for method {resolvedTargetMethod.Name}");
+            LogWarnSink($"sts2_lan_connect transpiler [{patchName}]: no bit-width operand replaced for method {resolvedTargetMethod.Name}");
         }
         else
         {
-            Log.Info($"sts2_lan_connect transpiler [{patchName}]: replaced {count} bit-width operand(s) {sourceBitWidth} -> {targetBitWidth} for {resolvedTargetMethod.Name}");
+            LogInfoSink($"sts2_lan_connect transpiler [{patchName}]: replaced {count} bit-width operand(s) {sourceBitWidth} -> {targetBitWidth} for {resolvedTargetMethod.Name}");
         }
 
         return list;
@@ -90,11 +101,11 @@ internal static class LanConnectTranspilerUtils
 
         if (count == 0)
         {
-            Log.Warn($"sts2_lan_connect transpiler [{patchName}]: no bit-width operand replaced for method {resolvedTargetMethod.Name}");
+            LogWarnSink($"sts2_lan_connect transpiler [{patchName}]: no bit-width operand replaced for method {resolvedTargetMethod.Name}");
         }
         else
         {
-            Log.Info(
+            LogInfoSink(
                 $"sts2_lan_connect transpiler [{patchName}]: replaced {count} bit-width operand(s) {expectedBitWidth} -> dynamic {resolvedProviderMethod.Name} for {resolvedTargetMethod.Name}");
         }
 

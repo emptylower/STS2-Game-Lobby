@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.6.0-alpha.9] - 2026-08-23
+
+客户端 `0.6.0-alpha.9` 修复「安装/更新后大厅不显示」；lobby-service 继续使用 `0.6.0-alpha.6`。
+
+### Fixed
+
+- 修复自 alpha.1 起存在的 MOD 加载顺序竞态：RitsuLib 先初始化时其泛型声明补丁会毒化闭合泛型目标，本 MOD 协议补丁随之抛 `InvalidProgramException`，初始化中止、大厅 UI 从未安装。
+- Tail 补丁全平台默认改用 `non_generic_v2` 非泛型计划（15 步，无闭合泛型目标）；线上字节格式不变，golden vector 在两套计划下逐字节一致。
+- begin-run 的 message-bus boundary 前缀仅在旧 `desktop_generic_v1` 计划下启用，修复桌面无 RitsuLib 时开局消息丢失 Tail 容器的问题。
+- 协议补丁失败改为降级模式：大厅 UI 照常安装可浏览，建房 / 加入 / 续局发布被拒绝，并通过游戏原生弹窗告知 `protocol_patch_conflict` 原因与恢复方法。
+
+### Diagnostics
+
+- 新增 `mod_load_order` 启动事件，记录 RitsuLib 等外部 MOD 是否先于本 MOD 打补丁；补丁失败事件附带目标的外部 owner 列表。
+
 ## [0.6.0-alpha.8] - 2026-08-20
 
 客户端 `0.6.0-alpha.8` Android gshared 非泛型补丁与启动诊断候选；lobby-service 继续使用 `0.6.0-alpha.6`。

@@ -24,6 +24,20 @@ internal static class LanConnectSerializationPatches
     private static bool _applied;
     private static int _patchedCount;
     private static int _failedCount;
+    private static BeginRunBoundaryState _beginRunBoundaryState;
+
+    // Test seam: xUnit hosts cannot enter Godot's GD-based logging (native bootstrap is
+    // absent outside the game process), so tests swap these sinks.
+    internal static Action<string> LogInfoSink = static message => Log.Info(message);
+    internal static Action<string> LogWarnSink = static message => Log.Warn(message);
+    internal static Action<string> LogErrorSink = static message => Log.Error(message);
+
+    internal static void ResetLogSinksForTesting()
+    {
+        LogInfoSink = static message => Log.Info(message);
+        LogWarnSink = static message => Log.Warn(message);
+        LogErrorSink = static message => Log.Error(message);
+    }
 
     private static readonly MethodInfo? WriteIntWithBits =
         AccessTools.Method(typeof(PacketWriter), nameof(PacketWriter.WriteInt), new[] { typeof(int), typeof(int) });
@@ -64,15 +78,17 @@ internal static class LanConnectSerializationPatches
         if (LanConnectExternalModDetection.IsRmpModLoaded)
         {
             _applied = true;
-            Log.Info("sts2_lan_connect serialization: RMP mod detected, skipping serialization patches.");
+            LogInfoSink("sts2_lan_connect serialization: RMP mod detected, skipping serialization patches.");
             return;
         }
 
         _patchedCount = 0;
         _failedCount = 0;
+        _beginRunBoundaryState = BeginRunBoundaryState.NotAttempted;
 
         bool includeBeginRunMessageBusBoundary = ShouldPatchBeginRunMessageBusBoundary(
-            OperatingSystem.IsAndroid());
+            OperatingSystem.IsAndroid(),
+            LanConnectTailPlanOverride.PreferLegacyDesktopGenericPlan);
         WirePatchPlan patchPlan;
         try
         {
@@ -87,7 +103,7 @@ internal static class LanConnectSerializationPatches
             string message =
                 $"sts2_lan_connect serialization: incompatible game wire schema; no patches were applied. " +
                 $"{ex.GetType().Name}: {ex.Message}";
-            Log.Error(message);
+            LogErrorSink(message);
             throw new InvalidOperationException(message, ex);
         }
 
@@ -105,13 +121,29 @@ internal static class LanConnectSerializationPatches
         }
         else
         {
-            Log.Info(
-                "sts2_lan_connect serialization: skipped the begin-run message-bus boundary patch " +
-                "on Android because Harmony cannot compile closed generic wrappers under gshared.");
+            if (OperatingSystem.IsAndroid())
+            {
+                _beginRunBoundaryState = BeginRunBoundaryState.SkippedAndroid;
+                LogInfoSink(
+                    "sts2_lan_connect serialization: skipped the begin-run message-bus boundary patch " +
+                    "on Android because Harmony cannot compile closed generic wrappers under gshared.");
+            }
+            else
+            {
+                _beginRunBoundaryState = BeginRunBoundaryState.SkippedNonGenericPlan;
+                LogInfoSink(
+                    "sts2_lan_connect serialization: skipped the begin-run message-bus boundary patch " +
+                    "because the non-generic tail plan carries begin-run through the concrete serializer.");
+            }
         }
 
-        int requiredWirePatchCount = patchPlan.Targets.Count
-                                     + (patchPlan.BeginRunMessageBusSerialize == null ? 0 : 1);
+        // The begin-run message-bus boundary is best-effort, and only attempted with the
+        // legacy desktop generic plan (where the begin-run tail lives on the same generic
+        // method). When it is attempted, it can only fail when a foreign patch (RitsuLib's
+        // generic-declared SerializePatch<TMessage>.Postfix) already holds the closed generic
+        // target, and that situation implies TailV1, where this prefix reproduces vanilla
+        // output bit for bit.
+        int requiredWirePatchCount = patchPlan.Targets.Count;
         if (_patchedCount != requiredWirePatchCount || _failedCount != 0)
         {
             int patchedCount = _patchedCount;
@@ -121,17 +153,17 @@ internal static class LanConnectSerializationPatches
                 $"sts2_lan_connect serialization: required wire patches incomplete " +
                 $"(applied={patchedCount}/{requiredWirePatchCount}, failed={failedCount}); " +
                 "extended multiplayer is unsafe and compatibility initialization was aborted.";
-            Log.Error(message);
+            LogErrorSink(message);
             throw new InvalidOperationException(message);
         }
 
         _applied = true;
 
-        Log.Info(
+        LogInfoSink(
             $"sts2_lan_connect serialization: patches applied={_patchedCount}, failed={_failedCount}. " +
             $"runtimePlayerType={patchPlan.SlotIdCarrierType.FullName}, " +
             $"activeProfile={LanConnectProtocolProfiles.GetActiveProfile()}, slotId=dynamic, lobbyList=dynamic, " +
-            $"beginRunMessageBusBoundary={(patchPlan.BeginRunMessageBusSerialize == null ? "android_gshared_skip" : "patched")}");
+            $"beginRunMessageBusBoundary={FormatBeginRunBoundaryState(_beginRunBoundaryState)}");
     }
 
     private static void TrySafePatch(WirePatchTarget target)
@@ -144,7 +176,7 @@ internal static class LanConnectSerializationPatches
         }
         catch (Exception ex)
         {
-            Log.Error($"sts2_lan_connect serialization: failed to patch {target.Label}: {ex}");
+            LogErrorSink($"sts2_lan_connect serialization: failed to patch {target.Label}: {ex}");
             _failedCount++;
         }
     }
@@ -155,16 +187,55 @@ internal static class LanConnectSerializationPatches
         {
             HarmonyInstance.Patch(method, prefix: new HarmonyMethod(
                 typeof(LanConnectSerializationPatches), prefixName));
-            _patchedCount++;
+            _beginRunBoundaryState = BeginRunBoundaryState.Patched;
         }
         catch (Exception ex)
         {
-            Log.Error($"sts2_lan_connect serialization: failed to patch {label}: {ex}");
-            _failedCount++;
+            string[] externalOwners = LanConnectProtocolPatchDispatcher.GetExternalPatchOwners(method);
+            _beginRunBoundaryState = externalOwners.Length > 0
+                ? BeginRunBoundaryState.SkippedForeignOwner
+                : BeginRunBoundaryState.Failed;
+            LanConnectDiagnosticException description = LanConnectDiagnosticRedactor.DescribeException(ex);
+            LogWarnSink(
+                "sts2_lan_connect patch_diag: event=begin_run_boundary_skipped " +
+                $"target={label} state={FormatBeginRunBoundaryState(_beginRunBoundaryState)} " +
+                $"exception={description.Type} hresult=0x{description.HResult:X8} " +
+                $"fingerprint={description.Fingerprint} " +
+                $"external_owners={(externalOwners.Length > 0 ? string.Join(",", externalOwners) : "none")}");
         }
     }
 
-    internal static bool ShouldPatchBeginRunMessageBusBoundary(bool isAndroid) => !isAndroid;
+    private enum BeginRunBoundaryState
+    {
+        NotAttempted,
+        Patched,
+        SkippedAndroid,
+        SkippedNonGenericPlan,
+        SkippedForeignOwner,
+        Failed
+    }
+
+    private static string FormatBeginRunBoundaryState(BeginRunBoundaryState state) => state switch
+    {
+        BeginRunBoundaryState.Patched => "patched",
+        BeginRunBoundaryState.SkippedAndroid => "skipped_android",
+        BeginRunBoundaryState.SkippedNonGenericPlan => "skipped_non_generic_plan",
+        BeginRunBoundaryState.SkippedForeignOwner => "skipped_foreign_owner",
+        BeginRunBoundaryState.Failed => "failed",
+        _ => "not_attempted"
+    };
+
+    internal static string BeginRunBoundaryStateForTesting =>
+        FormatBeginRunBoundaryState(_beginRunBoundaryState);
+
+    // The boundary prefix short-circuits SerializeMessage<LobbyBeginRunMessage>, so it must
+    // only exist where the tail hooks live on that same generic method (the legacy desktop
+    // plan). Under the default non-generic plan the tail hooks live on the concrete
+    // LobbyBeginRunMessage.Serialize, which the boundary prefix would starve of its call.
+    internal static bool ShouldPatchBeginRunMessageBusBoundary(
+        bool isAndroid,
+        bool preferLegacyDesktopGenericPlan) =>
+        !isAndroid && preferLegacyDesktopGenericPlan;
 
     private static WirePatchPlan ResolveRequiredPatchPlan(
         Assembly sts2Assembly,
@@ -328,11 +399,11 @@ internal static class LanConnectSerializationPatches
         try
         {
             HarmonyInstance.UnpatchAll(HarmonyInstance.Id);
-            Log.Warn("sts2_lan_connect serialization: rolled back incomplete wire patch set.");
+            LogWarnSink("sts2_lan_connect serialization: rolled back incomplete wire patch set.");
         }
         catch (Exception ex)
         {
-            Log.Error($"sts2_lan_connect serialization: failed to roll back incomplete wire patches: {ex}");
+            LogErrorSink($"sts2_lan_connect serialization: failed to roll back incomplete wire patches: {ex}");
         }
 
         ResetAppliedAfterExternalRollback();
@@ -343,6 +414,7 @@ internal static class LanConnectSerializationPatches
         _applied = false;
         _patchedCount = 0;
         _failedCount = 0;
+        _beginRunBoundaryState = BeginRunBoundaryState.NotAttempted;
     }
 
     internal static bool IsAppliedForTesting => _applied;

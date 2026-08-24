@@ -19,12 +19,52 @@ public static class Entry
 
         diagnostics.RunStage(LanConnectStartupStages.ConfigLoad, LanConnectConfig.Load);
         diagnostics.RunStage(LanConnectStartupStages.ExternalModDetection, LanConnectExternalModDetection.Detect);
+        // Record who patched before us: with a foreign owner present this early, the load
+        // order was foreign-first — the single fact that decides whether the closed-generic
+        // poisoning can trigger. Turns the next incident from log archaeology into one lookup.
+        try
+        {
+            bool ritsuLibAssemblyLoaded = AppDomain.CurrentDomain.GetAssemblies().Any(static assembly =>
+                string.Equals(assembly.GetName().Name, "STS2-RitsuLib", StringComparison.OrdinalIgnoreCase));
+            string[] externalPatchOwners = LanConnectProtocolPatchDispatcher.GetAllExternalPatchOwners();
+            diagnostics.RecordInfo(
+                "mod_load_order",
+                new Dictionary<string, object?>
+                {
+                    ["ritsulib_assembly_loaded"] = ritsuLibAssemblyLoaded,
+                    ["ritsulib_patched_before_us"] = externalPatchOwners.Any(static owner =>
+                        owner.Contains("ritsu", StringComparison.OrdinalIgnoreCase)),
+                    ["external_patch_owners"] = externalPatchOwners
+                });
+        }
+        catch (Exception exception)
+        {
+            diagnostics.Warn("mod_load_order", exception);
+        }
         diagnostics.RunStage(
             LanConnectStartupStages.TailRuntimeConfigure,
             static () => LanConnectTailMessagePatches.ConfigureRuntime(LanConnectTailMessageRuntime.Shared));
         diagnostics.RunStage(LanConnectStartupStages.SentryCompatibility, LanConnectSentryCompatibilityPatches.Initialize);
         diagnostics.RunStage(LanConnectStartupStages.AccessibilityBridge, LanConnectAccessibilityBridge.Initialize);
-        diagnostics.RunStage(LanConnectStartupStages.MultiplayerCompatibility, LanConnectMultiplayerCompatibility.Initialize);
+        try
+        {
+            diagnostics.RunStage(LanConnectStartupStages.MultiplayerCompatibility, LanConnectMultiplayerCompatibility.Initialize);
+        }
+        catch (Exception exception)
+        {
+            // Fail-closed means refusing to host/join, not killing the whole mod: the lobby
+            // UI (stage 9) must still install so players can see what happened.
+            LanConnectDiagnosticException description = LanConnectDiagnosticRedactor.DescribeException(exception);
+            LanConnectDegradedMode.Enter(LanConnectDegradedMode.ProtocolPatchConflictCode, description.Fingerprint);
+            diagnostics.RecordInfo(
+                "degraded_mode_entered",
+                new Dictionary<string, object?>
+                {
+                    ["reason"] = LanConnectDegradedMode.ReasonCode,
+                    ["exception_fingerprint"] = description.Fingerprint,
+                    ["exception_type"] = description.Type
+                });
+        }
         diagnostics.RunStage(LanConnectStartupStages.GameplayPatches, LanConnectGameplayPatches.Initialize);
         diagnostics.RunStage(LanConnectStartupStages.SceneReadyPatches, LanConnectSceneReadyPatches.Apply);
         diagnostics.RunStage(

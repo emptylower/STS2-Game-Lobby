@@ -688,6 +688,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private void ShowOverlayCore(bool startConnectivity, bool publishChatVisibility)
     {
         GD.Print("sts2_lan_connect overlay: show requested");
+        if (LanConnectDegradedMode.TryConsumeLobbyEntryNotice(out LanConnectProtocolFailure degradedNotice))
+        {
+            LanConnectProtocolUiMessages.Present(degradedNotice);
+        }
+
         SetUnderlyingMenuVisible(false);
         Visible = true;
         RefreshServerChatPresentation(force: true, publishStateVisibility: publishChatVisibility);
@@ -4132,6 +4137,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         string? desiredSavePlayerNetId = null,
         CancellationToken externalCancellationToken = default)
     {
+        if (LanConnectDegradedMode.CreateBlockingFailure() is { } degradedFailure)
+        {
+            LanConnectProtocolUiMessages.Present(degradedFailure);
+            return false;
+        }
+
         if (_actionInFlight || _stack == null || _loadingOverlay == null)
         {
             return false;

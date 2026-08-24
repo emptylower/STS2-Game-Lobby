@@ -44,7 +44,7 @@ internal sealed record LanConnectTailPatchStep(
 internal sealed class LanConnectTailPatchPlan
 {
     internal const string DesktopProfile = "desktop_generic_v1";
-    internal const string AndroidProfile = "android_non_generic_v2";
+    internal const string DefaultProfile = "non_generic_v2";
 
     internal LanConnectTailPatchPlan(
         string profile,
@@ -57,7 +57,7 @@ internal sealed class LanConnectTailPatchPlan
         MessageTypes = messageTypes;
         Steps = steps;
 
-        int expectedSteps = profile == AndroidProfile ? 15 : 30;
+        int expectedSteps = profile == DesktopProfile ? 30 : 15;
         if (ResolvedKinds.Count != 10 || MessageTypes.Count != 9 || Steps.Count != expectedSteps)
         {
             throw new InvalidDataException(
@@ -74,9 +74,14 @@ internal sealed class LanConnectTailPatchPlan
             throw new InvalidDataException($"Tail patch plan {profile} contains duplicate ID {duplicateId}.");
         }
 
-        if (profile == AndroidProfile)
+        if (profile != DesktopProfile)
         {
-            ValidateAndroidMethodsAreConcrete();
+            ValidateNonGenericMethodsAreConcrete();
+            if (GenericTargetCount != 0)
+            {
+                throw new InvalidDataException(
+                    $"Tail patch plan {profile} must not contain generic targets; found={GenericTargetCount}.");
+            }
         }
     }
 
@@ -86,7 +91,7 @@ internal sealed class LanConnectTailPatchPlan
     internal IReadOnlyList<LanConnectTailPatchStep> Steps { get; }
     internal int GenericTargetCount => Steps.Count(static step => step.Target.IsGenericMethod);
 
-    private void ValidateAndroidMethodsAreConcrete()
+    private void ValidateNonGenericMethodsAreConcrete()
     {
         foreach (LanConnectTailPatchStep step in Steps)
         {
@@ -105,7 +110,7 @@ internal sealed class LanConnectTailPatchPlan
             || method.DeclaringType?.ContainsGenericParameters == true)
         {
             throw new InvalidDataException(
-                $"Android Tail patch {id} {role} must be non-generic: {LanConnectTailMessagePatches.FormatMethod(method)}.");
+                $"Tail patch {id} {role} must be non-generic: {LanConnectTailMessagePatches.FormatMethod(method)}.");
         }
     }
 }
@@ -113,6 +118,12 @@ internal sealed class LanConnectTailPatchPlan
 internal static partial class LanConnectTailMessagePatches
 {
     internal static LanConnectTailPatchPlan ResolvePatchPlan(Assembly sts2Assembly, bool isAndroid)
+        => ResolvePatchPlan(sts2Assembly, isAndroid, preferLegacyDesktopGenericPlan: false);
+
+    internal static LanConnectTailPatchPlan ResolvePatchPlan(
+        Assembly sts2Assembly,
+        bool isAndroid,
+        bool preferLegacyDesktopGenericPlan)
     {
         ArgumentNullException.ThrowIfNull(sts2Assembly);
         IReadOnlyList<(LanConnectSidecarMessageKind Kind, Type Type)> resolvedKinds =
@@ -122,8 +133,12 @@ internal static partial class LanConnectTailMessagePatches
             .Distinct()
             .ToArray();
 
-        return isAndroid
-            ? ResolveAndroidPatchPlan(resolvedKinds, messageTypes)
+        // The non-generic plan is the default on every platform: closed generic targets can be
+        // poisoned by foreign patches declared on generic types (RitsuLib), and the non-generic
+        // plan is byte-equivalent per the golden vector runtime tests. The legacy desktop generic
+        // plan remains available as an explicit rollback branch.
+        return isAndroid || !preferLegacyDesktopGenericPlan
+            ? ResolveNonGenericPatchPlan(resolvedKinds, messageTypes)
             : ResolveDesktopPatchPlan(resolvedKinds, messageTypes);
     }
 
@@ -219,7 +234,7 @@ internal static partial class LanConnectTailMessagePatches
             steps);
     }
 
-    private static LanConnectTailPatchPlan ResolveAndroidPatchPlan(
+    private static LanConnectTailPatchPlan ResolveNonGenericPatchPlan(
         IReadOnlyList<(LanConnectSidecarMessageKind Kind, Type Type)> resolvedKinds,
         IReadOnlyList<Type> messageTypes)
     {
@@ -280,7 +295,7 @@ internal static partial class LanConnectTailMessagePatches
             PrefixPriority: Priority.First + 100));
 
         return new LanConnectTailPatchPlan(
-            LanConnectTailPatchPlan.AndroidProfile,
+            LanConnectTailPatchPlan.DefaultProfile,
             resolvedKinds,
             messageTypes,
             steps);
@@ -359,4 +374,24 @@ internal static partial class LanConnectTailMessagePatches
         "LobbyBeginRunMessage" => "lobby_begin_run",
         _ => throw new InvalidDataException($"Unknown Tail concrete message type {type.FullName}.")
     };
+}
+
+internal static class LanConnectTailPlanOverride
+{
+    // Emergency rollback only: launch the desktop game with STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1
+    // to restore the pre-alpha.9 generic plan. Android ignores this because Mono gshared cannot
+    // compile closed generic wrappers there.
+    private const string PlanEnvironmentVariable = "STS2_LAN_CONNECT_TAIL_PLAN";
+
+    private static bool? _preferLegacyDesktopGenericPlanForTesting;
+
+    internal static bool PreferLegacyDesktopGenericPlan =>
+        _preferLegacyDesktopGenericPlanForTesting
+        ?? string.Equals(
+            Environment.GetEnvironmentVariable(PlanEnvironmentVariable),
+            LanConnectTailPatchPlan.DesktopProfile,
+            StringComparison.Ordinal);
+
+    internal static void SetPreferLegacyDesktopGenericPlanForTesting(bool? value) =>
+        _preferLegacyDesktopGenericPlanForTesting = value;
 }

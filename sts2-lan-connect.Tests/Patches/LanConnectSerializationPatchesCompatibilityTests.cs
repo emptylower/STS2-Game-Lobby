@@ -66,16 +66,25 @@ public sealed class LanConnectSerializationPatchesCompatibilityTests
                 typeof(PlayerListMessage<StartRunLobbyPlayer>)));
     }
 
+    // The boundary prefix short-circuits SerializeMessage<LobbyBeginRunMessage>; under the
+    // default non-generic plan the begin-run tail lives on the concrete Serialize method,
+    // which the boundary would starve of its call. Only the legacy desktop generic plan
+    // (where the tail hooks share the boundary's target method) may still patch it.
     [Theory]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public void Closed_generic_message_bus_boundary_is_disabled_only_for_android_gshared(
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, false)]
+    public void Begin_run_message_bus_boundary_is_patched_only_with_the_legacy_desktop_generic_plan(
         bool isAndroid,
+        bool preferLegacyDesktopGenericPlan,
         bool expected)
     {
         Assert.Equal(
             expected,
-            LanConnectSerializationPatches.ShouldPatchBeginRunMessageBusBoundary(isAndroid));
+            LanConnectSerializationPatches.ShouldPatchBeginRunMessageBusBoundary(
+                isAndroid,
+                preferLegacyDesktopGenericPlan));
     }
 
     [Fact]

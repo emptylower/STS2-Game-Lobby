@@ -47,11 +47,11 @@ public sealed class LanConnectPackageContentTests
 
         using JsonDocument manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
-        Assert.Equal("0.6.0-alpha.8", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("0.6.0-alpha.9", manifest.RootElement.GetProperty("version").GetString());
         FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
             Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
         Assert.Equal("0.6.0.0", assemblyVersion.FileVersion);
-        Assert.StartsWith("0.6.0-alpha.8", assemblyVersion.ProductVersion, StringComparison.Ordinal);
+        Assert.StartsWith("0.6.0-alpha.9", assemblyVersion.ProductVersion, StringComparison.Ordinal);
 
         foreach (string packagePath in ExpectedFiles)
         {
@@ -286,13 +286,13 @@ public sealed class LanConnectPackageContentTests
     }
 
     [Fact]
-    public void Client_v060_alpha8_documents_android_non_generic_diagnostic_candidate()
+    public void Client_v060_alpha9_documents_lobby_missing_fix_candidate()
     {
         using Fixture fixture = new();
         string releaseNotes = File.ReadAllText(Path.Combine(
             fixture.RepositoryRoot,
             "docs",
-            "RELEASE_NOTES_V0.6.0_ALPHA8_ZH.md"));
+            "RELEASE_NOTES_V0.6.0_ALPHA9_ZH.md"));
         string changelog = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "CHANGELOG.md"));
         string readme = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "README.md"));
         string clientReadme = File.ReadAllText(Path.Combine(
@@ -305,6 +305,39 @@ public sealed class LanConnectPackageContentTests
             "STS2_LAN_CONNECT_USER_GUIDE_ZH.md"));
 
         foreach (string text in new[] { releaseNotes, changelog, readme, clientReadme, userGuide })
+        {
+            Assert.Contains("0.6.0-alpha.9", text, StringComparison.Ordinal);
+            Assert.Contains("non_generic_v2", text, StringComparison.Ordinal);
+            Assert.Contains("0.6.0-alpha.6", text, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("GitHub-only Pre-release", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("不更新 Steam 创意工坊", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("skipped_non_generic_plan", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("protocol_patch_conflict", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("STS2_LAN_CONNECT_TAIL_PLAN", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("PENDING", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("不再需要", releaseNotes, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Client_v060_alpha8_documents_android_non_generic_diagnostic_candidate()
+    {
+        using Fixture fixture = new();
+        string releaseNotes = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "RELEASE_NOTES_V0.6.0_ALPHA8_ZH.md"));
+        string changelog = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "CHANGELOG.md"));
+        string readme = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "README.md"));
+        string userGuide = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "STS2_LAN_CONNECT_USER_GUIDE_ZH.md"));
+
+        // The client install readme is a living document that follows the newest candidate;
+        // its alpha.9 content is asserted by Client_v060_alpha9_documents_lobby_missing_fix_candidate.
+        foreach (string text in new[] { releaseNotes, changelog, readme, userGuide })
         {
             Assert.Contains("0.6.0-alpha.8", text, StringComparison.Ordinal);
             Assert.Contains("PENDING", text, StringComparison.Ordinal);

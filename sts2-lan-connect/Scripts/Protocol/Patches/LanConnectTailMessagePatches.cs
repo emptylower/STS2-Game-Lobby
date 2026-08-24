@@ -102,16 +102,26 @@ internal static partial class LanConnectTailMessagePatches
     internal static void ResetRuntime() => Volatile.Write(ref _runtime, null);
 
     internal static void Apply(Harmony harmony)
-        => ApplyResolvedPlan(harmony, ResolvePatchPlan(typeof(PacketWriter).Assembly, OperatingSystem.IsAndroid()));
+        => ApplyResolvedPlan(harmony, ResolvePatchPlan(
+            typeof(PacketWriter).Assembly,
+            OperatingSystem.IsAndroid(),
+            LanConnectTailPlanOverride.PreferLegacyDesktopGenericPlan));
 
-    internal static void ApplyForTesting(Harmony harmony, bool isAndroid)
-        => ApplyResolvedPlan(harmony, ResolvePatchPlan(typeof(PacketWriter).Assembly, isAndroid));
+    // Tests resolve the plan explicitly via ResolvePatchPlan(...) and pass it in, so there is
+    // no boolean whose meaning drifts as the production default changes.
+    internal static void ApplyPlanForTesting(Harmony harmony, LanConnectTailPatchPlan plan)
+        => ApplyResolvedPlan(harmony, plan);
 
     internal static void ApplyPlanWithInjectedPatcherForTesting(
         Harmony harmony,
         LanConnectTailPatchPlan plan,
         Action<Harmony, LanConnectTailPatchStep> patcher)
         => ApplyResolvedPlan(harmony, plan, patcher, emitProductLog: false);
+
+    // Real patching against the real plan, without product logging: xUnit hosts cannot
+    // enter Godot's GD-based logging.
+    internal static void ApplyPlanQuietlyForTesting(Harmony harmony, LanConnectTailPatchPlan plan)
+        => ApplyResolvedPlan(harmony, plan, patcher: null, emitProductLog: false);
 
     private static void ApplyResolvedPlan(
         Harmony harmony,
@@ -172,10 +182,12 @@ internal static partial class LanConnectTailMessagePatches
                 diagnostics?.RecordPatchFailure(diagnosticDescriptor, diagnosticStarted, exception);
                 if (emitProductLog)
                 {
+                    string externalOwners = DescribeExternalOwnersBestEffort(step.Target);
                     Log.Error(
                         $"sts2_lan_connect patch_diag: event=patch_failure profile={plan.Profile} " +
                         $"patch_id={step.Id} ordinal={ordinal}/{plan.Steps.Count} elapsed_ms={stopwatch.ElapsedMilliseconds} " +
-                        $"exception={exception.GetType().FullName} hresult={exception.HResult}");
+                        $"exception={exception.GetType().FullName} hresult={exception.HResult} " +
+                        $"external_owners={externalOwners}");
                 }
                 throw;
             }
@@ -186,6 +198,19 @@ internal static partial class LanConnectTailMessagePatches
             Log.Info(
                 $"sts2_lan_connect patch_diag: event=plan_success profile={plan.Profile} " +
                 $"applied={applied}/{plan.Steps.Count} generic_target_count={plan.GenericTargetCount}");
+        }
+    }
+
+    private static string DescribeExternalOwnersBestEffort(MethodInfo target)
+    {
+        try
+        {
+            string[] owners = LanConnectProtocolPatchDispatcher.GetExternalPatchOwners(target);
+            return owners.Length > 0 ? string.Join(",", owners) : "none";
+        }
+        catch
+        {
+            return "unknown";
         }
     }
 

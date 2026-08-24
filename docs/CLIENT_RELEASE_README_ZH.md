@@ -14,7 +14,7 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.6.0-alpha.8`（GitHub 诊断候选） |
+| 客户端版本 | `0.6.0-alpha.9`（GitHub 修复候选） |
 | lobby-service 版本 | `0.6.0-alpha.6`（继续使用） |
 | 默认大厅 | `sts2-test.43.133.192.249.nip.io`（可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
@@ -37,7 +37,7 @@
 - 房主端原生多人等待页和局内玩家列表应显示客机设置的昵称，不应显示数字平台 ID。
 - 双方以官方 RitsuLib v0.5.13 进入同一续局后，由房主从房间管理点击“重开一局”；客机应自动返回、按原存档槽位加入新房间，并与房主再次进入同一局。
 - 重开日志应同时出现房主与客机旧 `RunManager.NetService` 已清理、新房间发布成功和客机 `relay_success`；不应出现 `handshake_transport_budget`、`LobbyJoinTimeout` 或 `ritsulib_not_allowed_in_compat_mode`。
-- Android 启动日志应显示 Tail 使用 `android_non_generic_v2`，并出现 `applied=15/15`、`generic_target_count=0` 与最终初始化哨兵；非 Android 日志应继续显示 `desktop_generic_v1`。原失败环境需禁用 SpeedX 后连续冷启动 3 次，此项在完成前保持 PENDING。
+- 各平台启动日志应显示 Tail 使用 `non_generic_v2`（alpha.9 起全平台默认），并出现 `applied=15/15`、`generic_target_count=0` 与最终初始化哨兵；`beginRunMessageBusBoundary` 应为 `skipped_non_generic_plan` 或 `skipped_foreign_owner`。Android 端需在真实设备回归复测，完成前保持 PENDING。
 - Android 房主经 relay 开局时，即使加载阶段超过房间心跳窗口，lobby-service 也不得删除仍有活跃房主的中继；双方进入首个同步状态后连接应继续稳定。
 - Tail 房主日志应显示控制通道连接成功，房间消息与玩家控制绑定可以加载，不再出现控制通道在握手完成前关闭。
 - 点击“放弃多人存档”后，“备份并永久放弃”和“保留存档”两个按钮都应完整可见，不再只显示一条红线。
@@ -238,7 +238,7 @@ This candidate builds on top of the existing feature set; nothing from earlier v
 - The host's native multiplayer load screen and in-run roster must show the guest's configured player name instead of a numeric platform ID.
 - With official RitsuLib v0.5.13 active on both peers, use **Restart Run** after resuming the same save. The guest must return automatically, reclaim its original slot in the republished room, and enter the same run again with the host.
 - Restart logs must show stale `RunManager.NetService` cleanup on both peers, successful room republication, and guest `relay_success`, without `handshake_transport_budget`, `LobbyJoinTimeout`, or `ritsulib_not_allowed_in_compat_mode`.
-- Android startup must report `android_non_generic_v2`, `applied=15/15`, `generic_target_count=0`, and the final initialization sentinel; non-Android startup retains `desktop_generic_v1`. The original environment must complete three cold starts with SpeedX disabled, and remains PENDING until then.
+- Startup on every platform must report the Tail plan as `non_generic_v2` (the all-platform default since alpha.9), with `applied=15/15`, `generic_target_count=0`, and the final initialization sentinel; `beginRunMessageBusBoundary` should read `skipped_non_generic_plan` or `skipped_foreign_owner`. Android still needs an on-device regression pass and remains PENDING until then.
 - During a relay-backed run start, an Android host may exceed the room-heartbeat window while loading; lobby-service must retain an authenticated active relay and both peers must remain connected after the first synchronized state.
 - A Tail host must complete its control-channel connection with the frozen client version and capability digest, allowing room messages and player-control bindings to load.
 - Both the destructive abandon-save action and the keep-save action must remain fully visible in the confirmation dialog.

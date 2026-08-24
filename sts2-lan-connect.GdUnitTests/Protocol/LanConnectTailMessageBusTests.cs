@@ -15,16 +15,16 @@ namespace Sts2LanConnect.GdUnitTests.Protocol;
 public sealed class LanConnectTailMessageBusTests
 {
     [TestCase]
-    public void Forced_android_plan_installs_all_concrete_non_generic_serializer_hooks()
+    public void Default_plan_installs_all_concrete_non_generic_serializer_hooks()
     {
         Harmony harmony = new($"sts2_lan_connect.tests.android_tail_plan.{Guid.NewGuid():N}");
 
         try
         {
-            LanConnectTailMessagePatches.ApplyForTesting(harmony, isAndroid: true);
             LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
                 typeof(PacketWriter).Assembly,
                 isAndroid: true);
+            LanConnectTailMessagePatches.ApplyPlanForTesting(harmony, plan);
 
             AssertInt(plan.Steps.Count).IsEqual(15);
             AssertInt(plan.GenericTargetCount).IsEqual(0);
@@ -51,7 +51,7 @@ public sealed class LanConnectTailMessageBusTests
     }
 
     [TestCase]
-    public void Outgoing_tail_prefixes_are_concrete_for_android_ritsu_compatibility()
+    public void Outgoing_tail_hooks_are_concrete_and_never_touch_closed_generics()
     {
         Harmony harmony = new($"sts2_lan_connect.tests.tail_prefixes.{Guid.NewGuid():N}");
 
@@ -69,16 +69,32 @@ public sealed class LanConnectTailMessageBusTests
 
             foreach (Type messageType in messageTypes)
             {
-                MethodInfo serialize = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
-                    typeof(NetMessageBus),
-                    messageType);
-                Patch[] prefixes = Harmony.GetPatchInfo(serialize)!.Prefixes
+                // The default plan patches the concrete per-type Serialize method with
+                // non-generic hooks...
+                MethodInfo concreteSerialize = AccessTools.Method(messageType, "Serialize", [typeof(PacketWriter)])!;
+                Patch[] prefixes = Harmony.GetPatchInfo(concreteSerialize)!.Prefixes
+                    .Where(patch => patch.owner == harmony.Id)
+                    .ToArray();
+                Patch[] postfixes = Harmony.GetPatchInfo(concreteSerialize)!.Postfixes
                     .Where(patch => patch.owner == harmony.Id)
                     .ToArray();
 
                 AssertThat(prefixes.Length).IsEqual(1);
                 AssertThat(prefixes[0].PatchMethod.IsGenericMethod).IsFalse();
                 AssertThat(prefixes[0].PatchMethod.ContainsGenericParameters).IsFalse();
+                AssertThat(postfixes.Length).IsEqual(1);
+                AssertThat(postfixes[0].PatchMethod.IsGenericMethod).IsFalse();
+                AssertThat(postfixes[0].PatchMethod.ContainsGenericParameters).IsFalse();
+
+                // ...and never touches the closed generic bus serializer, which foreign
+                // generic-declared patches can poison (RitsuLib conflict, see alpha.9 F2).
+                MethodInfo busSerialize = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
+                    typeof(NetMessageBus),
+                    messageType);
+                Patches? busPatches = Harmony.GetPatchInfo(busSerialize);
+                AssertThat(busPatches?.Prefixes.Count(patch => patch.owner == harmony.Id) ?? 0).IsEqual(0);
+                AssertThat(busPatches?.Postfixes.Count(patch => patch.owner == harmony.Id) ?? 0).IsEqual(0);
+                AssertThat(busPatches?.Transpilers.Count(patch => patch.owner == harmony.Id) ?? 0).IsEqual(0);
             }
         }
         finally
@@ -172,7 +188,7 @@ public sealed class LanConnectTailMessageBusTests
         return selection with { CapabilityDigest = LanConnectCapabilityDigest.Compute(selection) };
     }
 
-    private sealed class FakeRuntime : ILanConnectTailMessageRuntime
+    private sealed class FakeRuntime : ILanConnectAndroidTailMessageRuntime
     {
         internal List<LanConnectSidecarMessageKind> PreparedKinds { get; } = [];
         internal List<ulong> ValidatedSenders { get; } = [];
@@ -192,6 +208,46 @@ public sealed class LanConnectTailMessageBusTests
                 LanConnectTailCodec.Encode(
                     1,
                     [new LanConnectTailEntry(LanConnectTailEntry.CapabilitiesId, 1, true, capabilities)]));
+        }
+
+        public bool TryPrepareConcreteOutgoing(
+            PacketWriter writer,
+            LanConnectSidecarMessageKind messageKind,
+            object message,
+            out LanConnectAndroidPreparedMessage? prepared)
+        {
+            LanConnectProtocolSelection? selection = LanConnectSessionProtocolState.Shared.Current.Selection;
+            LanConnectPreparedTailMessage runtimePrepared =
+                PrepareOutgoing(null!, messageKind, 0, message, selection!);
+            prepared = new LanConnectAndroidPreparedMessage(null!, writer, messageKind, 0, selection!, runtimePrepared);
+            return true;
+        }
+
+        public void CompleteConcreteOutgoing(LanConnectAndroidPreparedMessage prepared)
+        {
+            if (prepared.Selection.Carrier == LanConnectProtocolCarrier.StandaloneTailV1)
+            {
+                _ = LanConnectStandaloneTailCarrier.Write(
+                    prepared.Writer,
+                    prepared.Prepared.Container,
+                    prepared.Selection);
+            }
+        }
+
+        public void ClearPendingOutgoing(PacketWriter writer)
+        {
+        }
+
+        public LanConnectAndroidTransportState? SubmitPendingSidecarBeforeVanilla(
+            object transport,
+            bool isHostTransport,
+            ulong recipientPeerId,
+            byte[] buffer,
+            int length) =>
+            null;
+
+        public void HandleVanillaTransportFailure(LanConnectAndroidTransportState state, Exception exception)
+        {
         }
 
         public void SubmitSidecarBeforeVanilla(

@@ -10,7 +10,8 @@ public sealed class LanConnectTailPatchPlanTests
     {
         LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
             typeof(PacketWriter).Assembly,
-            isAndroid: false);
+            isAndroid: false,
+            preferLegacyDesktopGenericPlan: true);
 
         Assert.Equal(LanConnectTailPatchPlan.DesktopProfile, plan.Profile);
         Assert.Equal(10, plan.ResolvedKinds.Count);
@@ -55,13 +56,28 @@ public sealed class LanConnectTailPatchPlanTests
     }
 
     [Fact]
+    public void Default_plan_is_the_non_generic_plan_on_every_platform()
+    {
+        foreach (bool isAndroid in new[] { false, true })
+        {
+            LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
+                typeof(PacketWriter).Assembly,
+                isAndroid);
+
+            Assert.Equal(LanConnectTailPatchPlan.DefaultProfile, plan.Profile);
+            Assert.Equal(15, plan.Steps.Count);
+            Assert.Equal(0, plan.GenericTargetCount);
+        }
+    }
+
+    [Fact]
     public void Android_plan_has_fifteen_concrete_non_generic_steps()
     {
         LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
             typeof(PacketWriter).Assembly,
             isAndroid: true);
 
-        Assert.Equal(LanConnectTailPatchPlan.AndroidProfile, plan.Profile);
+        Assert.Equal(LanConnectTailPatchPlan.DefaultProfile, plan.Profile);
         Assert.Equal(10, plan.ResolvedKinds.Count);
         Assert.Equal(9, plan.MessageTypes.Count);
         Assert.Equal(15, plan.Steps.Count);

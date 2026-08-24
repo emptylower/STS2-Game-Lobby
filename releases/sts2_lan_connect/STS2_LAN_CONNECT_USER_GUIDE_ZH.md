@@ -10,15 +10,24 @@
 
 # STS2 LAN Connect 使用说明
 
-当前客户端测试版为 `0.6.0-alpha.7`，lobby-service 继续使用 `0.6.0-alpha.6`。这不是正式版；同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+当前客户端修复候选为 `0.6.0-alpha.9`，lobby-service 继续使用 `0.6.0-alpha.6`。这是仅通过 GitHub 发布的 Pre-release，不更新 Steam 创意工坊。本版修复「安装/更新后大厅不显示」：任意 MOD 加载顺序下大厅都会正常出现。Android 端回归复测为 **PENDING**。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
 
-## v0.6.0-alpha.7 双协议房间
+## v0.6.0-alpha.9 「大厅不显示」修复
+
+- 修复 RitsuLib 先于本 MOD 初始化时大厅不出现（`InvalidProgramException` 中断初始化）的问题；旧版「关 RitsuLib 再开」的绕过办法在本版不再需要。
+- Tail 补丁全平台默认使用 15 项 `non_generic_v2` 非泛型计划；`desktop_generic_v1` 保留为紧急回滚分支（桌面环境变量 `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`）。
+- 协议补丁失败时大厅仍然可见可浏览，但建房 / 加入会被拒绝，并通过游戏原生弹窗说明原因与恢复步骤。
+- 启动日志可自查：`beginRunMessageBusBoundary=skipped_non_generic_plan` 或 `skipped_foreign_owner` 均为正常值。
+
+## v0.6.0-alpha.8 双协议房间
+
+- Android Tail 使用固定 15 项 `android_non_generic_v2` 非泛型补丁计划；非 Android 环境继续使用 30 项 `desktop_generic_v1` 计划。
+- 原失败设备禁用 SpeedX 后需连续冷启动 3 次。只有日志同时出现 `android_non_generic_v2`、`applied=15/15`、`generic_target_count=0` 与最终初始化哨兵，才可把该设备验证从 PENDING 改为通过。
 
 - 房主端会把大厅认证的玩家昵称同步到原生多人等待页和局内玩家列表，不再把客机显示为数字平台 ID。
 - 自动 SL 后从房间管理点击“重开一局”，房主与客机会清理已断开的旧网络服务；客机按原存档槽位自动加入房主重新发布的房间。
 - RitsuLib sidecar 会等待玩家控制绑定与 ENet 连接都就绪后再激活，避免连接先后顺序造成首包或重开会话错绑。
-- Android 端不再尝试安装只能在桌面环境安全编译的闭合泛型消息总线补丁；LAN Connect 保留 6 个 Android 必需的线上位宽补丁，因此初始化不会再中止，主页可以正常显示“联机大厅”。
-- Tail 出站消息改用 9 个非泛型具体 Harmony 前缀，RitsuLib v0.5.13 在 Android 的动态补丁阶段不再因重新编译 LAN Connect 泛型前缀而触发 Mono 原生断言。
+- Android 路径不再向 Harmony 提交闭合泛型 Tail 目标；9 类出站消息改由具体 serializer hook 处理，同时保留 6 个 Android 必需的线上位宽补丁。该设计用于避免已知 Mono 原生断言，但原失败设备结果仍为 PENDING。
 - “放弃多人存档”确认弹窗为选项区保留固定的最小可视高度，横屏和竖屏下都能完整显示“删除存档”与“保留存档”。
 - lobby-service 不再因 Android 开局加载暂时超过房间心跳窗口而删除仍有活跃房主的中继；中继空闲超时仍会在游戏连接真正停止后回收资源。
 - Tail 房主控制通道会提交建房时冻结的客户端版本与 capability digest，平台/房间消息和玩家控制绑定不再因协议身份缺失而加载失败。
@@ -29,7 +38,7 @@
 - 0.6 新协议保持原版 `2/3-bit` 主体，以 LAN protocol v1 携带完整 roster；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用公开 typed-sidecar carrier。
 - 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合会在 ticket 与 transport 前拒绝。
 - 本版不卸载、不直接调用也不恢复 RitsuLib 私有 Harmony postfix，不维护 RitsuLib 分支。
-- macOS 与 Android 使用 RitsuLib 时请统一安装官方 v0.5.13。最终候选包已完成跨端建房、加入、准备、开局、持续中继与 SL 冷启动续局验收；官方 v0.5.12 不应继续使用。
+- macOS 与 Android 使用 RitsuLib 时请统一安装官方 v0.5.13。自动门禁与可用环境 smoke 不替代原失败设备复测；官方 v0.5.12 不应继续使用。
 - direct-IP 在 v0.6 测试系列中只支持兼容模式，本地 Ritsu 或 Tail intent 会在建立连接前拒绝。
 - 历史客户端真实互通不在本 alpha 的测试门禁中。
 - 加入前会比较双方实际使用的 ModelId 线上编码。内容 MOD 组合不同并改变 net-id 表或位宽时，现在会明确提示不一致并拒绝加入，而不是进入后黑屏或一方卡在等待页；这是预期行为。
@@ -37,7 +46,15 @@
 - 默认兼容配置已从测试用 relaxed 恢复为 strict。普通 MOD 差异的显式 relaxed 入口不能跳过真实线上编码或游戏版本不一致。
 - 继续大厅存档或由房主重开时，房间绑定不会再被 safe-load/修复误写或删除。来源不明确的旧存档会询问一次“LAN 还是游戏大厅”，保存后不再重复询问。
 - 槽位接管后的踢出会针对当前占用者，不再永久封禁槽位原主人。列表过期时服务端拒绝操作；旧服务端不支持安全结果时只本地移出，并提示该玩家仍可回来。
-- 遇到加入失败、黑屏、等待页卡住或 MOD 误判，请同时提交两台机器各自的完整 `godot.log`。本版日志包含 WireCache 签名、四个位宽、表条目数和每个 MOD 的 `affects_gameplay` 标记。
+- 遇到启动失败、加入失败、黑屏、等待页卡住或 MOD 误判，请保留两端完整日志；Android 按下方取证步骤操作。
+
+### Android alpha.8 取证
+
+1. 从 launcher 导出本次启动的完整 `sts2*.log`。alpha.8 会把 `patch_diag` 同步写入普通日志，私有目录不可读时仍可定位最后一个 stage 与 patch ID。
+2. 同一次冷启动前执行 `adb logcat -c`，复现后保存 `adb logcat -d`。不要只提供崩溃末尾几行。
+3. 如果设备允许，使用 `run-as com.megacrit.sts2re` 导出整个 `user://sts2_lan_connect/diagnostics/` session；`run-as` 不可用时，可改用 root 或 launcher 文件提供器。
+
+若 `run-as`、root 与文件提供器均不可用，launcher `sts2*.log` 加完整 `adb logcat` 是受支持的降级证据。普通日志中的 `sts2_lan_connect patch_diag:` 镜像应包含最后 stage、patch ID、MethodInfo、程序集指纹与回滚结果。提交前不要附带配置正文、聊天、密码、token 或完整 URL/query。
 
 ## v0.5.5 游戏版本兼容
 
@@ -294,14 +311,24 @@
 
 # STS2 LAN Connect User Guide
 
-The current client candidate is `0.6.0-alpha.7`; lobby-service remains at `0.6.0-alpha.6`. This is not a final release. Every player must use the same client and game version and fully restart after updating.
+The current GitHub-only client fix candidate is `0.6.0-alpha.9`; lobby-service remains at `0.6.0-alpha.6`, and Steam Workshop is not updated. This candidate fixes the "lobby never appears" load-order race: the lobby shows up regardless of mod load order. The Android regression retest is **PENDING**. Every player must use the same client and game version and fully restart after updating.
 
-## v0.6.0-alpha.7 Dual-Protocol Rooms
+## v0.6.0-alpha.9 "Lobby Never Appears" Fix
+
+- Fixes the race where RitsuLib initializing first made our protocol patches throw `InvalidProgramException` and the lobby UI was never installed. The old workaround (toggle RitsuLib off, launch once, re-enable) is no longer needed.
+- The Tail patch plan now defaults to the 15-step, non-generic `non_generic_v2` plan on every platform; `desktop_generic_v1` remains available as an emergency rollback branch (desktop environment variable `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`).
+- When protocol patches fail, the lobby stays visible and browsable, but hosting/joining is refused and a native in-game popup explains the cause and the recovery steps.
+- Startup log self-check: `beginRunMessageBusBoundary=skipped_non_generic_plan` or `skipped_foreign_owner` are both expected values.
+
+## v0.6.0-alpha.8 Dual-Protocol Rooms
+
+- Android Tail uses the fixed 15-step, non-generic `android_non_generic_v2` patch plan. Other platforms retain the 30-step `desktop_generic_v1` plan.
+- The original environment must complete three cold starts with SpeedX disabled. It remains PENDING until each log contains `android_non_generic_v2`, `applied=15/15`, `generic_target_count=0`, and the final initialization sentinel.
 
 - Authenticated lobby player names now propagate to the host's native multiplayer load screen and in-run roster instead of appearing as numeric platform IDs.
 - After automatic save/load, **Restart Run** clears disconnected network services on both peers; the guest automatically reclaims its original slot in the host's republished room.
 - RitsuLib sidecar activation now waits for both the player-control binding and the ENet connection, preventing ordering-dependent first-packet and restart-session failures.
-- Android no longer attempts the closed-generic message-bus patch that can only be compiled safely on desktop. LAN Connect keeps the six required Android wire-width patches, so initialization completes and the Game Lobby entry can appear on the main page.
+- Android no longer submits closed-generic Tail targets to Harmony. Nine outgoing message kinds use concrete serializer hooks while retaining the six required Android wire-width patches. This is intended to avoid the known native Mono assertion, but verification on the original device remains PENDING.
 - The abandon-multiplayer-save confirmation now reserves a stable minimum viewport for its choices, keeping both Delete Save and Keep Save fully visible in landscape and portrait layouts.
 - Lobby-service no longer removes an authenticated active relay when an Android run load temporarily exceeds the room-heartbeat window. Relay idle cleanup still reclaims the session after game traffic actually stops.
 - Tail host control connections now submit the frozen client version and capability digest, preventing room messages and player-control bindings from failing due to missing protocol identity.
@@ -313,14 +340,22 @@ The current client candidate is `0.6.0-alpha.7`; lobby-service remains at `0.6.0
 - Ritsu-present peers can connect only to Ritsu-present peers; Ritsu-absent peers can connect only to Ritsu-absent peers. Mixed presence is rejected before ticket and transport allocation.
 - The RC4 private-postfix bridge is removed. LAN Connect does not detach, invoke, or restore private RitsuLib Harmony patches.
 - Tail outgoing messages now use nine concrete, non-generic Harmony prefixes, preventing RitsuLib v0.5.13's Android dynamic-patch pass from recompiling LAN Connect's generic prefix and triggering a native Mono assertion.
-- All macOS and Android RitsuLib peers must use official v0.5.13. The final candidate completed cross-platform room creation, join, ready, begin-run, sustained relay, and cold-start save/load recovery; v0.5.12 should not be used.
+- All macOS and Android RitsuLib peers must use official v0.5.13. Automated gates and smoke tests on available environments do not replace the original-device retest; v0.5.12 should not be used.
 - Direct IP is compat-only throughout the v0.6 prerelease series. Historical-client interoperability is outside this release gate.
 - The join flow now compares the actual ModelId wire encoding. Content-MOD sets that change net-id tables or bit widths are intentionally rejected before a black screen or stuck waiting room.
 - `affects_gameplay: false` only excludes a MOD from vanilla `idDatabaseHash`; it does not guarantee that the MOD takes no ModelIds. The new signature covers that gap and remains fail-open when unavailable.
 - The shipped profile is `strict` again. Explicit relaxed handling for ordinary MOD differences cannot bypass a genuine wire-signature or game-version mismatch.
 - Safe load and repair preserve continue-run bindings. Ambiguous legacy saves ask once whether they came from LAN or the game lobby.
 - A kick after slot takeover targets the current occupant instead of banning the original owner. Stale list actions are rejected; old services only permit a guarded local removal and report that no ban occurred.
-- For join failures, black screens, stuck waiting rooms, or MOD false positives, provide the complete `godot.log` from both machines. This build prints the WireCache signature, four bit widths, table counts, and every MOD's `affects_gameplay` flag.
+- For startup failures, join failures, black screens, stuck waiting rooms, or MOD false positives, preserve complete logs from both peers and follow the Android evidence steps below.
+
+### Android alpha.8 Evidence
+
+1. Export the launcher's complete `sts2*.log` for the failed startup. Alpha.8 mirrors `patch_diag` events into ordinary logs, preserving the last stage and patch ID when private files cannot be read.
+2. Clear logcat with `adb logcat -c` before the same cold start and save `adb logcat -d` after reproduction. Do not submit only the final crash lines.
+3. When permitted, export the whole `user://sts2_lan_connect/diagnostics/` session with `run-as com.megacrit.sts2re`. If `run-as` is unavailable, use root access or the launcher's file provider.
+
+If `run-as`, root, and the file provider are all unavailable, the launcher `sts2*.log` plus complete `adb logcat` are the supported fallback. The `sts2_lan_connect patch_diag:` mirror should still contain the final stage, patch ID, MethodInfo, assembly fingerprint, and rollback result. Do not include configuration bodies, chat text, passwords, tokens, or complete URL queries.
 
 ## v0.5.5 Game Compatibility
 

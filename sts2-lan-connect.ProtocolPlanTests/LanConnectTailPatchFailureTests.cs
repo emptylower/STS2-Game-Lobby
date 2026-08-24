@@ -38,7 +38,8 @@ public sealed class LanConnectTailPatchFailureTests
     {
         LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
             typeof(PacketWriter).Assembly,
-            isAndroid);
+            isAndroid,
+            preferLegacyDesktopGenericPlan: !isAndroid);
         string diagnosticsRoot = Path.Combine(
             Path.GetTempPath(),
             $"sts2-lan-connect-patch-ordinal-{Guid.NewGuid():N}");

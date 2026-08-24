@@ -20,6 +20,9 @@ internal static class LanConnectProtocolUiMessages
             "wire_cache_mismatch" => "联机数据版本不匹配，无法加入该房间。",
             "lan_protocol_version_mismatch" => "LAN 协议版本不匹配，无法继续连接。",
             "lan_tail_required" or "lan_tail_malformed" => "房间协议数据无效，连接已停止。",
+            "protocol_patch_conflict" => "联机协议补丁未能完整安装（通常与 RitsuLib 的补丁冲突），本次启动联机功能已停用，单机不受影响。\n" +
+                "恢复方法：在 MOD 菜单中只关闭 RitsuLib，启动一次游戏到主菜单后退出，再重新开启 RitsuLib。\n" +
+                "若仍无法恢复，请把 user://sts2_lan_connect/diagnostics/ 中最新的诊断目录反馈给 MOD 作者。",
             _ => $"联机协议拒绝了本次操作（{failure.Code}）。"
         };
     }

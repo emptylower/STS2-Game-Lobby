@@ -31,6 +31,11 @@ internal static class LanConnectDirectJoinFlow
         CancellationToken cancellationToken)
     {
         LanConnectLobbyManagedJoinFlow? currentFlow = null;
+        if (LanConnectDegradedMode.CreateBlockingFailure() is { } degradedFailure)
+        {
+            return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, null, degradedFailure);
+        }
+
         LanConnectProtocolFailure? localFailure = ValidateCompatOnlyPreTransport(
             LanConnectExternalCapabilityCollector.Collect().RitsuLibPresent);
         if (localFailure != null)

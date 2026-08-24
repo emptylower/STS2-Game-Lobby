@@ -3,7 +3,7 @@
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-![Client](https://img.shields.io/badge/client-v0.6.0--alpha.8-orange)
+![Client](https://img.shields.io/badge/client-v0.6.0--alpha.9-orange)
 ![Service](https://img.shields.io/badge/service-v0.6.0--alpha.6-orange)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
@@ -17,7 +17,7 @@
 
 ## 中文
 
-**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端诊断候选为 **v0.6.0-alpha.8**，大厅服务测试版仍为 **v0.6.0-alpha.6**。本候选版主要服务对象是：
+**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端修复候选为 **v0.6.0-alpha.9**，大厅服务测试版仍为 **v0.6.0-alpha.6**。本候选版主要服务对象是：
 
 - 想自行部署大厅服务的服主 / 运维
 - 想构建或分发客户端 MOD 的维护者
@@ -40,6 +40,14 @@
 - 节点之间通过 `lobby-service` 内置的 peer-announce 协议彼此发现
 - 客户端通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）拿到聚合节点列表
 - 不再有任何"母面板"或中心化审核后台；`SERVER_REGISTRY_*` 一组环境变量自 v0.4.0 起已从 lobby-service 中完全移除
+
+### v0.6.0-alpha.9 「大厅不显示」修复候选
+
+- 修复自 alpha.1 起存在的 MOD 加载顺序竞态：RitsuLib 先于本 MOD 初始化时，本 MOD 协议补丁会抛 `InvalidProgramException`，大厅 UI 从未安装。旧版的绕过办法（关 RitsuLib 再开）在本版不再需要。
+- Tail 补丁全平台默认改用 15 项 `non_generic_v2` 非泛型计划（与 alpha.8 的 Android 计划同源），不再注册任何闭合泛型 Harmony 目标；`desktop_generic_v1` 保留为紧急回滚分支（桌面环境变量 `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`）。
+- 线上字节格式零变化：golden vector 在两套计划下逐字节一致；6 项位宽 transpiler 与 Tail 计划同时应用时同样逐字节通过。
+- 协议补丁失败进入降级模式：大厅可见可浏览，建房 / 加入被拒绝，游戏原生弹窗直接说明原因与恢复方法。
+- 这是仅通过 GitHub 发布的修复 Pre-release，不更新 Steam 创意工坊；Android 端回归复测为 **PENDING**。
 
 ### v0.6.0-alpha.8 Android gshared 诊断候选
 
@@ -72,10 +80,10 @@
 
 ### 当前版本
 
-- 客户端源码 / 构建版本：`0.6.0-alpha.8`（GitHub 诊断候选）
+- 客户端源码 / 构建版本：`0.6.0-alpha.9`（GitHub 修复候选）
 - 大厅服务源码 / 构建版本：`0.6.0-alpha.6`（测试候选）
-- 当前测试候选：[`v0.6.0-alpha.8`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.8)（GitHub Pre-release）
-- 诊断候选说明：[`docs/RELEASE_NOTES_V0.6.0_ALPHA8_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ALPHA8_ZH.md)
+- 当前测试候选：[`v0.6.0-alpha.9`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.9)（GitHub Pre-release）
+- 修复候选说明：[`docs/RELEASE_NOTES_V0.6.0_ALPHA9_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ALPHA9_ZH.md)
 - 最新 GitHub 稳定版：[`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
 - Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（继续停留在 alpha.7；alpha.8 不更新 Workshop）
 
@@ -223,7 +231,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 ## English
 
-**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current GitHub-only diagnostic client candidate is **v0.6.0-alpha.8** and the lobby-service candidate remains **v0.6.0-alpha.6**.
+**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current GitHub-only client fix candidate is **v0.6.0-alpha.9** and the lobby-service candidate remains **v0.6.0-alpha.6**.
 
 ### What is in this repository
 
@@ -238,6 +246,14 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 ### Current architecture (introduced in v0.4.0)
 
 Each `lobby-service` node advertises itself to peers via the built-in peer-announce protocol. Clients aggregate the public node list through a Cloudflare discovery worker (`https://sts2-gamelobby-register.xyz`). There is no master panel and no central review backend; the `SERVER_REGISTRY_*` env vars from v0.3.x have been removed from `lobby-service` and have been inert since v0.4.0.
+
+### v0.6.0-alpha.9 "lobby never appears" fix candidate
+
+- Fixes the mod load-order race present since alpha.1: when RitsuLib initializes first, our protocol patches hit `InvalidProgramException` and the lobby UI was never installed. The old workaround (toggle RitsuLib off/on) is no longer needed.
+- The Tail patch plan now defaults to the 15-step, non-generic `non_generic_v2` plan on every platform (same plan alpha.8 shipped for Android); no closed-generic Harmony targets are registered. `desktop_generic_v1` remains as an emergency rollback branch via the desktop environment variable `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`.
+- Zero wire-format changes: golden vectors match byte for byte under both plans, including with all six bit-width transpilers applied.
+- On protocol patch failure the mod enters degraded mode: the lobby stays visible and browsable, hosting/joining is refused, and a native in-game popup explains the cause and the recovery steps.
+- GitHub-only fix prerelease; Steam Workshop is not updated. Android regression retest is **PENDING**.
 
 ### v0.6.0-alpha.8 Android gshared diagnostic candidate
 
