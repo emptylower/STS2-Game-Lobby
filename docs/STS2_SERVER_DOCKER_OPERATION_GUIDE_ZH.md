@@ -1,6 +1,8 @@
 # STS2 服务 Docker 化部署与运维指南
 
-> 本文档对应正式版 **v0.5.4**。部署仍只需要 `lobby-service` 一个容器；v0.5.4 在既有去中心化、聊天与 MOD 预检能力上新增可选 AI 语义审核、安全缓存和人工永久规则。正式包见 [GitHub Release v0.5.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.4)。以前的“双服务”栈（lobby-service + server-registry + postgres）仅作历史运维参考。
+> 当前正式版为 **v0.6.0**，正式包见 [GitHub Release v0.6.0](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0)（附带 `sts2_lobby_service.zip`）。
+>
+> 容器化部署与运维步骤自 v0.5.4 起未变，下文的 v0.5.4 说明继续适用：部署仍只需要 `lobby-service` 一个容器。v0.6.0 与测试候选 `0.6.0-alpha.6` 代码无功能差异，只对齐版本号；仍在 `0.5.4` 的节点建议升级，因为 0.6 客户端的双协议、capability digest 与 binding-aware kick 需要 0.6 服务端支持。以前的“双服务”栈（lobby-service + server-registry + postgres）仅作历史运维参考。
 
 ## 一、当前推荐：lobby-service 单容器
 

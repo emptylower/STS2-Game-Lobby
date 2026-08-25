@@ -4,6 +4,52 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-25
+
+`0.6.0` 正式版：客户端与 lobby-service 同步定为 `0.6.0`，收敛 `0.5.6-rc1`~`rc4` 与 `0.6.0-alpha.1`~`alpha.9` 全部测试候选。发布说明见 `docs/RELEASE_NOTES_V0.6.0_ZH.md`。本轮通过 GitHub Release 分发客户端与服务端产物，**暂不更新 Steam 创意工坊**。
+
+### Added
+
+- 双协议房间：建房显式选择 `compat_4_5_v1` 或 `tail_v1`，并冻结 carrier、RitsuLib presence 与 capability digest。
+- `WireCacheSignatureV1` 加入前线上编码校验：比较四张 ModelId net-id 表与四个编码位宽，真实不一致在 ticket 与 join request 两道关卡拒绝，签名缺失时 fail-open。
+- 与存档槽位分离的安装级 credential 与绑定到当前占用者的 kick handle。
+- 启动诊断：初始化阶段、稳定 patch ID、`mod_load_order` 事件、程序集指纹与回滚结果写入私有 JSONL、原子哨兵与普通游戏 / logcat 日志。
+
+### Changed
+
+- Tail 补丁全平台默认使用 15 步 `non_generic_v2` 非泛型计划；`desktop_generic_v1` 保留为紧急回滚分支（`STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`）。线上字节格式不变。
+- 发布默认兼容配置为 `strict`；relaxed 仅作为显式选项，不能跳过真实线上编码或游戏版本不一致。
+- lobby-service 版本从 `0.6.0-alpha.6` 对齐为 `0.6.0`，**代码无功能差异**；本 Release 附带 `sts2_lobby_service.zip`，已开启自动更新的节点会自动从 `0.5.4` 升级到 `0.6.0`。
+
+### Fixed
+
+- 修复自 alpha.1 起存在的 MOD 加载顺序竞态导致「安装/更新后大厅不显示」：RitsuLib 先初始化时其泛型声明补丁毒化闭合泛型目标，本 MOD 协议补丁抛 `InvalidProgramException` 并中止初始化。旧版「关 RitsuLib 再开」的绕过办法不再需要。
+- 协议补丁失败改为降级模式：大厅可见可浏览，建房 / 加入 / 续局发布被拒绝，并通过原生弹窗告知 `protocol_patch_conflict` 原因与恢复方法。
+- 修复房主端把客机昵称显示为数字平台 ID；大厅认证身份会刷新原生等待页与局内玩家列表。
+- 修复自动 SL 后「重开一局」时旧网络服务与协议租约导致客机无法返回；双方清理已断开的 `RunManager.NetService`，客机按原槽位自动加入。
+- 修复 SL/读档绑定持久化丢失 profile、carrier、RitsuLib presence、WireCache 签名与 capability digest 导致协议协商错误的问题。
+- 修复 lobby-service 改变区分大小写的 Base64URL WireCache 签名导致 `capability_digest_mismatch` 的问题。
+- 修复 Android 开局加载超过房间心跳窗口时，服务端误删仍有活跃房主的中继并断开客机的问题。
+- 修复 Tail 房主控制通道缺少客户端版本与 capability digest 导致房间消息与控制绑定无法建立的问题。
+- 修复「放弃多人存档」确认弹窗按钮被裁切成一条红线的问题。
+- 修复槽位接管后踢出误封原槽位主人，以及 stale 操作跟随槽位落到新占用者的问题。
+
+### Removed
+
+- 删除 `0.5.6-rc4` 对 RitsuLib 私有 Harmony postfix 的卸载、直接调用与恢复桥；不再访问 RitsuLib 私有 patch state。
+
+### Compatibility
+
+- 同一房间所有成员必须统一使用客户端 `0.6.0`；安装或更新后必须完整重启游戏。
+- macOS 与 Android 的 RitsuLib 路径要求官方 v0.5.13 及以上；混合 RitsuLib presence 在 ticket 与 transport 前拒绝。
+- direct-IP 只支持兼容模式；历史 `0.3.x`-`0.5.x` 客户端互通不在发布门禁范围内。
+
+### Verification
+
+- 维护者真机验收全部通过：桌面 Windows、桌面 macOS、Android，以及含官方 RitsuLib 的联机（任意加载顺序）。
+- `RITSULIB_ASSEMBLY=<官方 RitsuLib dll> ./scripts/verify-release.sh` 全绿：lobby-service 检查与测试、ProtocolPlanTests、客户端 xUnit 主套件、GdUnit 运行时套件（真实 `sts2.dll` 与官方 RitsuLib 程序集）。
+- golden vector 在 `non_generic_v2` 与 `desktop_generic_v1` 两套计划下逐字节一致，6 项位宽 transpiler 同时应用时同样一致。
+
 ## [0.6.0-alpha.9] - 2026-08-23
 
 客户端 `0.6.0-alpha.9` 修复「安装/更新后大厅不显示」；lobby-service 继续使用 `0.6.0-alpha.6`。

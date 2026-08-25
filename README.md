@@ -3,8 +3,8 @@
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-![Client](https://img.shields.io/badge/client-v0.6.0--alpha.9-orange)
-![Service](https://img.shields.io/badge/service-v0.6.0--alpha.6-orange)
+![Client](https://img.shields.io/badge/client-v0.6.0-brightgreen)
+![Service](https://img.shields.io/badge/service-v0.6.0-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
 **[中文](#中文) · [English](#english)**
@@ -17,7 +17,7 @@
 
 ## 中文
 
-**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前客户端修复候选为 **v0.6.0-alpha.9**，大厅服务测试版仍为 **v0.6.0-alpha.6**。本候选版主要服务对象是：
+**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前正式版为 **v0.6.0**，客户端与大厅服务版本号已同步对齐。本页主要服务对象是：
 
 - 想自行部署大厅服务的服主 / 运维
 - 想构建或分发客户端 MOD 的维护者
@@ -41,51 +41,62 @@
 - 客户端通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）拿到聚合节点列表
 - 不再有任何"母面板"或中心化审核后台；`SERVER_REGISTRY_*` 一组环境变量自 v0.4.0 起已从 lobby-service 中完全移除
 
-### v0.6.0-alpha.9 「大厅不显示」修复候选
+### v0.6.0 正式版
 
-- 修复自 alpha.1 起存在的 MOD 加载顺序竞态：RitsuLib 先于本 MOD 初始化时，本 MOD 协议补丁会抛 `InvalidProgramException`，大厅 UI 从未安装。旧版的绕过办法（关 RitsuLib 再开）在本版不再需要。
-- Tail 补丁全平台默认改用 15 项 `non_generic_v2` 非泛型计划（与 alpha.8 的 Android 计划同源），不再注册任何闭合泛型 Harmony 目标；`desktop_generic_v1` 保留为紧急回滚分支（桌面环境变量 `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`）。
-- 线上字节格式零变化：golden vector 在两套计划下逐字节一致；6 项位宽 transpiler 与 Tail 计划同时应用时同样逐字节通过。
-- 协议补丁失败进入降级模式：大厅可见可浏览，建房 / 加入被拒绝，游戏原生弹窗直接说明原因与恢复方法。
-- 这是仅通过 GitHub 发布的修复 Pre-release，不更新 Steam 创意工坊；Android 端回归复测为 **PENDING**。
+`v0.6.0` 是 `v0.5.5` 之后的第一个正式版，收敛了 `0.5.6-rc1`~`rc4` 与 `0.6.0-alpha.1`~`alpha.9` 共九个测试候选。完整说明见 [`docs/RELEASE_NOTES_V0.6.0_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ZH.md)。
 
-### v0.6.0-alpha.8 Android gshared 诊断候选
+**双协议房间**
 
-- 这是仅通过 GitHub 发布的诊断 Pre-release，不更新 Steam 创意工坊；Android 原失败设备尚未完成复测，gshared 修复状态为 **PENDING / 修复待验证**，不能据此认定问题已解决。
-- Android Tail 改用固定 15 项 `android_non_generic_v2` 非泛型补丁计划；非 Android 环境继续使用已验证的 30 项 `desktop_generic_v1` 路径。
-- 启动诊断会记录初始化阶段、稳定 patch ID、目标与 hook 元数据、程序集指纹、回滚结果和最后完成哨兵，并同步写入私有 JSONL 与普通游戏 / logcat 日志。
-- Android 原失败环境验收要求禁用 SpeedX 后连续冷启动 3 次；成功日志必须包含 `android_non_generic_v2`、`applied=15/15`、`generic_target_count=0` 和最终初始化哨兵。该项在真实设备复测前保持 PENDING。
-
-- 修复房主端把客机昵称显示为数字平台 ID 的问题；大厅认证身份会刷新原生多人等待页和局内玩家列表。
-- 修复自动 SL 后从房间管理执行“重开一局”时，旧网络服务与协议租约导致 RitsuLib 会话错绑、客机无法正常返回的问题。
-- 房主与客机现在会清理已断开的旧 `RunManager.NetService`，客机按原存档槽位自动加入新发布的续局房间。
-- Android 路径不再向 Harmony 提交闭合泛型 Tail 目标；9 类出站消息改由具体 serializer hook 处理，并保留 standalone 与官方 RitsuLib v0.5.13 typed-sidecar 的既有线上字节格式。
-- 修复“放弃多人存档”确认弹窗的危险操作按钮被滚动视口裁切成一条红线的问题。
-- 修复 Android 开局加载超过房间心跳窗口时，lobby-service 误删仍有活跃房主的中继并断开客机的问题；活跃中继由独立空闲超时负责最终回收。
-- 修复 Tail 房主控制通道缺少客户端版本与 capability digest、导致房间消息和控制绑定无法建立的问题。
-- 修复协议绑定持久化时丢失 profile、carrier、RitsuLib presence、WireCache 签名和 capability digest，导致 SL/读档重新协商错误协议的问题。
-- 修复 lobby-service 把区分大小写的 Base64URL WireCache 签名转为小写的问题；alpha.5 客户端也兼容尚未升级的旧服务。
-- 保留 alpha.3 的 RitsuLib 连接后 sidecar 激活修复；用户反馈日志所用 alpha.2 尚不包含该修复。
-- 修复房主重开后加入者复用缓存多人子菜单时自动重连未启动的问题。
-- 建房显式选择兼容模式或 0.6 新协议；选择结果、carrier、RitsuLib presence 和 capability digest 在房间生命周期内冻结
+- 建房显式选择兼容模式 `compat_4_5_v1` 或 0.6 新协议 `tail_v1`；选择结果、carrier、RitsuLib presence 和 capability digest 在房间生命周期内冻结
 - 兼容模式固定使用 `4/5-bit`，支持 2-8 人并拒绝 RitsuLib
-- 0.6 新协议保持原版 `2/3-bit` 消息主体，完整 roster 由 LAN protocol v1 携带
+- `tail_v1` 保持原版 `2/3-bit` 消息主体，完整 roster 由 LAN protocol v1 携带
 - 无 RitsuLib 房间使用 standalone carrier；全员 RitsuLib 房间只使用公开 typed-sidecar API
 - 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合在 ticket 和 transport 前拒绝
-- macOS 与 Android 的 RitsuLib 路径统一要求官方 v0.5.13；alpha.8 的原失败 Android 设备复测仍为 PENDING。官方 v0.5.12 不应继续用于本轮测试
 - 删除 RC4 对 RitsuLib 私有 postfix 的卸载、直接调用和恢复逻辑，不维护 RitsuLib 分支
-- direct-IP 在 v0.6 测试系列中只允许兼容模式，本地 Ritsu 或 Tail intent 在创建 transport 前拒绝
-- 客户端升级到 `0.6.0-alpha.8`；lobby-service 继续使用 `0.6.0-alpha.6`，已部署 alpha.6 的服主无需再次升级；同房所有成员必须统一 alpha.8
-- 历史客户端真实互通不属于本 alpha 的测试或发布门禁
+- direct-IP 只允许兼容模式，本地 Ritsu 或 Tail intent 在创建 transport 前拒绝
+
+**加入前线上编码校验**
+
+- `WireCacheSignatureV1` 比较四张 ModelId net-id 表与四个编码位宽；真实不一致在 ticket 与 join request 前拒绝，签名缺失时 fail-open
+- `affects_gameplay: false` 不保证 MOD 不占用 ModelId，新签名补上了这层检查
+- 发布默认兼容配置为 `strict`；relaxed 只适用于普通 MOD 差异
+
+**「安装/更新后大厅不显示」修复**
+
+- 修复自 alpha.1 起存在的 MOD 加载顺序竞态：RitsuLib 先于本 MOD 初始化时，本 MOD 协议补丁会抛 `InvalidProgramException`，大厅 UI 从未安装。旧版的绕过办法（关 RitsuLib 再开）不再需要
+- Tail 补丁全平台默认使用 15 项 `non_generic_v2` 非泛型计划，不再注册任何闭合泛型 Harmony 目标；`desktop_generic_v1` 保留为紧急回滚分支（桌面环境变量 `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`）
+- 线上字节格式零变化：golden vector 在两套计划下逐字节一致；6 项位宽 transpiler 与 Tail 计划同时应用时同样逐字节通过
+- 协议补丁失败进入降级模式：大厅可见可浏览，建房 / 加入被拒绝，游戏原生弹窗直接说明原因与恢复方法
+
+**续局、重开与身份**
+
+- 房主端把大厅认证的玩家昵称同步到原生多人等待页和局内玩家列表，不再显示数字平台 ID
+- 自动 SL 后「重开一局」时双方清理已断开的旧 `RunManager.NetService`，客机按原存档槽位自动加入新发布的房间
+- SL/读档续局完整保留存档冻结的 profile、carrier、RitsuLib presence、WireCache 签名和 capability digest
+- 踢出使用与存档槽位分离的安装 credential 与当前占用者 binding handle，槽位接管后不会误封原主人
+
+**Android 与稳定性**
+
+- Android Tail 使用固定 15 项非泛型补丁计划，不向 gshared 注册闭合泛型目标
+- lobby-service 不再因开局加载超过房间心跳窗口而删除仍有活跃房主的中继
+- lobby-service 保留区分大小写的 Base64URL WireCache 签名，不再产生 `capability_digest_mismatch`
+- 启动诊断记录初始化阶段、稳定 patch ID、`mod_load_order` 事件、程序集指纹与回滚结果，并同步写入普通游戏 / logcat 日志
+
+**升级要求**
+
+- 同房所有成员必须统一使用客户端 `0.6.0`，安装或更新后完整重启游戏
+- macOS 与 Android 的 RitsuLib 路径要求官方 v0.5.13 及以上
+- lobby-service `0.6.0` 与 `0.6.0-alpha.6` 代码无功能差异，仅对齐版本号；本 Release 附带 `sts2_lobby_service.zip`，已开启自动更新的节点会自动从 `0.5.4` 升级
+- 历史 `0.3.x`-`0.5.x` 客户端与 `0.6.0` 的真实互通不在发布门禁范围内
 
 ### 当前版本
 
-- 客户端源码 / 构建版本：`0.6.0-alpha.9`（GitHub 修复候选）
-- 大厅服务源码 / 构建版本：`0.6.0-alpha.6`（测试候选）
-- 当前测试候选：[`v0.6.0-alpha.9`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.9)（GitHub Pre-release）
-- 修复候选说明：[`docs/RELEASE_NOTES_V0.6.0_ALPHA9_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ALPHA9_ZH.md)
-- 最新 GitHub 稳定版：[`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
-- Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（继续停留在 alpha.7；alpha.8 不更新 Workshop）
+- 客户端源码 / 构建版本：`0.6.0`（正式版）
+- 大厅服务源码 / 构建版本：`0.6.0`（正式版，与 `0.6.0-alpha.6` 代码一致）
+- 当前正式版：[`v0.6.0`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0)（GitHub Release）
+- 发布说明：[`docs/RELEASE_NOTES_V0.6.0_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ZH.md)
+- 上一个正式版：[`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
+- Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（本轮暂不上传，条目仍停留在 alpha.7；描述稿见 [`docs/STEAM_WORKSHOP_DESCRIPTION_ZH.txt`](./docs/STEAM_WORKSHOP_DESCRIPTION_ZH.txt)）
 
 ### 推荐阅读顺序
 
@@ -204,6 +215,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 | 文档 | 说明 |
 |------|------|
 | [`CHANGELOG.md`](./CHANGELOG.md) | 客户端与服务端版本更新日志 |
+| [`docs/RELEASE_NOTES_V0.6.0_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ZH.md) | v0.6.0 正式版说明：双协议房间、加入前线上编码校验、大厅不显示修复、升级与验收 |
 | [`docs/RELEASE_NOTES_V0.5.6_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.6_CLIENT_ZH.md) | v0.5.6-rc4 客户端测试候选说明：RitsuLib Harmony 补丁桥、线上编码签名与已知限制 |
 | [`docs/RELEASE_NOTES_V0.5.5_CLIENT_ZH.md`](./docs/RELEASE_NOTES_V0.5.5_CLIENT_ZH.md) | v0.5.5 客户端正式说明：游戏 0.110.x ABI 兼容、验证范围与回滚步骤 |
 | [`docs/RELEASE_NOTES_V0.5.4_ZH.md`](./docs/RELEASE_NOTES_V0.5.4_ZH.md) | v0.5.4 lobby-service 正式说明：AI 审核、安全缓存、复审及永久规则 |
@@ -220,6 +232,15 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 | [`server-registry/README.md`](./server-registry/README.md) | (可选) 自托管公共列表服务源码说明，v0.5.1 不再依赖 |
 | [`docs/STS2_PEER_SIDECAR_GUIDE_ZH.md`](./docs/STS2_PEER_SIDECAR_GUIDE_ZH.md) | 历史：v0.2.x → v0.3 peer sidecar 兼容文档 |
 | [`docs/STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md`](./docs/STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md) | 历史：v0.3.2 升级说明 |
+
+### 反馈与交流
+
+遇到问题、想反馈 bug 或参与测试，欢迎加群：
+
+- **联机大厅 8 群：341498145**
+- **测试群（要求会导出 log）：1093309523**
+
+反馈时请尽量附上双方完整的 `godot.log` 与客户端内的本地调试报告。
 
 ### 许可证
 
@@ -247,49 +268,56 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 Each `lobby-service` node advertises itself to peers via the built-in peer-announce protocol. Clients aggregate the public node list through a Cloudflare discovery worker (`https://sts2-gamelobby-register.xyz`). There is no master panel and no central review backend; the `SERVER_REGISTRY_*` env vars from v0.3.x have been removed from `lobby-service` and have been inert since v0.4.0.
 
-### v0.6.0-alpha.9 "lobby never appears" fix candidate
+### v0.6.0 stable release
+
+`v0.6.0` is the first stable release after `v0.5.5`, consolidating all nine prerelease candidates from `0.5.6-rc1` through `0.6.0-alpha.9`. Full notes (Chinese): [`docs/RELEASE_NOTES_V0.6.0_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ZH.md).
+
+**Dual-protocol rooms**
+
+- Room creation explicitly selects `compat_4_5_v1` or `tail_v1` and freezes the profile, carrier, RitsuLib presence, and capability digest for the room's lifetime.
+- Compat uses fixed `4/5-bit` encoding for 2-8 players and rejects RitsuLib.
+- `tail_v1` preserves the vanilla `2/3-bit` body and carries the complete roster in LAN protocol v1.
+- No-Ritsu rooms use the standalone carrier; all-Ritsu rooms use only the public typed-sidecar API.
+- Ritsu-present peers connect only to Ritsu-present peers, and vice versa. Mixed presence is rejected before ticket and transport allocation.
+- The RC4 private-postfix detach/invoke/restore bridge is removed. LAN Connect does not maintain a RitsuLib fork.
+- Direct IP is compat-only.
+
+**Pre-join wire-encoding check**
+
+- `WireCacheSignatureV1` compares four ModelId net-id tables and four encoding bit widths. A genuine mismatch is rejected before the ticket and before the join request; a missing signature stays fail-open.
+- `affects_gameplay: false` does not guarantee that a MOD takes no ModelIds; the signature covers that gap.
+- The shipped profile is `strict`; relaxed applies only to ordinary MOD differences.
+
+**"Lobby never appears" fix**
 
 - Fixes the mod load-order race present since alpha.1: when RitsuLib initializes first, our protocol patches hit `InvalidProgramException` and the lobby UI was never installed. The old workaround (toggle RitsuLib off/on) is no longer needed.
-- The Tail patch plan now defaults to the 15-step, non-generic `non_generic_v2` plan on every platform (same plan alpha.8 shipped for Android); no closed-generic Harmony targets are registered. `desktop_generic_v1` remains as an emergency rollback branch via the desktop environment variable `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`.
+- The Tail patch plan defaults to the 15-step, non-generic `non_generic_v2` plan on every platform; no closed-generic Harmony targets are registered. `desktop_generic_v1` remains an emergency rollback branch via `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`.
 - Zero wire-format changes: golden vectors match byte for byte under both plans, including with all six bit-width transpilers applied.
-- On protocol patch failure the mod enters degraded mode: the lobby stays visible and browsable, hosting/joining is refused, and a native in-game popup explains the cause and the recovery steps.
-- GitHub-only fix prerelease; Steam Workshop is not updated. Android regression retest is **PENDING**.
+- On protocol patch failure the mod enters degraded mode: the lobby stays visible and browsable, hosting/joining is refused, and a native popup explains the cause and recovery steps.
 
-### v0.6.0-alpha.8 Android gshared diagnostic candidate
+**Save runs, restart, and identity**
 
-- This is a GitHub-only diagnostic prerelease and does not update Steam Workshop. Retesting on the originally failing Android device is still **PENDING**, so the gshared issue must not be described as resolved yet.
-- Android Tail uses the fixed 15-step, non-generic `android_non_generic_v2` patch plan. Other platforms retain the verified 30-step `desktop_generic_v1` path.
-- Startup evidence records initialization stages, stable patch IDs, target/hook metadata, assembly fingerprints, rollback results, and the final sentinel in both private JSONL and ordinary game/logcat logs.
-- Acceptance on the original environment requires three cold starts with SpeedX disabled and logs containing `android_non_generic_v2`, `applied=15/15`, `generic_target_count=0`, and the final initialization sentinel. This remains PENDING until completed on the device.
+- Authenticated lobby player names refresh the host's native load screen and in-run roster instead of numeric platform IDs.
+- After automatic save/load, **Restart Run** clears disconnected network services on both peers and the guest reclaims its original slot in the republished room.
+- Continue-run publication preserves the profile, carrier, RitsuLib presence, WireCache signature, and capability digest frozen in the save.
+- A kick after slot takeover targets the current occupant instead of banning the original owner.
 
-- Fixes remote players appearing as numeric platform IDs on the host. Authenticated lobby identities now refresh the native load screen and in-run roster.
-- Fixes the RitsuLib restart path after automatic save/load, where stale network services and a replaced protocol lease could prevent the guest from returning after **Restart Run**.
-- Both peers clear disconnected `RunManager.NetService` instances, and the guest automatically rejoins the republished room using its original save slot.
-- The Android path no longer submits closed-generic Tail targets to Harmony. Nine outgoing message kinds use concrete serializer hooks while preserving standalone and official RitsuLib v0.5.13 typed-sidecar wire bytes.
-- Fixes the destructive abandon-save action being clipped to a thin red line in the confirmation dialog.
-- Keeps an authenticated active relay host alive when an Android run load exceeds the room-heartbeat window, preventing lobby cleanup from cutting an in-progress relay; the relay idle timeout still performs final reclamation.
-- Adds the frozen client version and capability digest to Tail host control-channel connections, so room messaging and control bindings are no longer rejected.
-- Preserves the frozen profile, carrier, RitsuLib presence, WireCache signature, and capability digest when a save binding is persisted, preventing incorrect SL/load renegotiation.
-- Stops lobby-service from lowercasing case-sensitive Base64URL WireCache signatures; the alpha.5 client also tolerates the legacy service result.
-- Retains alpha.3's post-connect RitsuLib sidecar activation fix; the reported failing log was still running alpha.2.
-- Resumes client auto-reconnect explicitly when restart navigation reuses an already-created multiplayer submenu.
-- Room creation explicitly selects compat or Tail v1 and freezes the profile, carrier, RitsuLib presence, and capability digest.
-- Compat uses fixed `4/5-bit` encoding for 2-8 players and rejects RitsuLib.
-- Tail v1 preserves the vanilla `2/3-bit` body and carries the complete roster in LAN protocol v1.
-- No-Ritsu rooms use the standalone carrier; all-Ritsu rooms use only the public typed-sidecar API.
-- Ritsu-present peers connect only to Ritsu-present peers, while Ritsu-absent peers connect only to Ritsu-absent peers. Mixed presence is rejected before ticket and transport allocation.
-- Both macOS and Android RitsuLib paths require official v0.5.13. Retesting alpha.8 on the originally failing Android device remains PENDING. Official v0.5.12 should not be used for this test cycle.
-- The RC4 private-postfix detach/invoke/restore bridge is removed. LAN Connect does not maintain a RitsuLib fork.
-- Direct IP is compat-only throughout the v0.6 prerelease series. Historical-client interoperability is not part of this alpha gate.
+**Android and stability**
+
+- Android Tail uses the fixed 15-step, non-generic patch plan and submits no closed-generic targets to gshared.
+- Lobby-service keeps an authenticated active relay alive when a run load exceeds the room-heartbeat window.
+- Lobby-service preserves case-sensitive Base64URL WireCache signatures.
+- Startup evidence records initialization stages, stable patch IDs, the `mod_load_order` event, assembly fingerprints, and rollback results in both private JSONL and ordinary game/logcat logs.
 
 ### Current versions
 
-- Client source/build version: `0.6.0-alpha.8` (GitHub diagnostic candidate)
-- Lobby service source/build version: `0.6.0-alpha.6` (prerelease candidate)
-- Current release candidate: [`v0.6.0-alpha.8`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0-alpha.8) (GitHub prerelease)
-- Diagnostic release notes: [`docs/RELEASE_NOTES_V0.6.0_ALPHA8_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ALPHA8_ZH.md) (Chinese)
-- Latest stable GitHub release: [`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
-- Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) (remains on alpha.7; alpha.8 is not published there)
+- Client source/build version: `0.6.0` (stable)
+- Lobby service source/build version: `0.6.0` (stable; functionally identical to `0.6.0-alpha.6`)
+- Current release: [`v0.6.0`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0)
+- Release notes: [`docs/RELEASE_NOTES_V0.6.0_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ZH.md) (Chinese)
+- Previous stable release: [`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
+- Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) (not updated in this round; the entry remains on alpha.7)
+- Every player in a room must run client `0.6.0` and fully restart the game after updating. Operators still on `0.5.4` should upgrade; this release ships `sts2_lobby_service.zip`, so nodes with auto-update enabled upgrade themselves.
 
 ### Recommended reading order
 
@@ -362,3 +390,13 @@ The v0.5.1 client lobby supports keyboard/controller-style focus navigation. Roo
 - Preflight an install with `./scripts/build-sts2-lan-connect.sh --install --dry-run`. Release verification generates and checks packages only in temporary output directories and never reads or writes `releases/`. Public packages must not contain `typing.dll`, game assemblies, game images/fonts, or any game PCK other than this mod's own PCK.
 
 For operator details, environment variables, and API reference, go to [`lobby-service/README.md`](./lobby-service/README.md).
+
+
+### Feedback and community
+
+Chinese-language QQ groups for bug reports and testing:
+
+- **Game Lobby group 8: 341498145**
+- **Testing group (log export required): 1093309523**
+
+When reporting an issue, attach the complete `godot.log` from both peers plus the in-client local debug report.

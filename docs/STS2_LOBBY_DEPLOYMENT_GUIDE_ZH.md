@@ -10,7 +10,17 @@
 
 # STS2 游戏大厅部署指南
 
-> 本文档对应正式版 **v0.5.4**。去中心化节点网络、富聊天和 gameplay MOD 私有预检保持不变；v0.5.4 新增可选 AI 语义审核、安全缓存、人工永久白/黑名单和跨消息规避检测。正式包见 [GitHub Release v0.5.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.4)。如果你从 v0.3.x 升级，请同时阅读文末的 v0.4.0 架构迁移要点。
+> 当前正式版为 **v0.6.0**，正式包见 [GitHub Release v0.6.0](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0)（附带 `sts2_lobby_service.zip`）。
+>
+> 本文的部署与验证步骤自 v0.5.4 起未变，下文的 v0.5.4 说明继续适用；v0.6.0 的差异集中在下一节「v0.6.0 升级说明」。去中心化节点网络、富聊天、AI 语义审核和 gameplay MOD 私有预检保持不变。如果你从 v0.3.x 升级，请同时阅读文末的 v0.4.0 架构迁移要点。
+
+## v0.6.0 升级说明
+
+- `0.6.0` 与测试候选 `0.6.0-alpha.6` **代码无功能差异**，只对齐版本号。已手动部署 alpha.6 的节点属于可选升级。
+- 仍在 `0.5.4` 的节点建议升级：0.6 客户端的双协议（`compat_4_5_v1` / `tail_v1`）、capability digest 与 binding-aware kick 需要 0.6 服务端支持。
+- v0.6.0 Release 不是 pre-release 且附带 `sts2_lobby_service.zip`，因此**已开启自动更新的节点会自动升级到 `0.6.0`**（服务端自动更新只接受非 pre-release 且带该资产的 Release，且要求 `x.y.z` 格式的版本号）。
+- 手动升级路径与首次部署一致：解包后重启服务进程，重启会清除内存中的旧房间。环境变量、状态文件与数据目录都不需要改动。
+- 升级后自查：`/peers/health` 正常、管理面板可登录、客户端能刷出房间并成功建房 / 加入。
 
 ## 文档定位
 
@@ -411,6 +421,15 @@ CF discovery worker 还没拉到本节点的 announce，或本节点的 `PEER_SE
 
 - [`./STS2_PEER_SIDECAR_GUIDE_ZH.md`](./STS2_PEER_SIDECAR_GUIDE_ZH.md) —— v0.2.x → v0.3 sidecar 过渡
 - [`./STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md`](./STS2_LOBBY_OPERATOR_UPGRADE_V0.3.2_ZH.md) —— v0.3.2 升级说明
+
+## 反馈与交流
+
+服主部署、升级或排障遇到问题，欢迎加群：
+
+- **联机大厅 8 群：341498145**
+- **测试群（要求会导出 log）：1093309523**
+
+反馈时请附上 `sudo ./scripts/diagnose-lobby-peer.sh` 的输出与服务日志片段（去掉 token、密码和完整 URL query）。
 
 ---
 

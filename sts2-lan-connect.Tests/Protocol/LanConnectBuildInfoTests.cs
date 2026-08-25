@@ -10,6 +10,6 @@ public sealed class LanConnectBuildInfoTests
         string version = LanConnectBuildInfo.GetModVersion();
 
         Assert.True(LanConnectClientVersion.TryParseSupported(version, out LanConnectClientVersion? parsed));
-        Assert.Equal("0.6.0-alpha.9", parsed!.Canonical);
+        Assert.Equal("0.6.0", parsed!.Canonical);
     }
 }

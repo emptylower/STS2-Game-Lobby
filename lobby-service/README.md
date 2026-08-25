@@ -12,11 +12,13 @@
 
 # STS2 Lobby Service
 
-> 本文档对应测试候选 **v0.6.0-alpha.6**。客户端与服务必须同步升级；部署时重启服务进程以清除内存中的旧房间。
+> 本文档对应正式版 **v0.6.0**。客户端与服务必须同步升级；部署时重启服务进程以清除内存中的旧房间。
 
-alpha.6 保留 alpha.5 的 Base64URL WireCache 大小写修复，并在房间心跳超时时保留仍有已认证活跃房主的 relay，避免移动端开局加载期间误断开正在进行的游戏。relay 自身的空闲超时仍负责最终回收。
+`0.6.0` 与测试候选 `0.6.0-alpha.6` **代码无功能差异**，只对齐版本号。仍在 `0.5.4` 的节点建议升级：0.6 客户端的双协议、capability digest 与 binding-aware kick 需要 0.6 服务端支持。[GitHub Release v0.6.0](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0) 附带 `sts2_lobby_service.zip`，且不是 pre-release，因此已开启自动更新的节点会自动升级到 `0.6.0`。
 
-v0.6 新增 `compat_4_5_v1` / `tail_v1` profile、冻结的 protocol selection 与 capability digest。`tail_v1` 要求 RitsuLib presence 完全一致，mismatch 或 sidecar readiness 失败会在 slot、ticket、control binding 和 relay/transport 分配前返回结构化错误。历史客户端真实互通不属于本 alpha 的发布门禁。
+本版保留 Base64URL WireCache 大小写修复，并在房间心跳超时时保留仍有已认证活跃房主的 relay，避免移动端开局加载期间误断开正在进行的游戏。relay 自身的空闲超时仍负责最终回收。
+
+v0.6 新增 `compat_4_5_v1` / `tail_v1` profile、冻结的 protocol selection 与 capability digest。`tail_v1` 要求 RitsuLib presence 完全一致，mismatch 或 sidecar readiness 失败会在 slot、ticket、control binding 和 relay/transport 分配前返回结构化错误。历史 `0.3.x`-`0.5.x` 客户端与 `0.6.0` 的真实互通不属于发布门禁。
 
 ## 文档定位
 
@@ -25,7 +27,7 @@ v0.6 新增 `compat_4_5_v1` / `tail_v1` profile、冻结的 protocol selection �
 它主要回答：
 
 - 该服务负责什么、**不**负责什么
-- 当前 v0.5.4 推荐的部署路径是什么
+- 当前 v0.6.0 推荐的部署路径是什么
 - 首次部署完成后先检查哪些项目
 - 如何配置节点网络、私有访问、管理面板与客户端默认大厅
 - 需要深入查阅时，环境变量和 API 在哪里看
@@ -582,9 +584,9 @@ API Key 明文不会写盘或通过 GET 返回。请求端点默认必须使用 
 
 # STS2 Lobby Service
 
-> Targets source/build version **v0.5.4**. It retains the peer, chat, and MOD-preflight protocols while adding optional AI semantic moderation across chat, short-message sequences, room names, and player names. The GitHub Release is not published yet.
+> Targets source/build version **v0.6.0** (stable). It retains the peer, chat, AI moderation, and MOD-preflight protocols and adds the v0.6 `compat_4_5_v1` / `tail_v1` profiles, frozen protocol selection, and capability digests.
 
-The latest published service package remains `sts2_lobby_service.zip` in the [GitHub v0.5.3 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.3); `0.5.4` is currently available as a source build only.
+The published service package is `sts2_lobby_service.zip` in the [GitHub v0.6.0 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0). `0.6.0` is functionally identical to the `0.6.0-alpha.6` candidate; because the release is not a prerelease and ships that asset, nodes with auto-update enabled upgrade themselves.
 
 This README is the **operator/admin guide** for `lobby-service`.
 
