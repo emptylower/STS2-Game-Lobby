@@ -96,7 +96,7 @@
 - 当前正式版：[`v0.6.0`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0)（GitHub Release）
 - 发布说明：[`docs/RELEASE_NOTES_V0.6.0_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ZH.md)
 - 上一个正式版：[`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
-- Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（本轮暂不上传，条目仍停留在 alpha.7；描述稿见 [`docs/STEAM_WORKSHOP_DESCRIPTION_ZH.txt`](./docs/STEAM_WORKSHOP_DESCRIPTION_ZH.txt)）
+- Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（已更新到 `0.6.0`；描述文案见 [`docs/STEAM_WORKSHOP_DESCRIPTION_ZH.txt`](./docs/STEAM_WORKSHOP_DESCRIPTION_ZH.txt)）
 
 ### 推荐阅读顺序
 
@@ -316,7 +316,7 @@ Each `lobby-service` node advertises itself to peers via the built-in peer-annou
 - Current release: [`v0.6.0`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.0)
 - Release notes: [`docs/RELEASE_NOTES_V0.6.0_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ZH.md) (Chinese)
 - Previous stable release: [`v0.5.5`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.5.5)
-- Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) (not updated in this round; the entry remains on alpha.7)
+- Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) (updated to `0.6.0`)
 - Every player in a room must run client `0.6.0` and fully restart the game after updating. Operators still on `0.5.4` should upgrade; this release ships `sts2_lobby_service.zip`, so nodes with auto-update enabled upgrade themselves.
 
 ### Recommended reading order

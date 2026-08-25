@@ -20,7 +20,7 @@
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `strict + relay-only` |
 
-`0.6.0` 是 `0.5.5` 之后的第一个正式版，收敛了 `0.5.6-rc1`~`rc4` 与 `0.6.0-alpha.1`~`alpha.9` 全部九个测试候选；客户端与 lobby-service 的版本号同步对齐为 `0.6.0`。本轮通过 GitHub Release 分发，**Steam 创意工坊暂不上传**（Workshop 条目仍停留在 `0.6.0-alpha.7`）。安装或更新后必须完整重启游戏。完整说明见 `docs/RELEASE_NOTES_V0.6.0_ZH.md`。
+`0.6.0` 是 `0.5.5` 之后的第一个正式版，收敛了 `0.5.6-rc1`~`rc4` 与 `0.6.0-alpha.1`~`alpha.9` 全部九个测试候选；客户端与 lobby-service 的版本号同步对齐为 `0.6.0`。本版通过 GitHub Release 与 **Steam 创意工坊**（条目「游戏大厅」）同步分发。安装或更新后必须完整重启游戏。完整说明见 `docs/RELEASE_NOTES_V0.6.0_ZH.md`。
 
 「安装/更新 MOD 后大厅入口不出现」已在本版修复。根因是 MOD 加载顺序竞态：RitsuLib 先初始化时会毒化闭合泛型补丁目标，本 MOD 的协议补丁随之抛 `InvalidProgramException` 并中止初始化。现在 Tail 补丁全平台默认使用 15 步 `non_generic_v2` 非泛型计划，不再注册任何闭合泛型目标；线上字节格式零变化。alpha.8 及更早版本的临时绕过办法（先关 RitsuLib、启动一次、再开 RitsuLib）**不再需要**。桌面端如需紧急回滚旧计划，可设置环境变量 `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`。
 
@@ -227,7 +227,7 @@ v0.6 不再支持 `0.2.x` 客户端。自建大厅建议升级到 lobby-service 
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `strict + relay-only` |
 
-`0.6.0` is the first stable release after `0.5.5`, consolidating every candidate from `0.5.6-rc1` through `0.6.0-alpha.9`. The client and lobby-service versions are aligned at `0.6.0`. This round ships through GitHub Releases only; **Steam Workshop is not updated** and its entry remains on `0.6.0-alpha.7`. Fully restart the game after updating.
+`0.6.0` is the first stable release after `0.5.5`, consolidating every candidate from `0.5.6-rc1` through `0.6.0-alpha.9`. The client and lobby-service versions are aligned at `0.6.0`. It ships through both GitHub Releases and **Steam Workshop** (item 游戏大厅). Fully restart the game after updating.
 
 The "lobby entry never appears after installing or updating" bug is fixed. Its root cause was a mod load-order race: when RitsuLib initializes first it poisons closed-generic patch targets, so our protocol patches threw `InvalidProgramException` and aborted initialization. The Tail patch plan now defaults to the 15-step, non-generic `non_generic_v2` plan on every platform and registers no closed-generic targets; wire bytes are unchanged. The old workaround (disable RitsuLib, launch once, re-enable) is no longer needed. For an emergency rollback on desktop, set `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`.
 

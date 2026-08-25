@@ -3,8 +3,7 @@
 发布日期：2026-08-25
 
 > 状态：**正式版（stable）**。客户端与 lobby-service 同步定为 `0.6.0`。
-> 分发：GitHub Release（客户端 `sts2_lan_connect-release.zip` + 服务端 `sts2_lobby_service.zip`）。
-> **Steam 创意工坊本轮暂不上传**，Workshop 条目仍停留在 `0.6.0-alpha.7`；创意工坊描述稿已随本版准备好（`docs/STEAM_WORKSHOP_DESCRIPTION_ZH.txt`），待上传时直接使用。
+> 分发：GitHub Release（客户端 `sts2_lan_connect-release.zip` + 服务端 `sts2_lobby_service.zip`）与 **Steam 创意工坊**（条目「游戏大厅」`3749766330`，已更新到 `0.6.0`；此前该条目停留在 `0.5.5`）。
 
 `0.6.0` 是 `0.5.5` 之后的第一个正式版，收敛了 `0.5.6-rc1`~`rc4` 与 `0.6.0-alpha.1`~`alpha.9` 全部九个测试候选的改动。核心是**双协议房间**与**加入前线上编码校验**：把「装了不同 MOD / 装了 RitsuLib 就黑屏、卡等待页」从一类偶发故障，变成加入前可解释、可拒绝的明确结果。
 

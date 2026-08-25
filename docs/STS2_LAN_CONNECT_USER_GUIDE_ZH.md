@@ -10,7 +10,7 @@
 
 # STS2 LAN Connect 使用说明
 
-当前正式版为 `0.6.0`，客户端与 lobby-service 版本号已同步对齐。本轮通过 GitHub Release 分发，Steam 创意工坊暂不上传。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+当前正式版为 `0.6.0`，客户端与 lobby-service 版本号已同步对齐。可从 GitHub Release 或 Steam 创意工坊（条目「游戏大厅」）获取。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
 
 ## v0.6.0 正式版
 
@@ -327,7 +327,7 @@
 
 # STS2 LAN Connect User Guide
 
-The current stable release is `0.6.0`, with the client and lobby-service versions aligned. It ships through GitHub Releases; Steam Workshop is not updated in this round. Every player must use the same client and game version and fully restart after updating.
+The current stable release is `0.6.0`, with the client and lobby-service versions aligned. It ships through GitHub Releases and Steam Workshop (item 游戏大厅). Every player must use the same client and game version and fully restart after updating.
 
 ## v0.6.0 Stable Release
 

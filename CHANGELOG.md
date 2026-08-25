@@ -6,7 +6,7 @@
 
 ## [0.6.0] - 2026-08-25
 
-`0.6.0` 正式版：客户端与 lobby-service 同步定为 `0.6.0`，收敛 `0.5.6-rc1`~`rc4` 与 `0.6.0-alpha.1`~`alpha.9` 全部测试候选。发布说明见 `docs/RELEASE_NOTES_V0.6.0_ZH.md`。本轮通过 GitHub Release 分发客户端与服务端产物，**暂不更新 Steam 创意工坊**。
+`0.6.0` 正式版：客户端与 lobby-service 同步定为 `0.6.0`，收敛 `0.5.6-rc1`~`rc4` 与 `0.6.0-alpha.1`~`alpha.9` 全部测试候选。发布说明见 `docs/RELEASE_NOTES_V0.6.0_ZH.md`。客户端与服务端产物通过 GitHub Release 分发，Steam 创意工坊条目「游戏大厅」（`3749766330`）同步更新到 `0.6.0`（此前停留在 `0.5.5`）。
 
 ### Added
 
