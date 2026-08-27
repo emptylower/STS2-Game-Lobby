@@ -61,6 +61,29 @@ public sealed class LanConnectLobbyManagedJoinFlowTests
     }
 
     [Fact]
+    public void Resolves_duck_typed_concrete_initializer_that_implements_no_interface()
+    {
+        MethodInfo method = LanConnectLobbyManagedJoinFlow.ResolveCompatibleConnectMethod(
+            typeof(ConcreteDuckInitializer),
+            typeof(TestNetService));
+
+        Assert.Equal("Connect", method.Name);
+        Assert.Equal(typeof(Task<DuckConnectResult?>), method.ReturnType);
+        Assert.Equal(typeof(TestNetService), method.GetParameters()[0].ParameterType);
+        Assert.Equal(typeof(CancellationToken), method.GetParameters()[1].ParameterType);
+    }
+
+    private sealed class DuckConnectResult;
+
+    private sealed class ConcreteDuckInitializer
+    {
+        public Task<DuckConnectResult?> Connect(TestNetService service, CancellationToken cancellationToken)
+        {
+            return Task.FromResult<DuckConnectResult?>(null);
+        }
+    }
+
+    [Fact]
     public void Reads_legacy_flat_peer_version_fields()
     {
         LegacyInitialGameInfo message = new()

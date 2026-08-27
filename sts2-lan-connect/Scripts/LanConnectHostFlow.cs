@@ -52,7 +52,7 @@ internal static class LanConnectHostFlow
         }
 
         loadingOverlay.Visible = true;
-        NetHostGameService netService = new(PeerVersionInfo.LocalDefault());
+        NetHostGameService netService = LanConnectNetGameServiceFactory.CreateHost();
         int maxPlayers = Math.Clamp(
             LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
             LanConnectConstants.ProtocolMinPlayers,
@@ -154,7 +154,7 @@ internal static class LanConnectHostFlow
         }
 
         loadingOverlay.Visible = true;
-        NetHostGameService netService = new(PeerVersionInfo.LocalDefault());
+        NetHostGameService netService = LanConnectNetGameServiceFactory.CreateHost();
         LobbyApiClient? apiClient = null;
         LobbyCreateRoomResponse? registration = null;
         LanConnectSessionProtocolLease? protocolLease = null;

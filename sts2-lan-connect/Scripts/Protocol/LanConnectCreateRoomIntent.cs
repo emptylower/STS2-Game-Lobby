@@ -15,6 +15,14 @@ internal sealed record LanConnectCreateRoomIntent(
         }
 
         Offer.Validate();
+        if (Profile == LanConnectProtocolProfile.TailV1
+            && !Offer.Supports(LanConnectConstants.TailLanProtocolVersion))
+        {
+            throw LanConnectProtocolFailureMapper.FromLocalException(
+                "lan_protocol_version_mismatch",
+                "Tail runtime is unavailable on this game version.");
+        }
+
         if (Profile == LanConnectProtocolProfile.Compat4x5V1 && Offer.RitsuLibPresent)
         {
             throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibNotAllowedInCompat());

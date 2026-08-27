@@ -32,11 +32,11 @@ public sealed class LanConnectRitsuLibLobbyCompatibilityTests
             "Lobby",
             "LanConnectLobbyJoinFlow.cs"));
 
-        int prepareIndex = source.IndexOf("beforeConnect(concrete);", StringComparison.Ordinal);
+        int prepareIndex = source.IndexOf("beforeConnect(netService);", StringComparison.Ordinal);
         int connectIndex = source.IndexOf(
             "await client.ConnectToHost(netId, ip, port, cancelToken)",
             StringComparison.Ordinal);
-        int activateIndex = source.IndexOf("afterConnect(concrete);", StringComparison.Ordinal);
+        int activateIndex = source.IndexOf("afterConnect(netService);", StringComparison.Ordinal);
 
         Assert.True(prepareIndex >= 0, "Ritsu sidecar flow must be prepared before ENet connects.");
         Assert.True(connectIndex > prepareIndex, "ENet must connect after sidecar flow preparation.");

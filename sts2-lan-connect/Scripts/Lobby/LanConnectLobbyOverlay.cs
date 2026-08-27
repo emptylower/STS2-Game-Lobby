@@ -6247,7 +6247,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     }
 
     private string GetSelectedCreateProtocolDescription() =>
-        GetProtocolProfileDescription(ProtocolProfileFromCreateId(GetSelectedCreateProtocolId()));
+        GetProtocolProfileDescription(
+            ProtocolProfileFromCreateId(GetSelectedCreateProtocolId()),
+            LanConnectTailRuntimeSupport.IsAvailable);
 
     private int GetSelectedCreateProtocolId()
     {
@@ -6290,10 +6292,17 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
     }
 
-    private static string GetProtocolProfileDescription(LanConnectProtocolProfile profile) => profile switch
+    private static string GetProtocolProfileDescription(LanConnectProtocolProfile profile) =>
+        GetProtocolProfileDescription(profile, tailRuntimeAvailable: true);
+
+    private static string GetProtocolProfileDescription(
+        LanConnectProtocolProfile profile,
+        bool tailRuntimeAvailable) => profile switch
     {
         LanConnectProtocolProfile.Compat4x5V1 => "支持 0.3-0.5，不支持 RitsuLib",
-        LanConnectProtocolProfile.TailV1 => "仅支持 0.6+；RitsuLib 状态必须一致",
+        LanConnectProtocolProfile.TailV1 => tailRuntimeAvailable
+            ? "仅支持 0.6+；RitsuLib 状态必须一致"
+            : "仅支持 0.6+；当前游戏版本不支持该协议，请使用兼容模式",
         _ => "当前客户端不支持该房间的联机协议。"
     };
 
@@ -6313,6 +6322,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
 
         if (protocolId != CreateProtocolTailId)
+        {
+            return false;
+        }
+
+        if (!offer.Supports(LanConnectConstants.TailLanProtocolVersion))
         {
             return false;
         }
@@ -6591,6 +6605,18 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             && !string.Equals(room.RelayState, "ready", StringComparison.OrdinalIgnoreCase))
         {
             reason = "房主 relay 尚未注册完成，请稍后刷新后再试。";
+            return false;
+        }
+
+        string roomProfile = string.IsNullOrWhiteSpace(room.ProtocolProfileV2)
+            ? room.ProtocolProfile
+            : room.ProtocolProfileV2;
+        if (!LanConnectTailRuntimeSupport.IsAvailable
+            && string.Equals(roomProfile, LanConnectProtocolProfileExtensions.TailCanonical, StringComparison.Ordinal))
+        {
+            reason =
+                $"该房间使用 0.6 新协议（tail_v1），当前游戏版本 {LanConnectBuildInfo.GetGameVersion()} 不支持。"
+                + "请切换到 Steam 测试分支（public-beta）或加入兼容模式房间。";
             return false;
         }
 

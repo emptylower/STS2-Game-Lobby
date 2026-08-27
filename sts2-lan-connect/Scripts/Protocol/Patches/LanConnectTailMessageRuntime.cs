@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -36,6 +37,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectAndroidTailMessa
     private static int _androidSidecarSubmitDepth;
 
     internal static LanConnectTailMessageRuntime Shared { get; } = new();
+
+    private static readonly ConcurrentDictionary<Type, object> TailPlayerAccessorsCache = new();
 
     internal static bool HasPendingOutgoingRejectionForCurrentThread =>
         _outgoingRejections is { Count: > 0 };
@@ -830,7 +833,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectAndroidTailMessa
         List<StartRunLobbyPlayer> players = message.playersInLobby
             ?? throw new InvalidDataException("Join response has no lobby roster.");
         (List<StartRunLobbyPlayer> projection, IReadOnlyList<LanConnectRosterPlayerCarrier> carriers) =
-            ProjectStartRunPlayers(players);
+            ProjectPlayers(players);
         LanConnectRosterSnapshot snapshot = binding.RequireRoster().CommitHostSnapshot(carriers);
         message.playersInLobby = projection;
         return new LanConnectPreparedTailMessage(
@@ -846,7 +849,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectAndroidTailMessa
         List<StartRunLobbyPlayer> players = message.playersInLobby
             ?? throw new InvalidDataException("Begin-run message has no lobby roster.");
         (List<StartRunLobbyPlayer> projection, IReadOnlyList<LanConnectRosterPlayerCarrier> carriers) =
-            ProjectStartRunPlayers(players);
+            ProjectPlayers(players);
         LanConnectRosterSnapshot snapshot = binding.RequireRoster().CommitHostSnapshot(carriers);
         message.playersInLobby = projection;
         return new LanConnectPreparedTailMessage(
@@ -884,17 +887,9 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectAndroidTailMessa
         LanConnectProtocolSelection selection,
         Binding binding)
     {
-        IReadOnlyList<LanConnectRosterPlayerCarrier> carriers = message.playersAlreadyConnected
-            .Select(player =>
-            {
-                int realSlot = message.serializableRun.Players.FindIndex(saved => saved.NetId == player.id);
-                if (realSlot < 0)
-                {
-                    throw new InvalidDataException("Loaded-lobby player is absent from SerializableRun.Players.");
-                }
-                return SerializeCarrier(player.id, realSlot, player);
-            })
-            .ToArray();
+        IReadOnlyList<LanConnectRosterPlayerCarrier> carriers = BuildLoadJoinCarriers(
+            message.serializableRun.Players,
+            message.playersAlreadyConnected);
         LanConnectRosterSnapshot snapshot = binding.RequireRoster().CommitHostSnapshot(carriers);
         return new LanConnectPreparedTailMessage(
             message,
@@ -947,7 +942,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectAndroidTailMessa
         List<StartRunLobbyPlayer> projection = message.playersInLobby
             ?? throw new InvalidDataException("Join response has no vanilla roster projection.");
         AcceptRoster(binding, snapshot, LanConnectRosterSnapshotUse.Bootstrap);
-        message.playersInLobby = RestoreStartRunPlayers(snapshot, projection);
+        List<StartRunLobbyPlayer> restored = RestorePlayers(snapshot, projection);
+        message.playersInLobby = restored;
         SetBoxedField(boxedMessage, nameof(ClientLobbyJoinResponseMessage.playersInLobby), message.playersInLobby);
     }
 
@@ -964,7 +960,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectAndroidTailMessa
             snapshot.AuthorityPeerId,
             snapshot,
             LanConnectRosterSnapshotUse.StateTransition);
-        message.playersInLobby = RestoreStartRunPlayers(snapshot, projection);
+        List<StartRunLobbyPlayer> restored = RestorePlayers(snapshot, projection);
+        message.playersInLobby = restored;
         SetBoxedField(boxedMessage, nameof(LobbyBeginRunMessage.playersInLobby), message.playersInLobby);
     }
 
@@ -985,19 +982,10 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectAndroidTailMessa
             LanConnectRosterSnapshotUse.MembershipMutation,
             membership,
             message.lobbyPlayer.id);
-        LanConnectRosterPlayerCarrier carrier = snapshot.Players.Single(
-            player => player.PlayerId == message.lobbyPlayer.id);
-        StartRunLobbyPlayer restored = DeserializeCarrier<StartRunLobbyPlayer>(carrier, out uint consumed);
-        if (consumed != carrier.VanillaPlayerBitLength || restored.id != message.lobbyPlayer.id
-            || restored.slotId != snapshot.Players
-                .OrderBy(static player => player.RealSlotId)
-                .ThenBy(static player => player.PlayerId)
-                .Select((player, index) => (player, index))
-                .Single(value => value.player.PlayerId == restored.id).index % 4)
-        {
-            throw new InvalidDataException("PlayerJoined body and Tail roster disagree.");
-        }
-        restored.slotId = carrier.RealSlotId;
+        StartRunLobbyPlayer restored = RestoreJoinedPlayer<StartRunLobbyPlayer>(
+            snapshot.Players.Single(player => player.PlayerId == message.lobbyPlayer.id),
+            snapshot,
+            message.lobbyPlayer.id);
         SetBoxedField(boxedMessage, nameof(PlayerJoinedMessage.lobbyPlayer), restored);
     }
 
@@ -1008,21 +996,10 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectAndroidTailMessa
         Binding binding)
     {
         AcceptRoster(binding, snapshot, LanConnectRosterSnapshotUse.Bootstrap);
-        List<LoadRunLobbyPlayer> restored = snapshot.Players.Select(carrier =>
-        {
-            LoadRunLobbyPlayer player = DeserializeCarrier<LoadRunLobbyPlayer>(carrier, out uint consumed);
-            if (consumed != carrier.VanillaPlayerBitLength || player.id != carrier.PlayerId
-                || message.serializableRun.Players.FindIndex(saved => saved.NetId == player.id) != carrier.RealSlotId)
-            {
-                throw new InvalidDataException("Loaded-lobby roster carrier disagrees with the run/player binding.");
-            }
-            return player;
-        }).ToList();
-        if (!message.playersAlreadyConnected.Select(static player => player.id)
-            .SequenceEqual(restored.Select(static player => player.id)))
-        {
-            throw new InvalidDataException("Loaded-lobby vanilla membership disagrees with the Tail roster.");
-        }
+        List<LoadRunLobbyPlayer> restored = RestoreLoadJoinPlayers(
+            snapshot,
+            message.serializableRun.Players,
+            message.playersAlreadyConnected);
         SetBoxedField(boxedMessage, nameof(ClientLoadJoinResponseMessage.playersAlreadyConnected), restored);
     }
 
@@ -1049,63 +1026,146 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectAndroidTailMessa
         message.serializableRun.Players = restored;
     }
 
-    private static List<StartRunLobbyPlayer> RestoreStartRunPlayers(
+    private static List<TPlayer> RestorePlayers<TPlayer>(
         LanConnectRosterSnapshot snapshot,
-        IReadOnlyList<StartRunLobbyPlayer> projection)
+        IReadOnlyList<TPlayer> projection)
+        where TPlayer : IPacketSerializable, new()
     {
-        LanConnectRosterProjection.Validate(
-            snapshot,
-            projection,
-            static player => player.id,
-            static player => player.slotId);
+        LanConnectTailPlayerAccessors<TPlayer> accessors = ResolvePlayerAccessors<TPlayer>();
+        Func<TPlayer, int> getEmbeddedSlotId = accessors.GetSlotId
+            ?? throw new NotSupportedException($"{typeof(TPlayer).FullName} has no readable slotId member.");
+        LanConnectRosterProjection.Validate(snapshot, projection, accessors.GetId, getEmbeddedSlotId);
         return LanConnectRosterProjection.Restore(
             snapshot,
             carrier =>
             {
-                StartRunLobbyPlayer player = DeserializeCarrier<StartRunLobbyPlayer>(carrier, out uint bits);
+                TPlayer player = DeserializeCarrier<TPlayer>(carrier, out uint bits);
                 return (player, bits);
             },
-            static player => player.id,
-            static player => player.slotId,
-            static (player, slot) =>
+            accessors.GetId,
+            getEmbeddedSlotId,
+            (player, realSlot) =>
             {
-                player.slotId = slot;
+                accessors.SetSlotId(player, realSlot);
                 return player;
             }).ToList();
     }
 
-    private static (List<StartRunLobbyPlayer> Projection, IReadOnlyList<LanConnectRosterPlayerCarrier> Carriers)
-        ProjectStartRunPlayers(IReadOnlyList<StartRunLobbyPlayer> players)
+    private static TPlayer RestoreJoinedPlayer<TPlayer>(
+        LanConnectRosterPlayerCarrier carrier,
+        LanConnectRosterSnapshot snapshot,
+        ulong expectedId)
+        where TPlayer : IPacketSerializable, new()
     {
-        IReadOnlyList<LanConnectRosterProjectionItem<StartRunLobbyPlayer>> projected =
+        LanConnectTailPlayerAccessors<TPlayer> accessors = ResolvePlayerAccessors<TPlayer>();
+        Func<TPlayer, int> getSlotId = accessors.GetSlotId
+            ?? throw new NotSupportedException($"{typeof(TPlayer).FullName} has no readable slotId member.");
+        TPlayer restored = DeserializeCarrier<TPlayer>(carrier, out uint consumed);
+        if (consumed != carrier.VanillaPlayerBitLength || accessors.GetId(restored) != expectedId
+            || getSlotId(restored) != snapshot.Players
+                .OrderBy(static player => player.RealSlotId)
+                .ThenBy(static player => player.PlayerId)
+                .Select((player, index) => (player, index))
+                .Single(value => value.player.PlayerId == accessors.GetId(restored)).index % 4)
+        {
+            throw new InvalidDataException("PlayerJoined body and Tail roster disagree.");
+        }
+        accessors.SetSlotId(restored, carrier.RealSlotId);
+        return restored;
+    }
+
+    private static List<TPlayer> RestoreLoadJoinPlayers<TPlayer>(
+        LanConnectRosterSnapshot snapshot,
+        List<SerializablePlayer> savedPlayers,
+        IReadOnlyList<TPlayer> alreadyConnected)
+        where TPlayer : IPacketSerializable, new()
+    {
+        LanConnectTailPlayerAccessors<TPlayer> accessors = ResolvePlayerAccessors<TPlayer>();
+        List<TPlayer> restored = snapshot.Players.Select(carrier =>
+        {
+            TPlayer player = DeserializeCarrier<TPlayer>(carrier, out uint consumed);
+            if (consumed != carrier.VanillaPlayerBitLength
+                || accessors.GetId(player) != carrier.PlayerId
+                || savedPlayers.FindIndex(saved => saved.NetId == accessors.GetId(player)) != carrier.RealSlotId)
+            {
+                throw new InvalidDataException("Loaded-lobby roster carrier disagrees with the run/player binding.");
+            }
+            return player;
+        }).ToList();
+        if (!alreadyConnected.Select(accessors.GetId)
+            .SequenceEqual(restored.Select(accessors.GetId)))
+        {
+            throw new InvalidDataException("Loaded-lobby vanilla membership disagrees with the Tail roster.");
+        }
+
+        return restored;
+    }
+
+    private static IReadOnlyList<LanConnectRosterPlayerCarrier> BuildLoadJoinCarriers<TPlayer>(
+        List<SerializablePlayer> savedPlayers,
+        IReadOnlyList<TPlayer> connectedPlayers)
+        where TPlayer : IPacketSerializable, new()
+    {
+        LanConnectTailPlayerAccessors<TPlayer> accessors = ResolvePlayerAccessors<TPlayer>();
+        return connectedPlayers
+            .Select(player =>
+            {
+                int realSlot = savedPlayers.FindIndex(saved => saved.NetId == accessors.GetId(player));
+                if (realSlot < 0)
+                {
+                    throw new InvalidDataException("Loaded-lobby player is absent from SerializableRun.Players.");
+                }
+
+                return SerializeCarrier(accessors.GetId(player), realSlot, player);
+            })
+            .ToArray();
+    }
+
+    private static (List<TPlayer> Projection, IReadOnlyList<LanConnectRosterPlayerCarrier> Carriers)
+        ProjectPlayers<TPlayer>(IReadOnlyList<TPlayer> players)
+        where TPlayer : IPacketSerializable, new()
+    {
+        LanConnectTailPlayerAccessors<TPlayer> accessors = ResolvePlayerAccessors<TPlayer>();
+        Func<TPlayer, int> getSlotId = accessors.GetSlotId
+            ?? throw new NotSupportedException($"{typeof(TPlayer).FullName} has no readable slotId member.");
+        IReadOnlyList<LanConnectRosterProjectionItem<TPlayer>> projected =
             LanConnectRosterProjection.Create(
                 players,
-                static player => player.id,
-                static player => player.slotId,
-                static (player, slot) =>
+                accessors.GetId,
+                getSlotId,
+                (player, slot) =>
                 {
-                    player.slotId = slot;
+                    accessors.SetSlotId(player, slot);
                     return player;
                 });
         Dictionary<ulong, int> embeddedSlots = projected.ToDictionary(
             static item => item.PlayerId,
             static item => item.CanonicalIndex % 4);
         IReadOnlyList<LanConnectRosterPlayerCarrier> carriers = players
-            .OrderBy(static player => player.slotId)
-            .ThenBy(static player => player.id)
+            .OrderBy(getSlotId)
+            .ThenBy(accessors.GetId)
             .Select(player =>
             {
-                int realSlot = player.slotId;
-                int canonicalIndex = embeddedSlots.TryGetValue(player.id, out int firstFourIndex)
+                int realSlot = getSlotId(player);
+                ulong playerId = accessors.GetId(player);
+                int canonicalIndex = embeddedSlots.TryGetValue(playerId, out int firstFourIndex)
                     ? firstFourIndex
-                    : players.OrderBy(static value => value.slotId).ThenBy(static value => value.id)
+                    : players.OrderBy(getSlotId).ThenBy(accessors.GetId)
                         .Select((value, index) => (value, index))
-                        .Single(value => value.value.id == player.id).index % 4;
-                player.slotId = canonicalIndex;
-                return SerializeCarrier(player.id, realSlot, player);
+                        .Single(value => accessors.GetId(value.value) == playerId).index % 4;
+                accessors.SetSlotId(player, canonicalIndex);
+                return SerializeCarrier(playerId, realSlot, player);
             })
             .ToArray();
         return (projected.Select(static item => item.VanillaPlayer).ToList(), carriers);
+    }
+
+    private static LanConnectTailPlayerAccessors<TPlayer> ResolvePlayerAccessors<TPlayer>()
+        where TPlayer : IPacketSerializable, new()
+    {
+        return (LanConnectTailPlayerAccessors<TPlayer>)TailPlayerAccessorsCache.GetOrAdd(
+            typeof(TPlayer),
+            static _ => LanConnectTailPlayerAccessors<TPlayer>.FromMembers("id", "slotId"));
     }
 
     private static LanConnectRosterPlayerCarrier SerializeCarrier<T>(ulong playerId, int realSlot, T player)

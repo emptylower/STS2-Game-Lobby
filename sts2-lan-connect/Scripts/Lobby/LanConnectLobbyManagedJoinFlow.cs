@@ -59,7 +59,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
 
     public CancellationTokenSource CancelToken { get; } = new();
 
-    public async Task<JoinResult> BeginAsync(IClientConnectionInitializer initializer, SceneTree sceneTree)
+    public async Task<JoinResult> BeginAsync(object initializer, SceneTree sceneTree)
     {
         MegaCrit.Sts2.Core.Logging.Logger.logLevelTypeMap[LogType.Network] = LogLevel.Debug;
         MegaCrit.Sts2.Core.Logging.Logger.logLevelTypeMap[LogType.Actions] = LogLevel.VeryDebug;
@@ -71,7 +71,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         }
 
         _logger.Info($"Beginning managed join with initializer {initializer} relaxedCompatibility={_relaxedCompatibility}");
-        NetService = new NetClientGameService(PeerVersionInfo.LocalDefault());
+        NetService = LanConnectNetGameServiceFactory.CreateClient();
         if (_protocolSelection?.Profile == LanConnectProtocolProfile.TailV1)
         {
             LanConnectTailMessageRuntime.Shared.BindClient(
@@ -173,13 +173,25 @@ internal sealed class LanConnectLobbyManagedJoinFlow
     }
 
     private static async Task<NetErrorInfo?> ConnectAsync(
-        IClientConnectionInitializer initializer,
+        object initializer,
         NetClientGameService netService,
         CancellationToken cancellationToken)
     {
-        MethodInfo connectMethod = ResolveCompatibleConnectMethod(
-            typeof(IClientConnectionInitializer),
-            netService.GetType());
+        MethodInfo connectMethod;
+        try
+        {
+            connectMethod = ResolveCompatibleConnectMethod(
+                initializer.GetType(),
+                netService.GetType());
+        }
+        catch (MissingMethodException)
+        {
+            // GetMethods(Public|Instance) 找不到显式接口实现，
+            // 仅当初始化器仍以游戏接口形式暴露 Connect 时才回退到接口解析。
+            connectMethod = ResolveCompatibleConnectMethod(
+                typeof(IClientConnectionInitializer),
+                netService.GetType());
+        }
 
         object? connectTask;
         try
@@ -526,11 +538,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
 
     private void OnDisconnected(NetErrorInfo info)
     {
-        if (NetService != null
-            && LanConnectTailMessageRuntime.Shared.TryTakeValidatedRejection(
-                NetService,
-                NetService.HostNetId,
-                out LanConnectProtocolFailure? failure)
+        if (TryTakeTailRejection(out LanConnectProtocolFailure? failure)
             && failure != null)
         {
             _logger.Warn($"Disconnect carried validated LAN protocol rejection: {failure.Code}");
@@ -584,6 +592,23 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         TrySetException(_joinCompletion, exception);
         TrySetException(_loadJoinCompletion, exception);
         TrySetException(_rejoinCompletion, exception);
+    }
+
+    // 无法确认 0.107.1 是否有 NetClientGameService.HostNetId（v0.5.6 从未引用过 get_HostNetId），
+    // 因此对 TailMessageRuntime 与 HostNetId 的访问必须隔离在本方法体内；
+    // OnDisconnected 只在 tail 会话调用它，compat 会话（0.107.1 唯一可能的会话形态）下永远不会 JIT 本方法。
+    private bool TryTakeTailRejection(out LanConnectProtocolFailure? failure)
+    {
+        failure = null;
+        if (_protocolSelection?.Profile != LanConnectProtocolProfile.TailV1 || NetService == null)
+        {
+            return false;
+        }
+
+        return LanConnectTailMessageRuntime.Shared.TryTakeValidatedRejection(
+            NetService,
+            NetService.HostNetId,
+            out failure);
     }
 
     private void Cancel()

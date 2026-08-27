@@ -42,6 +42,12 @@
     </Reference>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- GameAbiLoadCheck 是独立诊断工具工程；其源码与生成物绝不进入 mod 程序集。 -->
+    <Compile Remove="tools/GameAbiLoadCheck/**/*.cs" />
+    <EmbeddedResource Remove="tools/GameAbiLoadCheck/**" />
+  </ItemGroup>
+
   <Target Name="CopyModDll" AfterTargets="Build">
     <MakeDir Directories="$(Sts2ModsDir)" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(Sts2ModsDir)" />

@@ -151,7 +151,7 @@ internal static class LanConnectMultiplayerSaveCompatibility
             isLoading => loadingOverlay.Visible = isLoading,
             run =>
             {
-                netService = new NetHostGameService(PeerVersionInfo.LocalDefault());
+                netService = LanConnectNetGameServiceFactory.CreateHost();
                 LanConnectResolvedRoomBinding binding = LanConnectMultiplayerSaveRoomBinding.Resolve(run);
                 if (binding.ProtocolFailure != null)
                 {

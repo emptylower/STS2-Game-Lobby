@@ -31,7 +31,17 @@ internal static class LanConnectProtocolPatchDispatcher
             try
             {
                 LanConnectSerializationPatches.Apply();
-                LanConnectTailMessagePatches.Apply(harmony);
+                if (LanConnectTailRuntimeSupport.IsAvailable)
+                {
+                    LanConnectTailMessagePatches.Apply(harmony);
+                }
+                else
+                {
+                    Log.Info(
+                        "sts2_lan_connect protocol dispatcher: tail runtime unavailable, "
+                        + $"skipping tail patches: {LanConnectTailRuntimeSupport.Current.UnavailableReason}");
+                }
+
                 _applied = true;
             }
             catch (Exception exception)

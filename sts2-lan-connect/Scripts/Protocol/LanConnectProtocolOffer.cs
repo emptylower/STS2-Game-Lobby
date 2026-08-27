@@ -11,9 +11,12 @@ internal sealed record LanConnectProtocolOffer(
     {
         LanConnectExternalCapabilitySnapshot capabilities = LanConnectExternalCapabilityCollector.Collect();
         string clientVersion = LanConnectClientVersion.ParseSupported(LanConnectBuildInfo.GetModVersion()).Canonical;
+        int tailLanProtocolVersion = LanConnectTailRuntimeSupport.IsAvailable
+            ? LanConnectConstants.TailLanProtocolVersion
+            : 0;
         return new LanConnectProtocolOffer(
-            LanConnectConstants.TailLanProtocolVersion,
-            LanConnectConstants.TailLanProtocolVersion,
+            tailLanProtocolVersion,
+            tailLanProtocolVersion,
             clientVersion,
             capabilities.RitsuLibPresent,
             capabilities.RitsuLibSidecarAvailable);

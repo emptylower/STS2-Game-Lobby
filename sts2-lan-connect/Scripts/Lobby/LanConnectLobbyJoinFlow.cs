@@ -64,6 +64,17 @@ internal static class LanConnectLobbyJoinFlow
                 ?? throw LanConnectProtocolFailureMapper.FromLocalException(
                     "lan_protocol_version_mismatch",
                     "The join response did not include a frozen protocol selection.");
+            if (!LanConnectTailRuntimeSupport.IsAvailable
+                && string.Equals(
+                    selectionDto.Profile,
+                    LanConnectProtocolProfileExtensions.TailCanonical,
+                    StringComparison.Ordinal))
+            {
+                return new LobbyJoinAttemptResult(
+                    LobbyJoinAttemptKind.Failed,
+                    $"该房间使用 0.6 新协议（tail_v1），当前游戏版本 {LanConnectBuildInfo.GetGameVersion()} 不支持。"
+                    + "请切换到 Steam 测试分支（public-beta）或加入兼容模式房间。");
+            }
             LanConnectProtocolSelection selection = selectionDto.ToValidatedValue(localOffer);
             _ = joinResponse.GetProtocolFlowNonceBytes();
             if (string.IsNullOrWhiteSpace(joinResponse.ConnectionPlan.ControlChannelId))
@@ -123,7 +134,7 @@ internal static class LanConnectLobbyJoinFlow
                 }, joinFlow.CancelToken);
                 try
                 {
-                    IClientConnectionInitializer initializer = selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1
+                    object initializer = selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1
                         ? new RitsuSidecarENetClientConnectionInitializer(
                             netId,
                             candidate.Host,
@@ -406,10 +417,10 @@ internal static class LanConnectLobbyJoinFlow
         string ip,
         ushort port,
         Action<NetClientGameService> beforeConnect,
-        Action<NetClientGameService> afterConnect) : IClientConnectionInitializer
+        Action<NetClientGameService> afterConnect)
     {
         public async Task<NetErrorInfo?> Connect(
-            INetClientGameService netService,
+            NetClientGameService netService,
             CancellationToken cancelToken = default)
         {
             if (netService.IsConnected)
@@ -418,18 +429,13 @@ internal static class LanConnectLobbyJoinFlow
                     "NetClientGameService must not be connected when passed to RitsuSidecarENetClientConnectionInitializer.");
             }
 
-            if (netService is not NetClientGameService concrete)
-            {
-                throw new InvalidOperationException("Ritsu sidecar ENet initializer requires NetClientGameService.");
-            }
-
-            ENetClient client = new(concrete);
+            ENetClient client = new(netService);
             netService.Initialize(client, PlatformType.None);
-            beforeConnect(concrete);
+            beforeConnect(netService);
             NetErrorInfo? error = await client.ConnectToHost(netId, ip, port, cancelToken);
             if (error == null)
             {
-                afterConnect(concrete);
+                afterConnect(netService);
             }
             return error;
         }
