@@ -16,14 +16,17 @@ public sealed class LanConnectCapabilitiesCodecTests
     }
 
     [Fact]
-    public void Ritsu_offer_requires_presence_and_public_sidecar_readiness_together()
+    public void Ritsu_offer_presence_and_sidecar_readiness_are_independent_diagnostic_bits()
     {
-        LanConnectProtocolOffer offer = new(1, 1, "0.6.0-alpha.1", true, true);
-        byte[] payload = LanConnectCapabilitiesCodec.EncodePeerOffer(offer);
-        Assert.Equal(offer, LanConnectCapabilitiesCodec.DecodePeerOffer(payload, 0));
+        // 0.5.18 事故正面回归：present 但 sidecar 不可用是合法 offer（native 载体不消费该位）。
+        LanConnectProtocolOffer presentButUnavailable = new(1, 1, "0.6.1-alpha.1", true, false);
+        byte[] payload = LanConnectCapabilitiesCodec.EncodePeerOffer(presentButUnavailable);
+        Assert.Equal(presentButUnavailable, LanConnectCapabilitiesCodec.DecodePeerOffer(payload, 0));
 
-        payload[^1] = 1;
-        Assert.Throws<InvalidDataException>(() => LanConnectCapabilitiesCodec.DecodePeerOffer(payload, 0));
+        payload[^1] = 3;
+        Assert.Equal(
+            presentButUnavailable with { RitsuLibSidecarAvailable = true },
+            LanConnectCapabilitiesCodec.DecodePeerOffer(payload, 0));
     }
 
     [Fact]
@@ -34,7 +37,7 @@ public sealed class LanConnectCapabilitiesCodecTests
         LanConnectCapabilitiesSelection decoded = LanConnectCapabilitiesCodec.DecodeSessionSelection(payload, 1);
 
         LanConnectCapabilitiesCodec.ValidateMatches(decoded, selection);
-        Assert.Equal(LanConnectProtocolCarrier.StandaloneTailV1, decoded.Carrier);
+        Assert.Equal(LanConnectProtocolCarrier.NativeBusV1, decoded.Carrier);
         Assert.False(decoded.RitsuLibPresent);
     }
 
@@ -46,7 +49,7 @@ public sealed class LanConnectCapabilitiesCodecTests
         Assert.Throws<InvalidDataException>(() => LanConnectCapabilitiesCodec.DecodeSessionSelection(payload, 2));
 
         byte[] badCarrier = payload.ToArray();
-        badCarrier[3] = 2;
+        badCarrier[3] = 4;
         Assert.Throws<InvalidDataException>(() => LanConnectCapabilitiesCodec.DecodeSessionSelection(badCarrier, 1));
 
         byte[] badFlags = payload.ToArray();
@@ -71,8 +74,8 @@ public sealed class LanConnectCapabilitiesCodecTests
         LanConnectProtocolSelection selection = new(
             LanConnectProtocolProfile.TailV1,
             1,
-            ritsu ? LanConnectProtocolCarrier.RitsuLibSidecarV1 : LanConnectProtocolCarrier.StandaloneTailV1,
-            "0.6.0-alpha.1",
+            LanConnectProtocolCarrier.NativeBusV1,
+            "0.6.1-alpha.1",
             8,
             "0.110.1",
             null,

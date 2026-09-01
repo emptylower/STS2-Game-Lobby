@@ -50,6 +50,49 @@ export function classifyClientVersion(clientVersion?: string, modVersion?: strin
   return modGeneration;
 }
 
+/**
+ * semver `>=` 比较（含预发布规则：预发布小于同号正式版；数字标识按数值、字母标识按
+ * ASCII；无预发布标签大于有预发布标签）。与客户端 C# 实现共用测试向量。
+ */
+export function isClientVersionAtLeast(candidate: string, required: string): boolean {
+  return compareSemver(parseClientVersion(candidate), parseClientVersion(required)) >= 0;
+}
+
+function compareSemver(left: ParsedClientVersion, right: ParsedClientVersion): number {
+  if (left.major !== right.major) return left.major - right.major;
+  if (left.minor !== right.minor) return left.minor - right.minor;
+  if (left.patch !== right.patch) return left.patch - right.patch;
+  return comparePrerelease(left.prerelease, right.prerelease);
+}
+
+function comparePrerelease(left: string | undefined, right: string | undefined): number {
+  if (left === undefined && right === undefined) return 0;
+  // 正式版大于任何预发布版本。
+  if (left === undefined) return 1;
+  if (right === undefined) return -1;
+  const leftIdentifiers = left.split(".");
+  const rightIdentifiers = right.split(".");
+  const count = Math.min(leftIdentifiers.length, rightIdentifiers.length);
+  for (let index = 0; index < count; index++) {
+    const leftIdentifier = leftIdentifiers[index] as string;
+    const rightIdentifier = rightIdentifiers[index] as string;
+    const leftNumeric = /^[0-9]+$/.test(leftIdentifier);
+    const rightNumeric = /^[0-9]+$/.test(rightIdentifier);
+    let comparison: number;
+    if (leftNumeric && rightNumeric) {
+      comparison = Number(leftIdentifier) - Number(rightIdentifier);
+    } else if (leftNumeric) {
+      comparison = -1;
+    } else if (rightNumeric) {
+      comparison = 1;
+    } else {
+      comparison = leftIdentifier < rightIdentifier ? -1 : leftIdentifier > rightIdentifier ? 1 : 0;
+    }
+    if (comparison !== 0) return comparison;
+  }
+  return leftIdentifiers.length - rightIdentifiers.length;
+}
+
 export function normalizeClientVersion(clientVersion: string | undefined, modVersion: string): string {
   classifyClientVersion(clientVersion, modVersion);
   return parseClientVersion(clientVersion ?? modVersion).canonical;

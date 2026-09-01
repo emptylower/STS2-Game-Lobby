@@ -86,8 +86,9 @@ internal static class LanConnectLobbyJoinFlow
 
             protocolLease = LanConnectSessionProtocolState.Shared.FreezeClient(selection, joinResponse.TicketId);
             ulong netId = ResolveJoinNetId(joinResponse, desiredSavePlayerNetId);
-            if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
+            if (selection.Profile == LanConnectProtocolProfile.TailV1)
             {
+                // native_bus_v1：控制通道下发工单 nonce 给房主（flow 绑定），所有 tail 房间都需要。
                 preTransportControlApiClient = LobbyApiClient.CreateConfigured();
                 preTransportControlClient = new LobbyControlClient();
                 Uri controlUri = preTransportControlApiClient.BuildClientControlUri(
@@ -399,35 +400,6 @@ internal static class LanConnectLobbyJoinFlow
         Log.Info(
             $"sts2_lan_connect join_flow: no saved-run slot selected for room {joinResponse.Room.RoomId}; using persistent netId={fallbackNetId}");
         return fallbackNetId;
-    }
-
-    private sealed class RitsuSidecarENetClientConnectionInitializer(
-        ulong netId,
-        string ip,
-        ushort port,
-        Action<NetClientGameService> beforeConnect,
-        Action<NetClientGameService> afterConnect)
-    {
-        public async Task<NetErrorInfo?> Connect(
-            NetClientGameService netService,
-            CancellationToken cancelToken = default)
-        {
-            if (netService.IsConnected)
-            {
-                throw new InvalidOperationException(
-                    "NetClientGameService must not be connected when passed to RitsuSidecarENetClientConnectionInitializer.");
-            }
-
-            ENetClient client = new(netService);
-            netService.Initialize(client, PlatformType.None);
-            beforeConnect(netService);
-            NetErrorInfo? error = await client.ConnectToHost(netId, ip, port, cancelToken);
-            if (error == null)
-            {
-                afterConnect(netService);
-            }
-            return error;
-        }
     }
 
     private static async Task ReportConnectionEventSafeAsync(

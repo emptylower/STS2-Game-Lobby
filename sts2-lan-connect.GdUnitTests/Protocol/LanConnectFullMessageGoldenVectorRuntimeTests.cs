@@ -231,6 +231,91 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         }
     }
 
+    // 契约变更时重建 tail-full fixtures：STS2_LAN_CONNECT_REGEN_FIXTURES=1 运行本用例。
+    // .bin = 原版包（native 载体不再追加尾部容器）；容器改由扩展帧承载，其哈希写入 .json。
+    [TestCase]
+    public void Regenerate_fixtures_when_contract_changes()
+    {
+        if (Environment.GetEnvironmentVariable("STS2_LAN_CONNECT_REGEN_FIXTURES") != "1")
+        {
+            return;
+        }
+
+        InitializeSts2Serialization();
+        using NativeTypeIdScope typeId = new();
+        string fixtureRoot = Path.Combine(FindRepositoryRoot(), "test-fixtures", "protocol", "v0.6");
+        using RuntimePair pair = new();
+        Harmony harmony = new($"sts2_lan_connect.tests.fixture_regen.{Guid.NewGuid():N}");
+        LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
+        LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
+            typeof(PacketWriter).Assembly);
+        LanConnectTailMessagePatches.ApplyPlanForTesting(harmony, plan);
+        try
+        {
+            foreach (MessageSpec spec in Specs())
+            {
+                using LanConnectSessionProtocolLease lease = spec.Direction == Direction.HostToClient
+                    ? LanConnectSessionProtocolState.Shared.FreezeHost(pair.Selection, spec.Name)
+                    : LanConnectSessionProtocolState.Shared.FreezeClient(pair.Selection, spec.Name);
+                IDisposable? rejectionScope = spec.Rejection == null ? null : PushOutgoingRejection(spec.Rejection);
+                try
+                {
+                    object message = spec.CreateMessage();
+                    NetMessageBus senderBus = spec.Direction == Direction.HostToClient ? pair.HostBus : pair.ClientBus;
+                    ulong sender = spec.Direction == Direction.HostToClient ? pair.HostId : pair.ClientId;
+                    byte[] buffer = SerializeMessage(senderBus, sender, message, out int length);
+                    byte[] vanilla = buffer.AsSpan(0, length).ToArray();
+                    LanConnectSidecarFrame extensionFrame = DeliverExtensionFrame(pair, spec.Direction, buffer, length);
+                    byte[] container = extensionFrame.Container.ToArray();
+
+                    PacketReader reader = new();
+                    reader.Reset(vanilla);
+                    int messageTypeId = reader.ReadByte();
+                    ulong embeddedSender = reader.ReadULong();
+                    INetMessage parsed = (INetMessage)Activator.CreateInstance(message.GetType())!;
+                    parsed.Deserialize(reader);
+                    int vanillaBodyEndBit = reader.BitPosition;
+                    int vanillaEndByte = (vanillaBodyEndBit + 7) / 8;
+                    int paddingBits = vanillaEndByte * 8 - vanillaBodyEndBit;
+
+                    File.WriteAllBytes(Path.Combine(fixtureRoot, $"{spec.Name}.bin"), vanilla.AsSpan(0, vanillaEndByte).ToArray());
+                    string json = $$"""
+{
+  "name": "{{spec.Name}}",
+  "schema": "sts2-v0.111.0-netmessagebus-native-full-v2",
+  "file": "{{spec.Name}}.bin",
+  "messageType": "{{message.GetType().Name}}",
+  "messageTypeId": {{messageTypeId}},
+  "senderPeerId": {{embeddedSender}},
+  "headerBytes": 9,
+  "messageKind": "{{spec.Kind}}",
+  "messageKindValue": {{(byte)spec.Kind}},
+  "vanillaBodyEndBit": {{vanillaBodyEndBit}},
+  "paddingBits": {{paddingBits}},
+  "containerStartBit": {{vanillaEndByte * 8}},
+  "containerStartByte": {{vanillaEndByte}},
+  "containerBytes": {{container.Length}},
+  "totalBytes": {{vanillaEndByte}},
+  "sha256": "{{Sha256(vanilla.AsSpan(0, vanillaEndByte).ToArray())}}",
+  "containerSha256": "{{Sha256(container)}}",
+  "expected": null
+}
+""";
+                    File.WriteAllText(Path.Combine(fixtureRoot, $"{spec.Name}.json"), json + "\n");
+                }
+                finally
+                {
+                    rejectionScope?.Dispose();
+                }
+            }
+        }
+        finally
+        {
+            harmony.UnpatchAll(harmony.Id);
+            LanConnectTailMessagePatches.ConfigureRuntime(LanConnectTailMessageRuntime.Shared);
+        }
+    }
+
     private static IEnumerable<MessageSpec> Specs()
     {
         yield return Host(
@@ -254,7 +339,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             new Expected("peerOffer")
             {
                 MaxAscensionUnlocked = 12,
-                ClientVersion = "0.6.0-alpha.1",
+                ClientVersion = "0.6.1-alpha.1",
                 RitsuLibPresent = false,
                 RitsuLibSidecarAvailable = false
             });
@@ -264,7 +349,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             () => new ClientLoadJoinRequestMessage(),
             new Expected("peerOffer")
             {
-                ClientVersion = "0.6.0-alpha.1",
+                ClientVersion = "0.6.1-alpha.1",
                 RitsuLibPresent = false,
                 RitsuLibSidecarAvailable = false
             });
@@ -274,7 +359,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             () => new ClientRejoinRequestMessage(),
             new Expected("peerOffer")
             {
-                ClientVersion = "0.6.0-alpha.1",
+                ClientVersion = "0.6.1-alpha.1",
                 RitsuLibPresent = false,
                 RitsuLibSidecarAvailable = false
             });
@@ -448,7 +533,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
                     .IsEqual(spec.Expected.RitsuLibSidecarAvailable!.Value);
                 break;
             case "selection":
-                AssertThat(payload.SessionSelection!.Carrier).IsEqual(LanConnectProtocolCarrier.StandaloneTailV1);
+                AssertThat(payload.SessionSelection!.Carrier).IsEqual(LanConnectProtocolCarrier.NativeBusV1);
                 AssertThat(payload.Roster).IsNull();
                 AssertThat(payload.Rejection).IsNull();
                 break;
@@ -678,7 +763,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         internal TestNetClient ClientTransport { get; }
         internal ulong HostId => DefaultHostId;
         internal ulong ClientId => DefaultClientId;
-        internal LanConnectProtocolOffer Offer { get; } = new(1, 1, "0.6.0-alpha.1", false, false);
+        internal LanConnectProtocolOffer Offer { get; } = new(1, 1, "0.6.1-alpha.1", false, false);
         internal LanConnectProtocolSelection Selection { get; } = CreateSelection();
         internal NetMessageBus HostBus => GetBus(Host);
         internal NetMessageBus ClientBus => GetBus(Client);
@@ -702,8 +787,8 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             LanConnectProtocolSelection selection = new(
                 LanConnectProtocolProfile.TailV1,
                 1,
-                LanConnectProtocolCarrier.StandaloneTailV1,
-                "0.6.0-alpha.1",
+                LanConnectProtocolCarrier.NativeBusV1,
+                "0.6.1-alpha.1",
                 8,
                 "0.111.0",
                 "aabbccdd",

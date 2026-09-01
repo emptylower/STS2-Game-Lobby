@@ -184,15 +184,15 @@ public sealed class LanConnectTailMessageBusTests
     }
 
     private static LanConnectProtocolOffer Offer() =>
-        new(1, 1, "0.6.0-alpha.1", false, false);
+        new(1, 1, "0.6.1-alpha.1", false, false);
 
     private static LanConnectProtocolSelection Selection()
     {
         LanConnectProtocolSelection selection = new(
             LanConnectProtocolProfile.TailV1,
             1,
-            LanConnectProtocolCarrier.StandaloneTailV1,
-            "0.6.0-alpha.1",
+            LanConnectProtocolCarrier.NativeBusV1,
+            "0.6.1-alpha.1",
             8,
             "0.110.1",
             "aabb",

@@ -1022,7 +1022,7 @@ public sealed class LanConnectTailMessageRuntimeTests
         LanConnectProtocolSelection selection = new(
             LanConnectProtocolProfile.TailV1,
             1,
-            LanConnectProtocolCarrier.StandaloneTailV1,
+            LanConnectProtocolCarrier.NativeBusV1,
             "0.6.1-alpha.1",
             8,
             "0.111.0",

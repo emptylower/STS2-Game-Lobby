@@ -65,22 +65,23 @@ internal sealed record LanConnectProtocolSelection(
                         LanConnectProtocolFailure.RitsuLibPresenceMismatch(RitsuLibPresent));
                 }
 
-                LanConnectProtocolCarrier expectedCarrier = RitsuLibPresent
-                    ? LanConnectProtocolCarrier.RitsuLibSidecarV1
-                    : LanConnectProtocolCarrier.StandaloneTailV1;
-                if (Carrier != expectedCarrier)
+                if (Carrier is LanConnectProtocolCarrier.LegacyTailV1 or LanConnectProtocolCarrier.LegacySidecarV1)
                 {
                     throw LanConnectProtocolFailureMapper.FromLocalException(
-                        "ritsulib_presence_mismatch",
-                        $"Carrier {Carrier.ToWireValue()} conflicts with frozen RitsuLib presence {RitsuLibPresent}.",
+                        "lan_legacy_carrier_unsupported",
+                        "该房间使用旧版协议载体，请升级 LAN Connect。",
                         requiredRitsuLibPresent: RitsuLibPresent);
                 }
 
-                if (RitsuLibPresent && !localOffer.RitsuLibSidecarAvailable)
+                if (Carrier != LanConnectProtocolCarrier.NativeBusV1)
                 {
-                    throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
+                    throw LanConnectProtocolFailureMapper.FromLocalException(
+                        "lan_protocol_version_mismatch",
+                        $"Carrier {Carrier.ToWireValue()} is not a valid Tail v1 carrier.",
+                        requiredRitsuLibPresent: RitsuLibPresent);
                 }
 
+                // tail_v1 完全忽略 sidecar 可用性（native 载体不经 sidecar 就绪检查）。
                 break;
             default:
                 throw LanConnectProtocolFailureMapper.FromLocalException("protocol_profile_unsupported");

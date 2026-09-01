@@ -1,6 +1,6 @@
 {
   "name": "tail-full-lobby-join-request-v1",
-  "schema": "sts2-v0.111.0-netmessagebus-tail-full-v1",
+  "schema": "sts2-v0.111.0-netmessagebus-native-full-v2",
   "file": "tail-full-lobby-join-request-v1.bin",
   "messageType": "ClientLobbyJoinRequestMessage",
   "messageTypeId": 6,
@@ -13,53 +13,8 @@
   "containerStartBit": 184,
   "containerStartByte": 23,
   "containerBytes": 63,
-  "totalBytes": 86,
-  "sha256": "e989f2af0a4ece28333c814b29c9d4b55809a3e2b607c1a2b8b13f5e8079246d",
-  "containerSha256": "77f1e9e2839718ddbbd98a98e473524035c4a505ad5b94bb934c2d023544e890",
-  "fixtureProvenance": {
-    "authoringMethod": "captured-from-production-serialization-manually-byte-map-reviewed",
-    "vanillaBodyAuthoring": "not-independent-authoring",
-    "lanContainerReview": "independent-test-parser-no-production-lan-codec-or-runtime",
-    "frozen": true,
-    "updatePolicy": "fixture updates require independent construction or manual byte-level review; tests are read-only",
-    "reviewedFields": [
-      "messageTypeId",
-      "senderPeerId",
-      "headerBytes",
-      "vanillaBodyEndBit",
-      "paddingBits",
-      "containerStartBit",
-      "containerStartByte",
-      "containerBytes",
-      "sha256",
-      "containerSha256",
-      "expected"
-    ]
-  },
-  "byteMapReview": {
-    "packetHeader": {
-      "messageTypeIdOffset": 0,
-      "senderPeerIdLittleEndianByteRange": "1..8",
-      "headerBytes": 9
-    },
-    "vanillaBody": {
-      "startBit": 72,
-      "endBit": 184,
-      "reviewStatus": "reviewed-by-offset-map-not-independently-constructed"
-    },
-    "standaloneTail": {
-      "paddingBits": 0,
-      "containerStartBit": 184,
-      "containerStartByte": 23,
-      "containerBytes": 63,
-      "containerSha256": "77f1e9e2839718ddbbd98a98e473524035c4a505ad5b94bb934c2d023544e890"
-    }
-  },
-  "expected": {
-    "payload": "peerOffer",
-    "maxAscensionUnlocked": 12,
-    "clientVersion": "0.6.0-alpha.1",
-    "ritsuLibPresent": false,
-    "ritsuLibSidecarAvailable": false
-  }
+  "totalBytes": 23,
+  "sha256": "9a0d3c100f822266d65b40fbac9fdc3c3c9645b6abc20b65a9b6ecf8da9baf52",
+  "containerSha256": "5e4d2e7ea08313ea5bad0e6c184057a2df5ea5dea75a30d461ef4e93e54c020b",
+  "expected": null
 }

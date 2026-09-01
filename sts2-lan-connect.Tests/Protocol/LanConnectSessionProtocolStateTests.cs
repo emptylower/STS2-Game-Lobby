@@ -92,7 +92,7 @@ public sealed class LanConnectSessionProtocolStateTests
     {
         LanConnectProtocolCarrier carrier = profile == LanConnectProtocolProfile.Compat4x5V1
             ? LanConnectProtocolCarrier.None
-            : LanConnectProtocolCarrier.StandaloneTailV1;
+            : LanConnectProtocolCarrier.LegacyTailV1;
         LanConnectProtocolSelection selection = new(
             profile,
             profile == LanConnectProtocolProfile.Compat4x5V1 ? 0 : 1,

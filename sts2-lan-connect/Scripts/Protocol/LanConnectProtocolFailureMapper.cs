@@ -13,7 +13,12 @@ internal static class LanConnectProtocolFailureMapper
         "lan_tail_required",
         "lan_tail_malformed",
         "lan_protocol_version_mismatch",
-        "ritsulib_sidecar_unavailable"
+        "ritsulib_sidecar_unavailable",
+        "lan_legacy_carrier_unsupported",
+        "lan_registry_fingerprint_required",
+        "lan_registry_fingerprint_mismatch",
+        "lan_native_frame_invalid",
+        "lan_client_version_too_old"
     ];
 
     public static LanConnectProtocolFailure FromService(LobbyServiceException exception)

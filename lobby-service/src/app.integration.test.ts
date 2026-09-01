@@ -414,7 +414,8 @@ const CURRENT_PROBE_CAPABILITIES = {
   lanProtocolMin: 1,
   lanProtocolMax: 1,
   minimumClientVersion: "0.3.0",
-  tailV1MinimumClientVersion: "0.6.0-alpha.1",
+  tailV1MinimumClientVersion: "0.6.1-alpha.1",
+        tailV1Carrier: "native_bus_v1",
 } as const;
 
 test("GET /probe returns exact current chat capabilities", async () => {
@@ -519,11 +520,12 @@ test("active authenticated relay survives room heartbeat timeout and accepts a d
   }
 });
 
-test("HTTP protocol gates reject Ritsu mismatch and sidecar unavailability before tickets", async () => {
+test("HTTP protocol gates reject Ritsu mismatch, bad fingerprints and old clients before tickets", async () => {
   const scenarios = [
-    { host: true, joiner: false, joinerSidecar: false, code: "ritsulib_presence_mismatch" },
-    { host: false, joiner: true, joinerSidecar: true, code: "ritsulib_presence_mismatch" },
-    { host: true, joiner: true, joinerSidecar: false, code: "ritsulib_sidecar_unavailable" },
+    { host: true, joiner: false, joinerSidecar: false, fingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", code: "ritsulib_presence_mismatch" },
+    { host: false, joiner: true, joinerSidecar: true, fingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", code: "ritsulib_presence_mismatch" },
+    { host: true, joiner: true, joinerSidecar: false, fingerprint: "sha256:v1:" + "c".repeat(64), code: "lan_registry_fingerprint_mismatch" },
+    { host: true, joiner: true, joinerSidecar: false, fingerprint: "not-a-fingerprint", code: "lan_registry_fingerprint_required" },
   ] as const;
   for (const scenario of scenarios) {
     const config = testConfig({ port: 0 });
@@ -538,15 +540,16 @@ test("HTTP protocol gates reject Ritsu mismatch and sidecar unavailability befor
           hostPlayerName: "Host",
           gameMode: "standard",
           version: "1.0.0",
-          modVersion: "0.6.0-alpha.1",
-          clientVersion: "0.6.0-alpha.1",
+          modVersion: "0.6.1-alpha.1",
+          clientVersion: "0.6.1-alpha.1",
           protocolProfileV2: "tail_v1",
           protocolOffer: {
             lanProtocolMin: 1,
             lanProtocolMax: 1,
-            clientVersion: "0.6.0-alpha.1",
+            clientVersion: "0.6.1-alpha.1",
             ritsuLibPresent: scenario.host,
             ritsuLibSidecarAvailable: scenario.host,
+            registryFingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           },
           maxPlayers: 8,
           hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -560,12 +563,13 @@ test("HTTP protocol gates reject Ritsu mismatch and sidecar unavailability befor
         body: JSON.stringify({
           playerName: "Guest",
           version: "1.0.0",
-          modVersion: "0.6.0-alpha.1",
-          clientVersion: "0.6.0-alpha.1",
+          modVersion: "0.6.1-alpha.1",
+          clientVersion: "0.6.1-alpha.1",
+          registryFingerprint: scenario.fingerprint,
           protocolOffer: {
             lanProtocolMin: 1,
             lanProtocolMax: 1,
-            clientVersion: "0.6.0-alpha.1",
+            clientVersion: "0.6.1-alpha.1",
             ritsuLibPresent: scenario.joiner,
             ritsuLibSidecarAvailable: scenario.joinerSidecar,
           },
@@ -574,6 +578,9 @@ test("HTTP protocol gates reject Ritsu mismatch and sidecar unavailability befor
       assert.equal(rejected.status, 409);
       const body = await rejected.json() as Record<string, unknown>;
       assert.equal(body.code, scenario.code);
+      if (scenario.code === "lan_registry_fingerprint_mismatch") {
+        assert.equal(typeof (body.details as { expectedFingerprintPrefix?: string }).expectedFingerprintPrefix, "string");
+      }
       assert.equal("ticketId" in body, false);
       assert.equal("connectionPlan" in body, false);
     } finally {
@@ -583,10 +590,11 @@ test("HTTP protocol gates reject Ritsu mismatch and sidecar unavailability befor
   }
 });
 
-test("HTTP create gates reject Ritsu in compat and unavailable Tail sidecar without rooms", async () => {
+test("HTTP create gates reject Ritsu in compat and missing Tail fingerprints without rooms", async () => {
   const cases = [
-    { profile: "compat_4_5_v1", sidecar: true, code: "ritsulib_not_allowed_in_compat_mode" },
-    { profile: "tail_v1", sidecar: false, code: "ritsulib_sidecar_unavailable" },
+    { profile: "compat_4_5_v1" as const, fingerprint: undefined as string | undefined, code: "ritsulib_not_allowed_in_compat_mode" },
+    { profile: "tail_v1" as const, fingerprint: undefined as string | undefined, code: "lan_registry_fingerprint_required" },
+    { profile: "tail_v1" as const, fingerprint: "sha256:v1:oops", code: "lan_registry_fingerprint_required" },
   ] as const;
   for (const scenario of cases) {
     const config = testConfig({ port: 0 });
@@ -601,15 +609,16 @@ test("HTTP create gates reject Ritsu in compat and unavailable Tail sidecar with
           hostPlayerName: "Host",
           gameMode: "standard",
           version: "1.0.0",
-          modVersion: "0.6.0-alpha.1",
-          clientVersion: "0.6.0-alpha.1",
+          modVersion: "0.6.1-alpha.1",
+          clientVersion: "0.6.1-alpha.1",
           protocolProfileV2: scenario.profile,
           protocolOffer: {
             lanProtocolMin: 1,
             lanProtocolMax: 1,
-            clientVersion: "0.6.0-alpha.1",
+            clientVersion: "0.6.1-alpha.1",
             ritsuLibPresent: true,
-            ritsuLibSidecarAvailable: scenario.sidecar,
+            ritsuLibSidecarAvailable: false,
+            ...(scenario.fingerprint === undefined ? {} : { registryFingerprint: scenario.fingerprint }),
           },
           maxPlayers: 8,
           hostConnectionInfo: { enetPort: 7777 },

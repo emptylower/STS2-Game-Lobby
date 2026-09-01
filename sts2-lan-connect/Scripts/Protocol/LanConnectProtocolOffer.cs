@@ -5,7 +5,9 @@ internal sealed record LanConnectProtocolOffer(
     int LanProtocolMax,
     string ClientVersion,
     bool RitsuLibPresent,
-    bool RitsuLibSidecarAvailable)
+    bool RitsuLibSidecarAvailable,
+    string? RegistryFingerprint = null,
+    string? RitsuLibVersion = null)
 {
     public static LanConnectProtocolOffer CreateCurrent()
     {
@@ -14,12 +16,25 @@ internal sealed record LanConnectProtocolOffer(
         int tailLanProtocolVersion = LanConnectTailRuntimeSupport.IsAvailable
             ? LanConnectConstants.TailLanProtocolVersion
             : 0;
+        // 指纹需要游戏消息注册表已初始化；不可用时留空（服务端创建门禁会拒绝并给出明确错误）。
+        string? fingerprint = null;
+        try
+        {
+            fingerprint = LanConnectRegistryFingerprint.Compute();
+        }
+        catch (Exception)
+        {
+            // 游戏消息注册表不可用（如测试宿主）：留空；创建门禁会给出结构化错误而非崩溃。
+        }
+
         return new LanConnectProtocolOffer(
             tailLanProtocolVersion,
             tailLanProtocolVersion,
             clientVersion,
             capabilities.RitsuLibPresent,
-            capabilities.RitsuLibSidecarAvailable);
+            capabilities.RitsuLibSidecarAvailable,
+            fingerprint,
+            capabilities.RitsuLibVersion);
     }
 
     public LanConnectProtocolOffer Validate()
@@ -32,13 +47,7 @@ internal sealed record LanConnectProtocolOffer(
         }
 
         _ = LanConnectClientVersion.ParseSupported(ClientVersion);
-        if (!RitsuLibPresent && RitsuLibSidecarAvailable)
-        {
-            throw LanConnectProtocolFailureMapper.FromLocalException(
-                "ritsulib_sidecar_unavailable",
-                "RitsuLib sidecar cannot be available when RitsuLib is absent.");
-        }
-
+        // native_bus_v1：sidecar 可用性仅是诊断位，不再参与 offer 校验（0.5.18 事故正面回归）。
         return this;
     }
 

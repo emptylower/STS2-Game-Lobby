@@ -121,7 +121,7 @@ public sealed class LanConnectTailMessageMatrixTests
 
         LanConnectProtocolSelection drift = selection with
         {
-            Carrier = LanConnectProtocolCarrier.RitsuLibSidecarV1,
+            Carrier = LanConnectProtocolCarrier.LegacySidecarV1,
             RitsuLibPresent = true
         };
         Assert.Throws<InvalidDataException>(() => LanConnectTailMessageProtocol.DecodeAndValidate(
@@ -138,7 +138,7 @@ public sealed class LanConnectTailMessageMatrixTests
         LanConnectProtocolSelection selection = new(
             LanConnectProtocolProfile.TailV1,
             1,
-            LanConnectProtocolCarrier.StandaloneTailV1,
+            LanConnectProtocolCarrier.LegacyTailV1,
             "0.6.0-alpha.1",
             8,
             "0.110.1",

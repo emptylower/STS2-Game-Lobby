@@ -5,7 +5,7 @@
     "offer": {
       "lanProtocolMin": 1,
       "lanProtocolMax": 1,
-      "clientVersion": "0.6.0-alpha.1",
+      "clientVersion": "0.6.1-alpha.1",
       "ritsuLibPresent": false,
       "ritsuLibSidecarAvailable": false
     },
@@ -25,9 +25,10 @@
     "offer": {
       "lanProtocolMin": 1,
       "lanProtocolMax": 1,
-      "clientVersion": "0.6.0-alpha.1",
+      "clientVersion": "0.6.1-alpha.1",
       "ritsuLibPresent": false,
-      "ritsuLibSidecarAvailable": false
+      "ritsuLibSidecarAvailable": false,
+      "registryFingerprint": "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     "policy": {
       "profile": "tail_v1",
@@ -37,7 +38,7 @@
       "gameVersion": "0.110.1",
       "wireCacheSignatureV1": "aabb"
     },
-    "expectedDigest": "9e05bfe38a117996c20b46d9caa75c690de2c5666b37c8e3b42eb5ebc4b7ed76"
+    "expectedDigest": "59011f3bf8565282a922800189a3ce8d7049a108fa4fc7e162b85fff02da3d33"
   },
   {
     "name": "tail_v1_ritsulib_sidecar",
@@ -45,9 +46,10 @@
     "offer": {
       "lanProtocolMin": 1,
       "lanProtocolMax": 1,
-      "clientVersion": "0.6.0-alpha.1",
+      "clientVersion": "0.6.1-alpha.1",
       "ritsuLibPresent": true,
-      "ritsuLibSidecarAvailable": true
+      "ritsuLibSidecarAvailable": true,
+      "registryFingerprint": "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     "policy": {
       "profile": "tail_v1",
@@ -57,7 +59,7 @@
       "gameVersion": "0.110.1",
       "wireCacheSignatureV1": "aabb"
     },
-    "expectedDigest": "19bf340a52ff054a950df4e25670e9ee42cf4647fd1aa8ba9d5234f81575397a"
+    "expectedDigest": "92e41e6aa5017504bf998d96fd0b2d10e353ef745f4f850dfd5c665000871d09"
   },
   {
     "name": "compat_4_5_v1_case_sensitive_wire_cache",
@@ -87,7 +89,8 @@
       "lanProtocolMax": 1,
       "clientVersion": "0.6.0-alpha.5",
       "ritsuLibPresent": false,
-      "ritsuLibSidecarAvailable": false
+      "ritsuLibSidecarAvailable": false,
+      "registryFingerprint": "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     "policy": {
       "profile": "tail_v1",
@@ -97,6 +100,6 @@
       "gameVersion": "v0.111.0",
       "wireCacheSignatureV1": "wcv1:D5-qRxko7ywoZJWzaOM9Q49NNOWP1Jr2qXc_Nk204uU"
     },
-    "expectedDigest": "9c6b6fdb3aebd6ddb8b27ddb2fe69106291ed4e7efbe4acb1fb71930b0002789"
+    "expectedDigest": "5e69ba5f485b9e079ba1433e2ddb78cec31ef49b87e2241f73d2eebd8022a918"
   }
 ]

@@ -227,21 +227,25 @@ test("createRoom rejects pre-0.3 callers before allocating a room id", () => {
   assert.equal(store.listRooms().length, 0);
 });
 
+const tailFingerprint = "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const otherTailFingerprint = "sha256:v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
 function tailCreateInput(ritsuLibPresent: boolean, ritsuLibSidecarAvailable = ritsuLibPresent) {
   return {
     roomName: "0.6 协议房",
     hostPlayerName: "Host",
     gameMode: "standard",
     version: "1.2.3",
-    modVersion: "0.6.0-alpha.1",
-    clientVersion: "0.6.0-alpha.1",
+    modVersion: "0.6.1-alpha.1",
+    clientVersion: "0.6.1-alpha.1",
     protocolProfileV2: "tail_v1" as const,
     protocolOffer: {
       lanProtocolMin: 1,
       lanProtocolMax: 1,
-      clientVersion: "0.6.0-alpha.1",
+      clientVersion: "0.6.1-alpha.1",
       ritsuLibPresent,
       ritsuLibSidecarAvailable,
+      registryFingerprint: tailFingerprint,
     },
     maxPlayers: 8,
     hostConnectionInfo: { enetPort: 33771 },
@@ -252,15 +256,16 @@ function tailJoinInput(ritsuLibPresent: boolean, ritsuLibSidecarAvailable = rits
   return {
     playerName: "Guest",
     version: "1.2.3",
-    modVersion: "0.6.0-alpha.1",
-    clientVersion: "0.6.0-alpha.1",
+    modVersion: "0.6.1-alpha.1",
+    clientVersion: "0.6.1-alpha.1",
     protocolOffer: {
       lanProtocolMin: 1,
       lanProtocolMax: 1,
-      clientVersion: "0.6.0-alpha.1",
+      clientVersion: "0.6.1-alpha.1",
       ritsuLibPresent,
       ritsuLibSidecarAvailable,
     },
+    registryFingerprint: tailFingerprint,
   };
 }
 
@@ -268,10 +273,9 @@ test("Tail rooms freeze deterministic homogeneous carriers and issue per-ticket 
   for (const ritsuLibPresent of [false, true]) {
     const store = new LobbyStore(baseConfig);
     const created = store.createRoom(tailCreateInput(ritsuLibPresent), "203.0.113.10");
-    assert.equal(
-      created.room.protocolSelection.carrier,
-      ritsuLibPresent ? "ritsulib_sidecar_v1" : "standalone_tail_v1",
-    );
+    assert.equal(created.room.protocolSelection.carrier, "native_bus_v1");
+    assert.equal(created.room.protocolSelection.registryFingerprint, tailFingerprint);
+    assert.equal(created.room.protocolSelection.minimumClientVersion, "0.6.1-alpha.1");
     assert.equal(created.protocolSelection, created.room.protocolSelection);
     assert.equal(created.room.protocolSelection.ritsuLibPresent, ritsuLibPresent);
     const first = store.joinRoom(created.roomId, tailJoinInput(ritsuLibPresent));
@@ -283,34 +287,81 @@ test("Tail rooms freeze deterministic homogeneous carriers and issue per-ticket 
   }
 });
 
-test("Tail create rejects an unavailable host sidecar before every allocation", () => {
+test("Tail create tolerates an unavailable sidecar and rejects a missing fingerprint before every allocation", () => {
   let idAllocations = 0;
   const store = new LobbyStore(baseConfig, { id: () => { idAllocations += 1; return `id-${idAllocations}`; } });
+  // 0.5.18 事故正面回归：Ritsu 存在但 sidecar 不可用 => 照常创建（native 载体）。
+  const created = store.createRoom(tailCreateInput(true, false), "203.0.113.10");
+  assert.equal(created.room.protocolSelection.carrier, "native_bus_v1");
+
+  // fingerprint 缺失/非法在房间分配前拒绝。
   assert.throws(
-    () => store.createRoom(tailCreateInput(true, false), "203.0.113.10"),
-    (error: unknown) => error instanceof LobbyStoreError && error.code === "ritsulib_sidecar_unavailable",
+    () => {
+      const input = tailCreateInput(true);
+      delete (input.protocolOffer as { registryFingerprint?: string }).registryFingerprint;
+      store.createRoom(input, "203.0.113.10");
+    },
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "lan_registry_fingerprint_required",
   );
-  assert.equal(idAllocations, 0);
-  assert.equal(store.listRooms().length, 0);
+  assert.equal(store.listRooms().length, 1);
 });
 
-test("Tail join rejects both presence mismatch directions and unavailable joiner sidecar before ticket allocation", () => {
+test("Tail join gate chain rejects presence mismatch, joiner-sidecar-free presence, bad fingerprints and old clients before ticket allocation", () => {
   const cases = [
     { host: true, joiner: false, sidecar: false, code: "ritsulib_presence_mismatch" },
     { host: false, joiner: true, sidecar: true, code: "ritsulib_presence_mismatch" },
-    { host: true, joiner: true, sidecar: false, code: "ritsulib_sidecar_unavailable" },
-  ] as const;
+    { host: true, joiner: true, sidecar: false, code: null },
+    { host: true, joiner: true, fingerprint: "sha256:v1:" + "c".repeat(64), code: "lan_registry_fingerprint_mismatch" },
+    { host: true, joiner: true, fingerprint: "bad", code: "lan_registry_fingerprint_required" },
+  ] as Array<{ host: boolean; joiner: boolean; sidecar: boolean; fingerprint?: string; code: string | null }>;
   for (const scenario of cases) {
     let idAllocations = 0;
     const store = new LobbyStore(baseConfig, { id: () => { idAllocations += 1; return `id-${idAllocations}`; } });
     const created = store.createRoom(tailCreateInput(scenario.host), "203.0.113.10");
     const afterCreate = idAllocations;
-    assert.throws(
-      () => store.joinRoom(created.roomId, tailJoinInput(scenario.joiner, scenario.sidecar)),
-      (error: unknown) => error instanceof LobbyStoreError && error.code === scenario.code,
-    );
-    assert.equal(idAllocations, afterCreate, scenario.code);
+    const input = tailJoinInput(scenario.joiner, scenario.sidecar);
+    if (scenario.fingerprint !== undefined) {
+      input.registryFingerprint = scenario.fingerprint;
+    }
+
+    if (scenario.code === null) {
+      // 0.5.18 事故正面回归：joiner 侧 sidecar 不可用照常签发工单。
+      const joined = store.joinRoom(created.roomId, input);
+      assert.match(joined.protocolFlowNonce, /^[0-9a-f]{32}$/);
+    } else {
+      assert.throws(
+        () => store.joinRoom(created.roomId, input),
+        (error: unknown) => error instanceof LobbyStoreError && error.code === scenario.code,
+      );
+      assert.equal(idAllocations, afterCreate, scenario.code ?? "unnamed");
+    }
   }
+
+  // 旧 0.6 客户端（无 fingerprint 字段、版本过旧）在工单签发路径被拒。
+  const store = new LobbyStore(baseConfig);
+  const created = store.createRoom(tailCreateInput(true), "203.0.113.10");
+  const legacyJoiner = tailJoinInput(true);
+  delete legacyJoiner.registryFingerprint;
+  legacyJoiner.clientVersion = "0.6.0";
+  legacyJoiner.modVersion = "0.6.0";
+  legacyJoiner.protocolOffer = legacyJoiner.protocolOffer
+    ? { ...legacyJoiner.protocolOffer, clientVersion: "0.6.0" }
+    : undefined;
+  assert.throws(
+    () => store.joinRoom(created.roomId, legacyJoiner),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "lan_registry_fingerprint_required",
+  );
+  const fingerprintButOld = tailJoinInput(true);
+  fingerprintButOld.clientVersion = "0.6.0";
+  fingerprintButOld.modVersion = "0.6.0";
+  fingerprintButOld.protocolOffer = fingerprintButOld.protocolOffer
+    ? { ...fingerprintButOld.protocolOffer, clientVersion: "0.6.0" }
+    : undefined;
+  assert.throws(
+    () => store.joinRoom(created.roomId, fingerprintButOld),
+    (error: unknown) => error instanceof LobbyStoreError && error.code === "lan_client_version_too_old",
+  );
+  assert.notEqual(otherTailFingerprint, tailFingerprint);
 });
 
 test("Tail control binding validates version and digest before allocating a binding", () => {
@@ -320,7 +371,7 @@ test("Tail control binding validates version and digest before allocating a bind
   const joined = store.joinRoom(created.roomId, tailJoinInput(false));
   const afterTicket = idAllocations;
   assert.throws(
-    () => store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId, "0.6.0-alpha.1", "0".repeat(64)),
+    () => store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId, "0.6.1-alpha.1", "0".repeat(64)),
     (error: unknown) => error instanceof LobbyStoreError && error.code === "capability_digest_mismatch",
   );
   assert.equal(idAllocations, afterTicket);
@@ -328,7 +379,7 @@ test("Tail control binding validates version and digest before allocating a bind
     created.roomId,
     created.controlChannelId,
     joined.ticketId,
-    "0.6.0-alpha.1",
+    "0.6.1-alpha.1",
     created.room.protocolSelection.capabilityDigest,
   );
   assert.equal(redeemed.protocolFlowNonce, joined.protocolFlowNonce);

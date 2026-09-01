@@ -17,10 +17,8 @@ public sealed class LanConnectCapabilityDigestTests
                 profile == LanConnectProtocolProfile.Compat4x5V1 ? 0 : 1,
                 profile == LanConnectProtocolProfile.Compat4x5V1
                     ? LanConnectProtocolCarrier.None
-                    : ritsuPresent
-                        ? LanConnectProtocolCarrier.RitsuLibSidecarV1
-                        : LanConnectProtocolCarrier.StandaloneTailV1,
-                profile == LanConnectProtocolProfile.Compat4x5V1 ? "0.3.0" : "0.6.0-alpha.1",
+                    : LanConnectProtocolCarrier.NativeBusV1,
+                profile == LanConnectProtocolProfile.Compat4x5V1 ? "0.3.0" : "0.6.1-alpha.1",
                 vector.Policy.MaxPlayers,
                 vector.Policy.GameVersion,
                 vector.Policy.WireCacheSignatureV1,
@@ -34,93 +32,77 @@ public sealed class LanConnectCapabilityDigestTests
     [Fact]
     public void Carrier_changes_the_digest()
     {
-        LanConnectProtocolSelection standalone = new(
+        LanConnectProtocolSelection legacy = new(
             LanConnectProtocolProfile.TailV1,
             1,
-            LanConnectProtocolCarrier.StandaloneTailV1,
-            "0.6.0-alpha.1",
+            LanConnectProtocolCarrier.LegacyTailV1,
+            "0.6.1-alpha.1",
             8,
             "0.110.1",
             "aabb",
             false,
             string.Empty);
-        LanConnectProtocolSelection sidecar = standalone with
-        {
-            Carrier = LanConnectProtocolCarrier.RitsuLibSidecarV1,
-            RitsuLibPresent = true
-        };
+        LanConnectProtocolSelection native = legacy with { Carrier = LanConnectProtocolCarrier.NativeBusV1 };
 
         Assert.NotEqual(
-            LanConnectCapabilityDigest.Compute(standalone),
-            LanConnectCapabilityDigest.Compute(sidecar));
+            LanConnectCapabilityDigest.Compute(legacy),
+            LanConnectCapabilityDigest.Compute(native));
     }
 
-    [Theory]
-    [InlineData(
-        "compat_4_5_v1",
-        0,
-        "none",
-        "0.3.0",
-        "64d24fb637bf6e55ec8f486c4dc9ebaec554defe68f54be0da5a73ffd71bf8cd")]
-    [InlineData(
-        "tail_v1",
-        1,
-        "standalone_tail_v1",
-        "0.6.0-alpha.1",
-        "0acaf09bc69874c88a01bac7c5cdb7b464331da7ebad5b78f516a2d83036a0fd")]
-    public void Accepts_alpha4_legacy_lowercase_digest_response(
-        string profile,
-        int protocolVersion,
-        string carrier,
-        string minimumClientVersion,
-        string capabilityDigest)
+    [Fact]
+    public void Legacy_carrier_selections_are_rejected_with_the_stable_upgrade_error()
     {
-        LobbyProtocolSelectionDto dto = CreateResponseDto(
-            profile,
-            protocolVersion,
-            carrier,
-            minimumClientVersion,
-            capabilityDigest);
-        LanConnectProtocolOffer offer = new(1, 1, "0.6.0-alpha.5", false, false);
+        LobbyProtocolSelectionDto legacyCarrier = CreateResponseDto(
+            "tail_v1",
+            1,
+            "standalone_tail_v1",
+            "0.6.0-alpha.1",
+            new string('a', 64));
+        LanConnectProtocolOffer offer = new(1, 1, "0.6.1-alpha.1", false, false);
 
-        LanConnectProtocolSelection selection = dto.ToValidatedValue(offer);
-
-        Assert.Equal(profile, selection.Profile.ToCanonical());
-        Assert.Equal(capabilityDigest, selection.CapabilityDigest);
+        LanConnectProtocolException exception = Assert.Throws<LanConnectProtocolException>(
+            () => legacyCarrier.ToValidatedValue(offer));
+        Assert.Equal("lan_legacy_carrier_unsupported", exception.Failure.Code);
     }
 
-    [Theory]
-    [InlineData(
-        "compat_4_5_v1",
-        0,
-        "none",
-        "0.3.0",
-        "9aceddb15255e3b925ea37d438614a71317d9d86c5dd66df2ffada45355643b3")]
-    [InlineData(
-        "tail_v1",
-        1,
-        "standalone_tail_v1",
-        "0.6.0-alpha.1",
-        "9c6b6fdb3aebd6ddb8b27ddb2fe69106291ed4e7efbe4acb1fb71930b0002789")]
-    public void Validates_case_sensitive_create_response(
-        string profile,
-        int protocolVersion,
-        string carrier,
-        string minimumClientVersion,
-        string capabilityDigest)
+    [Fact]
+    public void Native_carrier_selection_validates_with_the_exact_digest()
     {
+        LanConnectProtocolSelection template = new(
+            LanConnectProtocolProfile.TailV1,
+            1,
+            LanConnectProtocolCarrier.NativeBusV1,
+            "0.6.1-alpha.1",
+            8,
+            "v0.111.0",
+            "wcv1:D5-qRxko7ywoZJWzaOM9Q49NNOWP1Jr2qXc_Nk204uU",
+            false,
+            string.Empty);
+        string expectedDigest = LanConnectCapabilityDigest.Compute(template);
+        LanConnectProtocolOffer offer = new(1, 1, "0.6.1-alpha.1", false, false);
+
         LobbyProtocolSelectionDto dto = CreateResponseDto(
-            profile,
-            protocolVersion,
-            carrier,
-            minimumClientVersion,
-            capabilityDigest);
-        LanConnectProtocolOffer offer = new(1, 1, "0.6.0-alpha.5", false, false);
+            "tail_v1",
+            1,
+            "native_bus_v1",
+            "0.6.1-alpha.1",
+            expectedDigest);
+        Assert.Equal(expectedDigest, dto.ToValidatedValue(offer).CapabilityDigest);
 
-        LanConnectProtocolSelection selection = dto.ToValidatedValue(offer);
-
-        Assert.Equal(profile, selection.Profile.ToCanonical());
-        Assert.Equal(capabilityDigest, selection.CapabilityDigest);
+        // 大小写翻转的签名必须得出不同摘要并被拒绝。
+        LanConnectProtocolSelection flipped = template with
+        {
+            WireCacheSignature = template.WireCacheSignature!.ToUpperInvariant()
+        };
+        string flippedDigest = LanConnectCapabilityDigest.Compute(flipped);
+        Assert.NotEqual(expectedDigest, flippedDigest);
+        LobbyProtocolSelectionDto mismatched = CreateResponseDto(
+            "tail_v1",
+            1,
+            "native_bus_v1",
+            "0.6.1-alpha.1",
+            flippedDigest);
+        Assert.Throws<LanConnectProtocolException>(() => mismatched.ToValidatedValue(offer));
     }
 
     private static LobbyProtocolSelectionDto CreateResponseDto(
@@ -148,32 +130,39 @@ public sealed class LanConnectCapabilityDigestTests
 
     private static IReadOnlyList<DigestVector> ReadVectors()
     {
-        string path = Path.Combine(FindRepositoryRoot(), "test-fixtures", "protocol", "v0.6", "capability-digest-v1.json");
-        return JsonSerializer.Deserialize<List<DigestVector>>(
-            File.ReadAllText(path),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
-    }
-
-    private static string FindRepositoryRoot()
-    {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
         while (directory != null && !File.Exists(Path.Combine(directory.FullName, "STS2-Game-Lobby.sln")))
         {
             directory = directory.Parent;
         }
 
-        return directory?.FullName
-               ?? throw new DirectoryNotFoundException("Could not locate repository root.");
+        string path = Path.Combine(
+            directory?.FullName ?? throw new DirectoryNotFoundException(),
+            "test-fixtures", "protocol", "v0.6", "capability-digest-v1.json");
+        return JsonSerializer.Deserialize<List<DigestVector>>(
+            File.ReadAllText(path),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
     }
 
     private sealed record DigestVector(
         string Name,
         string Profile,
-        DigestOffer Offer,
-        DigestPolicy Policy,
+        DigestOfferVector Offer,
+        DigestPolicyVector Policy,
         string ExpectedDigest);
 
-    private sealed record DigestOffer(bool RitsuLibPresent);
+    private sealed record DigestOfferVector(
+        int LanProtocolMin,
+        int LanProtocolMax,
+        string ClientVersion,
+        bool RitsuLibPresent,
+        bool RitsuLibSidecarAvailable);
 
-    private sealed record DigestPolicy(int MaxPlayers, string GameVersion, string? WireCacheSignatureV1);
+    private sealed record DigestPolicyVector(
+        string Profile,
+        int LanProtocolMin,
+        int LanProtocolMax,
+        int MaxPlayers,
+        string GameVersion,
+        string WireCacheSignatureV1);
 }

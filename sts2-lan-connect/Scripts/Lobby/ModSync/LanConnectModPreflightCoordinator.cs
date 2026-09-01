@@ -225,7 +225,8 @@ internal sealed class LanConnectModPreflightCoordinator
                 ModList = request.ModList,
                 WireCacheSignatureV1 = request.WireCacheSignatureV1,
                 DesiredSavePlayerNetId = request.DesiredSavePlayerNetId,
-                PlayerNetId = request.PlayerNetId
+                PlayerNetId = request.PlayerNetId,
+                RegistryFingerprint = request.ProtocolOffer.RegistryFingerprint
             },
             cancellationToken);
         return new LanConnectModPreflightJoinResult

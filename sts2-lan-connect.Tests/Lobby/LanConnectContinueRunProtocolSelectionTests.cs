@@ -124,7 +124,7 @@ public sealed class LanConnectContinueRunProtocolSelectionTests
             required with { MaxPlayers = 4 }));
         Assert.False(LanConnectHostFlow.ArePublishSelectionsEquivalent(
             required,
-            required with { Carrier = LanConnectProtocolCarrier.RitsuLibSidecarV1 }));
+            required with { Carrier = LanConnectProtocolCarrier.LegacySidecarV1 }));
     }
 
     private static LanConnectProtocolSelection TailSelection(bool ritsuLibPresent)
@@ -133,8 +133,8 @@ public sealed class LanConnectContinueRunProtocolSelectionTests
             LanConnectProtocolProfile.TailV1,
             LanConnectConstants.TailLanProtocolVersion,
             ritsuLibPresent
-                ? LanConnectProtocolCarrier.RitsuLibSidecarV1
-                : LanConnectProtocolCarrier.StandaloneTailV1,
+                ? LanConnectProtocolCarrier.LegacySidecarV1
+                : LanConnectProtocolCarrier.LegacyTailV1,
             "0.6.0-alpha.1",
             8,
             "0.111.0",

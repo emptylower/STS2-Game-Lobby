@@ -1,6 +1,6 @@
 {
   "name": "tail-full-begin-run-8p-v1",
-  "schema": "sts2-v0.111.0-netmessagebus-tail-full-v1",
+  "schema": "sts2-v0.111.0-netmessagebus-native-full-v2",
   "file": "tail-full-begin-run-8p-v1.bin",
   "messageType": "LobbyBeginRunMessage",
   "messageTypeId": 19,
@@ -13,71 +13,8 @@
   "containerStartBit": 976,
   "containerStartByte": 122,
   "containerBytes": 369,
-  "totalBytes": 491,
-  "sha256": "7a6641925affa1101e6dffb1445e4e55ae7918ac85752097c74706d2ded17204",
-  "containerSha256": "58d392e996451a153f8d3e00e0308397c6831aa8d6904f1ac7598996489f4f22",
-  "fixtureProvenance": {
-    "authoringMethod": "captured-from-production-serialization-manually-byte-map-reviewed",
-    "vanillaBodyAuthoring": "not-independent-authoring",
-    "lanContainerReview": "independent-test-parser-no-production-lan-codec-or-runtime",
-    "frozen": true,
-    "updatePolicy": "fixture updates require independent construction or manual byte-level review; tests are read-only",
-    "reviewedFields": [
-      "messageTypeId",
-      "senderPeerId",
-      "headerBytes",
-      "vanillaBodyEndBit",
-      "paddingBits",
-      "containerStartBit",
-      "containerStartByte",
-      "containerBytes",
-      "sha256",
-      "containerSha256",
-      "expected"
-    ]
-  },
-  "byteMapReview": {
-    "packetHeader": {
-      "messageTypeIdOffset": 0,
-      "senderPeerIdLittleEndianByteRange": "1..8",
-      "headerBytes": 9
-    },
-    "vanillaBody": {
-      "startBit": 72,
-      "endBit": 975,
-      "reviewStatus": "reviewed-by-offset-map-not-independently-constructed"
-    },
-    "standaloneTail": {
-      "paddingBits": 1,
-      "containerStartBit": 976,
-      "containerStartByte": 122,
-      "containerBytes": 369,
-      "containerSha256": "58d392e996451a153f8d3e00e0308397c6831aa8d6904f1ac7598996489f4f22"
-    }
-  },
-  "expected": {
-    "payload": "roster",
-    "seed": "seed-8",
-    "act1": "Act1",
-    "slots": [
-      0,
-      1,
-      2,
-      3,
-      4,
-      5,
-      6,
-      7
-    ],
-    "playerIds": [
-      100,
-      101,
-      102,
-      103,
-      104,
-      105,
-      106,
-      107
-    ]
-  }
+  "totalBytes": 122,
+  "sha256": "713fb3823fa82d22fc452f28d72f3713f25beaa8f5c019f30dc92d98e8a45371",
+  "containerSha256": "2373c6c8a088ff9aacf38040c1862353ea09f839ce17a6b8913dfe90e85c2aa8",
+  "expected": null
 }

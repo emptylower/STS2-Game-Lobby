@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { ProtocolContractError } from "./protocol-errors.js";
 import type { ProtocolProfile } from "./protocol-profile.js";
 
-export type ProtocolCarrier = "none" | "standalone_tail_v1" | "ritsulib_sidecar_v1";
+export type ProtocolCarrier = "none" | "standalone_tail_v1" | "ritsulib_sidecar_v1" | "native_bus_v1";
 
 export interface ProtocolOffer {
   readonly lanProtocolMin: number;
@@ -10,6 +10,15 @@ export interface ProtocolOffer {
   readonly clientVersion: string;
   readonly ritsuLibPresent: boolean;
   readonly ritsuLibSidecarAvailable: boolean;
+  readonly registryFingerprint?: string | undefined;
+  readonly ritsuLibVersion?: string | undefined;
+}
+
+/** registry fingerprint 格式：sha256:v1: + 64 位小写 hex。 */
+export const RegistryFingerprintPattern = /^sha256:v1:[0-9a-f]{64}$/;
+
+export function isValidRegistryFingerprint(value: string | undefined): value is string {
+  return typeof value === "string" && RegistryFingerprintPattern.test(value);
 }
 
 export interface ServerProtocolPolicy {
@@ -31,6 +40,8 @@ export interface RoomProtocolSelection {
   readonly wireCacheSignature?: string | undefined;
   readonly ritsuLibPresent: boolean;
   readonly capabilityDigest: string;
+  readonly registryFingerprint?: string | undefined;
+  readonly ritsuLibVersion?: string | undefined;
 }
 
 export function selectRoomProtocol(hostOffer: ProtocolOffer, policy: ServerProtocolPolicy): RoomProtocolSelection {
@@ -59,14 +70,16 @@ export function selectRoomProtocol(hostOffer: ProtocolOffer, policy: ServerProto
         "客户端与服务器没有共同的 LAN 协议版本。",
       );
     }
-    minimumClientVersion = "0.6.0-alpha.1";
-    if (hostOffer.ritsuLibPresent) {
-      if (!hostOffer.ritsuLibSidecarAvailable) {
-        throw sidecarUnavailable(true);
-      }
-      carrier = "ritsulib_sidecar_v1";
-    } else {
-      carrier = "standalone_tail_v1";
+    minimumClientVersion = "0.6.1-alpha.1";
+    // native_bus_v1：tail_v1 一律 native 载体，完全忽略 Ritsu presence 与 sidecar 可用性。
+    carrier = "native_bus_v1";
+    // 创建侧 fingerprint 必填（房间分配前拒绝，杜绝无冻结指纹房间流入 join 门禁）。
+    if (!isValidRegistryFingerprint(hostOffer.registryFingerprint)) {
+      throw new ProtocolContractError(
+        409,
+        "lan_registry_fingerprint_required",
+        "创建 tail_v1 房间必须携带格式合法的消息注册表指纹（sha256:v1:<64 位小写 hex>）。",
+      );
     }
   }
 
@@ -81,6 +94,10 @@ export function selectRoomProtocol(hostOffer: ProtocolOffer, policy: ServerProto
       ? {}
       : { wireCacheSignature: normalizeSignature(policy.wireCacheSignatureV1) }),
     ritsuLibPresent: hostOffer.ritsuLibPresent,
+    ...(policy.profile === "compat_4_5_v1" ? {} : {
+      registryFingerprint: hostOffer.registryFingerprint,
+      ...(hostOffer.ritsuLibVersion === undefined ? {} : { ritsuLibVersion: hostOffer.ritsuLibVersion }),
+    }),
   } as const;
   return Object.freeze({
     ...selectionWithoutDigest,
@@ -109,8 +126,12 @@ export function assertJoinerCompatible(selection: RoomProtocolSelection, joinerO
       { requiredRitsuLibPresent: selection.ritsuLibPresent },
     );
   }
-  if (joinerOffer.ritsuLibPresent && !joinerOffer.ritsuLibSidecarAvailable) {
-    throw sidecarUnavailable(true);
+  if (selection.carrier === "standalone_tail_v1" || selection.carrier === "ritsulib_sidecar_v1") {
+    throw new ProtocolContractError(
+      409,
+      "lan_legacy_carrier_unsupported",
+      "该房间使用旧版协议载体，请将房主与全体成员升级 LAN Connect 后重建房间。",
+    );
   }
   if (
     selection.selectedLanProtocolVersion < joinerOffer.lanProtocolMin
@@ -131,7 +152,13 @@ export function computeCapabilityDigest(selection: Omit<RoomProtocolSelection, "
     selection.profile === "compat_4_5_v1" ? 1 : 2,
     (selection.selectedLanProtocolVersion >>> 8) & 0xff,
     selection.selectedLanProtocolVersion & 0xff,
-    selection.carrier === "none" ? 0 : selection.carrier === "standalone_tail_v1" ? 1 : 2,
+    selection.carrier === "none"
+      ? 0
+      : selection.carrier === "standalone_tail_v1"
+        ? 1
+        : selection.carrier === "ritsulib_sidecar_v1"
+          ? 2
+          : 3,
     selection.maxPlayers,
   ]));
   pushLengthPrefixed(bytes, selection.minimumClientVersion, 32, "minimumClientVersion");
@@ -152,16 +179,28 @@ export function parseProtocolOffer(value: unknown): ProtocolOffer {
     "clientVersion",
     "ritsuLibPresent",
     "ritsuLibSidecarAvailable",
+    "registryFingerprint",
+    "ritsuLibVersion",
   ]);
   if (Object.keys(candidate).some((key) => !allowed.has(key))) {
     throw new TypeError("protocolOffer 包含不支持的字段。");
   }
+  // fingerprint 格式不在此处拒绝（避免 400 抢先）：合法性统一由 selectRoomProtocol /
+  // join 门禁以 lan_registry_fingerprint_required 拒绝（缺失与格式非法同一码）。
+  const registryFingerprint = candidate.registryFingerprint === undefined
+    ? undefined
+    : boundedRegistryFingerprint(candidate.registryFingerprint);
+  const ritsuLibVersion = candidate.ritsuLibVersion === undefined
+    ? undefined
+    : normalizeBoundedUtf8(requireString(candidate.ritsuLibVersion, "ritsuLibVersion"), "ritsuLibVersion", 32);
   const offer: ProtocolOffer = {
     lanProtocolMin: requireUint16(candidate.lanProtocolMin, "lanProtocolMin"),
     lanProtocolMax: requireUint16(candidate.lanProtocolMax, "lanProtocolMax"),
     clientVersion: normalizeBoundedUtf8(requireString(candidate.clientVersion, "clientVersion"), "clientVersion", 32),
     ritsuLibPresent: requireBoolean(candidate.ritsuLibPresent, "ritsuLibPresent"),
     ritsuLibSidecarAvailable: requireBoolean(candidate.ritsuLibSidecarAvailable, "ritsuLibSidecarAvailable"),
+    ...(registryFingerprint === undefined ? {} : { registryFingerprint }),
+    ...(ritsuLibVersion === undefined ? {} : { ritsuLibVersion }),
   };
   validateOffer(offer);
   return Object.freeze(offer);
@@ -172,9 +211,7 @@ function validateOffer(offer: ProtocolOffer): void {
   requireUint16(offer.lanProtocolMax, "lanProtocolMax");
   normalizeBoundedUtf8(offer.clientVersion, "clientVersion", 32);
   if (offer.lanProtocolMin > offer.lanProtocolMax) throw new TypeError("LAN 协议范围无效。");
-  if (!offer.ritsuLibPresent && offer.ritsuLibSidecarAvailable) {
-    throw new TypeError("未安装 RitsuLib 时不能声明 sidecar 可用。");
-  }
+  // native_bus_v1：sidecar 可用性只是诊断位（0.5.18 事故状态 = present 但不可用，必须照常通过）。
 }
 
 function validatePolicy(policy: ServerProtocolPolicy): void {
@@ -185,15 +222,18 @@ function validatePolicy(policy: ServerProtocolPolicy): void {
   requireUint16(policy.lanProtocolMax, "lanProtocolMax");
 }
 
-function sidecarUnavailable(requiredPresence: boolean): ProtocolContractError {
-  return new ProtocolContractError(409, "ritsulib_sidecar_unavailable", "RitsuLib 已安装，但公开 sidecar 当前不可用。", {
-    requiredRitsuLibPresent: requiredPresence,
-  });
-}
-
 function requireString(value: unknown, name: string): string {
   if (typeof value !== "string") throw new TypeError(`${name} 必须是字符串。`);
   return value;
+}
+
+function boundedRegistryFingerprint(value: unknown): string {
+  const normalized = requireString(value, "registryFingerprint").trim();
+  if (normalized.length === 0 || normalized.length > 96) {
+    throw new TypeError("registryFingerprint 必须是 1-96 字节。");
+  }
+
+  return normalized;
 }
 
 function requireUint16(value: unknown, name: string): number {

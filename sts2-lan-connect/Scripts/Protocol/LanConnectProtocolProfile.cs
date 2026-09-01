@@ -9,8 +9,9 @@ internal enum LanConnectProtocolProfile
 internal enum LanConnectProtocolCarrier
 {
     None,
-    StandaloneTailV1,
-    RitsuLibSidecarV1
+    LegacyTailV1,
+    LegacySidecarV1,
+    NativeBusV1
 }
 
 internal static class LanConnectProtocolProfileExtensions
@@ -59,8 +60,8 @@ internal static class LanConnectProtocolProfileExtensions
     public static string ToWireValue(this LanConnectProtocolCarrier carrier) => carrier switch
     {
         LanConnectProtocolCarrier.None => "none",
-        LanConnectProtocolCarrier.StandaloneTailV1 => "standalone_tail_v1",
-        LanConnectProtocolCarrier.RitsuLibSidecarV1 => "ritsulib_sidecar_v1",
+        LanConnectProtocolCarrier.LegacyTailV1 => "standalone_tail_v1",
+        LanConnectProtocolCarrier.LegacySidecarV1 => "ritsulib_sidecar_v1",
         _ => throw LanConnectProtocolFailureMapper.FromLocalException(
             "protocol_profile_unsupported",
             $"Unknown protocol carrier enum value {(int)carrier}.")
@@ -69,8 +70,9 @@ internal static class LanConnectProtocolProfileExtensions
     public static LanConnectProtocolCarrier ParseCarrier(string? value) => value switch
     {
         "none" => LanConnectProtocolCarrier.None,
-        "standalone_tail_v1" => LanConnectProtocolCarrier.StandaloneTailV1,
-        "ritsulib_sidecar_v1" => LanConnectProtocolCarrier.RitsuLibSidecarV1,
+        "standalone_tail_v1" => LanConnectProtocolCarrier.LegacyTailV1,
+        "native_bus_v1" => LanConnectProtocolCarrier.NativeBusV1,
+        "ritsulib_sidecar_v1" => LanConnectProtocolCarrier.LegacySidecarV1,
         _ => throw LanConnectProtocolFailureMapper.FromLocalException(
             "protocol_profile_unsupported",
             $"Unknown protocol carrier '{value ?? "<missing>"}'.")

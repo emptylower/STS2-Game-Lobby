@@ -4,11 +4,13 @@ import type { LobbyModDescriptor, ModDiffResult } from "./mod-sync/protocol.js";
 import { canonicalModInventoryJson, validateModInventory } from "./mod-sync/validator.js";
 import {
   classifyClientVersion,
+  isClientVersionAtLeast,
   normalizeClientVersion,
   type ClientApiGeneration,
 } from "./client-version.js";
 import {
   assertJoinerCompatible,
+  isValidRegistryFingerprint,
   selectRoomProtocol,
   type ProtocolOffer,
   type RoomProtocolSelection,
@@ -231,6 +233,7 @@ export interface JoinRoomInput {
   wireCacheSignatureV1?: string | undefined;
   desiredSavePlayerNetId?: string | undefined;
   playerNetId?: string | undefined;
+  registryFingerprint?: string | undefined;
 }
 
 export interface ModPreflightInput {
@@ -591,6 +594,13 @@ export class LobbyStore {
       throw new LobbyStoreError(426, "client_update_required", "客户端版本无效。");
     }
 
+    // tail_v1 统一加入门禁链（spec §5）：presence → carrier（上方 assertJoinerCompatible）→
+    // registry fingerprint → minimumClientVersion →（后续既有 mod 列表校验）。
+    // compat_4_5_v1 房间沿用旧合同，不走 fingerprint/minVersion 门禁。
+    if (room.protocolSelection.profile !== "compat_4_5_v1") {
+      this.runTailJoinGates(room, joinerVersion, input.registryFingerprint);
+    }
+
     const clientInstallationId = this.resolveClientInstallationIdentity(
       room,
       input.playerNetId,
@@ -652,6 +662,114 @@ export class LobbyStore {
       hostSession,
       availableSavedRunSlots,
     };
+  }
+
+  /** 工单签发前的门禁链快查（app 层在 wire-cache 预检查之前调用，保证错误优先级）。 */
+  /** preflight UX 快速失败：fingerprint 与房间冻结值不一致时抛非 2xx（不承担门禁）。 */
+  assertPreflightFingerprintAllowed(roomId: string, registryFingerprint: string): void {
+    const room = this.requireRoom(roomId);
+    const selection = room.protocolSelection;
+    if (selection.profile === "compat_4_5_v1" || !isValidRegistryFingerprint(selection.registryFingerprint)) {
+      return;
+    }
+
+    if (!isValidRegistryFingerprint(registryFingerprint) || registryFingerprint.trim() !== selection.registryFingerprint) {
+      throw new LobbyStoreError(
+        409,
+        "lan_registry_fingerprint_mismatch",
+        "双端 MOD 消息注册表不一致，请统一房间与本地 MOD 集合后重试。",
+        {
+          expectedFingerprintPrefix: selection.registryFingerprint.slice(0, "sha256:v1:".length + 8),
+          receivedFingerprintPrefix: registryFingerprint.trim().slice(0, "sha256:v1:".length + 8),
+        },
+      );
+    }
+  }
+
+  findJoinProtocolGateFailure(roomId: string, input: JoinRoomInput): LobbyStoreError | undefined {
+    try {
+      const room = this.requireRoom(roomId);
+      if (room.protocolSelection.profile === "compat_4_5_v1") {
+        return undefined;
+      }
+
+      const joinerGeneration = this.runProtocolValidation(() =>
+        classifyClientVersion(input.clientVersion, input.modVersion));
+      const joinerVersion = this.runProtocolValidation(() =>
+        normalizeClientVersion(input.clientVersion, input.modVersion));
+      const joinerProfile = this.runProtocolValidation(() => parseRequestedProfile({
+        generation: joinerGeneration,
+        legacyProfile: joinerGeneration === "compat_0_3_0_5" ? "extended_8p" : undefined,
+        canonicalProfile: joinerGeneration === "canonical_0_6_plus" ? room.protocolProfileV2 : undefined,
+      }));
+      if (joinerProfile !== room.protocolProfileV2) {
+        return undefined; // 由 validateJoinCompatibility 返回完整错误
+      }
+
+      const joinerOffer = this.resolveOffer(joinerGeneration, joinerVersion, input.protocolOffer);
+      try {
+        this.runProtocolValidation(() => assertJoinerCompatible(room.protocolSelection, joinerOffer));
+      } catch (error) {
+        if (error instanceof LobbyStoreError) {
+          return error;
+        }
+        throw error;
+      }
+
+      try {
+        this.runTailJoinGates(room, joinerVersion, input.registryFingerprint);
+      } catch (error) {
+        if (error instanceof LobbyStoreError) {
+          return error;
+        }
+        throw error;
+      }
+
+      return undefined;
+    } catch (error) {
+      if (error instanceof LobbyStoreError) {
+        return error;
+      }
+      throw error;
+    }
+  }
+
+  private runTailJoinGates(
+    room: Room,
+    joinerVersion: string,
+    registryFingerprint: string | undefined,
+  ): void {
+    const selection = room.protocolSelection;
+    if (!isValidRegistryFingerprint(registryFingerprint) || !isValidRegistryFingerprint(selection.registryFingerprint)) {
+      throw new LobbyStoreError(
+        409,
+        "lan_registry_fingerprint_required",
+        "加入 tail_v1 房间必须携带本机消息注册表指纹（sha256:v1:<64 位小写 hex>），请升级 LAN Connect。",
+      );
+    }
+
+    const received = registryFingerprint.trim();
+    const expected = selection.registryFingerprint;
+    if (received !== expected) {
+      throw new LobbyStoreError(
+        409,
+        "lan_registry_fingerprint_mismatch",
+        "双端 MOD 消息注册表不一致，请统一房间与本地 MOD 集合后重试。",
+        {
+          expectedFingerprintPrefix: expected.slice(0, "sha256:v1:".length + 8),
+          receivedFingerprintPrefix: received.slice(0, "sha256:v1:".length + 8),
+        },
+      );
+    }
+
+    if (!isClientVersionAtLeast(joinerVersion, selection.minimumClientVersion)) {
+      throw new LobbyStoreError(
+        426,
+        "lan_client_version_too_old",
+        `客户端版本过低，请升级 LAN Connect 至 ${selection.minimumClientVersion}。`,
+        { requiredClientVersion: selection.minimumClientVersion },
+      );
+    }
   }
 
   modPreflight(roomId: string, input: ModPreflightInput): ModPreflightResult {

@@ -293,6 +293,8 @@ internal sealed class LobbyJoinRoomRequest
     public string? DesiredSavePlayerNetId { get; set; }
 
     public string? PlayerNetId { get; set; }
+
+    public string? RegistryFingerprint { get; set; }
 }
 
 internal sealed class LobbyModPreflightRequest
@@ -409,13 +411,24 @@ internal sealed class LobbyProtocolOfferDto
 
     public bool RitsuLibSidecarAvailable { get; set; }
 
-    public static LobbyProtocolOfferDto FromValue(LanConnectProtocolOffer offer) => new()
+    /// <summary>创建侧必填：本机消息注册表指纹（不参与能力摘要哈希）。</summary>
+    public string? RegistryFingerprint { get; set; }
+
+    /// <summary>可选诊断字段：RitsuLib 版本（缺失 = unknown，仅展示与预检 UX）。</summary>
+    public string? RitsuLibVersion { get; set; }
+
+    public static LobbyProtocolOfferDto FromValue(
+        LanConnectProtocolOffer offer,
+        string? registryFingerprint = null,
+        string? ritsuLibVersion = null) => new()
     {
         LanProtocolMin = offer.LanProtocolMin,
         LanProtocolMax = offer.LanProtocolMax,
         ClientVersion = offer.ClientVersion,
         RitsuLibPresent = offer.RitsuLibPresent,
-        RitsuLibSidecarAvailable = offer.RitsuLibSidecarAvailable
+        RitsuLibSidecarAvailable = offer.RitsuLibSidecarAvailable,
+        RegistryFingerprint = registryFingerprint ?? offer.RegistryFingerprint,
+        RitsuLibVersion = ritsuLibVersion ?? offer.RitsuLibVersion
     };
 }
 

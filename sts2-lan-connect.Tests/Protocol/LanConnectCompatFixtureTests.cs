@@ -60,7 +60,7 @@ public sealed class LanConnectCompatFixtureTests
         LanConnectProtocolSelection selection = new(
             LanConnectProtocolProfile.TailV1,
             LanConnectConstants.TailLanProtocolVersion,
-            LanConnectProtocolCarrier.StandaloneTailV1,
+            LanConnectProtocolCarrier.LegacyTailV1,
             "0.6.0-alpha.1",
             8,
             "0.110.1",

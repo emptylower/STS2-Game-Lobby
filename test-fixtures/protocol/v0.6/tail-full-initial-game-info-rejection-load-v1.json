@@ -1,6 +1,6 @@
 {
   "name": "tail-full-initial-game-info-rejection-load-v1",
-  "schema": "sts2-v0.111.0-netmessagebus-tail-full-v1",
+  "schema": "sts2-v0.111.0-netmessagebus-native-full-v2",
   "file": "tail-full-initial-game-info-rejection-load-v1.bin",
   "messageType": "InitialGameInfoMessage",
   "messageTypeId": 16,
@@ -13,55 +13,8 @@
   "containerStartBit": 88,
   "containerStartByte": 11,
   "containerBytes": 115,
-  "totalBytes": 126,
-  "sha256": "ded6c7bea0d64610e15b2934c0f5078280a779a4745f3eff687996d069dbb046",
-  "containerSha256": "b4289022ce92962824c03bd6a44458064bdc09fb9168be7cf2557669bf871213",
-  "fixtureProvenance": {
-    "authoringMethod": "captured-from-production-serialization-manually-byte-map-reviewed",
-    "vanillaBodyAuthoring": "not-independent-authoring",
-    "lanContainerReview": "independent-test-parser-no-production-lan-codec-or-runtime",
-    "frozen": true,
-    "updatePolicy": "fixture updates require independent construction or manual byte-level review; tests are read-only",
-    "reviewedFields": [
-      "messageTypeId",
-      "senderPeerId",
-      "headerBytes",
-      "vanillaBodyEndBit",
-      "paddingBits",
-      "containerStartBit",
-      "containerStartByte",
-      "containerBytes",
-      "sha256",
-      "containerSha256",
-      "expected"
-    ]
-  },
-  "byteMapReview": {
-    "packetHeader": {
-      "messageTypeIdOffset": 0,
-      "senderPeerIdLittleEndianByteRange": "1..8",
-      "headerBytes": 9
-    },
-    "vanillaBody": {
-      "startBit": 72,
-      "endBit": 83,
-      "reviewStatus": "reviewed-by-offset-map-not-independently-constructed"
-    },
-    "standaloneTail": {
-      "paddingBits": 5,
-      "containerStartBit": 88,
-      "containerStartByte": 11,
-      "containerBytes": 115,
-      "containerSha256": "b4289022ce92962824c03bd6a44458064bdc09fb9168be7cf2557669bf871213"
-    }
-  },
-  "expected": {
-    "payload": "rejection",
-    "sessionState": "InLobby",
-    "gameMode": "Standard",
-    "connectionFailureReason": "ModMismatch",
-    "rejectionStage": "load",
-    "code": "game_version_mismatch",
-    "detail": "rejected during loaded-run join request"
-  }
+  "totalBytes": 11,
+  "sha256": "45ce2ce403910dd0bbec4607aab6cb9a63d7893cbfa508d498bafde1ec3ac77b",
+  "containerSha256": "b25117188d142079b8496b6b9e26735936c3cad8307aca51a50f2687f29e5a81",
+  "expected": null
 }

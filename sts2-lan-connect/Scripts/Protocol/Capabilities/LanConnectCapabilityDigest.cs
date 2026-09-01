@@ -29,8 +29,9 @@ internal static class LanConnectCapabilityDigest
         stream.WriteByte(selection.Carrier switch
         {
             LanConnectProtocolCarrier.None => 0,
-            LanConnectProtocolCarrier.StandaloneTailV1 => 1,
-            LanConnectProtocolCarrier.RitsuLibSidecarV1 => 2,
+            LanConnectProtocolCarrier.LegacyTailV1 => 1,
+            LanConnectProtocolCarrier.LegacySidecarV1 => 2,
+            LanConnectProtocolCarrier.NativeBusV1 => 3,
             _ => throw LanConnectProtocolFailureMapper.FromLocalException("protocol_profile_unsupported")
         });
         stream.WriteByte(checked((byte)selection.MaxPlayers));
