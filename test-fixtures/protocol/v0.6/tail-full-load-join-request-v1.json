@@ -16,5 +16,31 @@
   "totalBytes": 9,
   "sha256": "f8fdf0f11575ee941276aee3bd4a6a7d588ab004e4a320ed346f24683a7253ed",
   "containerSha256": "5e4d2e7ea08313ea5bad0e6c184057a2df5ea5dea75a30d461ef4e93e54c020b",
-  "expected": null
+  "fixtureProvenance": {
+    "authoringMethod": "captured-from-production-serialization-manually-byte-map-reviewed",
+    "vanillaBodyAuthoring": "not-independent-authoring",
+    "lanContainerReview": "independent-test-parser-no-production-lan-codec-or-runtime",
+    "frozen": true,
+    "updatePolicy": "fixture updates require independent construction or manual byte-level review; tests are read-only",
+    "reviewedFields": [
+      "messageTypeId",
+      "senderPeerId",
+      "headerBytes",
+      "vanillaBodyEndBit",
+      "paddingBits",
+      "containerStartBit",
+      "containerStartByte",
+      "containerBytes",
+      "sha256",
+      "containerSha256",
+      "expected"
+    ]
+  },
+  "byteMapReview": {"packetHeader":{"messageTypeIdOffset":0,"senderPeerIdLittleEndianByteRange":"1..8","headerBytes":9},"vanillaBody":{"startBit":72,"endBit":72,"reviewStatus":"reviewed-by-offset-map-not-independently-constructed"},"standaloneTail":{"paddingBits":0,"containerStartBit":72,"containerStartByte":9,"containerBytes":63,"containerSha256":"5e4d2e7ea08313ea5bad0e6c184057a2df5ea5dea75a30d461ef4e93e54c020b"}},
+  "expected": {
+    "payload": "peerOffer",
+    "clientVersion": "0.6.0-alpha.1",
+    "ritsuLibPresent": false,
+    "ritsuLibSidecarAvailable": false
+  }
 }

@@ -26,7 +26,6 @@ internal static class LanConnectGameplayPatches
         if (TryApplyGroup("SaveManager", () => LanConnectSaveManagerPatches.Apply(HarmonyInstance))) applied++; else failed++;
         if (TryApplyGroup("JoinScreenAutoJoin", () => LanConnectJoinScreenAutoJoinPatches.Apply(HarmonyInstance))) applied++; else failed++;
         if (TryApplyGroup("PeerVersionInfo", () => LanConnectPeerVersionInfoPatches.Apply(HarmonyInstance))) applied++; else failed++;
-        if (TryApplyGroup("RitsuLibLobbyCompatibility", () => LanConnectRitsuLibLobbyCompatibility.Apply(HarmonyInstance))) applied++; else failed++;
 
         if (LanConnectExternalModDetection.IsRmpModLoaded)
         {

@@ -136,7 +136,6 @@ internal static class LanConnectMultiplayerSaveCompatibility
         }
 
         field.SetValue(runManager, null);
-        LanConnectRitsuLibSidecarCarrier.Shared.ObserveNetService(null);
         GD.Print(
             $"sts2_lan_connect restart_net_service: cleared stale RunManager service type={staleService!.GetType().Name}");
         return true;

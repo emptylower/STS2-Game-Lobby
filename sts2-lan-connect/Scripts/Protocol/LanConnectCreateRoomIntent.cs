@@ -28,13 +28,7 @@ internal sealed record LanConnectCreateRoomIntent(
             throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibNotAllowedInCompat());
         }
 
-        if (Profile == LanConnectProtocolProfile.TailV1
-            && Offer.RitsuLibPresent
-            && !Offer.RitsuLibSidecarAvailable)
-        {
-            throw new LanConnectProtocolException(LanConnectProtocolFailure.RitsuLibSidecarUnavailable());
-        }
-
+        // native_bus_v1：tail 房间不再要求 sidecar 可用（0.5.18 事故状态照常建房）。
         return this;
     }
 

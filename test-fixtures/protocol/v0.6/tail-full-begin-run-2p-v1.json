@@ -16,5 +16,38 @@
   "totalBytes": 77,
   "sha256": "f9ef93961a49318d46089be42b67107549ff7e7c9f55e24cea49c3d081694d8c",
   "containerSha256": "a5f0bfe116807ab063b6b48fdd739fb537abff6255abeee77f7f973dc2789dc4",
-  "expected": null
+  "fixtureProvenance": {
+    "authoringMethod": "captured-from-production-serialization-manually-byte-map-reviewed",
+    "vanillaBodyAuthoring": "not-independent-authoring",
+    "lanContainerReview": "independent-test-parser-no-production-lan-codec-or-runtime",
+    "frozen": true,
+    "updatePolicy": "fixture updates require independent construction or manual byte-level review; tests are read-only",
+    "reviewedFields": [
+      "messageTypeId",
+      "senderPeerId",
+      "headerBytes",
+      "vanillaBodyEndBit",
+      "paddingBits",
+      "containerStartBit",
+      "containerStartByte",
+      "containerBytes",
+      "sha256",
+      "containerSha256",
+      "expected"
+    ]
+  },
+  "byteMapReview": {"packetHeader":{"messageTypeIdOffset":0,"senderPeerIdLittleEndianByteRange":"1..8","headerBytes":9},"vanillaBody":{"startBit":72,"endBit":613,"reviewStatus":"reviewed-by-offset-map-not-independently-constructed"},"standaloneTail":{"paddingBits":3,"containerStartBit":616,"containerStartByte":77,"containerBytes":153,"containerSha256":"a5f0bfe116807ab063b6b48fdd739fb537abff6255abeee77f7f973dc2789dc4"}},
+  "expected": {
+    "payload": "roster",
+    "seed": "seed-2",
+    "act1": "Act1",
+    "slots": [
+      0,
+      1
+    ],
+    "playerIds": [
+      100,
+      101
+    ]
+  }
 }

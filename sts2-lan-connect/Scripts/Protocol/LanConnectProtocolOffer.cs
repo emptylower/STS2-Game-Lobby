@@ -5,7 +5,7 @@ internal sealed record LanConnectProtocolOffer(
     int LanProtocolMax,
     string ClientVersion,
     bool RitsuLibPresent,
-    bool RitsuLibSidecarAvailable,
+    bool LegacySidecarAvailable,
     string? RegistryFingerprint = null,
     string? RitsuLibVersion = null)
 {
@@ -32,7 +32,7 @@ internal sealed record LanConnectProtocolOffer(
             tailLanProtocolVersion,
             clientVersion,
             capabilities.RitsuLibPresent,
-            capabilities.RitsuLibSidecarAvailable,
+            capabilities.LegacySidecarAvailable,
             fingerprint,
             capabilities.RitsuLibVersion);
     }

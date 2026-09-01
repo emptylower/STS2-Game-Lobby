@@ -218,7 +218,7 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
     // closed via MakeGenericType, which is what poisons the target for later patchers.
     private MethodInfo PatchForeignGenericPostfix(Harmony foreign, Type messageType)
     {
-        MethodInfo target = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
+        MethodInfo target = ResolveClosedBusSerializerForTesting(
             typeof(NetMessageBus),
             messageType);
         Type closedPatchType = typeof(ForeignSerializePatch<>).MakeGenericType(messageType);
@@ -236,6 +236,15 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
             _ = message;
         }
     }
+
+    // 测试专用：复刻第三方（RitsuLib 形态）选择的闭环泛型 serializer 目标。
+    private static MethodInfo ResolveClosedBusSerializerForTesting(Type busType, Type messageType) =>
+        busType
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Single(method => method.Name == nameof(NetMessageBus.SerializeMessage)
+                && method.IsGenericMethodDefinition
+                && method.GetParameters().Length == 3)
+            .MakeGenericMethod(messageType);
 
     private static string FindRepositoryRoot()
     {

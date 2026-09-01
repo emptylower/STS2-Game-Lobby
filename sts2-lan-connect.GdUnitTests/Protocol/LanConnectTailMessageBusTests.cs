@@ -87,7 +87,7 @@ public sealed class LanConnectTailMessageBusTests
 
                 // ...and never touches the closed generic bus serializer, which foreign
                 // generic-declared patches can poison (RitsuLib conflict, see alpha.9 F2).
-                MethodInfo busSerialize = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
+                MethodInfo busSerialize = ResolveClosedBusSerializerForTesting(
                     typeof(NetMessageBus),
                     messageType);
                 Patches? busPatches = Harmony.GetPatchInfo(busSerialize);
@@ -180,8 +180,17 @@ public sealed class LanConnectTailMessageBusTests
     {
         LanConnectExternalCapabilitySnapshot snapshot = LanConnectExternalCapabilityCollector.Collect([]);
         AssertThat(snapshot.RitsuLibPresent).IsFalse();
-        AssertThat(snapshot.RitsuLibSidecarAvailable).IsFalse();
+        AssertThat(snapshot.LegacySidecarAvailable).IsFalse();
     }
+
+    // 测试专用：解析闭环泛型总线 serializer（生产端解析器已删除；本断言只证明我们不碰它）。
+    private static MethodInfo ResolveClosedBusSerializerForTesting(Type busType, Type messageType) =>
+        busType
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Single(method => method.Name == nameof(NetMessageBus.SerializeMessage)
+                && method.IsGenericMethodDefinition
+                && method.GetParameters().Length == 3)
+            .MakeGenericMethod(messageType);
 
     private static LanConnectProtocolOffer Offer() =>
         new(1, 1, "0.6.1-alpha.1", false, false);

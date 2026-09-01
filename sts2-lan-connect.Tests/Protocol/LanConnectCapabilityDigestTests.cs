@@ -156,7 +156,7 @@ public sealed class LanConnectCapabilityDigestTests
         int LanProtocolMax,
         string ClientVersion,
         bool RitsuLibPresent,
-        bool RitsuLibSidecarAvailable);
+        bool LegacySidecarAvailable);
 
     private sealed record DigestPolicyVector(
         string Profile,

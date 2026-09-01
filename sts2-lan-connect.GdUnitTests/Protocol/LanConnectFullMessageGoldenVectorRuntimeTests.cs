@@ -279,6 +279,33 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
                     int paddingBits = vanillaEndByte * 8 - vanillaBodyEndBit;
 
                     File.WriteAllBytes(Path.Combine(fixtureRoot, $"{spec.Name}.bin"), vanilla.AsSpan(0, vanillaEndByte).ToArray());
+                    string jsonPath = Path.Combine(fixtureRoot, $"{spec.Name}.json");
+                    string existing = File.Exists(jsonPath) ? File.ReadAllText(jsonPath) : "{}";
+                    using JsonDocument existingDocument = JsonDocument.Parse(existing);
+                    JsonElement old = existingDocument.RootElement;
+                    string expectedJson = old.TryGetProperty("expected", out JsonElement expectedElement)
+                        ? expectedElement.GetRawText()
+                        : "null";
+                    string provenanceJson = old.TryGetProperty("fixtureProvenance", out JsonElement provenanceElement)
+                        ? provenanceElement.GetRawText()
+                        : "null";
+                    string byteMapJson = "null";
+                    if (old.TryGetProperty("byteMapReview", out JsonElement byteMapElement))
+                    {
+                        // byteMapReview 的 standaloneTail 段随容器迁移到扩展帧同步刷新。
+                        System.Text.Json.Nodes.JsonNode? byteMapNode =
+                            System.Text.Json.Nodes.JsonNode.Parse(byteMapElement.GetRawText());
+                        if (byteMapNode?["standaloneTail"] is System.Text.Json.Nodes.JsonObject tailNode)
+                        {
+                            tailNode["paddingBits"] = paddingBits;
+                            tailNode["containerStartBit"] = vanillaEndByte * 8;
+                            tailNode["containerStartByte"] = vanillaEndByte;
+                            tailNode["containerBytes"] = container.Length;
+                            tailNode["containerSha256"] = Sha256(container);
+                        }
+
+                        byteMapJson = byteMapNode?.ToJsonString() ?? "null";
+                    }
                     string json = $$"""
 {
   "name": "{{spec.Name}}",
@@ -298,10 +325,12 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
   "totalBytes": {{vanillaEndByte}},
   "sha256": "{{Sha256(vanilla.AsSpan(0, vanillaEndByte).ToArray())}}",
   "containerSha256": "{{Sha256(container)}}",
-  "expected": null
+  "fixtureProvenance": {{provenanceJson}},
+  "byteMapReview": {{byteMapJson}},
+  "expected": {{expectedJson}}
 }
 """;
-                    File.WriteAllText(Path.Combine(fixtureRoot, $"{spec.Name}.json"), json + "\n");
+                    File.WriteAllText(jsonPath, json + "\n");
                 }
                 finally
                 {
@@ -341,7 +370,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
                 MaxAscensionUnlocked = 12,
                 ClientVersion = "0.6.1-alpha.1",
                 RitsuLibPresent = false,
-                RitsuLibSidecarAvailable = false
+                LegacySidecarAvailable = false
             });
         yield return Client(
             "tail-full-load-join-request-v1",
@@ -351,7 +380,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             {
                 ClientVersion = "0.6.1-alpha.1",
                 RitsuLibPresent = false,
-                RitsuLibSidecarAvailable = false
+                LegacySidecarAvailable = false
             });
         yield return Client(
             "tail-full-rejoin-request-v1",
@@ -361,7 +390,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             {
                 ClientVersion = "0.6.1-alpha.1",
                 RitsuLibPresent = false,
-                RitsuLibSidecarAvailable = false
+                LegacySidecarAvailable = false
             });
         yield return Host(
             "tail-full-lobby-join-response-v1",
@@ -529,8 +558,8 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             case "peerOffer":
                 AssertThat(payload.PeerOffer!.ClientVersion).IsEqual(spec.Expected.ClientVersion);
                 AssertThat(payload.PeerOffer.RitsuLibPresent).IsEqual(spec.Expected.RitsuLibPresent!.Value);
-                AssertThat(payload.PeerOffer.RitsuLibSidecarAvailable)
-                    .IsEqual(spec.Expected.RitsuLibSidecarAvailable!.Value);
+                AssertThat(payload.PeerOffer.LegacySidecarAvailable)
+                    .IsEqual(spec.Expected.LegacySidecarAvailable!.Value);
                 break;
             case "selection":
                 AssertThat(payload.SessionSelection!.Carrier).IsEqual(LanConnectProtocolCarrier.NativeBusV1);
@@ -723,7 +752,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         public string? Act1 { get; init; }
         public string? ClientVersion { get; init; }
         public bool? RitsuLibPresent { get; init; }
-        public bool? RitsuLibSidecarAvailable { get; init; }
+        public bool? LegacySidecarAvailable { get; init; }
         public int[]? Slots { get; init; }
         public ulong[]? PlayerIds { get; init; }
         public ulong? JoinedPlayerId { get; init; }

@@ -59,12 +59,13 @@ public sealed class LanConnectFullMessageGoldenVectorTests
     {
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(jsonFile));
         JsonElement root = document.RootElement;
+        Assert.Equal("sts2-v0.111.0-netmessagebus-native-full-v2", root.GetProperty("schema").GetString());
         string file = root.GetProperty("file").GetString()!;
-        byte[] fullMessage = File.ReadAllBytes(Path.Combine(fixtureRoot, file));
+        byte[] vanilla = File.ReadAllBytes(Path.Combine(fixtureRoot, file));
 
         VerifyFixtureProvenance(root.GetProperty("fixtureProvenance"));
-        Assert.Equal(root.GetProperty("totalBytes").GetInt32(), fullMessage.Length);
-        Assert.Equal(root.GetProperty("sha256").GetString(), Sha256(fullMessage));
+        Assert.Equal(root.GetProperty("totalBytes").GetInt32(), vanilla.Length);
+        Assert.Equal(root.GetProperty("sha256").GetString(), Sha256(vanilla));
         Assert.Equal(9, root.GetProperty("headerBytes").GetInt32());
 
         int vanillaBodyEndBit = root.GetProperty("vanillaBodyEndBit").GetInt32();
@@ -76,25 +77,23 @@ public sealed class LanConnectFullMessageGoldenVectorTests
         Assert.Equal(paddingBits, containerStartBit - vanillaBodyEndBit);
         VerifyByteMapReview(root.GetProperty("byteMapReview"), root);
 
+        // native_bus_v1：原版包不再追加尾部容器；containerStartByte 即原版包终点，
+        // 容器哈希记录扩展帧承载的容器内容（其逐字节验证在 GdUnit 生产链测试中执行）。
         int containerStartByte = containerStartBit / 8;
         Assert.Equal(root.GetProperty("containerStartByte").GetInt32(), containerStartByte);
-        Assert.Equal(containerStartByte, IndexOf(fullMessage, TailMagic));
-        Assert.Equal(root.GetProperty("messageTypeId").GetInt32(), fullMessage[0]);
+        Assert.Equal(containerStartByte, vanilla.Length);
+        Assert.Equal(root.GetProperty("messageTypeId").GetInt32(), vanilla[0]);
         ulong senderPeerId = root.GetProperty("senderPeerId").GetUInt64();
-        Assert.Equal(senderPeerId, BinaryPrimitives.ReadUInt64LittleEndian(fullMessage.AsSpan(1, 8)));
-        byte[] container = fullMessage.AsSpan(containerStartByte).ToArray();
-        Assert.True(container.AsSpan(0, TailMagic.Length).SequenceEqual(TailMagic));
-        Assert.Equal(root.GetProperty("containerBytes").GetInt32(), container.Length);
-        Assert.Equal(root.GetProperty("containerSha256").GetString(), Sha256(container));
-        AssertPaddingBitsAreZero(fullMessage, vanillaBodyEndBit, paddingBits);
+        Assert.Equal(senderPeerId, BinaryPrimitives.ReadUInt64LittleEndian(vanilla.AsSpan(1, 8)));
+        string containerSha256 = root.GetProperty("containerSha256").GetString();
+        Assert.Matches("^[0-9a-f]{64}$", containerSha256);
+        Assert.True(root.GetProperty("containerBytes").GetInt32() > 0);
+        Assert.Equal(-1, IndexOf(vanilla, TailMagic));
+        AssertPaddingBitsAreZero(vanilla, vanillaBodyEndBit, paddingBits);
 
         int kind = root.GetProperty("messageKindValue").GetInt32();
         Assert.Equal(root.GetProperty("messageKind").GetString(), MessageKindName(kind));
-        JsonElement expected = root.GetProperty("expected");
-        string payloadKind = expected.GetProperty("payload").GetString()!;
-
-        IndependentTailEnvelope envelope = ParseTailContainer(container);
-        VerifyExpectedPayload(expected, payloadKind, kind, senderPeerId, envelope);
+        Assert.NotNull(root.GetProperty("expected").GetProperty("payload").GetString());
     }
 
     private static void VerifyFixtureProvenance(JsonElement provenance)

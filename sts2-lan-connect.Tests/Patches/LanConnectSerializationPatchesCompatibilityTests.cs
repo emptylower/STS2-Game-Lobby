@@ -48,7 +48,7 @@ public sealed class LanConnectSerializationPatchesCompatibilityTests
     [Fact]
     public void Resolves_closed_generic_message_bus_serializer()
     {
-        MethodInfo result = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
+        MethodInfo result = ResolveClosedBusSerializerForTesting(
             typeof(CompatibleMessageBus),
             typeof(PlayerListMessage<StartRunLobbyPlayer>));
 
@@ -60,31 +60,32 @@ public sealed class LanConnectSerializationPatchesCompatibilityTests
     [Fact]
     public void Rejects_message_bus_without_expected_generic_serializer_shape()
     {
-        Assert.Throws<MissingMethodException>(() =>
-            LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
+        Assert.Throws<InvalidOperationException>(() =>
+            ResolveClosedBusSerializerForTesting(
                 typeof(IncompatibleMessageBus),
                 typeof(PlayerListMessage<StartRunLobbyPlayer>)));
     }
 
-    // The boundary prefix short-circuits SerializeMessage<LobbyBeginRunMessage>; under the
-    // default non-generic plan the begin-run tail lives on the concrete Serialize method,
-    // which the boundary would starve of its call. Only the legacy desktop generic plan
-    // (where the tail hooks share the boundary's target method) may still patch it.
-    [Theory]
-    [InlineData(false, true, true)]
-    [InlineData(false, false, false)]
-    [InlineData(true, true, false)]
-    [InlineData(true, false, false)]
-    public void Begin_run_message_bus_boundary_is_patched_only_with_the_legacy_desktop_generic_plan(
-        bool isAndroid,
-        bool preferLegacyDesktopGenericPlan,
-        bool expected)
+    // 测试专用：解析闭环泛型总线 serializer（生产端的泛型解析器已随桌面泛型计划删除）。
+    private static MethodInfo ResolveClosedBusSerializerForTesting(Type busType, Type messageType) =>
+        busType
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Single(method => method.Name == "SerializeMessage"
+                && method.IsGenericMethodDefinition
+                && method.GetParameters().Length == 3)
+            .MakeGenericMethod(messageType);
+
+    // begin-run 边界 prefix 随桌面泛型计划一并删除：native_bus_v1 下恒不注册该目标。
+    [Fact]
+    public void Begin_run_message_bus_boundary_is_never_patched_under_native_bus()
     {
-        Assert.Equal(
-            expected,
-            LanConnectSerializationPatches.ShouldPatchBeginRunMessageBusBoundary(
-                isAndroid,
-                preferLegacyDesktopGenericPlan));
+        string source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "sts2-lan-connect",
+            "Scripts",
+            "LanConnectSerializationPatches.cs"));
+        Assert.DoesNotContain("beginRunMessageBusSerialize = Resolve", source, StringComparison.Ordinal);
+        Assert.Contains("native_bus_v1 恒为 null", source, StringComparison.Ordinal);
     }
 
     [Fact]

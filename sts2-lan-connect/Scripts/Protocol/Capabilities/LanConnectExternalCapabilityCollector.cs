@@ -4,7 +4,7 @@ namespace Sts2LanConnect.Scripts;
 
 internal sealed record LanConnectExternalCapabilitySnapshot(
     bool RitsuLibPresent,
-    bool RitsuLibSidecarAvailable,
+    bool LegacySidecarAvailable,
     string? RitsuLibVersion = null);
 
 internal static class LanConnectExternalCapabilityCollector

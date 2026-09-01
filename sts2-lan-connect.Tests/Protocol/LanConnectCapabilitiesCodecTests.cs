@@ -25,7 +25,7 @@ public sealed class LanConnectCapabilitiesCodecTests
 
         payload[^1] = 3;
         Assert.Equal(
-            presentButUnavailable with { RitsuLibSidecarAvailable = true },
+            presentButUnavailable with { LegacySidecarAvailable = true },
             LanConnectCapabilitiesCodec.DecodePeerOffer(payload, 0));
     }
 

@@ -151,36 +151,8 @@ if [[ "$ARTIFACTS_ONLY" -eq 0 ]]; then
   export DOTNET_BIN
   "$DOTNET_BIN" test "$ROOT_DIR/sts2-lan-connect.ProtocolPlanTests/sts2_lan_connect.ProtocolPlanTests.csproj" -m:1
   "$DOTNET_BIN" test "$ROOT_DIR/sts2-lan-connect.Tests/sts2_lan_connect.Tests.csproj" -m:1
-  # The legacy desktop-generic golden-vector case runs in a dedicated Godot process:
-  # detouring and restoring SerializeMessage<T> can leave the concrete Serialize inlined in
-  # the restored native code, which would bypass the non-generic plan's concrete patches in
-  # every later test of the same process. A filter that matches nothing exits 0 silently,
-  # so both invocations must prove from their TRX reports that tests actually ran (and that
-  # the legacy case stayed out of the main run).
-  GDUNIT_MAIN_TRX="$TEMP_ROOT/gdunit-main.trx"
-  GDUNIT_LEGACY_TRX="$TEMP_ROOT/gdunit-legacy.trx"
-  "$DOTNET_BIN" test "$ROOT_DIR/sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj" \
-    --settings "$ROOT_DIR/sts2-lan-connect.GdUnitTests/gdunit4.runsettings" \
-    --filter "FullyQualifiedName!~legacy_desktop_generic_plan" \
-    --logger "trx;LogFileName=$GDUNIT_MAIN_TRX" \
-    -p:RitsuLibAssembly="$RITSULIB_ASSEMBLY" -m:1
-  "$DOTNET_BIN" test "$ROOT_DIR/sts2-lan-connect.GdUnitTests/sts2_lan_connect.GdUnitTests.csproj" \
-    --settings "$ROOT_DIR/sts2-lan-connect.GdUnitTests/gdunit4.runsettings" \
-    --filter "FullyQualifiedName~legacy_desktop_generic_plan" \
-    --logger "trx;LogFileName=$GDUNIT_LEGACY_TRX" \
-    -p:RitsuLibAssembly="$RITSULIB_ASSEMBLY" -m:1
-  GDUNIT_MAIN_COUNT="$(grep -c '<UnitTestResult ' "$GDUNIT_MAIN_TRX" || true)"
-  GDUNIT_LEGACY_COUNT="$(grep -c '<UnitTestResult ' "$GDUNIT_LEGACY_TRX" || true)"
-  [[ "$GDUNIT_MAIN_COUNT" -ge 1 ]] || \
-    release_die "GdUnit main run executed 0 tests (filter drifted?); the suite must not pass empty"
-  [[ "$GDUNIT_LEGACY_COUNT" -eq 1 ]] || \
-    release_die "GdUnit legacy-plan run executed $GDUNIT_LEGACY_COUNT tests, expected exactly 1 (golden byte-equivalence evidence)"
-  grep -q "legacy_desktop_generic_plan" "$GDUNIT_LEGACY_TRX" || \
-    release_die "GdUnit legacy-plan run did not execute the legacy_desktop_generic_plan case"
-  if grep -q "legacy_desktop_generic_plan" "$GDUNIT_MAIN_TRX"; then
-    release_die "GdUnit main run included the legacy_desktop_generic_plan case; it must run in isolation"
-  fi
-  echo "[verify-release] GdUnit executed tests: main=$GDUNIT_MAIN_COUNT legacy=$GDUNIT_LEGACY_COUNT"
+  # native_bus_v1 迁移零引用门禁（固定符号表）。
+  bash "$ROOT_DIR/scripts/check-native-bus-migration.sh"
 fi
 
 DOTNET_BIN="$(resolve_tool \

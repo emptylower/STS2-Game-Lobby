@@ -234,6 +234,9 @@ internal static class LanConnectMultiplayerSaveRoomBinding
 
         try
         {
+            // registry fingerprint 不持久化：重建 selection 只恢复结构字段；重发布房间时
+            // 经 CreateCurrent() 以本机注册表即时重算并随 offer 上传（spec §5 字段级合同）。
+            // 旧载体绑定在此被 Validate 以 lan_legacy_carrier_unsupported 拒绝 → 回退为重新发布。
             LanConnectProtocolSelection selection = new(
                 LanConnectProtocolProfileExtensions.ParseCanonical(binding.ProtocolProfileV2),
                 binding.SelectedLanProtocolVersion,

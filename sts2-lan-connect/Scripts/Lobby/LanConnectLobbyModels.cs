@@ -409,7 +409,8 @@ internal sealed class LobbyProtocolOfferDto
 
     public bool RitsuLibPresent { get; set; }
 
-    public bool RitsuLibSidecarAvailable { get; set; }
+    [JsonPropertyName("ritsuLibSidecarAvailable")]
+    public bool LegacySidecarAvailable { get; set; }
 
     /// <summary>创建侧必填：本机消息注册表指纹（不参与能力摘要哈希）。</summary>
     public string? RegistryFingerprint { get; set; }
@@ -426,7 +427,7 @@ internal sealed class LobbyProtocolOfferDto
         LanProtocolMax = offer.LanProtocolMax,
         ClientVersion = offer.ClientVersion,
         RitsuLibPresent = offer.RitsuLibPresent,
-        RitsuLibSidecarAvailable = offer.RitsuLibSidecarAvailable,
+        LegacySidecarAvailable = offer.LegacySidecarAvailable,
         RegistryFingerprint = registryFingerprint ?? offer.RegistryFingerprint,
         RitsuLibVersion = ritsuLibVersion ?? offer.RitsuLibVersion
     };

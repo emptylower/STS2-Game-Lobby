@@ -6331,9 +6331,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return false;
         }
 
-        return offer.RitsuLibPresent
-            ? offer.RitsuLibSidecarAvailable
-            : standaloneTailRuntimeAvailable;
+        _ = offer.RitsuLibPresent;
+        return standaloneTailRuntimeAvailable;
     }
 
     private void SelectDefaultCreateProtocol()

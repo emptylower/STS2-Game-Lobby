@@ -229,15 +229,6 @@ internal static class LanConnectSerializationPatches
     internal static string BeginRunBoundaryStateForTesting =>
         FormatBeginRunBoundaryState(_beginRunBoundaryState);
 
-    // The boundary prefix short-circuits SerializeMessage<LobbyBeginRunMessage>, so it must
-    // only exist where the tail hooks live on that same generic method (the legacy desktop
-    // plan). Under the default non-generic plan the tail hooks live on the concrete
-    // LobbyBeginRunMessage.Serialize, which the boundary prefix would starve of its call.
-    internal static bool ShouldPatchBeginRunMessageBusBoundary(
-        bool isAndroid,
-        bool preferLegacyDesktopGenericPlan) =>
-        !isAndroid && preferLegacyDesktopGenericPlan;
-
     private static WirePatchPlan ResolveRequiredPatchPlan(
         Assembly sts2Assembly,
         bool includeBeginRunMessageBusBoundary)
@@ -249,13 +240,9 @@ internal static class LanConnectSerializationPatches
         ValidateBeginRunWireSchema(beginRunType);
         _ = NetMessageBusWriter
             ?? throw new MissingFieldException(typeof(NetMessageBus).FullName, "_writer");
+        // begin-run 边界 prefix 只服务于已删除的桌面泛型计划；native_bus_v1 恒为 null。
+        _ = includeBeginRunMessageBusBoundary;
         MethodInfo? beginRunMessageBusSerialize = null;
-        if (includeBeginRunMessageBusBoundary)
-        {
-            beginRunMessageBusSerialize = ResolveGenericSerializeMessageMethod(
-                typeof(NetMessageBus),
-                beginRunType);
-        }
 
         WirePatchTarget[] targets =
         {
@@ -290,32 +277,6 @@ internal static class LanConnectSerializationPatches
             beginRunType,
             beginRunMessageBusSerialize,
             targets);
-    }
-
-    internal static MethodInfo ResolveGenericSerializeMessageMethod(Type messageBusType, Type messageType)
-    {
-        MethodInfo[] matches = messageBusType
-            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-            .Where(static method => method.Name == nameof(NetMessageBus.SerializeMessage))
-            .Where(static method => method.IsGenericMethodDefinition)
-            .Where(static method => method.ReturnType == typeof(byte[]))
-            .Where(static method =>
-            {
-                ParameterInfo[] parameters = method.GetParameters();
-                return parameters.Length == 3
-                    && parameters[0].ParameterType == typeof(ulong)
-                    && parameters[1].ParameterType.IsGenericParameter
-                    && parameters[2].ParameterType == typeof(int).MakeByRefType();
-            })
-            .ToArray();
-        if (matches.Length != 1)
-        {
-            throw new MissingMethodException(
-                messageBusType.FullName,
-                $"SerializeMessage<T>(UInt64, T, out Int32) unique overload; found={matches.Length}");
-        }
-
-        return matches[0].MakeGenericMethod(messageType);
     }
 
     private static void ValidateBeginRunWireSchema(Type beginRunType)

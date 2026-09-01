@@ -16,5 +16,34 @@
   "totalBytes": 11,
   "sha256": "45ce2ce403910dd0bbec4607aab6cb9a63d7893cbfa508d498bafde1ec3ac77b",
   "containerSha256": "d927da97a82a6fd5d43236de11a2fbf846802bd2c69680aa1bca042924853774",
-  "expected": null
+  "fixtureProvenance": {
+    "authoringMethod": "captured-from-production-serialization-manually-byte-map-reviewed",
+    "vanillaBodyAuthoring": "not-independent-authoring",
+    "lanContainerReview": "independent-test-parser-no-production-lan-codec-or-runtime",
+    "frozen": true,
+    "updatePolicy": "fixture updates require independent construction or manual byte-level review; tests are read-only",
+    "reviewedFields": [
+      "messageTypeId",
+      "senderPeerId",
+      "headerBytes",
+      "vanillaBodyEndBit",
+      "paddingBits",
+      "containerStartBit",
+      "containerStartByte",
+      "containerBytes",
+      "sha256",
+      "containerSha256",
+      "expected"
+    ]
+  },
+  "byteMapReview": {"packetHeader":{"messageTypeIdOffset":0,"senderPeerIdLittleEndianByteRange":"1..8","headerBytes":9},"vanillaBody":{"startBit":72,"endBit":83,"reviewStatus":"reviewed-by-offset-map-not-independently-constructed"},"standaloneTail":{"paddingBits":5,"containerStartBit":88,"containerStartByte":11,"containerBytes":106,"containerSha256":"d927da97a82a6fd5d43236de11a2fbf846802bd2c69680aa1bca042924853774"}},
+  "expected": {
+    "payload": "rejection",
+    "sessionState": "InLobby",
+    "gameMode": "Standard",
+    "connectionFailureReason": "ModMismatch",
+    "rejectionStage": "rejoin",
+    "code": "wire_cache_mismatch",
+    "detail": "rejected during rejoin request"
+  }
 }

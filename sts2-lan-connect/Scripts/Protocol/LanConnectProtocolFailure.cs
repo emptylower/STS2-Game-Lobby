@@ -29,9 +29,6 @@ internal sealed record LanConnectProtocolFailure(
     public static LanConnectProtocolFailure RitsuLibNotAllowedInCompat(string? detail = null) =>
         new LanConnectProtocolFailure("ritsulib_not_allowed_in_compat_mode", null, false, detail).Validate();
 
-    public static LanConnectProtocolFailure RitsuLibSidecarUnavailable(string? detail = null) =>
-        new LanConnectProtocolFailure("ritsulib_sidecar_unavailable", null, true, detail).Validate();
-
     private static void ValidateBounded(string? value, string name, int maxBytes, bool required)
     {
         if ((required && string.IsNullOrWhiteSpace(value))

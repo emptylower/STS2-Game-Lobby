@@ -80,7 +80,6 @@ internal sealed class LanConnectLobbyManagedJoinFlow
                 _protocolSelection,
                 _protocolFlowNonce ?? throw new InvalidOperationException("Tail join has no protocol flow nonce."));
         }
-        LanConnectRitsuLibLobbyCompatibility.TrackLobbyNetService(NetService);
         CancelToken.Token.Register(Cancel);
 
         CancellationTokenSource updateLoopCancelSource = new();
@@ -148,7 +147,6 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             if (NetService != null)
             {
                 LanConnectTailMessageRuntime.Shared.Unbind(NetService);
-                LanConnectRitsuLibLobbyCompatibility.ReleaseLobbyNetService(NetService);
             }
 
             throw;
@@ -422,7 +420,6 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             try
             {
                 NetService?.Update();
-                LanConnectRitsuLibLobbyCompatibility.Tick(NetService);
             }
             catch (Exception ex)
             {

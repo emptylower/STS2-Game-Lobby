@@ -521,10 +521,15 @@ internal sealed partial class LanConnectLobbyRuntime :
         LanConnectRemoteLobbyPlayerPatches.FlushQueuedRefresh();
         DrivePendingRestartNavigation(delta);
         SynchronizeReferenceMode();
-        LanConnectRitsuLibLobbyCompatibility.Tick(
-            _activeSession != null
-                ? _activeSession.NetService
-                : _activeClientSession?.NetService);
+        // 配对屏障超时巡检（入口路径自检之外，由 runtime tick 兜底触发）。
+        MegaCrit.Sts2.Core.Multiplayer.Game.INetGameService? sweepService =
+            (MegaCrit.Sts2.Core.Multiplayer.Game.INetGameService?)_activeSession?.NetService
+            ?? _activeClientSession?.NetService;
+        if (sweepService != null)
+        {
+            LanConnectTailMessageRuntime.Shared.SweepBarrierTimeouts(sweepService, DateTimeOffset.UtcNow);
+        }
+
         if (_activeSession == null)
         {
             return;
@@ -957,7 +962,6 @@ internal sealed partial class LanConnectLobbyRuntime :
         LanConnectProtocolOffer protocolOffer,
         LanConnectProtocolSelection protocolSelection)
     {
-        LanConnectRitsuLibLobbyCompatibility.TrackLobbyNetService(netService);
         if (protocolSelection.Profile == LanConnectProtocolProfile.TailV1)
         {
             LanConnectTailMessageRuntime.Shared.BindHost(
@@ -1119,7 +1123,6 @@ internal sealed partial class LanConnectLobbyRuntime :
         LobbyControlClient? connectedControlClient = null,
         LobbyApiClient? connectedApiClient = null)
     {
-        LanConnectRitsuLibLobbyCompatibility.TrackLobbyNetService(netService);
         _pendingSaveBindingCoordinator.AttachJoinedClient();
         string? controlChannelId = joinResponse.ConnectionPlan.ControlChannelId;
         if (string.IsNullOrWhiteSpace(controlChannelId))
@@ -1419,7 +1422,6 @@ internal sealed partial class LanConnectLobbyRuntime :
             {
                 _pendingSaveBindingCoordinator.HostedFlowEnded();
                 _activeSession = null;
-                LanConnectRitsuLibLobbyCompatibility.ReleaseLobbyNetService(session.NetService);
                 _joinedRoomPeerIds = new HashSet<ulong>();
                 LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
                 LeaveChatRoomIfIdle();
@@ -1477,7 +1479,6 @@ internal sealed partial class LanConnectLobbyRuntime :
             () =>
             {
                 _activeClientSession = null;
-                LanConnectRitsuLibLobbyCompatibility.ReleaseLobbyNetService(session.NetService);
                 _joinedRoomPeerIds = new HashSet<ulong>();
                 LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
                 LeaveChatRoomIfIdle();
@@ -3520,7 +3521,9 @@ internal sealed partial class LanConnectLobbyRuntime :
         private readonly Action<ulong, NetErrorInfo> _clientDisconnectedHandler;
         private Action<LobbyControlEnvelope>? _controlEnvelopeHandler;
         internal readonly HashSet<ulong> _connectedPeerIds = new();
-        private readonly LanConnectHostSidecarActivationGate _sidecarActivationGate = new();
+        // native flow 激活会合点：控制通道已绑定 且 peer 已连接，两者齐备时 flush 延迟扩展帧。
+        private readonly HashSet<ulong> _nativePreparedPeerIds = [];
+        private readonly HashSet<ulong> _nativeConnectedPeerIds = [];
         private readonly LanConnectLobbyKickTargetDirectory _kickTargets = new();
         private readonly object _pendingKickSync = new();
         private readonly Dictionary<string, TaskCompletionSource<LobbyControlEnvelope>> _pendingKicks =
@@ -3636,8 +3639,14 @@ internal sealed partial class LanConnectLobbyRuntime :
             }
         }
 
-        public bool ObserveNativeControlBinding(ulong peerNetId) =>
-            _sidecarActivationGate.ObserveControlBinding(peerNetId);
+        public bool ObserveNativeControlBinding(ulong peerNetId)
+        {
+            lock (_nativePreparedPeerIds)
+            {
+                _nativePreparedPeerIds.Add(peerNetId);
+                return _nativeConnectedPeerIds.Contains(peerNetId);
+            }
+        }
 
         public bool RememberKickBinding(string playerNetId, string bindingId)
         {
@@ -3703,7 +3712,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             }
             _kickTargets.ObserveConnected(_.ToString());
             if (ProtocolSelection.Profile == LanConnectProtocolProfile.TailV1 &&
-                _sidecarActivationGate.ObservePeerConnected(_))
+                ObserveNativePeerConnected(_))
             {
                 LanConnectTailMessageRuntime.Shared.ActivateHostNativeFlow(NetService, _);
             }
@@ -3714,13 +3723,31 @@ internal sealed partial class LanConnectLobbyRuntime :
             }
         }
 
+        private bool ObserveNativePeerConnected(ulong peerNetId)
+        {
+            lock (_nativePreparedPeerIds)
+            {
+                _nativeConnectedPeerIds.Add(peerNetId);
+                return _nativePreparedPeerIds.Contains(peerNetId);
+            }
+        }
+
+        private void ObserveNativePeerDisconnected(ulong peerNetId)
+        {
+            lock (_nativePreparedPeerIds)
+            {
+                _nativeConnectedPeerIds.Remove(peerNetId);
+                _nativePreparedPeerIds.Remove(peerNetId);
+            }
+        }
+
         public void OnClientDisconnected(ulong _, NetErrorInfo __)
         {
             lock (_connectedPeerIds)
             {
                 _connectedPeerIds.Remove(_);
             }
-            _sidecarActivationGate.ObservePeerDisconnected(_);
+            ObserveNativePeerDisconnected(_);
             _kickTargets.ObserveDisconnected(_.ToString());
             if (ProtocolSelection.Profile == LanConnectProtocolProfile.TailV1)
             {

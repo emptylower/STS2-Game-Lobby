@@ -4,15 +4,6 @@ namespace Sts2LanConnect.Tests.Protocol;
 
 public sealed class LanConnectProtocolUiMessagesTests
 {
-    [Fact]
-    public void Ritsu_sidecar_descriptor_contract_is_stable()
-    {
-        Assert.Equal("sts2_lan_connect", LanConnectRitsuLibSidecarCarrier.ModuleId);
-        Assert.Equal("protocol_v1", LanConnectRitsuLibSidecarCarrier.MessageKey);
-        Assert.Equal("StableSync", LanConnectRitsuLibSidecarCarrier.DeliverySemantics);
-        Assert.True(LanConnectRitsuLibSidecarCarrier.IsRequired);
-    }
-
     [Theory]
     [InlineData("client_update_required")]
     [InlineData("protocol_profile_unsupported")]
@@ -74,40 +65,37 @@ public sealed class LanConnectProtocolUiMessagesTests
     }
 
     [Fact]
-    public void Tail_with_Ritsu_fails_closed_when_public_sidecar_is_unavailable()
+    public void Tail_with_Ritsu_tolerates_an_unavailable_public_sidecar()
     {
-        LanConnectProtocolOffer offer = new(1, 1, "0.6.0-alpha.1", true, false);
+        // 0.5.18 事故正面回归：present 但 sidecar 不可用照常创建 tail 房间（native 载体）。
+        LanConnectProtocolOffer offer = new(1, 1, "0.6.1-alpha.1", true, false);
 
-        LanConnectProtocolException exception = Assert.Throws<LanConnectProtocolException>(() =>
-            LanConnectLobbyOverlay.BuildCreateRoomIntentForTests(301, 8, offer).Validate());
-
-        Assert.Equal("ritsulib_sidecar_unavailable", exception.Failure.Code);
+        Assert.Equal(
+            LanConnectProtocolProfile.TailV1,
+            LanConnectLobbyOverlay.BuildCreateRoomIntentForTests(301, 8, offer).Validate().Profile);
     }
 
     [Fact]
     public void Create_options_follow_local_Ritsu_presence_and_carrier_readiness()
     {
-        LanConnectProtocolOffer noRitsu = new(1, 1, "0.6.0-alpha.1", false, false);
-        LanConnectProtocolOffer ritsuUnavailable = new(1, 1, "0.6.0-alpha.1", true, false);
-        LanConnectProtocolOffer ritsuReady = new(1, 1, "0.6.0-alpha.1", true, true);
+        LanConnectProtocolOffer noRitsu = new(1, 1, "0.6.1-alpha.1", false, false);
+        LanConnectProtocolOffer ritsuUnavailable = new(1, 1, "0.6.1-alpha.1", true, false);
 
+        // tail 可选性只取决于运行时支持，不再消费 sidecar 可用性。
         Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, noRitsu, true));
         Assert.False(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, noRitsu, false));
-        Assert.False(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, ritsuUnavailable, true));
-        Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, ritsuReady, false));
-        Assert.False(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(300, ritsuReady, false));
+        Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, ritsuUnavailable, true));
+        Assert.False(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(300, ritsuUnavailable, false));
         Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(300, noRitsu, false));
     }
 
     [Fact]
     public void Create_dialog_defaults_to_the_first_protocol_supported_by_the_local_runtime()
     {
-        LanConnectProtocolOffer noRitsu = new(1, 1, "0.6.0-alpha.1", false, false);
-        LanConnectProtocolOffer ritsuUnavailable = new(1, 1, "0.6.0-alpha.1", true, false);
-        LanConnectProtocolOffer ritsuReady = new(1, 1, "0.6.0-alpha.1", true, true);
+        LanConnectProtocolOffer noRitsu = new(1, 1, "0.6.1-alpha.1", false, false);
+        LanConnectProtocolOffer ritsuUnavailable = new(1, 1, "0.6.1-alpha.1", true, false);
 
         Assert.Equal(300, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(noRitsu, true));
-        Assert.Equal(301, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(ritsuReady, false));
-        Assert.Equal(300, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(ritsuUnavailable, false));
+        Assert.Equal(301, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(ritsuUnavailable, true));
     }
 }

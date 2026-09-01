@@ -39,7 +39,7 @@ internal static class LanConnectCapabilitiesCodec
             flags |= RitsuLibPresentFlag;
         }
 
-        if (offer.RitsuLibSidecarAvailable)
+        if (offer.LegacySidecarAvailable)
         {
             flags |= TypedSidecarAvailableFlag;
         }
