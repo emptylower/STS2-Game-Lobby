@@ -1351,6 +1351,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         bool isHost,
         byte[]? protocolFlowNonce = null)
     {
+        // 自检强制执行点：用户已发起 tail 会话，主菜单前的注册表初始化必然已完成。
+        LanConnectNativeBusStartupCheck.EnsureReadyOrThrow();
         offer.Validate();
         selection.Validate(offer);
         Binding binding = new(this, service, offer, selection, isHost, protocolFlowNonce);

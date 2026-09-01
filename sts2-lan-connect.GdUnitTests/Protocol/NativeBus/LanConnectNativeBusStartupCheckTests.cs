@@ -29,44 +29,86 @@ public sealed class LanConnectNativeBusStartupCheckTests
         AssertThat(LanConnectNativeBusStartupCheck.ValidateTable(256, unique)).IsNull();
     }
 
-    [TestCase]
-    public void Run_against_the_vanilla_registry_reports_ready_with_a_fingerprint()
+    private static void InitializeRegistry()
     {
         AssemblyInfo.Init();
         typeof(MessageTypes).GetField("_cache", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
             .SetValue(null, new NetTypeCache<INetMessage>(INetMessageSubtypes.All.ToList()));
+    }
+
+    private static void ClearRegistry()
+    {
+        typeof(MessageTypes).GetField("_cache", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(null, null);
+    }
+
+    [TestCase]
+    public void Run_without_the_registry_returns_pending_and_never_disables()
+    {
+        ClearRegistry();
+        LanConnectNativeBusStartupCheck.ResetForTesting();
+
+        LanConnectNativeBusStartupCheck.Result result = LanConnectNativeBusStartupCheck.Run();
+        AssertThat(result.Pending).IsTrue();
+        AssertThat(result.Ok).IsFalse();
+    }
+
+    [TestCase]
+    public void Run_against_the_vanilla_registry_reports_ready_with_a_fingerprint()
+    {
+        InitializeRegistry();
         LanConnectNativeBusSender.TypeIdResolverForTesting = () => 200;
+        LanConnectNativeBusStartupCheck.ResetForTesting();
 
         try
         {
             LanConnectNativeBusStartupCheck.Result result = LanConnectNativeBusStartupCheck.Run();
             AssertThat(result.Ok).IsTrue();
+            AssertThat(result.Pending).IsFalse();
             AssertThat(result.LocalTypeId!.Value).IsEqual(200);
             AssertBool(result.RegistryFingerprint!.StartsWith("sha256:v1:")).IsTrue();
         }
         finally
         {
             LanConnectNativeBusSender.TypeIdResolverForTesting = null;
+            LanConnectNativeBusStartupCheck.ResetForTesting();
         }
     }
 
     [TestCase]
-    public void Run_reports_a_baselib_collision_as_disable_reason()
+    public void Ensure_ready_passes_when_ready_and_disables_on_a_definitive_failure()
     {
-        AssemblyInfo.Init();
-        typeof(MessageTypes).GetField("_cache", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
-            .SetValue(null, new NetTypeCache<INetMessage>(INetMessageSubtypes.All.ToList()));
-        LanConnectNativeBusSender.TypeIdResolverForTesting = () => 128;
+        InitializeRegistry();
+        LanConnectNativeBusSender.TypeIdResolverForTesting = () => 200;
+        LanConnectNativeBusStartupCheck.ResetForTesting();
+        LanConnectDegradedMode.ResetForTesting();
 
         try
         {
-            LanConnectNativeBusStartupCheck.Result result = LanConnectNativeBusStartupCheck.Run();
-            AssertThat(result.Ok).IsFalse();
-            AssertBool(result.Reason!.Contains("BaseLib")).IsTrue();
+            // 就绪：门禁直通并缓存裁决。
+            LanConnectNativeBusStartupCheck.EnsureReadyOrThrow();
+            AssertThat(LanConnectNativeBusStartupCheck.CachedVerdict.Ok).IsTrue();
         }
         finally
         {
             LanConnectNativeBusSender.TypeIdResolverForTesting = null;
+            LanConnectDegradedMode.ResetForTesting();
+        }
+
+        // 终局失败：抛结构化异常并进入降级模式。
+        LanConnectNativeBusSender.TypeIdResolverForTesting = () => 128;
+        LanConnectNativeBusStartupCheck.ResetForTesting();
+        LanConnectDegradedMode.ResetForTesting();
+        try
+        {
+            AssertThrown(() => LanConnectNativeBusStartupCheck.EnsureReadyOrThrow());
+            AssertBool(LanConnectDegradedMode.IsActive).IsTrue();
+        }
+        finally
+        {
+            LanConnectNativeBusSender.TypeIdResolverForTesting = null;
+            LanConnectDegradedMode.ResetForTesting();
+            LanConnectNativeBusStartupCheck.ResetForTesting();
         }
     }
 }

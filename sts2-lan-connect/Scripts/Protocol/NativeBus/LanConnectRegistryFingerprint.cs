@@ -19,7 +19,10 @@ internal static class LanConnectRegistryFingerprint
 {
     internal const string Prefix = "sha256:v1:";
 
-    /// <summary>枚举全表并计算指纹；仅在游戏消息注册表已初始化后调用。</summary>
+    /// <summary>
+    /// 枚举全表并计算指纹；仅在游戏消息注册表已初始化后调用。
+    /// 空表（注册表未初始化）抛出而非产出格式合法但内容错误的指纹。
+    /// </summary>
     internal static string Compute()
     {
         using MemoryStream stream = new();
@@ -31,6 +34,12 @@ internal static class LanConnectRegistryFingerprint
             }
 
             WriteEntry(stream, id, type);
+        }
+
+        if (stream.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Message registry is empty; the fingerprint must not be computed before OneTimeInitialization.");
         }
 
         return Prefix + Convert.ToHexString(SHA256.HashData(stream.ToArray())).ToLowerInvariant();

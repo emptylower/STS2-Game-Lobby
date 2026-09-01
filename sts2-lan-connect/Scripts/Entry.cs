@@ -50,8 +50,10 @@ public static class Entry
             {
                 LanConnectNativeBusStartupCheck.Result check = LanConnectNativeBusStartupCheck.Run();
                 LanConnectNativeBusStartupCheck.LogDiagnostics(check, patchStackOrder: "lan_connect_first_then_ritsulib");
-                if (!check.Ok)
+                if (!check.Ok && !check.Pending)
                 {
+                    // 终局失败（表超限/byte 别名/BaseLib 冲突）才降级；Pending（注册表未初始化）
+                    // 由首次 tail 绑定的 EnsureReadyOrThrow 补跑，Entry 阶段注册表必然未就绪。
                     LanConnectDegradedMode.Enter(
                         LanConnectDegradedMode.ProtocolPatchConflictCode,
                         $"native_bus_self_check:{check.Reason}");
