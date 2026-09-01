@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [0.6.1-alpha.1] - 2026-09-01
+
+`0.6.1-alpha.1`：协议载体切换为 `native_bus_v1` 的首个测试候选（GitHub-only pre-release，真机 E2E 矩阵验收前不更新创意工坊）。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ALPHA1_ZH.md`。客户端与 lobby-service 同步 `0.6.1-alpha.1`（tail 房间 `minimumClientVersion` 同值）。双版本 ABI 对比见 `docs/abi-reports/2026-09-01-native-bus/REPORT.md`。
+
+### Added
+
+- `native_bus_v1` 载体：注册自定义 `INetMessage`（游戏官方 mod 消息机制，BaseLib 同用），协议容器经原版 ch0 FIFO 投递；发送链三级（Serialize prefix 容器生产 → transport prefix/postfix 广播批次 → 专用发送出口），接收链按传输层 sender 配对屏障（2000ms 超时、引用身份旁挂表、缓冲释放上下文恢复）。
+- registry fingerprint（`sha256:v1`）主门禁：创建侧房间分配前必填，加入侧挂工单签发路径；门禁链 presence → carrier → fingerprint → minimumClientVersion 置于 wire-cache 预检查之前。`/mod-preflight` 降为只读 UX 投影。
+- 服务端五步门禁新错误码：`lan_legacy_carrier_unsupported`、`lan_registry_fingerprint_required`、`lan_registry_fingerprint_mismatch`、`lan_client_version_too_old`；运行时 `lan_native_frame_invalid`、`lan_type_id_mismatch`、`lan_extension_missing`。
+- 启动自检（注册表 ≤256、byte 映射唯一、BaseLib 128/129 冲突检测）与 `native_bus` 就绪诊断行。
+- `scripts/check-native-bus-migration.sh` 零引用门禁与 `scripts/abi-compare-sts2.sh` 双版本 ABI 对比（显式 fixture/SHA-256/工具版本参数）。
+
+### Changed
+
+- tail_v1 房间一律 native 载体，**完全忽略 Ritsu presence 与 sidecar 可用性**（0.5.18 事故状态照常建房/加入）；与 RitsuLib 共存改为零交叠，运行时依赖归零。
+- `minimumClientVersion` 升至 `0.6.1-alpha.1`；旧 0.6 客户端加入新 tail 房间被 `lan_registry_fingerprint_required` 拒绝并提示升级；新客户端加入旧载体房间被 `lan_legacy_carrier_unsupported` 拒绝。compat 房间沿用旧合同。
+- 桌面泛型补丁计划及其回滚入口删除；全平台统一 16 步非泛型计划（新增 dispatch barrier），禁止 `SetBufferMessages` 补丁目标。
+
+### Fixed
+
+- 修复 0.111.0 上 roster slot 投影静默失效的预存缺陷（玩家载荷改 struct 后按值写入器不可见；slot 写入器改为 byref）。
+- `LobbyJoinTimeout` 列入可重试原因：中继候选失败后继续尝试直连候选（0.5.18 事故中 3 个直连候选从未被尝试）。
+
+
 ## [0.6.0] - 2026-08-25
 
 `0.6.0` 正式版：客户端与 lobby-service 同步定为 `0.6.0`，收敛 `0.5.6-rc1`~`rc4` 与 `0.6.0-alpha.1`~`alpha.9` 全部测试候选。发布说明见 `docs/RELEASE_NOTES_V0.6.0_ZH.md`。客户端与服务端产物通过 GitHub Release 分发，Steam 创意工坊条目「游戏大厅」（`3749766330`）同步更新到 `0.6.0`（此前停留在 `0.5.5`）。
