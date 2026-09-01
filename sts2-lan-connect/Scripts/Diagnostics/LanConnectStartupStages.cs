@@ -7,6 +7,7 @@ internal static class LanConnectStartupStages
     public const string ConfigLoad = "config_load";
     public const string ExternalModDetection = "external_mod_detection";
     public const string TailRuntimeConfigure = "tail_runtime_configure";
+    public const string NativeBusStartupCheck = "native_bus_startup_check";
     public const string SentryCompatibility = "sentry_compatibility";
     public const string AccessibilityBridge = "accessibility_bridge";
     public const string MultiplayerCompatibility = "multiplayer_compatibility";
@@ -20,6 +21,7 @@ internal static class LanConnectStartupStages
         ConfigLoad,
         ExternalModDetection,
         TailRuntimeConfigure,
+        NativeBusStartupCheck,
         SentryCompatibility,
         AccessibilityBridge,
         MultiplayerCompatibility,

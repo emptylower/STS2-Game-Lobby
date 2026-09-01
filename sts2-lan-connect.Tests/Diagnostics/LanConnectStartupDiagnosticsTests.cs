@@ -21,12 +21,13 @@ public sealed class LanConnectStartupDiagnosticsTests
 
         Assert.True(createIndex >= 0);
         Assert.True(firstLogIndex > createIndex);
-        Assert.Equal(10, CountOccurrences(source, "diagnostics.RunStage("));
+        Assert.Equal(11, CountOccurrences(source, "diagnostics.RunStage("));
         Assert.Equal(
             [
                 "config_load",
                 "external_mod_detection",
                 "tail_runtime_configure",
+                "native_bus_startup_check",
                 "sentry_compatibility",
                 "accessibility_bridge",
                 "multiplayer_compatibility",
@@ -89,9 +90,9 @@ public sealed class LanConnectStartupDiagnosticsTests
         JsonElement[] stages = events
             .Where(element => element.GetProperty("event").GetString() == "init_stage")
             .ToArray();
-        Assert.Equal(20, stages.Length);
+        Assert.Equal(22, stages.Length);
         Assert.Equal(
-            Enumerable.Range(1, 10).SelectMany(static ordinal => new[] { ordinal, ordinal }),
+            Enumerable.Range(1, 11).SelectMany(static ordinal => new[] { ordinal, ordinal }),
             stages.Select(element => element.GetProperty("ordinal").GetInt32()));
         Assert.All(stages.Where(static (_, index) => index % 2 == 0), element =>
             Assert.Equal("begin", element.GetProperty("status").GetString()));

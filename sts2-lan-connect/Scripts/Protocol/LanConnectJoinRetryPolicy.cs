@@ -17,7 +17,7 @@ internal static class LanConnectJoinRetryPolicy
     }
 
     public static bool IsRetryableReason(string? reason) => reason is
-        "Timeout" or "HandshakeTimeout" or "UnknownNetworkError";
+        "Timeout" or "HandshakeTimeout" or "UnknownNetworkError" or "LobbyJoinTimeout";
 
     private static bool IsRetryableClientConnectionFailure(Exception exception) =>
         exception is ClientConnectionFailedException connectionFailure

@@ -44,6 +44,19 @@ public static class Entry
         diagnostics.RunStage(
             LanConnectStartupStages.TailRuntimeConfigure,
             static () => LanConnectTailMessagePatches.ConfigureRuntime(LanConnectTailMessageRuntime.Shared));
+        diagnostics.RunStage(
+            LanConnectStartupStages.NativeBusStartupCheck,
+            static () =>
+            {
+                LanConnectNativeBusStartupCheck.Result check = LanConnectNativeBusStartupCheck.Run();
+                LanConnectNativeBusStartupCheck.LogDiagnostics(check, patchStackOrder: "lan_connect_first_then_ritsulib");
+                if (!check.Ok)
+                {
+                    LanConnectDegradedMode.Enter(
+                        LanConnectDegradedMode.ProtocolPatchConflictCode,
+                        $"native_bus_self_check:{check.Reason}");
+                }
+            });
         diagnostics.RunStage(LanConnectStartupStages.SentryCompatibility, LanConnectSentryCompatibilityPatches.Initialize);
         diagnostics.RunStage(LanConnectStartupStages.AccessibilityBridge, LanConnectAccessibilityBridge.Initialize);
         try

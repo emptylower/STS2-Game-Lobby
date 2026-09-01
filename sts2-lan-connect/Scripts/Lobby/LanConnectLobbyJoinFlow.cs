@@ -172,6 +172,13 @@ internal static class LanConnectLobbyJoinFlow
                 catch (LanConnectProtocolException ex)
                 {
                     joinFlow.NetService?.Disconnect(NetError.ModMismatch);
+                    // 结构化失败码作为 connection-event phase 上报（含 native_bus 新 phase）。
+                    _ = TaskHelper.RunSafely(ReportConnectionEventSafeAsync(
+                        joinResponse.Room.RoomId,
+                        joinResponse.TicketId,
+                        ex.Failure.Code,
+                        candidate,
+                        ex.Failure.Detail));
                     return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, null, ex.Failure);
                 }
                 catch (ClientConnectionFailedException ex)
