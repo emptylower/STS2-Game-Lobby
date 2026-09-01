@@ -26,7 +26,7 @@ internal static class LanConnectNativeBusStartupCheck
     {
         if (count > 256)
         {
-            return $"MessageTypes.Count={count} exceeds 256; vanilla WriteByte((byte)id) would alias.";
+            return $"MessageTypes table size {count} exceeds 256; vanilla WriteByte((byte)id) would alias.";
         }
 
         HashSet<byte> seen = [];
@@ -45,19 +45,14 @@ internal static class LanConnectNativeBusStartupCheck
     {
         try
         {
-            int count = MessageTypes.Count;
+            // 不依赖 MessageTypes.Count（0.107.1 无该属性）：从 0 起枚举到首个空洞。
             List<int> ids = [];
-            for (int id = 0; id < count; id++)
+            while (MessageTypes.TryGetMessageType(ids.Count, out Type? type) && type != null)
             {
-                if (!MessageTypes.TryGetMessageType(id, out Type? type) || type == null)
-                {
-                    return Result.Fail($"registry table has a hole at id={id}.");
-                }
-
-                ids.Add(id);
+                ids.Add(ids.Count);
             }
 
-            string? tableError = ValidateTable(count, ids);
+            string? tableError = ValidateTable(ids.Count, ids);
             if (tableError != null)
             {
                 return Result.Fail(tableError);

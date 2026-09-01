@@ -1,0 +1,823 @@
+--- docs/abi-reports/2026-09-01-native-bus/v0.107.1/MegaCrit_Sts2_Core_Multiplayer_Serialization_MessageTypes.cs	2026-09-01 14:19:38
++++ docs/abi-reports/2026-09-01-native-bus/v0.111.0/MegaCrit_Sts2_Core_Multiplayer_Serialization_MessageTypes.cs	2026-09-01 14:19:52
+@@ -8,6 +8,8 @@
+ {
+ 	private static NetTypeCache<INetMessage>? _cache;
+ 
++	public static int Count => (_cache ?? throw new InvalidOperationException()).Count;
++
+ 	public static void Initialize()
+ 	{
+ 		List<Type> list = new List<Type>();
+DIFF: MegaCrit.Sts2.Core.Multiplayer.Serialization.MessageTypes
+--- docs/abi-reports/2026-09-01-native-bus/v0.107.1/MegaCrit_Sts2_Core_Multiplayer_Serialization_NetTypeCache.cs	2026-09-01 14:19:39
++++ docs/abi-reports/2026-09-01-native-bus/v0.111.0/MegaCrit_Sts2_Core_Multiplayer_Serialization_NetTypeCache.cs	2026-09-01 14:19:53
+@@ -15,16 +15,18 @@
+ 
+ 	private readonly List<Type> _idToType;
+ 
++	public int Count => _idToType.Count;
++
+ 	public NetTypeCache(List<Type> types)
+ 	{
+-		types.Sort((Type t1, Type t2) => string.CompareOrdinal(t1.Name, t2.Name));
+-		_idToType = types;
+-		for (int num = 0; num < types.Count; num++)
++		IEnumerable<ContentSorter<string>.Item> source = ContentSorter<string>.Sort(types, (Type t) => t.Name);
++		_idToType = source.Select((ContentSorter<string>.Item i) => i.type).ToList();
++		for (int num = 0; num < _idToType.Count; num++)
+ 		{
+-			Type type = types[num];
++			Type type = _idToType[num];
+ 			if (!type.GetInterfaces().Contains<Type>(typeof(TBase)))
+ 			{
+-				throw new InvalidOperationException($"Type {types[num]} does not implement interface {typeof(TBase)}!");
++				throw new InvalidOperationException($"Type {_idToType[num]} does not implement interface {typeof(TBase)}!");
+ 			}
+ 			_typeToId[type] = num;
+ 		}
+DIFF: MegaCrit.Sts2.Core.Multiplayer.Serialization.NetTypeCache`1
+--- docs/abi-reports/2026-09-01-native-bus/v0.107.1/MegaCrit_Sts2_Core_Multiplayer_Serialization_ContentSorter.cs	2026-09-01 14:19:39
++++ docs/abi-reports/2026-09-01-native-bus/v0.111.0/MegaCrit_Sts2_Core_Multiplayer_Serialization_ContentSorter.cs	2026-09-01 14:19:54
+@@ -1 +1,124 @@
+-// TYPE ABSENT IN THIS GAME VERSION
++using System;
++using System.Collections.Generic;
++using MegaCrit.Sts2.Core.Logging;
++using MegaCrit.Sts2.Core.Modding;
++
++namespace MegaCrit.Sts2.Core.Multiplayer.Serialization;
++
++/// <summary>
++/// Used in the ModelIdSerializationCache to sort models before IDing them.
++/// When mods are installed, the Sort function ensures that the types returned are sorted in a deterministic order
++/// across all peers. It guards against several issues:
++///  - Mods can be loaded in different sort orders
++///  - Different mods can have content with the same ID
++///  - The same mod can have content with the same ID
++/// When in the base game, this is mostly for theoretical safety; ModelDb is likely to return models in the same order.
++///
++/// This class is generic so it can be used across several places.
++/// </summary>
++public static class ContentSorter<TIdType> where TIdType : IComparable<TIdType>
++{
++	public struct Item
++	{
++		public Type type;
++
++		public TIdType id;
++
++		public Mod? mod;
++
++		public override string ToString()
++		{
++			return $"{type} {id} {mod?.manifest?.id}";
++		}
++	}
++
++	/// <summary>
++	/// Sort some content.
++	/// </summary>
++	/// <param name="types">The types to sort.</param>
++	/// <param name="getId">The delegate which will be used to obtain the ID of each type.</param>
++	/// <param name="affectsGameplayAtEnd">If true, types from mods that do not affect gameplay will be placed at the
++	/// end of the resulting list. This is important so that players without those mods will still have a stable and
++	/// deterministic sorting of IDs that will be sent over the network.</param>
++	/// <returns></returns>
++	public static List<Item> Sort(IEnumerable<Type> types, Func<Type, TIdType> getId, bool affectsGameplayAtEnd = true)
++	{
++		if (AssemblyInfo.ModMap == null)
++		{
++			throw new InvalidOperationException("ContentSorter called before AssemblyInfo was initialized. This is not allowed.");
++		}
++		List<Item> list = new List<Item>();
++		foreach (Type type in types)
++		{
++			bool isBaseGame;
++			Mod mod = AssemblyInfo.ModForType(type, out isBaseGame);
++			if (mod == null && !isBaseGame)
++			{
++				Log.Error($"Attempting to register type {type} in assembly {type.Assembly}, but it is not associated with any mod! You may need to call {"ModManager"}.{"AssociateAssemblyWithMod"} to manually register the assembly. Type sorting may break because of this, causing errors in multiplayer.");
++			}
++			list.Add(new Item
++			{
++				type = type,
++				id = getId(type),
++				mod = mod
++			});
++		}
++		Sort(list, affectsGameplayAtEnd);
++		return list;
++	}
++
++	/// <summary>
++	/// This is public for testing.
++	/// </summary>
++	public static List<Item> Sort(List<Item> items, bool affectsGameplayAtEnd = true)
++	{
++		items.Sort(delegate(Item p1, Item p2)
++		{
++			if (affectsGameplayAtEnd)
++			{
++				bool value = p1.mod?.manifest?.affectsGameplay ?? true;
++				int num = (p2.mod?.manifest?.affectsGameplay ?? true).CompareTo(value);
++				if (num != 0)
++				{
++					return num;
++				}
++			}
++			ref TIdType id = ref p1.id;
++			TIdType id2 = p2.id;
++			int num2 = id.CompareTo(id2);
++			if (num2 != 0)
++			{
++				return num2;
++			}
++			if (p1.mod != null && p2.mod == null)
++			{
++				return 1;
++			}
++			if (p1.mod == null && p2.mod != null)
++			{
++				return -1;
++			}
++			if (p1.mod == null && p2.mod == null)
++			{
++				return 0;
++			}
++			int num3 = string.CompareOrdinal(p1.mod.manifest.id, p2.mod.manifest.id);
++			if (num3 != 0)
++			{
++				return num3;
++			}
++			int num4 = string.CompareOrdinal(p1.type.FullName, p2.type.FullName);
++			if (num4 != 0)
++			{
++				return num4;
++			}
++			string fullName = p1.type.Assembly.FullName;
++			string fullName2 = p2.type.Assembly.FullName;
++			int num5 = string.CompareOrdinal(fullName, fullName2);
++			return (num5 != 0) ? num5 : 0;
++		});
++		return items;
++	}
++}
++You are not using the latest version of the tool, please update.
++Latest version is '11.0.0.9375' (yours is '9.1.0.7988')
+DIFF: MegaCrit.Sts2.Core.Multiplayer.Serialization.ContentSorter`1
+--- docs/abi-reports/2026-09-01-native-bus/v0.107.1/MegaCrit_Sts2_Core_Multiplayer_NetMessageBus.cs	2026-09-01 14:19:40
++++ docs/abi-reports/2026-09-01-native-bus/v0.111.0/MegaCrit_Sts2_Core_Multiplayer_NetMessageBus.cs	2026-09-01 14:19:54
+@@ -1,6 +1,7 @@
+ using System;
+ using System.Collections.Generic;
+ using MegaCrit.Sts2.Core.Logging;
++using MegaCrit.Sts2.Core.Modding;
+ using MegaCrit.Sts2.Core.Multiplayer.Game;
+ using MegaCrit.Sts2.Core.Multiplayer.Serialization;
+ 
+@@ -17,9 +18,9 @@
+ 		public object originalHandler;
+ 	}
+ 
+-	private readonly PacketReader _reader = new PacketReader();
++	private readonly PacketReader _reader;
+ 
+-	private readonly PacketWriter _writer = new PacketWriter();
++	private readonly PacketWriter _writer;
+ 
+ 	private readonly Logger _logger = new Logger("NetMessageBus", LogType.Network);
+ 
+@@ -29,15 +30,23 @@
+ 
+ 	private bool _isBufferingMessages;
+ 
++	private readonly HashSet<byte> _warnedMessageTypes = new HashSet<byte>();
++
+ 	private readonly List<(INetMessage, ulong)> _bufferedMessages = new List<(INetMessage, ulong)>();
+ 
++	public NetMessageBus(PacketReader reader, PacketWriter writer)
++	{
++		_reader = reader;
++		_writer = writer;
++	}
++
+ 	public byte[] SerializeMessage<T>(ulong senderId, T message, out int length) where T : INetMessage
+ 	{
+ 		_writer.Reset();
+ 		_writer.WriteByte((byte)message.ToId());
+ 		_writer.WriteULong(senderId);
+ 		message.Serialize(_writer);
+-		length = (int)Math.Ceiling((float)_writer.BitPosition / 8f);
++		length = _writer.BytePosition;
+ 		return _writer.Buffer;
+ 	}
+ 
+@@ -49,7 +58,15 @@
+ 		byte b = _reader.ReadByte();
+ 		if (!MessageTypes.TryGetMessageType(b, out Type type))
+ 		{
+-			Log.Error($"Received message with first byte {b} that is not a valid message ID!");
++			if (ModManager.IsRunningModded() && b >= MessageTypes.Count && !_warnedMessageTypes.Contains(b))
++			{
++				Log.Warn($"Received message with length {packetBytes.Length} and first byte {b} that is outside the bounds of our known messages ({MessageTypes.Count}). Since we are modded, we are assuming this is a message that does not affect gameplay and will not warn about this again.");
++				_warnedMessageTypes.Add(b);
++			}
++			else
++			{
++				Log.Error($"Received message with length {packetBytes.Length} and first byte {b} that is not a valid message ID!");
++			}
+ 			return false;
+ 		}
+ 		overrideSenderId = _reader.ReadULong();
+DIFF: MegaCrit.Sts2.Core.Multiplayer.NetMessageBus
+--- docs/abi-reports/2026-09-01-native-bus/v0.107.1/MegaCrit_Sts2_Core_Multiplayer_NetHostGameService.cs	2026-09-01 14:19:43
++++ docs/abi-reports/2026-09-01-native-bus/v0.111.0/MegaCrit_Sts2_Core_Multiplayer_NetHostGameService.cs	2026-09-01 14:19:57
+@@ -3,6 +3,7 @@
+ using System.Threading.Tasks;
+ using MegaCrit.Sts2.Core.Entities.Multiplayer;
+ using MegaCrit.Sts2.Core.Logging;
++using MegaCrit.Sts2.Core.Multiplayer.Connection;
+ using MegaCrit.Sts2.Core.Multiplayer.Game;
+ using MegaCrit.Sts2.Core.Multiplayer.Quality;
+ using MegaCrit.Sts2.Core.Multiplayer.Serialization;
+@@ -10,29 +11,38 @@
+ using MegaCrit.Sts2.Core.Multiplayer.Transport.ENet;
+ using MegaCrit.Sts2.Core.Multiplayer.Transport.Steam;
+ using MegaCrit.Sts2.Core.Platform;
++using MegaCrit.Sts2.Core.TestSupport;
+ 
+ namespace MegaCrit.Sts2.Core.Multiplayer;
+ 
+-public class NetHostGameService : INetHostHandler, INetHandler, INetHostGameService, INetGameService
++public class NetHostGameService : INetHostHandler, INetHandler, INetHostGameService, INetGameService, IHandshakeHandler
+ {
+ 	private NetHost? _netHost;
+ 
+-	private readonly NetMessageBus _messageBus = new NetMessageBus();
++	private readonly PacketReader _reader = new PacketReader();
+ 
++	private readonly PacketWriter _writer = new PacketWriter();
++
++	private readonly NetMessageBus _messageBus;
++
++	private readonly HandshakeManager _handshakeManager;
++
+ 	private readonly NetQualityTracker _qualityTracker;
+ 
+ 	private readonly List<NetClientData> _connectedPeers = new List<NetClientData>();
+ 
+ 	public bool IsConnected => _netHost?.IsConnected ?? false;
+ 
+-	public IReadOnlyList<NetClientData> ConnectedPeers => _connectedPeers;
+-
+ 	public ulong NetId => (_netHost ?? throw new InvalidOperationException("Tried to get NetId while not connected!")).NetId;
+ 
+ 	public bool IsGameLoading => _qualityTracker.IsGameLoading;
+ 
++	public List<NetClientData> ConnectedPeers => _connectedPeers;
++
+ 	public PlatformType Platform { get; private set; }
+ 
++	public PeerVersionInfo LocalVersion { get; }
++
+ 	public NetHost? NetHost => _netHost;
+ 
+ 	public NetGameType Type => NetGameType.Host;
+@@ -43,8 +53,13 @@
+ 
+ 	public event Action<ulong, NetErrorInfo>? ClientDisconnected;
+ 
+-	public NetHostGameService()
++	public event Action<ulong, NetErrorInfo>? ClientConnectionFailed;
++
++	public NetHostGameService(PeerVersionInfo versionInfo)
+ 	{
++		LocalVersion = versionInfo;
++		_messageBus = new NetMessageBus(_reader, _writer);
++		_handshakeManager = new HandshakeManager(this, versionInfo, _writer);
+ 		_qualityTracker = new NetQualityTracker(this);
+ 	}
+ 
+@@ -60,6 +75,13 @@
+ 		return steamHost.StartHost(maxClients);
+ 	}
+ 
++	public Task<NetErrorInfo?> StartTestHost(AbstractTestNetHost host, int maxClients)
++	{
++		_netHost = host;
++		Platform = PlatformType.None;
++		return host.StartHost(maxClients);
++	}
++
+ 	public void Update()
+ 	{
+ 		NetHost? netHost = _netHost;
+@@ -119,19 +141,48 @@
+ 
+ 	public void OnPacketReceived(ulong senderId, byte[] packetBytes, NetTransferMode mode, int channel)
+ 	{
+-		if (!_messageBus.TryDeserializeMessage(packetBytes, out INetMessage message, out ulong? overrideSenderId))
++		if (_handshakeManager.IsHandshaking(senderId))
+ 		{
+-			Log.Error($"Tried to deserialize packet of size {packetBytes.Length} as message, but we were not able to!");
++			_reader.Reset(packetBytes);
++			_handshakeManager.HandshakeMessageReceived(senderId, _reader);
+ 			return;
+ 		}
+-		if (message.ShouldBroadcast)
++		int num = _connectedPeers.FindIndex((NetClientData p) => p.peerId == senderId);
++		INetMessage message;
++		ulong? overrideSenderId;
++		if (num < 0)
+ 		{
+-			BroadcastMessage(message, senderId, channel, overrideSenderId.Value);
++			Log.Warn($"Received {packetBytes.Length} bytes from unknown peer {senderId}!");
+ 		}
+-		senderId = overrideSenderId ?? senderId;
+-		_messageBus.SendMessageToAllHandlers(message, senderId);
++		else if (_messageBus.TryDeserializeMessage(packetBytes, out message, out overrideSenderId))
++		{
++			if (message.ShouldBroadcast)
++			{
++				BroadcastMessage(message, senderId, channel, overrideSenderId.Value);
++			}
++			senderId = overrideSenderId.GetValueOrDefault(senderId);
++			_messageBus.SendMessageToAllHandlers(message, senderId);
++		}
++	}
++
++	public void HandshakeSucceeded(ulong senderId, PeerVersionInfo versionInfo)
++	{
++		_connectedPeers.Add(new NetClientData
++		{
++			peerId = senderId,
++			readyForBroadcasting = false,
++			versionInfo = versionInfo
++		});
++		_qualityTracker.OnPeerConnected(senderId);
++		this.ClientConnected?.Invoke(senderId);
+ 	}
+ 
++	public void HandshakeFailed(ulong senderId, NetErrorInfo info)
++	{
++		this.ClientConnectionFailed?.Invoke(senderId, info);
++		DisconnectClient(senderId, info.GetReason());
++	}
++
+ 	private void BroadcastMessage<T>(T message, ulong excludePeerId, int channel, ulong overrideSenderId) where T : INetMessage
+ 	{
+ 		foreach (NetClientData connectedPeer in _connectedPeers)
+@@ -162,6 +213,16 @@
+ 		}
+ 	}
+ 
++	public PeerVersionInfo? GetVersionInfoForPeer(ulong peerId)
++	{
++		int num = _connectedPeers.FindIndex((NetClientData p) => p.peerId == peerId);
++		if (num < 0)
++		{
++			return null;
++		}
++		return _connectedPeers[num].versionInfo;
++	}
++
+ 	public void DisconnectClient(ulong peerId, NetError reason, bool now = false)
+ 	{
+ 		_netHost.DisconnectClient(peerId, reason, now);
+@@ -182,22 +243,29 @@
+ 		this.Disconnected?.Invoke(info);
+ 	}
+ 
++	public void SendHandshakeMessage(ulong peerId, PacketWriter writer)
++	{
++		_netHost.SendMessageToClient(peerId, _writer.Buffer, _writer.BytePosition, NetTransferMode.Reliable, NetTransferMode.Reliable.ToChannelId());
++	}
++
+ 	public void OnPeerConnected(ulong peerId)
+ 	{
+-		_connectedPeers.Add(new NetClientData
+-		{
+-			peerId = peerId,
+-			readyForBroadcasting = false
+-		});
+-		_qualityTracker.OnPeerConnected(peerId);
+-		this.ClientConnected?.Invoke(peerId);
++		_handshakeManager.BeginHandshakeFor(peerId);
+ 	}
+ 
+ 	public void OnPeerDisconnected(ulong peerId, NetErrorInfo info)
+ 	{
+-		_connectedPeers.RemoveAll((NetClientData p) => p.peerId == peerId);
++		int num = _connectedPeers.RemoveAll((NetClientData p) => p.peerId == peerId);
+ 		_qualityTracker.OnPeerDisconnected(peerId);
+-		this.ClientDisconnected?.Invoke(peerId, info);
++		if (num > 0)
++		{
++			this.ClientDisconnected?.Invoke(peerId, info);
++		}
++		if (_handshakeManager.IsHandshaking(peerId))
++		{
++			_handshakeManager.AbortHandshake(peerId);
++			this.ClientConnectionFailed?.Invoke(peerId, info);
++		}
+ 	}
+ 
+ 	public ConnectionStats? GetStatsForPeer(ulong peerId)
+@@ -217,7 +285,7 @@
+ 
+ 	public string? GetRawLobbyIdentifier()
+ 	{
+-		return _netHost?.GetRawLobbyIdentifier();
++		return NetHost?.GetRawLobbyIdentifier();
+ 	}
+ }
+ You are not using the latest version of the tool, please update.
+DIFF: MegaCrit.Sts2.Core.Multiplayer.NetHostGameService
+--- docs/abi-reports/2026-09-01-native-bus/v0.107.1/MegaCrit_Sts2_Core_Multiplayer_NetClientGameService.cs	2026-09-01 14:19:44
++++ docs/abi-reports/2026-09-01-native-bus/v0.111.0/MegaCrit_Sts2_Core_Multiplayer_NetClientGameService.cs	2026-09-01 14:19:58
+@@ -1,6 +1,7 @@
+ using System;
+ using MegaCrit.Sts2.Core.Entities.Multiplayer;
+ using MegaCrit.Sts2.Core.Logging;
++using MegaCrit.Sts2.Core.Multiplayer.Connection;
+ using MegaCrit.Sts2.Core.Multiplayer.Game;
+ using MegaCrit.Sts2.Core.Multiplayer.Quality;
+ using MegaCrit.Sts2.Core.Multiplayer.Serialization;
+@@ -9,15 +10,21 @@
+ 
+ namespace MegaCrit.Sts2.Core.Multiplayer;
+ 
+-public class NetClientGameService : INetClientHandler, INetHandler, INetClientGameService, INetGameService
++public class NetClientGameService : INetClientHandler, INetHandler, INetClientGameService, INetGameService, IHandshakeHandler
+ {
+-	private readonly NetMessageBus _messageBus = new NetMessageBus();
++	private readonly PacketReader _reader = new PacketReader();
+ 
++	private readonly PacketWriter _writer = new PacketWriter();
++
++	private readonly NetMessageBus _messageBus;
++
+ 	private readonly NetQualityTracker _qualityTracker;
+ 
++	private readonly HandshakeManager _handshakeManager;
++
+ 	public NetClient? NetClient { get; private set; }
+ 
+-	public bool IsConnected => NetClient?.IsConnected ?? false;
++	public bool IsConnected { get; private set; }
+ 
+ 	public ulong NetId => (NetClient ?? throw new InvalidOperationException("Tried to get NetId while not connected!")).NetId;
+ 
+@@ -27,14 +34,21 @@
+ 
+ 	public PlatformType Platform { get; private set; }
+ 
++	public PeerVersionInfo LocalVersion { get; }
++
+ 	public NetGameType Type => NetGameType.Client;
+ 
+ 	public event Action? ConnectedToHost;
+ 
++	public event Action<NetErrorInfo>? ConnectionFailed;
++
+ 	public event Action<NetErrorInfo>? Disconnected;
+ 
+-	public NetClientGameService()
++	public NetClientGameService(PeerVersionInfo versionInfo)
+ 	{
++		LocalVersion = versionInfo;
++		_messageBus = new NetMessageBus(_reader, _writer);
++		_handshakeManager = new HandshakeManager(this, versionInfo, _writer);
+ 		_qualityTracker = new NetQualityTracker(this);
+ 	}
+ 
+@@ -50,6 +64,9 @@
+ 		if (netClient != null && netClient.IsConnected)
+ 		{
+ 			NetClient.Update();
++		}
++		if (IsConnected)
++		{
+ 			_qualityTracker.Update();
+ 		}
+ 	}
+@@ -89,11 +106,18 @@
+ 
+ 	public void OnPacketReceived(ulong senderId, byte[] packetBytes, NetTransferMode mode, int channel)
+ 	{
+-		if (!_messageBus.TryDeserializeMessage(packetBytes, out INetMessage message, out ulong? overrideSenderId))
++		NetClient? netClient = NetClient;
++		if (netClient != null)
+ 		{
+-			Log.Error($"Tried to deserialize packet of size {packetBytes.Length} as message, but we were not able to!");
++			_ = netClient.HostNetId;
++			if (true && _handshakeManager.IsHandshaking(NetClient.HostNetId))
++			{
++				_reader.Reset(packetBytes);
++				_handshakeManager.HandshakeMessageReceived(senderId, _reader);
++				return;
++			}
+ 		}
+-		else
++		if (_messageBus.TryDeserializeMessage(packetBytes, out INetMessage message, out ulong? overrideSenderId))
+ 		{
+ 			senderId = overrideSenderId ?? senderId;
+ 			_messageBus.SendMessageToAllHandlers(message, senderId);
+@@ -111,7 +135,28 @@
+ 
+ 	public void OnConnectedToHost()
+ 	{
+-		_qualityTracker.OnPeerConnected(NetClient.HostNetId);
++		_handshakeManager.BeginHandshakeFor(HostNetId);
++	}
++
++	public void SendHandshakeMessage(ulong peerId, PacketWriter writer)
++	{
++		if (peerId != HostNetId)
++		{
++			throw new InvalidOperationException($"Tried to send handshake message as client to {peerId}, who is not the host!");
++		}
++		NetClient.SendMessageToHost(writer.Buffer, writer.BytePosition, NetTransferMode.Reliable, NetTransferMode.Reliable.ToChannelId());
++	}
++
++	public void HandshakeFailed(ulong peerId, NetErrorInfo info)
++	{
++		Disconnect(info.GetReason());
++		this.ConnectionFailed?.Invoke(info);
++	}
++
++	public void HandshakeSucceeded(ulong peerId, PeerVersionInfo versionInfo)
++	{
++		IsConnected = true;
++		_qualityTracker.OnPeerConnected(peerId);
+ 		this.ConnectedToHost?.Invoke();
+ 	}
+ 
+@@ -119,7 +164,16 @@
+ 	{
+ 		_qualityTracker.OnPeerDisconnected(hostNetId);
+ 		_qualityTracker.Dispose();
+-		this.Disconnected?.Invoke(info);
++		if (IsConnected)
++		{
++			IsConnected = false;
++			this.Disconnected?.Invoke(info);
++		}
++		else if (_handshakeManager.IsHandshaking(hostNetId))
++		{
++			_handshakeManager.AbortHandshake(hostNetId);
++			this.ConnectionFailed?.Invoke(info);
++		}
+ 	}
+ 
+ 	public ConnectionStats? GetStatsForPeer(ulong peerId)
+DIFF: MegaCrit.Sts2.Core.Multiplayer.NetClientGameService
+--- docs/abi-reports/2026-09-01-native-bus/v0.107.1/MegaCrit_Sts2_Core_Multiplayer_Messages_Lobby_InitialGameInfoMessage.cs	2026-09-01 14:19:46
++++ docs/abi-reports/2026-09-01-native-bus/v0.111.0/MegaCrit_Sts2_Core_Multiplayer_Messages_Lobby_InitialGameInfoMessage.cs	2026-09-01 14:20:00
+@@ -1,8 +1,5 @@
+-using System.Collections.Generic;
+-using MegaCrit.Sts2.Core.Debug;
+ using MegaCrit.Sts2.Core.Entities.Multiplayer;
+ using MegaCrit.Sts2.Core.Logging;
+-using MegaCrit.Sts2.Core.Modding;
+ using MegaCrit.Sts2.Core.Multiplayer.Serialization;
+ using MegaCrit.Sts2.Core.Multiplayer.Transport;
+ using MegaCrit.Sts2.Core.Runs;
+@@ -15,36 +12,16 @@
+ public struct InitialGameInfoMessage : INetMessage, IPacketSerializable
+ {
+ 	/// <summary>
+-	/// The version of the game the host is running.
++	/// What state the run is currently in.
+ 	/// </summary>
+-	public string version;
++	public RunSessionState sessionState;
+ 
+ 	/// <summary>
+-	/// A hash of all the IDs in the model database.
+-	/// </summary>
+-	public uint idDatabaseHash;
+-
+-	/// <summary>
+-	/// A list of all the gameplay-affecting mods that the host has installed, if any.
+-	/// </summary>
+-	public List<string>? gameplayAffectingMods;
+-
+-	/// <summary>
+-	/// A list of all the non-gameplay-affecting mods that the host has installed, if any.
+-	/// </summary>
+-	public List<string>? otherMods;
+-
+-	/// <summary>
+ 	/// What kind of run this is (standard, daily, custom).
+ 	/// </summary>
+ 	public GameMode gameMode;
+ 
+ 	/// <summary>
+-	/// What state the run is currently in.
+-	/// </summary>
+-	public RunSessionState sessionState;
+-
+-	/// <summary>
+ 	/// If the host is about to disconnect the client, why.
+ 	/// </summary>
+ 	public ConnectionFailureReason? connectionFailureReason;
+@@ -57,80 +34,25 @@
+ 
+ 	public bool ShouldBuffer => true;
+ 
+-	/// <summary>
+-	/// Returns an InitialGameInfoMessage with the version and idDatabaseHash filled in.
+-	/// </summary>
+-	public static InitialGameInfoMessage Basic()
+-	{
+-		return new InitialGameInfoMessage
+-		{
+-			version = (ReleaseInfoManager.Instance.ReleaseInfo?.Version ?? GitHelper.ShortCommitId ?? "UNKNOWN"),
+-			idDatabaseHash = ModelIdSerializationCache.Hash,
+-			gameplayAffectingMods = ModManager.GetGameplayRelevantModNameList(),
+-			otherMods = ModManager.GetNonGameplayRelevantModNameList()
+-		};
+-	}
+-
+ 	public void Serialize(PacketWriter writer)
+ 	{
+-		writer.WriteString(version);
+-		writer.WriteUInt(idDatabaseHash);
+-		writer.WriteEnum(gameMode);
+ 		writer.WriteEnum(sessionState);
++		writer.WriteEnum(gameMode);
+ 		writer.WriteBool(connectionFailureReason.HasValue);
+ 		if (connectionFailureReason.HasValue)
+ 		{
+ 			writer.WriteEnum(connectionFailureReason.Value);
+ 		}
+-		writer.WriteBool(gameplayAffectingMods != null);
+-		if (gameplayAffectingMods != null)
+-		{
+-			writer.WriteInt(gameplayAffectingMods.Count);
+-			foreach (string gameplayAffectingMod in gameplayAffectingMods)
+-			{
+-				writer.WriteString(gameplayAffectingMod);
+-			}
+-		}
+-		writer.WriteBool(otherMods != null);
+-		if (otherMods == null)
+-		{
+-			return;
+-		}
+-		writer.WriteInt(otherMods.Count);
+-		foreach (string otherMod in otherMods)
+-		{
+-			writer.WriteString(otherMod);
+-		}
+ 	}
+ 
+ 	public void Deserialize(PacketReader reader)
+ 	{
+-		version = reader.ReadString();
+-		idDatabaseHash = reader.ReadUInt();
+-		gameMode = reader.ReadEnum<GameMode>();
+ 		sessionState = reader.ReadEnum<RunSessionState>();
++		gameMode = reader.ReadEnum<GameMode>();
+ 		if (reader.ReadBool())
+ 		{
+ 			connectionFailureReason = reader.ReadEnum<ConnectionFailureReason>();
+ 		}
+-		if (reader.ReadBool())
+-		{
+-			int num = reader.ReadInt();
+-			gameplayAffectingMods = new List<string>();
+-			for (int i = 0; i < num; i++)
+-			{
+-				gameplayAffectingMods.Add(reader.ReadString());
+-			}
+-		}
+-		if (reader.ReadBool())
+-		{
+-			int num2 = reader.ReadInt();
+-			otherMods = new List<string>();
+-			for (int j = 0; j < num2; j++)
+-			{
+-				otherMods.Add(reader.ReadString());
+-			}
+-		}
+ 	}
+ }
+ You are not using the latest version of the tool, please update.
+DIFF: MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.InitialGameInfoMessage
+--- docs/abi-reports/2026-09-01-native-bus/v0.107.1/MegaCrit_Sts2_Core_Multiplayer_Messages_Lobby_ClientLobbyJoinResponseMessage.cs	2026-09-01 14:19:47
++++ docs/abi-reports/2026-09-01-native-bus/v0.111.0/MegaCrit_Sts2_Core_Multiplayer_Messages_Lobby_ClientLobbyJoinResponseMessage.cs	2026-09-01 14:20:02
+@@ -18,7 +18,7 @@
+ 	/// <summary>
+ 	/// List of players already in the lobby.
+ 	/// </summary>
+-	public List<LobbyPlayer>? playersInLobby;
++	public List<StartRunLobbyPlayer>? playersInLobby;
+ 
+ 	/// <summary>
+ 	/// If the run is a daily, this contains information about the time that the host requested from the time server.
+@@ -71,7 +71,7 @@
+ 
+ 	public void Deserialize(PacketReader reader)
+ 	{
+-		playersInLobby = reader.ReadList<LobbyPlayer>(3);
++		playersInLobby = reader.ReadList<StartRunLobbyPlayer>(3);
+ 		if (reader.ReadBool())
+ 		{
+ 			dailyTime = reader.Read<TimeServerResult>();
+DIFF: MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.ClientLobbyJoinResponseMessage
+--- docs/abi-reports/2026-09-01-native-bus/v0.107.1/MegaCrit_Sts2_Core_Multiplayer_Messages_Lobby_ClientLoadJoinResponseMessage.cs	2026-09-01 14:19:49
++++ docs/abi-reports/2026-09-01-native-bus/v0.111.0/MegaCrit_Sts2_Core_Multiplayer_Messages_Lobby_ClientLoadJoinResponseMessage.cs	2026-09-01 14:20:03
+@@ -1,4 +1,5 @@
+ using System.Collections.Generic;
++using MegaCrit.Sts2.Core.Entities.Multiplayer;
+ using MegaCrit.Sts2.Core.Logging;
+ using MegaCrit.Sts2.Core.Multiplayer.Serialization;
+ using MegaCrit.Sts2.Core.Multiplayer.Transport;
+@@ -13,7 +14,7 @@
+ {
+ 	public SerializableRun serializableRun;
+ 
+-	public List<ulong> playersAlreadyConnected;
++	public List<LoadRunLobbyPlayer> playersAlreadyConnected;
+ 
+ 	public bool ShouldBroadcast => false;
+ 
+@@ -26,21 +27,21 @@
+ 	public void Serialize(PacketWriter writer)
+ 	{
+ 		writer.Write(serializableRun);
+-		writer.WriteInt(playersAlreadyConnected.Count, 6);
+-		foreach (ulong item in playersAlreadyConnected)
++		writer.WriteInt(playersAlreadyConnected.Count, 8);
++		foreach (LoadRunLobbyPlayer item in playersAlreadyConnected)
+ 		{
+-			writer.WriteULong(item);
++			writer.Write(item);
+ 		}
+ 	}
+ 
+ 	public void Deserialize(PacketReader reader)
+ 	{
+ 		serializableRun = reader.Read<SerializableRun>();
+-		playersAlreadyConnected = new List<ulong>();
+-		int num = reader.ReadInt(6);
++		playersAlreadyConnected = new List<LoadRunLobbyPlayer>();
++		int num = reader.ReadInt(8);
+ 		for (int i = 0; i < num; i++)
+ 		{
+-			playersAlreadyConnected.Add(reader.ReadULong());
++			playersAlreadyConnected.Add(reader.Read<LoadRunLobbyPlayer>());
+ 		}
+ 	}
+ }
+DIFF: MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.ClientLoadJoinResponseMessage
+--- docs/abi-reports/2026-09-01-native-bus/v0.107.1/MegaCrit_Sts2_Core_Multiplayer_Messages_Lobby_PlayerJoinedMessage.cs	2026-09-01 14:19:50
++++ docs/abi-reports/2026-09-01-native-bus/v0.111.0/MegaCrit_Sts2_Core_Multiplayer_Messages_Lobby_PlayerJoinedMessage.cs	2026-09-01 14:20:05
+@@ -7,11 +7,11 @@
+ 
+ /// <summary>
+ /// Sent from host to clients when a client has joined.
+-/// The newly joined client receives ClientSlotGrantedMessage and not this message.
++/// The newly joined client receives ClientLobbyJoinResponseMessage and not this message.
+ /// </summary>
+ public struct PlayerJoinedMessage : INetMessage, IPacketSerializable
+ {
+-	public LobbyPlayer lobbyPlayer;
++	public StartRunLobbyPlayer lobbyPlayer;
+ 
+ 	public bool ShouldBroadcast => false;
+ 
+@@ -28,7 +28,7 @@
+ 
+ 	public void Deserialize(PacketReader reader)
+ 	{
+-		lobbyPlayer = reader.Read<LobbyPlayer>();
++		lobbyPlayer = reader.Read<StartRunLobbyPlayer>();
+ 	}
+ }
+ You are not using the latest version of the tool, please update.
+DIFF: MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.PlayerJoinedMessage
+--- docs/abi-reports/2026-09-01-native-bus/v0.107.1/MegaCrit_Sts2_Core_Multiplayer_Messages_Lobby_LobbyBeginRunMessage.cs	2026-09-01 14:19:51
++++ docs/abi-reports/2026-09-01-native-bus/v0.111.0/MegaCrit_Sts2_Core_Multiplayer_Messages_Lobby_LobbyBeginRunMessage.cs	2026-09-01 14:20:05
+@@ -13,7 +13,7 @@
+ /// </summary>
+ public struct LobbyBeginRunMessage : INetMessage, IPacketSerializable
+ {
+-	public List<LobbyPlayer>? playersInLobby;
++	public List<StartRunLobbyPlayer>? playersInLobby;
+ 
+ 	public string seed;
+ 
+@@ -43,7 +43,7 @@
+ 
+ 	public void Deserialize(PacketReader reader)
+ 	{
+-		playersInLobby = reader.ReadList<LobbyPlayer>(3);
++		playersInLobby = reader.ReadList<StartRunLobbyPlayer>(3);
+ 		seed = reader.ReadString();
+ 		modifiers = reader.ReadList<SerializableModifier>();
+ 		act1 = reader.ReadString();
+DIFF: MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.LobbyBeginRunMessage
