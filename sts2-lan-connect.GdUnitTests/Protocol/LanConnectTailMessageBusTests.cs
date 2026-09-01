@@ -22,11 +22,10 @@ public sealed class LanConnectTailMessageBusTests
         try
         {
             LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
-                typeof(PacketWriter).Assembly,
-                isAndroid: true);
+                typeof(PacketWriter).Assembly);
             LanConnectTailMessagePatches.ApplyPlanForTesting(harmony, plan);
 
-            AssertInt(plan.Steps.Count).IsEqual(15);
+            AssertInt(plan.Steps.Count).IsEqual(16);
             AssertInt(plan.GenericTargetCount).IsEqual(0);
             foreach (LanConnectTailPatchStep step in plan.Steps.Take(9))
             {
@@ -104,59 +103,73 @@ public sealed class LanConnectTailMessageBusTests
     }
 
     [TestCase]
-    public void Standalone_tail_uses_authenticated_transport_sender_before_dispatch()
+    public void Native_deserialize_guards_intercept_short_frames_and_offset9_native_frames()
     {
         Harmony harmony = new($"sts2_lan_connect.tests.tail_bus.{Guid.NewGuid():N}");
         FakeRuntime runtime = new();
-        LanConnectProtocolOffer offer = Offer();
-        LanConnectProtocolSelection selection = Selection();
         using LanConnectSessionProtocolLease lease =
-            LanConnectSessionProtocolState.Shared.FreezeHost(selection, harmony.Id);
+            LanConnectSessionProtocolState.Shared.FreezeHost(Selection(), "native-bus-guards");
 
         try
         {
             LanConnectTailMessagePatches.ConfigureRuntime(runtime);
+            LanConnectNativeBusSender.TypeIdResolverForTesting = () => 200;
             NetMessageBus bus = new(new PacketReader(), new PacketWriter());
             AssemblyInfo.Init();
             typeof(MessageTypes).GetField("_cache", BindingFlags.Static | BindingFlags.NonPublic)!
                 .SetValue(null, new NetTypeCache<INetMessage>(INetMessageSubtypes.All.ToList()));
-            LobbyBeginRunMessage request = new()
-            {
-                playersInLobby = [],
-                seed = string.Empty,
-                modifiers = [],
-                act1 = string.Empty
-            };
-            _ = bus.SerializeMessage(41, request, out _);
             LanConnectTailMessagePatches.Apply(harmony);
 
-            byte[] packet = bus.SerializeMessage(41, request, out int length)
-                .AsSpan(0, length)
-                .ToArray();
-            using (LanConnectTailMessagePatches.PushTransportSenderForTesting(41))
+            // ① <9 字节且首字节为本类型 ID：原版读取 senderId 会越界，prefix 拦截并转结构化失败。
+            byte[] shortFrame = [(byte)200, 0x01, 0x02, 0x03];
+            using (LanConnectTailMessagePatches.PushTransportReceiveContextForTesting(41))
             {
-                bool decoded = bus.TryDeserializeMessage(packet, out INetMessage? message, out ulong? sender);
-                AssertThat(decoded).IsTrue();
-                AssertThat(message is LobbyBeginRunMessage).IsTrue();
-                AssertThat(sender == 41).IsTrue();
+                AssertThat(bus.TryDeserializeMessage(shortFrame, out _, out _)).IsFalse();
             }
+            AssertThat(runtime.RejectedSenders).Contains(41UL);
 
-            AssertThat(runtime.PreparedKinds).Contains(LanConnectSidecarMessageKind.LobbyBeginRun);
-            AssertThat(runtime.ValidatedSenders).Contains(41UL);
-
-            bool decodedWithoutSenderContext = bus.TryDeserializeMessage(packet, out _, out _);
-            AssertThat(decodedWithoutSenderContext).IsFalse();
-            AssertThat(runtime.RejectedSenders.Contains(0UL)).IsFalse();
-
-            using (LanConnectTailMessagePatches.PushTransportSenderForTesting(99))
+            // ② 未知 ID + offset-9 完整外层帧：升级为 lan_type_id_mismatch 结构化失败。
+            LanConnectSidecarFrame frame = new(
+                LanConnectSidecarMessageKind.LobbyBeginRun,
+                new byte[LanConnectSidecarFrameCodec.FlowNonceBytes],
+                1,
+                LanConnectTailCodec.Encode(
+                    1,
+                    [new LanConnectTailEntry(
+                        LanConnectTailEntry.CapabilitiesId,
+                        1,
+                        true,
+                        LanConnectCapabilitiesCodec.EncodeSessionSelection(Selection()))]));
+            LanConnectNativeBusMessage native = new();
+            native.Configure(200, LanConnectSidecarFrameCodec.Encode(frame));
+            PacketWriter wire = new() { WarnOnGrow = false };
+            wire.WriteByte(199); // 未知 typeId
+            wire.WriteULong(41);
+            native.Serialize(wire);
+            byte[] displaced = wire.Buffer.AsSpan(0, wire.BytePosition).ToArray();
+            using (LanConnectTailMessagePatches.PushTransportReceiveContextForTesting(41))
             {
-                bool decoded = bus.TryDeserializeMessage(packet, out _, out _);
-                AssertThat(decoded).IsFalse();
+                AssertThat(bus.TryDeserializeMessage(displaced, out _, out _)).IsFalse();
             }
-            AssertThat(runtime.RejectedSenders).Contains(99UL);
+            AssertThat(runtime.RejectedSenders.Contains(41UL)).IsTrue();
+
+            // ③ 第三方消息 payload 恰以前缀相似开头（magic/ver 相同但 frameLen 越界）：
+            //    维持原版"警告后丢弃"，不误伤断开。
+            byte[] prefixSimilar = (byte[])displaced.Clone();
+            prefixSimilar[17] = 0xFF;
+            prefixSimilar[18] = 0xFF;
+            prefixSimilar[19] = 0xFF;
+            prefixSimilar[20] = 0xFF;
+            runtime.RejectedSenders.Clear();
+            using (LanConnectTailMessagePatches.PushTransportReceiveContextForTesting(41))
+            {
+                AssertThat(bus.TryDeserializeMessage(prefixSimilar, out _, out _)).IsFalse();
+            }
+            AssertThat(runtime.RejectedSenders.Count).IsEqual(0);
         }
         finally
         {
+            LanConnectNativeBusSender.TypeIdResolverForTesting = null;
             harmony.UnpatchAll(harmony.Id);
             LanConnectTailMessagePatches.ConfigureRuntime(LanConnectTailMessageRuntime.Shared);
         }
@@ -188,7 +201,7 @@ public sealed class LanConnectTailMessageBusTests
         return selection with { CapabilityDigest = LanConnectCapabilityDigest.Compute(selection) };
     }
 
-    private sealed class FakeRuntime : ILanConnectAndroidTailMessageRuntime
+    private sealed class FakeRuntime : ILanConnectTailMessageRuntime
     {
         internal List<LanConnectSidecarMessageKind> PreparedKinds { get; } = [];
         internal List<ulong> ValidatedSenders { get; } = [];
@@ -214,62 +227,39 @@ public sealed class LanConnectTailMessageBusTests
             PacketWriter writer,
             LanConnectSidecarMessageKind messageKind,
             object message,
-            out LanConnectAndroidPreparedMessage? prepared)
+            out LanConnectNativePreparedMessage? prepared)
         {
             LanConnectProtocolSelection? selection = LanConnectSessionProtocolState.Shared.Current.Selection;
             LanConnectPreparedTailMessage runtimePrepared =
                 PrepareOutgoing(null!, messageKind, 0, message, selection!);
-            prepared = new LanConnectAndroidPreparedMessage(null!, writer, messageKind, 0, selection!, runtimePrepared);
+            prepared = new LanConnectNativePreparedMessage(null!, writer, messageKind, 0, selection!, runtimePrepared);
             return true;
         }
 
-        public void CompleteConcreteOutgoing(LanConnectAndroidPreparedMessage prepared)
+        public void CompleteConcreteOutgoing(LanConnectNativePreparedMessage prepared)
         {
-            if (prepared.Selection.Carrier == LanConnectProtocolCarrier.StandaloneTailV1)
-            {
-                _ = LanConnectStandaloneTailCarrier.Write(
-                    prepared.Writer,
-                    prepared.Prepared.Container,
-                    prepared.Selection);
-            }
         }
 
         public void ClearPendingOutgoing(PacketWriter writer)
         {
         }
 
-        public LanConnectAndroidTransportState? SubmitPendingSidecarBeforeVanilla(
+        public LanConnectNativeSendContext? BeginNativeTransport(
             object transport,
             bool isHostTransport,
             ulong recipientPeerId,
             byte[] buffer,
-            int length) =>
-            null;
+            int length) => null;
 
-        public void HandleVanillaTransportFailure(LanConnectAndroidTransportState state, Exception exception)
+        public void CompleteNativeTransport(LanConnectNativeSendContext? state, bool vanillaPeerReachable)
         {
         }
 
-        public void SubmitSidecarBeforeVanilla(
-            NetMessageBus messageBus,
-            LanConnectSidecarMessageKind messageKind,
-            ulong senderPeerId,
-            object message,
-            byte[] container,
-            LanConnectProtocolSelection selection) =>
-            throw new InvalidOperationException();
-
-        public void ValidateStandaloneIncoming(
-            NetMessageBus messageBus,
-            LanConnectSidecarMessageKind messageKind,
-            ulong transportSenderPeerId,
-            INetMessage message,
-            byte[] container,
-            LanConnectProtocolSelection selection)
+        public void HandleNativeTransportFailure(LanConnectNativeSendContext? state, Exception exception)
         {
-            _ = LanConnectTailCodec.Decode(container);
-            ValidatedSenders.Add(transportSenderPeerId);
         }
+
+        public bool TryEnterNativeDispatch(NetMessageBus messageBus, INetMessage message, ulong senderId) => true;
 
         public void HandleIncomingFailure(
             NetMessageBus messageBus,
@@ -279,12 +269,5 @@ public sealed class LanConnectTailMessageBusTests
         {
             RejectedSenders.Add(transportSenderPeerId);
         }
-
-        public bool TryPairSidecarIncoming(
-            NetMessageBus messageBus,
-            LanConnectSidecarMessageKind messageKind,
-            ulong senderPeerId,
-            INetMessage message,
-            LanConnectProtocolSelection selection) => false;
     }
 }

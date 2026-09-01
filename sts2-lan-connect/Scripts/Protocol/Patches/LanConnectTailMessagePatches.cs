@@ -6,94 +6,13 @@ using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
+using MegaCrit.Sts2.Core.Multiplayer.Transport;
 using MegaCrit.Sts2.Core.Multiplayer.Transport.ENet;
 
 namespace Sts2LanConnect.Scripts;
 
-internal interface ILanConnectTailMessageRuntime
-{
-    LanConnectPreparedTailMessage PrepareOutgoing(
-        NetMessageBus messageBus,
-        LanConnectSidecarMessageKind messageKind,
-        ulong senderPeerId,
-        object message,
-        LanConnectProtocolSelection selection);
-
-    void SubmitSidecarBeforeVanilla(
-        NetMessageBus messageBus,
-        LanConnectSidecarMessageKind messageKind,
-        ulong senderPeerId,
-        object message,
-        byte[] container,
-        LanConnectProtocolSelection selection);
-
-    void ValidateStandaloneIncoming(
-        NetMessageBus messageBus,
-        LanConnectSidecarMessageKind messageKind,
-        ulong transportSenderPeerId,
-        INetMessage message,
-        byte[] container,
-        LanConnectProtocolSelection selection);
-
-    void HandleIncomingFailure(
-        NetMessageBus messageBus,
-        ulong transportSenderPeerId,
-        Exception exception,
-        LanConnectProtocolSelection selection);
-
-    bool TryPairSidecarIncoming(
-        NetMessageBus messageBus,
-        LanConnectSidecarMessageKind messageKind,
-        ulong senderPeerId,
-        INetMessage message,
-        LanConnectProtocolSelection selection);
-}
-
-internal interface ILanConnectAndroidTailMessageRuntime : ILanConnectTailMessageRuntime
-{
-    bool TryPrepareConcreteOutgoing(
-        PacketWriter writer,
-        LanConnectSidecarMessageKind messageKind,
-        object message,
-        out LanConnectAndroidPreparedMessage? prepared);
-
-    void CompleteConcreteOutgoing(LanConnectAndroidPreparedMessage prepared);
-
-    void ClearPendingOutgoing(PacketWriter writer);
-
-    LanConnectAndroidTransportState? SubmitPendingSidecarBeforeVanilla(
-        object transport,
-        bool isHostTransport,
-        ulong recipientPeerId,
-        byte[] buffer,
-        int length);
-
-    void HandleVanillaTransportFailure(
-        LanConnectAndroidTransportState state,
-        Exception exception);
-}
-
-internal sealed record LanConnectPreparedTailMessage(object Message, byte[] Container);
-
-internal sealed record LanConnectAndroidPreparedMessage(
-    NetMessageBus MessageBus,
-    PacketWriter Writer,
-    LanConnectSidecarMessageKind MessageKind,
-    ulong SenderPeerId,
-    LanConnectProtocolSelection Selection,
-    LanConnectPreparedTailMessage Prepared);
-
-internal sealed record LanConnectAndroidTransportState(
-    NetMessageBus MessageBus,
-    long Sequence,
-    ulong RecipientPeerId);
-
 internal static partial class LanConnectTailMessagePatches
 {
-    private static readonly FieldInfo? NetMessageBusWriter =
-        AccessTools.Field(typeof(NetMessageBus), "_writer");
-    private static readonly FieldInfo? NetMessageBusReader =
-        AccessTools.Field(typeof(NetMessageBus), "_reader");
     private static ILanConnectTailMessageRuntime? _runtime;
 
     internal static void ConfigureRuntime(ILanConnectTailMessageRuntime runtime) =>
@@ -102,10 +21,7 @@ internal static partial class LanConnectTailMessagePatches
     internal static void ResetRuntime() => Volatile.Write(ref _runtime, null);
 
     internal static void Apply(Harmony harmony)
-        => ApplyResolvedPlan(harmony, ResolvePatchPlan(
-            typeof(PacketWriter).Assembly,
-            OperatingSystem.IsAndroid(),
-            LanConnectTailPlanOverride.PreferLegacyDesktopGenericPlan));
+        => ApplyResolvedPlan(harmony, ResolvePatchPlan(typeof(PacketWriter).Assembly));
 
     // Tests resolve the plan explicitly via ResolvePatchPlan(...) and pass it in, so there is
     // no boolean whose meaning drifts as the production default changes.
@@ -289,32 +205,6 @@ internal static partial class LanConnectTailMessagePatches
         return $"{method.DeclaringType?.FullName}.{method.Name}{genericArguments}({parameters})";
     }
 
-    private static MethodInfo ResolveSerializePrefix(Type messageType)
-    {
-        string methodName = messageType == typeof(InitialGameInfoMessage)
-            ? nameof(SerializeInitialGameInfoPrefix)
-            : messageType == typeof(ClientLobbyJoinRequestMessage)
-                ? nameof(SerializeLobbyJoinRequestPrefix)
-                : messageType == typeof(ClientLobbyJoinResponseMessage)
-                    ? nameof(SerializeLobbyJoinResponsePrefix)
-                    : messageType == typeof(ClientLoadJoinRequestMessage)
-                        ? nameof(SerializeLoadJoinRequestPrefix)
-                        : messageType == typeof(ClientLoadJoinResponseMessage)
-                            ? nameof(SerializeLoadJoinResponsePrefix)
-                            : messageType == typeof(ClientRejoinRequestMessage)
-                                ? nameof(SerializeRejoinRequestPrefix)
-                                : messageType == typeof(ClientRejoinResponseMessage)
-                                    ? nameof(SerializeRejoinResponsePrefix)
-                                    : messageType == typeof(PlayerJoinedMessage)
-                                        ? nameof(SerializePlayerJoinedPrefix)
-                                        : messageType == typeof(LobbyBeginRunMessage)
-                                            ? nameof(SerializeLobbyBeginRunPrefix)
-                                            : throw new InvalidDataException(
-                                                $"Message type {messageType.FullName} has no concrete tail serializer prefix.");
-        return AccessTools.Method(typeof(LanConnectTailMessagePatches), methodName)
-            ?? throw new MissingMethodException(typeof(LanConnectTailMessagePatches).FullName, methodName);
-    }
-
     internal static byte[] EncodePeerOfferMessage(
         LanConnectSidecarMessageKind messageKind,
         LanConnectProtocolOffer offer) =>
@@ -342,194 +232,130 @@ internal static partial class LanConnectTailMessagePatches
 
     private static InvalidDataException Invalid(string message) => new(message);
 
+    // ---- 接收上下文（OnPacketReceived prefix：捕获传输层 sender/mode/channel） ----
+
     [ThreadStatic]
-    private static Stack<ulong>? _transportSenders;
+    private static Stack<LanConnectTransportReceiveContext>? _transportReceiveContexts;
+
+    private static void ReceivePrefix(
+        INetGameService __instance,
+        ulong senderId,
+        NetTransferMode mode,
+        int channel)
+    {
+        _ = __instance;
+        (_transportReceiveContexts ??= new Stack<LanConnectTransportReceiveContext>())
+            .Push(new LanConnectTransportReceiveContext(senderId, mode, channel));
+    }
+
+    private static Exception? ReceiveFinalizer(Exception? __exception)
+    {
+        if (_transportReceiveContexts is { Count: > 0 } contexts)
+        {
+            contexts.Pop();
+        }
+
+        return __exception;
+    }
+
+    internal static IDisposable PushTransportReceiveContextForTesting(
+        ulong senderPeerId,
+        int channel = 0,
+        NetTransferMode mode = NetTransferMode.None)
+    {
+        (_transportReceiveContexts ??= new Stack<LanConnectTransportReceiveContext>())
+            .Push(new LanConnectTransportReceiveContext(senderPeerId, mode, channel));
+        return new TransportReceiveContextScope();
+    }
+
+    internal static bool TryPeekTransportReceiveContext(
+        out LanConnectTransportReceiveContext context)
+    {
+        if (_transportReceiveContexts is { Count: > 0 } contexts)
+        {
+            context = contexts.Peek();
+            return true;
+        }
+
+        context = null!;
+        return false;
+    }
+
+    private sealed class TransportReceiveContextScope : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0
+                && _transportReceiveContexts is { Count: > 0 } contexts)
+            {
+                contexts.Pop();
+            }
+        }
+    }
+
+    // ---- 第一级：10 个具体消息 Serialize prefix（容器生产 seam，不改写原版字节） ----
 
     // ReSharper disable UnusedMember.Local -- invoked by Harmony.
-    private static void SerializeInitialGameInfoPrefix(
-        NetMessageBus __instance,
-        ulong senderId,
-        ref InitialGameInfoMessage message,
-        out LanConnectPreparedTailMessage? __state)
-    {
-        message = (InitialGameInfoMessage)PrepareSerializeMessage(
-            __instance,
-            senderId,
-            message,
-            typeof(InitialGameInfoMessage),
-            out __state);
-    }
-
-    private static void SerializeLobbyJoinRequestPrefix(
-        NetMessageBus __instance,
-        ulong senderId,
-        ref ClientLobbyJoinRequestMessage message,
-        out LanConnectPreparedTailMessage? __state)
-    {
-        message = (ClientLobbyJoinRequestMessage)PrepareSerializeMessage(
-            __instance,
-            senderId,
-            message,
-            typeof(ClientLobbyJoinRequestMessage),
-            out __state);
-    }
-
-    private static void SerializeLobbyJoinResponsePrefix(
-        NetMessageBus __instance,
-        ulong senderId,
-        ref ClientLobbyJoinResponseMessage message,
-        out LanConnectPreparedTailMessage? __state)
-    {
-        message = (ClientLobbyJoinResponseMessage)PrepareSerializeMessage(
-            __instance,
-            senderId,
-            message,
-            typeof(ClientLobbyJoinResponseMessage),
-            out __state);
-    }
-
-    private static void SerializeLoadJoinRequestPrefix(
-        NetMessageBus __instance,
-        ulong senderId,
-        ref ClientLoadJoinRequestMessage message,
-        out LanConnectPreparedTailMessage? __state)
-    {
-        message = (ClientLoadJoinRequestMessage)PrepareSerializeMessage(
-            __instance,
-            senderId,
-            message,
-            typeof(ClientLoadJoinRequestMessage),
-            out __state);
-    }
-
-    private static void SerializeLoadJoinResponsePrefix(
-        NetMessageBus __instance,
-        ulong senderId,
-        ref ClientLoadJoinResponseMessage message,
-        out LanConnectPreparedTailMessage? __state)
-    {
-        message = (ClientLoadJoinResponseMessage)PrepareSerializeMessage(
-            __instance,
-            senderId,
-            message,
-            typeof(ClientLoadJoinResponseMessage),
-            out __state);
-    }
-
-    private static void SerializeRejoinRequestPrefix(
-        NetMessageBus __instance,
-        ulong senderId,
-        ref ClientRejoinRequestMessage message,
-        out LanConnectPreparedTailMessage? __state)
-    {
-        message = (ClientRejoinRequestMessage)PrepareSerializeMessage(
-            __instance,
-            senderId,
-            message,
-            typeof(ClientRejoinRequestMessage),
-            out __state);
-    }
-
-    private static void SerializeRejoinResponsePrefix(
-        NetMessageBus __instance,
-        ulong senderId,
-        ref ClientRejoinResponseMessage message,
-        out LanConnectPreparedTailMessage? __state)
-    {
-        message = (ClientRejoinResponseMessage)PrepareSerializeMessage(
-            __instance,
-            senderId,
-            message,
-            typeof(ClientRejoinResponseMessage),
-            out __state);
-    }
-
-    private static void SerializePlayerJoinedPrefix(
-        NetMessageBus __instance,
-        ulong senderId,
-        ref PlayerJoinedMessage message,
-        out LanConnectPreparedTailMessage? __state)
-    {
-        message = (PlayerJoinedMessage)PrepareSerializeMessage(
-            __instance,
-            senderId,
-            message,
-            typeof(PlayerJoinedMessage),
-            out __state);
-    }
-
-    private static void SerializeLobbyBeginRunPrefix(
-        NetMessageBus __instance,
-        ulong senderId,
-        ref LobbyBeginRunMessage message,
-        out LanConnectPreparedTailMessage? __state)
-    {
-        message = (LobbyBeginRunMessage)PrepareSerializeMessage(
-            __instance,
-            senderId,
-            message,
-            typeof(LobbyBeginRunMessage),
-            out __state);
-    }
-
     private static void AndroidSerializeInitialGameInfoPrefix(
         ref InitialGameInfoMessage __instance,
         PacketWriter __0,
-        out LanConnectAndroidPreparedMessage? __state) =>
-        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+        out LanConnectNativePreparedMessage? __state) =>
+        __instance = PrepareConcreteMessage(__0, __instance, out __state);
 
     private static void AndroidSerializeLobbyJoinRequestPrefix(
         ref ClientLobbyJoinRequestMessage __instance,
         PacketWriter __0,
-        out LanConnectAndroidPreparedMessage? __state) =>
-        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+        out LanConnectNativePreparedMessage? __state) =>
+        __instance = PrepareConcreteMessage(__0, __instance, out __state);
 
     private static void AndroidSerializeLobbyJoinResponsePrefix(
         ref ClientLobbyJoinResponseMessage __instance,
         PacketWriter __0,
-        out LanConnectAndroidPreparedMessage? __state) =>
-        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+        out LanConnectNativePreparedMessage? __state) =>
+        __instance = PrepareConcreteMessage(__0, __instance, out __state);
 
     private static void AndroidSerializeLoadJoinRequestPrefix(
         ref ClientLoadJoinRequestMessage __instance,
         PacketWriter __0,
-        out LanConnectAndroidPreparedMessage? __state) =>
-        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+        out LanConnectNativePreparedMessage? __state) =>
+        __instance = PrepareConcreteMessage(__0, __instance, out __state);
 
     private static void AndroidSerializeLoadJoinResponsePrefix(
         ref ClientLoadJoinResponseMessage __instance,
         PacketWriter __0,
-        out LanConnectAndroidPreparedMessage? __state) =>
-        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+        out LanConnectNativePreparedMessage? __state) =>
+        __instance = PrepareConcreteMessage(__0, __instance, out __state);
 
     private static void AndroidSerializeRejoinRequestPrefix(
         ref ClientRejoinRequestMessage __instance,
         PacketWriter __0,
-        out LanConnectAndroidPreparedMessage? __state) =>
-        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+        out LanConnectNativePreparedMessage? __state) =>
+        __instance = PrepareConcreteMessage(__0, __instance, out __state);
 
     private static void AndroidSerializeRejoinResponsePrefix(
         ref ClientRejoinResponseMessage __instance,
         PacketWriter __0,
-        out LanConnectAndroidPreparedMessage? __state) =>
-        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+        out LanConnectNativePreparedMessage? __state) =>
+        __instance = PrepareConcreteMessage(__0, __instance, out __state);
 
     private static void AndroidSerializePlayerJoinedPrefix(
         ref PlayerJoinedMessage __instance,
         PacketWriter __0,
-        out LanConnectAndroidPreparedMessage? __state) =>
-        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+        out LanConnectNativePreparedMessage? __state) =>
+        __instance = PrepareConcreteMessage(__0, __instance, out __state);
 
     private static void AndroidSerializeLobbyBeginRunPrefix(
         ref LobbyBeginRunMessage __instance,
         PacketWriter __0,
-        out LanConnectAndroidPreparedMessage? __state) =>
-        __instance = PrepareAndroidConcreteMessage(__0, __instance, out __state);
+        out LanConnectNativePreparedMessage? __state) =>
+        __instance = PrepareConcreteMessage(__0, __instance, out __state);
 
-    private static T PrepareAndroidConcreteMessage<T>(
+    private static T PrepareConcreteMessage<T>(
         PacketWriter writer,
         T message,
-        out LanConnectAndroidPreparedMessage? state)
+        out LanConnectNativePreparedMessage? state)
         where T : struct, INetMessage
     {
         state = null;
@@ -539,9 +365,8 @@ internal static partial class LanConnectTailMessagePatches
             return message;
         }
 
-        ILanConnectAndroidTailMessageRuntime runtime = Volatile.Read(ref _runtime)
-            as ILanConnectAndroidTailMessageRuntime
-            ?? throw new InvalidOperationException("Android Tail protocol message runtime is not configured.");
+        ILanConnectTailMessageRuntime runtime = Volatile.Read(ref _runtime)
+            ?? throw new InvalidOperationException("Tail protocol message runtime is not configured.");
         LanConnectSidecarMessageKind kind = GetMessageKind(typeof(T));
         if (kind == LanConnectSidecarMessageKind.InitialGameInfo
             && LanConnectTailMessageRuntime.HasPendingOutgoingRejectionForCurrentThread)
@@ -563,35 +388,36 @@ internal static partial class LanConnectTailMessagePatches
         return projected;
     }
 
-    private static void AndroidConcreteSerializePostfix(LanConnectAndroidPreparedMessage? __state)
+    private static void AndroidConcreteSerializePostfix(LanConnectNativePreparedMessage? __state)
     {
         if (__state == null)
         {
             return;
         }
 
-        ILanConnectAndroidTailMessageRuntime runtime = Volatile.Read(ref _runtime)
-            as ILanConnectAndroidTailMessageRuntime
-            ?? throw new InvalidOperationException("Android Tail protocol message runtime is not configured.");
+        ILanConnectTailMessageRuntime runtime = Volatile.Read(ref _runtime)
+            ?? throw new InvalidOperationException("Tail protocol message runtime is not configured.");
         runtime.CompleteConcreteOutgoing(__state);
     }
 
     private static void AndroidWriterResetPrefix(PacketWriter __instance)
     {
-        if (Volatile.Read(ref _runtime) is ILanConnectAndroidTailMessageRuntime runtime)
+        if (Volatile.Read(ref _runtime) is ILanConnectTailMessageRuntime runtime)
         {
             runtime.ClearPendingOutgoing(__instance);
         }
     }
+
+    // ---- 第二/第三级：transport prefix/postfix/finalizer（非泛型、单点） ----
 
     private static void AndroidHostTransportPrefix(
         ENetHost __instance,
         ulong peerId,
         byte[] bytes,
         int length,
-        out LanConnectAndroidTransportState? __state)
+        out LanConnectNativeSendContext? __state)
     {
-        __state = PrepareAndroidTransport(
+        __state = PrepareNativeTransport(
             __instance,
             isHostTransport: true,
             peerId,
@@ -603,9 +429,9 @@ internal static partial class LanConnectTailMessagePatches
         ENetClient __instance,
         byte[] bytes,
         int length,
-        out LanConnectAndroidTransportState? __state)
+        out LanConnectNativeSendContext? __state)
     {
-        __state = PrepareAndroidTransport(
+        __state = PrepareNativeTransport(
             __instance,
             isHostTransport: false,
             recipientPeerId: 0,
@@ -613,19 +439,19 @@ internal static partial class LanConnectTailMessagePatches
             length);
     }
 
-    private static LanConnectAndroidTransportState? PrepareAndroidTransport(
+    private static LanConnectNativeSendContext? PrepareNativeTransport(
         object transport,
         bool isHostTransport,
         ulong recipientPeerId,
         byte[] bytes,
         int length)
     {
-        if (Volatile.Read(ref _runtime) is not ILanConnectAndroidTailMessageRuntime runtime)
+        if (Volatile.Read(ref _runtime) is not ILanConnectTailMessageRuntime runtime)
         {
             return null;
         }
 
-        return runtime.SubmitPendingSidecarBeforeVanilla(
+        return runtime.BeginNativeTransport(
             transport,
             isHostTransport,
             recipientPeerId,
@@ -633,19 +459,56 @@ internal static partial class LanConnectTailMessagePatches
             length);
     }
 
+    private static void AndroidHostTransportPostfix(
+        ENetHost __instance,
+        ulong peerId,
+        LanConnectNativeSendContext? __state)
+    {
+        // 结构性递归免疫：native 发送出口触发的重入直接跳过。
+        if (LanConnectNativeBusSender.ReentryForCurrentThread)
+        {
+            return;
+        }
+
+        bool peerReachable = __instance.ConnectedPeerIds.Contains(peerId);
+        CompleteNativeTransport(__state, peerReachable);
+    }
+
+    private static void AndroidClientTransportPostfix(
+        ENetClient __instance,
+        LanConnectNativeSendContext? __state)
+    {
+        if (LanConnectNativeBusSender.ReentryForCurrentThread)
+        {
+            return;
+        }
+
+        CompleteNativeTransport(__state, __instance.IsConnected);
+    }
+
+    private static void CompleteNativeTransport(LanConnectNativeSendContext? state, bool vanillaPeerReachable)
+    {
+        if (Volatile.Read(ref _runtime) is not ILanConnectTailMessageRuntime runtime)
+        {
+            return;
+        }
+
+        runtime.CompleteNativeTransport(state, vanillaPeerReachable);
+    }
+
     private static Exception? AndroidHostTransportFinalizer(
         Exception? __exception,
-        LanConnectAndroidTransportState? __state) =>
-        CompleteAndroidTransport(__exception, __state);
+        LanConnectNativeSendContext? __state) =>
+        CompleteNativeTransportFailure(__exception, __state);
 
     private static Exception? AndroidClientTransportFinalizer(
         Exception? __exception,
-        LanConnectAndroidTransportState? __state) =>
-        CompleteAndroidTransport(__exception, __state);
+        LanConnectNativeSendContext? __state) =>
+        CompleteNativeTransportFailure(__exception, __state);
 
-    private static Exception? CompleteAndroidTransport(
+    private static Exception? CompleteNativeTransportFailure(
         Exception? exception,
-        LanConnectAndroidTransportState? state)
+        LanConnectNativeSendContext? state)
     {
         if (exception == null || state == null)
         {
@@ -654,322 +517,194 @@ internal static partial class LanConnectTailMessagePatches
 
         try
         {
-            if (Volatile.Read(ref _runtime) is ILanConnectAndroidTailMessageRuntime runtime)
+            if (Volatile.Read(ref _runtime) is ILanConnectTailMessageRuntime runtime)
             {
-                runtime.HandleVanillaTransportFailure(state, exception);
+                runtime.HandleNativeTransportFailure(state, exception);
             }
         }
         catch (Exception abortException)
         {
             Log.Error(
-                "sts2_lan_connect tail: failed to terminate Android Tail binding after vanilla transport failure: " +
+                "sts2_lan_connect tail: failed to terminate Native Tail binding after vanilla transport failure: " +
                 $"{abortException.GetType().Name}: {abortException.Message}");
         }
 
         return exception;
     }
 
-    private static object PrepareSerializeMessage(
-        NetMessageBus messageBus,
-        ulong senderId,
-        object message,
-        Type messageType,
-        out LanConnectPreparedTailMessage? state)
-    {
-        state = null;
-        LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
-        LanConnectProtocolSelection? selection = snapshot.Selection;
-        if (selection?.Profile != LanConnectProtocolProfile.TailV1 || !snapshot.IsActive)
-        {
-            return message;
-        }
+    // ---- 配对屏障（NetMessageBus.SendMessageToAllHandlers prefix） ----
 
-        ILanConnectTailMessageRuntime runtime = Volatile.Read(ref _runtime)
-            ?? throw new InvalidOperationException("Tail protocol message runtime is not configured.");
-        LanConnectSidecarMessageKind kind = GetMessageKind(messageType);
-        if (kind == LanConnectSidecarMessageKind.InitialGameInfo
-            && LanConnectTailMessageRuntime.HasPendingOutgoingRejectionForCurrentThread)
-        {
-            kind = LanConnectSidecarMessageKind.ConnectionFailed;
-        }
-        LanConnectPreparedTailMessage prepared = runtime.PrepareOutgoing(
-            messageBus,
-            kind,
-            senderId,
-            message,
-            selection);
-        if (!messageType.IsInstanceOfType(prepared.Message))
-        {
-            throw new InvalidOperationException(
-                $"Tail runtime returned {prepared.Message.GetType().FullName} for {messageType.FullName}.");
-        }
-
-        object projected = prepared.Message;
-        state = prepared;
-        if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
-        {
-            runtime.SubmitSidecarBeforeVanilla(messageBus, kind, senderId, projected, prepared.Container, selection);
-        }
-
-        return projected;
-    }
-
-    private static void SerializePostfix(
+    private static bool DispatchBarrierPrefix(
         NetMessageBus __instance,
-        ulong senderId,
-        object message,
-        ref int length,
-        ref byte[] __result,
-        LanConnectPreparedTailMessage? __state)
+        INetMessage message,
+        ulong senderId)
     {
-        LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
-        LanConnectProtocolSelection? selection = snapshot.Selection;
-        if (selection?.Profile != LanConnectProtocolProfile.TailV1 || !snapshot.IsActive)
+        if (Volatile.Read(ref _runtime) is not ILanConnectTailMessageRuntime runtime)
         {
-            return;
-        }
-
-        if (__state == null)
-        {
-            throw new InvalidOperationException("Tail outgoing message was not prepared before serialization.");
-        }
-
-        if (selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
-        {
-            return;
-        }
-
-        PacketWriter writer = NetMessageBusWriter?.GetValue(__instance) as PacketWriter
-            ?? throw new InvalidOperationException("NetMessageBus writer is unavailable.");
-        LanConnectStandaloneTailPlacement placement = LanConnectStandaloneTailCarrier.Write(
-            writer,
-            __state.Container,
-            selection);
-        length = checked((placement.ContainerEndBit + 7) / 8);
-        __result = writer.Buffer;
-    }
-
-    private static void DeserializePostfix(
-        NetMessageBus __instance,
-        ref bool __result,
-        ref INetMessage? message,
-        ref ulong? overrideSenderId)
-    {
-        LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
-        LanConnectProtocolSelection? selection = snapshot.Selection;
-        if (selection?.Profile != LanConnectProtocolProfile.TailV1 || !snapshot.IsActive)
-        {
-            return;
-        }
-
-        ILanConnectTailMessageRuntime? runtime = Volatile.Read(ref _runtime);
-        if (runtime == null)
-        {
-            __result = false;
-            message = null;
-            overrideSenderId = null;
-            return;
-        }
-
-        if (!__result || message == null || !overrideSenderId.HasValue)
-        {
-            if (!__result && TryPeekTransportSender(out ulong failedSenderPeerId))
-            {
-                try
-                {
-                    runtime.HandleIncomingFailure(
-                        __instance,
-                        failedSenderPeerId,
-                        new InvalidDataException("Tail message deserialization failed before vanilla dispatch."),
-                        selection);
-                }
-                catch
-                {
-                    // Rejection transport can fail too; the malformed message must still stay blocked.
-                }
-            }
-
-            return;
+            return true;
         }
 
         try
         {
-            if (!TryGetIncomingMessageKind(message, out LanConnectSidecarMessageKind kind))
-            {
-                return;
-            }
-
-            if (!TryPeekTransportSender(out ulong transportSenderPeerId))
-            {
-                throw new InvalidDataException(
-                    "Tail message deserialization has no authenticated transport-sender context.");
-            }
-
-            if (overrideSenderId.Value != transportSenderPeerId)
-            {
-                throw new InvalidDataException(
-                    "Embedded message sender differs from the authenticated transport sender.");
-            }
-
-            if (selection.Carrier == LanConnectProtocolCarrier.StandaloneTailV1)
-            {
-                PacketReader reader = NetMessageBusReader?.GetValue(__instance) as PacketReader
-                    ?? throw new InvalidOperationException("NetMessageBus reader is unavailable.");
-                LanConnectStandaloneTailPlacement placement = LanConnectStandaloneTailCarrier.Read(reader, selection);
-                runtime.ValidateStandaloneIncoming(
-                    __instance,
-                    kind,
-                    transportSenderPeerId,
-                    message,
-                    placement.ContainerBytes,
-                    selection);
-            }
-            else if (!runtime.TryPairSidecarIncoming(
-                         __instance,
-                         kind,
-                         transportSenderPeerId,
-                         message,
-                         selection))
-            {
-                __result = false;
-                message = null;
-                overrideSenderId = null;
-            }
+            return runtime.TryEnterNativeDispatch(__instance, message, senderId);
         }
         catch (Exception exception)
         {
-            Log.Warn(
-                $"sts2_lan_connect tail: blocked {message?.GetType().Name ?? "unknown"} " +
-                $"from transport peer {overrideSenderId?.ToString() ?? "unknown"}: " +
-                $"{exception.GetType().Name}: {exception.Message}");
-            __result = false;
-            message = null;
-            overrideSenderId = null;
-            if (!TryPeekTransportSender(out ulong transportSenderPeerId))
-            {
-                return;
-            }
+            Log.Error(
+                $"sts2_lan_connect tail: native dispatch barrier crashed: {exception.GetType().Name}: {exception.Message}");
+            return false;
+        }
+    }
 
+    // ---- TryDeserializeMessage 拆分（prefix：<9 字节已知 ID 前置拦截；postfix：未知 ID 捕获） ----
+
+    private static bool TryDeserializePrefix(NetMessageBus __instance, byte[] __0)
+    {
+        // 原版会在读取 senderId 时越界抛出：先拦截并转 lan_native_frame_invalid。
+        if (__0.Length >= LanConnectNativeBusMessage.VanillaWireHeaderBytes || __0.Length == 0)
+        {
+            return true;
+        }
+
+        if (__0[0] != (byte)LanConnectNativeBusSender.ResolveTypeId())
+        {
+            return true;
+        }
+
+        if (Volatile.Read(ref _runtime) is ILanConnectTailMessageRuntime runtime
+            && TryPeekTransportReceiveContext(out LanConnectTransportReceiveContext context))
+        {
             try
             {
                 runtime.HandleIncomingFailure(
                     __instance,
-                    transportSenderPeerId,
-                    exception,
-                    selection);
+                    context.SenderPeerId,
+                    LanConnectProtocolFailureMapper.FromLocalException(
+                        "lan_native_frame_invalid",
+                        $"Native bus packet of {__0.Length} bytes is shorter than the vanilla wire header."),
+                    RequireActiveSelection());
             }
             catch
             {
-                // Protocol rejection transport can fail too; the original message must still stay blocked.
+                // 拒绝通道失败时仍须跳过原版反序列化（前缀返回 false），避免越界读取。
             }
         }
-    }
 
-    private static void ReceivePrefix(INetGameService __instance, ulong senderId)
-    {
-        _ = __instance;
-        (_transportSenders ??= new Stack<ulong>()).Push(senderId);
-    }
-
-    private static Exception? ReceiveFinalizer(Exception? __exception)
-    {
-        if (_transportSenders is { Count: > 0 } senders)
-        {
-            senders.Pop();
-        }
-
-        return __exception;
-    }
-
-    internal static IDisposable PushTransportSenderForTesting(ulong senderPeerId)
-    {
-        (_transportSenders ??= new Stack<ulong>()).Push(senderPeerId);
-        return new TransportSenderScope();
-    }
-
-    private static ulong RequireTransportSender()
-    {
-        if (!TryPeekTransportSender(out ulong senderPeerId))
-        {
-            throw new InvalidOperationException(
-                "Tail message deserialization has no authenticated transport-sender context.");
-        }
-
-        return senderPeerId;
-    }
-
-    private static bool TryPeekTransportSender(out ulong senderPeerId)
-    {
-        if (_transportSenders is { Count: > 0 } senders)
-        {
-            senderPeerId = senders.Peek();
-            return true;
-        }
-
-        senderPeerId = 0;
         return false;
     }
 
-    private static void HostBroadcastPrefix(
-        NetHostGameService __instance,
-        out IDisposable? __state)
+    private static void TryDeserializePostfix(
+        NetMessageBus __instance,
+        byte[] __0,
+        bool __result)
     {
-        __state = null;
-        if (!IsActiveRitsuTail())
+        if (__result
+            || __0.Length < LanConnectNativeBusMessage.VanillaWireHeaderBytes + 3)
         {
             return;
         }
 
-        ulong[] recipients = __instance.ConnectedPeers
-            .Where(static peer => peer.readyForBroadcasting)
-            .Select(static peer => peer.peerId)
-            .ToArray();
-        __state = LanConnectTailMessageRuntime.PushOutgoingSidecarRecipientsForCurrentThread(recipients);
-    }
-
-    private static void HostSendInternalPrefix(
-        ulong peerId,
-        out IDisposable? __state)
-    {
-        __state = null;
-        if (!IsActiveRitsuTail())
+        int offset = LanConnectNativeBusMessage.VanillaWireHeaderBytes;
+        if (__0[offset] != LanConnectNativeBusMessage.MagicFirst
+            || __0[offset + 1] != LanConnectNativeBusMessage.MagicSecond
+            || __0[offset + 2] != LanConnectNativeBusMessage.WireVersion)
         {
             return;
         }
 
-        __state = LanConnectTailMessageRuntime.PushOutgoingSidecarRecipientsForCurrentThread([peerId]);
-    }
-
-    private static Exception? HostSendFinalizer(Exception? __exception, IDisposable? __state)
-    {
-        __state?.Dispose();
-        return __exception;
-    }
-
-    private static bool IsActiveRitsuTail()
-    {
-        LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
-        LanConnectProtocolSelection? selection = snapshot.Selection;
-        return selection is
-            {
-                Profile: LanConnectProtocolProfile.TailV1,
-                Carrier: LanConnectProtocolCarrier.RitsuLibSidecarV1
-            } && snapshot.IsActive;
-    }
-
-    private sealed class TransportSenderScope : IDisposable
-    {
-        private int _disposed;
-
-        public void Dispose()
+        if (!LooksLikeCompleteOuterFrame(__0))
         {
-            if (Interlocked.Exchange(ref _disposed, 1) == 0 && _transportSenders is { Count: > 0 } senders)
+            // 仅前缀相似：维持原版"警告一次后丢弃"，不误伤断开第三方消息。
+            return;
+        }
+
+        if (Volatile.Read(ref _runtime) is ILanConnectTailMessageRuntime runtime
+            && TryPeekTransportReceiveContext(out LanConnectTransportReceiveContext context))
+        {
+            try
             {
-                senders.Pop();
+                runtime.HandleIncomingFailure(
+                    __instance,
+                    context.SenderPeerId,
+                    LanConnectProtocolFailureMapper.FromLocalException(
+                        "lan_type_id_mismatch",
+                        $"Packet carries a native bus outer frame under unknown type id {__0[0]}."),
+                    RequireActiveSelection());
+            }
+            catch
+            {
+                // 结构化拒绝通道也可能失败；原版"警告后丢弃"语义保持不变。
             }
         }
     }
-    // ReSharper restore UnusedMember.Local
+
+    private static Exception? TryDeserializeFinalizer(
+        NetMessageBus __instance,
+        Exception? __exception)
+    {
+        if (__exception != null
+            && Volatile.Read(ref _runtime) is ILanConnectTailMessageRuntime runtime
+            && TryPeekTransportReceiveContext(out LanConnectTransportReceiveContext context))
+        {
+            try
+            {
+                runtime.HandleIncomingFailure(
+                    __instance,
+                    context.SenderPeerId,
+                    __exception,
+                    RequireActiveSelection());
+            }
+            catch
+            {
+                // 异常清理失败不得替代原始异常。
+            }
+        }
+
+        return __exception;
+    }
+
+    /// <summary>
+    /// offset-9 完整性检查：外层帧 magic/ver/frameLen 边界/localTypeId 处于 byte 范围内
+    /// 全部合法时才视为"我方帧落在未知 ID 上"（v11 M-MAGIC：第三方前缀相似不误伤）。
+    /// </summary>
+    private static bool LooksLikeCompleteOuterFrame(byte[] packet)
+    {
+        const int outerHeader = LanConnectNativeBusMessage.OuterHeaderBytes;
+        int offset = LanConnectNativeBusMessage.VanillaWireHeaderBytes;
+        if (packet.Length < offset + outerHeader)
+        {
+            return false;
+        }
+
+        if (packet[offset] != LanConnectNativeBusMessage.MagicFirst
+            || packet[offset + 1] != LanConnectNativeBusMessage.MagicSecond
+            || packet[offset + 2] != LanConnectNativeBusMessage.WireVersion)
+        {
+            return false;
+        }
+
+        uint frameLength = BinaryPrimitivesReadUInt32BE(packet, offset + 3 + 4);
+        uint localTypeId = BinaryPrimitivesReadUInt32BE(packet, offset + 3);
+        if (localTypeId > 255)
+        {
+            return false;
+        }
+
+        long declaredEnd = offset + outerHeader + (long)frameLength;
+        return declaredEnd <= packet.Length && packet.Length <= LanConnectNativeBusMessage.MaxPacketBytes;
+    }
+
+    private static uint BinaryPrimitivesReadUInt32BE(byte[] source, int offset) =>
+        (uint)(source[offset] << 24
+               | source[offset + 1] << 16
+               | source[offset + 2] << 8
+               | source[offset + 3]);
+
+    private static LanConnectProtocolSelection RequireActiveSelection()
+        => LanConnectSessionProtocolState.Shared.Current.Selection
+           ?? throw new InvalidOperationException("No active Tail protocol selection.");
+
+    // ---- 工具 ----
 
     internal static bool TryGetMessageKind(Type type, out LanConnectSidecarMessageKind kind)
         => LanConnectTailMessageTypeMatrix.TryGetKind(type.Name, out kind);
@@ -978,23 +713,5 @@ internal static partial class LanConnectTailMessagePatches
         TryGetMessageKind(type, out LanConnectSidecarMessageKind kind)
             ? kind
             : throw Invalid($"Message type {type.FullName} is not part of LAN protocol v1.");
-
-    private static bool TryGetIncomingMessageKind(
-        INetMessage message,
-        out LanConnectSidecarMessageKind kind)
-    {
-        if (!TryGetMessageKind(message.GetType(), out kind))
-        {
-            return false;
-        }
-
-        if (kind == LanConnectSidecarMessageKind.InitialGameInfo
-            && message is InitialGameInfoMessage { connectionFailureReason: not null })
-        {
-            kind = LanConnectSidecarMessageKind.ConnectionFailed;
-        }
-
-        return true;
-    }
-
+    // ReSharper restore UnusedMember.Local
 }

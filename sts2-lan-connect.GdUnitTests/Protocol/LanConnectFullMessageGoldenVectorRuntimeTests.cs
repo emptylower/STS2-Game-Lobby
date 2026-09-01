@@ -12,6 +12,7 @@ using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
 using MegaCrit.Sts2.Core.Multiplayer.Transport;
+using MegaCrit.Sts2.Core.Multiplayer.Transport.ENet;
 using MegaCrit.Sts2.Core.Platform;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
@@ -29,21 +30,10 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
     private static readonly object InitializationSync = new();
     private static bool _initialized;
 
-    // The legacy desktop-generic case must run in a separate Godot process from every test
-    // that relies on the concrete-serialize path: detouring SerializeMessage<T> and then
-    // restoring it can leave the concrete Serialize inlined in the restored native code,
-    // bypassing concrete-method patches for the rest of the process. verify-release.sh runs
-    // this method in its own invocation.
-    [TestCase]
-    public void Full_message_golden_vectors_match_real_v01110_netmessagebus_packets_legacy_desktop_generic_plan()
-    {
-        RunGoldenVectors(forceLegacyDesktopGenericPlan: true);
-    }
-
     [TestCase]
     public void Full_message_golden_vectors_match_real_v01110_netmessagebus_packets()
     {
-        RunGoldenVectors(forceLegacyDesktopGenericPlan: false);
+        RunGoldenVectors();
     }
 
     // alpha.9 audit A1-T1: production applies LanConnectSerializationPatches.Apply() together
@@ -53,6 +43,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
     public void Full_message_golden_vectors_match_with_serialization_patches_and_default_plan()
     {
         InitializeSts2Serialization();
+        using NativeTypeIdScope typeId = new();
         string fixtureRoot = Path.Combine(FindRepositoryRoot(), "test-fixtures", "protocol", "v0.6");
 
         using RuntimePair pair = new();
@@ -85,6 +76,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
     public void Begin_run_executes_the_concrete_serialize_method_under_the_default_plan()
     {
         InitializeSts2Serialization();
+        using NativeTypeIdScope typeId = new();
 
         using RuntimePair pair = new();
         Harmony harmony = new($"sts2_lan_connect.tests.begin_run_concrete.{Guid.NewGuid():N}");
@@ -115,12 +107,14 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
                 modifiers = [],
                 act1 = "Act1"
             };
-            byte[] generated = SerializeMessage(pair.HostBus, pair.HostId, message, out int length)
-                .AsSpan(0, length)
-                .ToArray();
+            byte[] buffer = SerializeMessage(pair.HostBus, pair.HostId, message, out int length);
+            byte[] generated = buffer.AsSpan(0, length).ToArray();
 
             AssertThat(_beginRunConcreteSerializeCalls).IsEqual(1);
-            AssertThat(IndexOf(generated, "STSLAN01"u8.ToArray()) >= 0).IsTrue();
+            AssertThat(IndexOf(generated, "STSLAN01"u8.ToArray()) >= 0).IsFalse();
+            LanConnectSidecarFrame extensionFrame = DeliverExtensionFrame(
+                pair, Direction.HostToClient, buffer, length);
+            AssertThat(extensionFrame.MessageKind).IsEqual(LanConnectSidecarMessageKind.LobbyBeginRun);
         }
         finally
         {
@@ -134,20 +128,31 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
 
     private static int _beginRunConcreteSerializeCalls;
 
+    private sealed class NativeTypeIdScope : IDisposable
+    {
+        private const uint TestNativeTypeId = 200;
+
+        public NativeTypeIdScope()
+        {
+            LanConnectNativeBusSender.TypeIdResolverForTesting = () => (int)TestNativeTypeId;
+        }
+
+        public void Dispose() => LanConnectNativeBusSender.TypeIdResolverForTesting = null;
+    }
+
     private static void CountBeginRunConcreteSerialize() => _beginRunConcreteSerializeCalls++;
 
-    private static void RunGoldenVectors(bool forceLegacyDesktopGenericPlan)
+    private static void RunGoldenVectors()
     {
         InitializeSts2Serialization();
+        using NativeTypeIdScope typeId = new();
         string fixtureRoot = Path.Combine(FindRepositoryRoot(), "test-fixtures", "protocol", "v0.6");
 
         using RuntimePair pair = new();
         Harmony harmony = new($"sts2_lan_connect.tests.full_message_golden.{Guid.NewGuid():N}");
         LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
         LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
-            typeof(PacketWriter).Assembly,
-            isAndroid: false,
-            preferLegacyDesktopGenericPlan: forceLegacyDesktopGenericPlan);
+            typeof(PacketWriter).Assembly);
         LanConnectTailMessagePatches.ApplyPlanForTesting(harmony, plan);
         try
         {
@@ -173,42 +178,50 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
                 object message = spec.CreateMessage();
                 NetMessageBus senderBus = spec.Direction == Direction.HostToClient ? pair.HostBus : pair.ClientBus;
                 ulong sender = spec.Direction == Direction.HostToClient ? pair.HostId : pair.ClientId;
-                byte[] generated = SerializeMessage(senderBus, sender, message, out int length)
-                    .AsSpan(0, length)
-                    .ToArray();
-                Fixture fixture = BuildFixture(spec, generated, sender, message.GetType());
+                byte[] buffer = SerializeMessage(senderBus, sender, message, out int length);
+                byte[] generated = buffer.AsSpan(0, length).ToArray();
 
                 string binPath = Path.Combine(fixtureRoot, $"{spec.Name}.bin");
                 string jsonPath = Path.Combine(fixtureRoot, $"{spec.Name}.json");
-
                 byte[] expected = File.ReadAllBytes(binPath);
-                AssertThat(Convert.ToHexString(generated)).IsEqual(Convert.ToHexString(expected));
                 using JsonDocument document = JsonDocument.Parse(File.ReadAllText(jsonPath));
                 JsonElement root = document.RootElement;
-                AssertThat(root.GetProperty("schema").GetString()).IsEqual("sts2-v0.111.0-netmessagebus-tail-full-v1");
-                AssertThat(root.GetProperty("messageTypeId").GetInt32()).IsEqual(fixture.MessageTypeId);
+                int vanillaBodyEndBit = root.GetProperty("vanillaBodyEndBit").GetInt32();
+                int containerStartByte = root.GetProperty("containerStartByte").GetInt32();
+
+                // native_bus_v1 不改写原版序列化字节：原版包与 v0.6 fixture 的原版前缀
+                // 逐字节一致（容器不再追加在尾部，改由扩展帧承载）。
+                int vanillaWholeBytes = vanillaBodyEndBit / 8;
+                AssertThat(Convert.ToHexString(generated.AsSpan(0, vanillaWholeBytes).ToArray()))
+                    .IsEqual(Convert.ToHexString(expected.AsSpan(0, vanillaWholeBytes).ToArray()));
+                AssertThat(length).IsLessEqual(containerStartByte);
+                AssertThat(root.GetProperty("messageTypeId").GetInt32()).IsEqual(generated[0]);
                 AssertThat(root.GetProperty("senderPeerId").GetUInt64()).IsEqual(sender);
-                AssertThat(root.GetProperty("vanillaBodyEndBit").GetInt32()).IsEqual(fixture.VanillaBodyEndBit);
-                AssertThat(root.GetProperty("containerStartBit").GetInt32()).IsEqual(fixture.ContainerStartBit);
-                AssertThat(root.GetProperty("sha256").GetString()).IsEqual(fixture.Sha256);
-                AssertThat(root.GetProperty("containerSha256").GetString()).IsEqual(fixture.ContainerSha256);
+
+                // 第三级 transport postfix：扩展帧以专用发送出口成对发出，容器哈希与 v0.6 一致。
+                LanConnectSidecarFrame extensionFrame = DeliverExtensionFrame(
+                    pair, spec.Direction, buffer, length);
+                AssertThat(extensionFrame.MessageKind).IsEqual(spec.Kind);
+                string containerSha256 = Sha256(extensionFrame.Container.ToArray());
+                AssertThat(root.GetProperty("containerSha256").GetString()).IsEqual(containerSha256);
+                LanConnectTailMessagePayload payload = LanConnectTailMessagePatches.DecodeAndValidate(
+                    spec.Kind,
+                    extensionFrame.Container.Span,
+                    pair.Selection,
+                    pair.HostId,
+                    pair.HostId);
 
                 NetMessageBus receiverBus = new(new PacketReader(), new PacketWriter());
-                RecordingRuntime recordingRuntime = new(pair.Selection, sender, pair.HostId);
-                LanConnectTailMessagePatches.ConfigureRuntime(recordingRuntime);
-                using (LanConnectTailMessagePatches.PushTransportSenderForTesting(sender))
-                {
-                    bool decoded = receiverBus.TryDeserializeMessage(
-                        expected,
-                        out INetMessage? decodedMessage,
-                        out ulong? decodedSender);
-                    AssertThat(decoded).IsTrue();
-                    AssertThat(decodedSender.HasValue).IsTrue();
-                    AssertThat(decodedSender!.Value).IsEqual(sender);
-                    AssertBodySemantics(spec, decodedMessage!);
-                    AssertTailSemantics(spec, recordingRuntime.Payload!);
-                }
-                LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
+                byte[] vanillaPacket = expected.AsSpan(0, containerStartByte).ToArray();
+                bool decoded = receiverBus.TryDeserializeMessage(
+                    vanillaPacket,
+                    out INetMessage? decodedMessage,
+                    out ulong? decodedSender);
+                AssertThat(decoded).IsTrue();
+                AssertThat(decodedSender.HasValue).IsTrue();
+                AssertThat(decodedSender!.Value).IsEqual(sender);
+                AssertBodySemantics(spec, decodedMessage!);
+                AssertTailSemantics(spec, payload);
             }
             finally
             {
@@ -387,50 +400,6 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         Expected expected) =>
         new(name, Direction.ClientToHost, kind, createMessage, expected, null);
 
-    private static Fixture BuildFixture(MessageSpec spec, byte[] packet, ulong sender, Type messageType)
-    {
-        int containerStartByte = IndexOf(packet, "STSLAN01"u8.ToArray());
-        if (containerStartByte < 0)
-        {
-            throw new InvalidDataException($"{spec.Name}: standalone Tail container magic not found.");
-        }
-
-        PacketReader reader = new();
-        reader.Reset(packet);
-        int messageTypeId = reader.ReadByte();
-        ulong embeddedSender = reader.ReadULong();
-        INetMessage parsed = (INetMessage)Activator.CreateInstance(messageType)!;
-        parsed.Deserialize(reader);
-        int vanillaBodyEndBit = reader.BitPosition;
-        int containerStartBit = containerStartByte * 8;
-        int paddingBits = containerStartBit - vanillaBodyEndBit;
-        if (embeddedSender != sender || paddingBits is < 0 or > 7)
-        {
-            throw new InvalidDataException($"{spec.Name}: invalid sender or standalone padding.");
-        }
-
-        byte[] container = packet.AsSpan(containerStartByte).ToArray();
-        return new Fixture(
-            spec.Name,
-            "sts2-v0.111.0-netmessagebus-tail-full-v1",
-            $"{spec.Name}.bin",
-            messageType.Name,
-            messageTypeId,
-            sender,
-            9,
-            spec.Kind.ToString(),
-            (byte)spec.Kind,
-            vanillaBodyEndBit,
-            paddingBits,
-            containerStartBit,
-            containerStartByte,
-            container.Length,
-            packet.Length,
-            Sha256(packet),
-            Sha256(container),
-            spec.Expected);
-    }
-
     private static void AssertBodySemantics(MessageSpec spec, INetMessage message)
     {
         switch (message)
@@ -507,6 +476,36 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         byte[] buffer = (byte[])method.Invoke(bus, args)!;
         length = (int)args[2]!;
         return buffer;
+    }
+
+    /// <summary>镜像第三级 transport postfix：取 pending → 专用发送出口 → 解出 sidecar 帧。</summary>
+    private static LanConnectSidecarFrame DeliverExtensionFrame(
+        RuntimePair pair,
+        Direction direction,
+        byte[] buffer,
+        int length)
+    {
+        bool isHost = direction == Direction.HostToClient;
+        object transport = isHost ? pair.HostTransport : pair.ClientTransport;
+        LanConnectNativeSendContext context = pair.Runtime.BeginNativeTransport(
+            transport,
+            isHost,
+            isHost ? pair.ClientId : 0,
+            buffer,
+            length) ?? throw new InvalidOperationException("golden vector pending did not resolve");
+        pair.Runtime.CompleteNativeTransport(context, vanillaPeerReachable: true);
+
+        byte[] wire = isHost
+            ? pair.HostTransport.SentToClients[^1].Bytes
+            : pair.ClientTransport.SentToHost[^1];
+        LanConnectNativeBusMessage message = new();
+        PacketReader reader = new();
+        reader.Reset(wire);
+        _ = reader.ReadByte();
+        _ = reader.ReadULong();
+        message.Deserialize(reader);
+        AssertThat(message.InvalidReason).IsNull();
+        return LanConnectSidecarFrameCodec.Decode(message.Frame!.ToArray());
     }
 
     private static IDisposable PushOutgoingRejection(LanConnectProtocolFailure failure)
@@ -628,26 +627,6 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         Expected Expected,
         LanConnectProtocolFailure? Rejection);
 
-    private sealed record Fixture(
-        string Name,
-        string Schema,
-        string File,
-        string MessageType,
-        int MessageTypeId,
-        ulong SenderPeerId,
-        int HeaderBytes,
-        string MessageKind,
-        int MessageKindValue,
-        int VanillaBodyEndBit,
-        int PaddingBits,
-        int ContainerStartBit,
-        int ContainerStartByte,
-        int ContainerBytes,
-        int TotalBytes,
-        string Sha256,
-        string ContainerSha256,
-        Expected Expected);
-
     private sealed record Expected(string Payload)
     {
         public string? SessionState { get; init; }
@@ -673,68 +652,6 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         public void Dispose() => field.SetValue(null, null);
     }
 
-    private sealed class RecordingRuntime(
-        LanConnectProtocolSelection selection,
-        ulong expectedSender,
-        ulong hostPeerId) : ILanConnectTailMessageRuntime
-    {
-        internal LanConnectTailMessagePayload? Payload { get; private set; }
-
-        public LanConnectPreparedTailMessage PrepareOutgoing(
-            NetMessageBus messageBus,
-            LanConnectSidecarMessageKind messageKind,
-            ulong senderPeerId,
-            object message,
-            LanConnectProtocolSelection activeSelection) =>
-            throw new NotSupportedException();
-
-        public void SubmitSidecarBeforeVanilla(
-            NetMessageBus messageBus,
-            LanConnectSidecarMessageKind messageKind,
-            ulong senderPeerId,
-            object message,
-            byte[] container,
-            LanConnectProtocolSelection activeSelection) =>
-            throw new NotSupportedException();
-
-        public void ValidateStandaloneIncoming(
-            NetMessageBus messageBus,
-            LanConnectSidecarMessageKind messageKind,
-            ulong transportSenderPeerId,
-            INetMessage message,
-            byte[] container,
-            LanConnectProtocolSelection activeSelection)
-        {
-            AssertThat(transportSenderPeerId).IsEqual(expectedSender);
-            Payload = messageKind is
-                LanConnectSidecarMessageKind.LobbyJoinRequest or
-                LanConnectSidecarMessageKind.LoadJoinRequest or
-                LanConnectSidecarMessageKind.RejoinRequest
-                    ? LanConnectTailMessagePatches.DecodeAndValidate(messageKind, container)
-                    : LanConnectTailMessagePatches.DecodeAndValidate(
-                        messageKind,
-                        container,
-                        selection,
-                        transportSenderPeerId,
-                        hostPeerId);
-        }
-
-        public void HandleIncomingFailure(
-            NetMessageBus messageBus,
-            ulong transportSenderPeerId,
-            Exception exception,
-            LanConnectProtocolSelection activeSelection) =>
-            throw exception;
-
-        public bool TryPairSidecarIncoming(
-            NetMessageBus messageBus,
-            LanConnectSidecarMessageKind messageKind,
-            ulong senderPeerId,
-            INetMessage message,
-            LanConnectProtocolSelection activeSelection) =>
-            false;
-    }
-
     private sealed class RuntimePair : IDisposable
     {
         internal const ulong DefaultHostId = 1;
@@ -749,7 +666,10 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             Client.Initialize(ClientTransport, default);
             Runtime.BindHost(Host, Offer, Selection);
             Runtime.BindClient(Client, Offer, Selection, Convert.FromHexString("00112233445566778899aabbccddeeff"));
+            Runtime.PrepareHostNativeFlow(Host, ClientId, Convert.FromHexString("00112233445566778899aabbccddeeff"));
         }
+
+        internal byte[] LastHostExtension => HostTransport.SentToClients[^1].Bytes;
 
         internal LanConnectTailMessageRuntime Runtime { get; } = new();
         internal NetHostGameService Host { get; } = new(PeerVersionInfo.LocalDefault());
@@ -795,7 +715,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
 
     private sealed record CapturedPacket(ulong PeerId, byte[] Bytes);
 
-    private sealed class TestNetHost(INetHostHandler handler, ulong netId) : NetHost(handler)
+    private sealed class TestNetHost(INetHostHandler handler, ulong netId) : ENetHost(handler)
     {
         internal List<CapturedPacket> SentToClients { get; } = [];
         public override IEnumerable<ulong> ConnectedPeerIds => [RuntimePair.DefaultClientId];
@@ -816,13 +736,15 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         public override string? GetRawLobbyIdentifier() => null;
     }
 
-    private sealed class TestNetClient(INetClientHandler handler, ulong netId, ulong hostNetId) : NetClient(handler)
+    private sealed class TestNetClient(INetClientHandler handler, ulong netId, ulong hostNetId) : ENetClient(handler)
     {
-        public override bool IsConnected { get; } = true;
+        internal List<byte[]> SentToHost { get; } = [];
+        public override bool IsConnected => true;
         public override ulong NetId { get; } = netId;
         public override ulong HostNetId { get; } = hostNetId;
         public override void Update() { }
-        public override void SendMessageToHost(byte[] bytes, int length, NetTransferMode mode, int channel = 0) { }
+        public override void SendMessageToHost(byte[] bytes, int length, NetTransferMode mode, int channel = 0) =>
+            SentToHost.Add(bytes.AsSpan(0, length).ToArray());
         public override void DisconnectFromHost(NetError reason, bool now = false) { }
         public override string? GetRawLobbyIdentifier() => null;
     }

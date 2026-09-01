@@ -1,3 +1,4 @@
+using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
 using Sts2LanConnect.Scripts;
 
@@ -6,19 +7,17 @@ namespace Sts2LanConnect.ProtocolPlanTests;
 public sealed class LanConnectTailPatchPlanTests
 {
     [Fact]
-    public void Desktop_plan_has_the_stable_thirty_step_generic_shape()
+    public void Native_plan_has_the_stable_sixteen_step_non_generic_shape()
     {
         LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
-            typeof(PacketWriter).Assembly,
-            isAndroid: false,
-            preferLegacyDesktopGenericPlan: true);
+            typeof(PacketWriter).Assembly);
 
-        Assert.Equal(LanConnectTailPatchPlan.DesktopProfile, plan.Profile);
+        Assert.Equal("native_bus_v1", plan.Profile);
         Assert.Equal(10, plan.ResolvedKinds.Count);
         Assert.Equal(9, plan.MessageTypes.Count);
-        Assert.Equal(30, plan.Steps.Count);
-        Assert.Equal(30, plan.Steps.Select(static step => step.Id).Distinct(StringComparer.Ordinal).Count());
-        Assert.True(plan.GenericTargetCount > 0);
+        Assert.Equal(16, plan.Steps.Count);
+        Assert.Equal(16, plan.Steps.Select(static step => step.Id).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(0, plan.GenericTargetCount);
         Assert.Equal(
             [
                 "tail.serialize.initial_game_info",
@@ -30,76 +29,13 @@ public sealed class LanConnectTailPatchPlanTests
                 "tail.serialize.rejoin_response",
                 "tail.serialize.player_joined",
                 "tail.serialize.lobby_begin_run",
-                "tail.deserialize",
+                "tail.writer_reset",
                 "tail.receive.host",
                 "tail.receive.client",
-                "tail.host.broadcast.initial_game_info",
-                "tail.host.targeted.initial_game_info",
-                "tail.host.broadcast.lobby_join_request",
-                "tail.host.targeted.lobby_join_request",
-                "tail.host.broadcast.lobby_join_response",
-                "tail.host.targeted.lobby_join_response",
-                "tail.host.broadcast.load_join_request",
-                "tail.host.targeted.load_join_request",
-                "tail.host.broadcast.load_join_response",
-                "tail.host.targeted.load_join_response",
-                "tail.host.broadcast.rejoin_request",
-                "tail.host.targeted.rejoin_request",
-                "tail.host.broadcast.rejoin_response",
-                "tail.host.targeted.rejoin_response",
-                "tail.host.broadcast.player_joined",
-                "tail.host.targeted.player_joined",
-                "tail.host.broadcast.lobby_begin_run",
-                "tail.host.targeted.lobby_begin_run"
-            ],
-            plan.Steps.Select(static step => step.Id));
-    }
-
-    [Fact]
-    public void Default_plan_is_the_non_generic_plan_on_every_platform()
-    {
-        foreach (bool isAndroid in new[] { false, true })
-        {
-            LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
-                typeof(PacketWriter).Assembly,
-                isAndroid);
-
-            Assert.Equal(LanConnectTailPatchPlan.DefaultProfile, plan.Profile);
-            Assert.Equal(15, plan.Steps.Count);
-            Assert.Equal(0, plan.GenericTargetCount);
-        }
-    }
-
-    [Fact]
-    public void Android_plan_has_fifteen_concrete_non_generic_steps()
-    {
-        LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
-            typeof(PacketWriter).Assembly,
-            isAndroid: true);
-
-        Assert.Equal(LanConnectTailPatchPlan.DefaultProfile, plan.Profile);
-        Assert.Equal(10, plan.ResolvedKinds.Count);
-        Assert.Equal(9, plan.MessageTypes.Count);
-        Assert.Equal(15, plan.Steps.Count);
-        Assert.Equal(0, plan.GenericTargetCount);
-        Assert.Equal(15, plan.Steps.Select(static step => step.Id).Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(
-            [
-                "tail.android.serialize.initial_game_info",
-                "tail.android.serialize.lobby_join_request",
-                "tail.android.serialize.lobby_join_response",
-                "tail.android.serialize.load_join_request",
-                "tail.android.serialize.load_join_response",
-                "tail.android.serialize.rejoin_request",
-                "tail.android.serialize.rejoin_response",
-                "tail.android.serialize.player_joined",
-                "tail.android.serialize.lobby_begin_run",
-                "tail.android.writer_reset",
                 "tail.deserialize",
-                "tail.receive.host",
-                "tail.receive.client",
-                "tail.android.transport.host",
-                "tail.android.transport.client"
+                "tail.dispatch_barrier",
+                "tail.transport.host",
+                "tail.transport.client"
             ],
             plan.Steps.Select(static step => step.Id));
 
@@ -118,11 +54,30 @@ public sealed class LanConnectTailPatchPlanTests
     }
 
     [Fact]
+    public void Native_plan_patches_no_generic_targets_and_no_buffer_toggle()
+    {
+        LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
+            typeof(PacketWriter).Assembly);
+
+        Assert.DoesNotContain(
+            plan.Steps,
+            static step => step.Target.Name == nameof(NetMessageBus.SetBufferMessages));
+        Assert.DoesNotContain(
+            plan.Steps,
+            static step => step.Target.Name is nameof(NetMessageBus.SerializeMessage)
+                or "SendMessage" or "SendMessageToClientInternal");
+        Assert.Equal(2, plan.Steps.Count(static step => step.Category == "transport"));
+        Assert.Equal(1, plan.Steps.Count(static step => step.Category == "dispatch_barrier"));
+        Assert.All(
+            plan.Steps.Where(static step => step.Category == "transport"),
+            static step => Assert.NotNull(step.Prefix));
+    }
+
+    [Fact]
     public void Ten_message_kinds_resolve_without_omission_to_nine_types()
     {
         LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
-            typeof(PacketWriter).Assembly,
-            isAndroid: true);
+            typeof(PacketWriter).Assembly);
 
         Assert.Equal(Enum.GetValues<LanConnectSidecarMessageKind>(), plan.ResolvedKinds.Select(static item => item.Kind));
         Assert.Equal(

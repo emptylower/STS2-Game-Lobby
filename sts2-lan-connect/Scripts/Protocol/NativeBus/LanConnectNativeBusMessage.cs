@@ -64,6 +64,91 @@ public sealed class LanConnectNativeBusMessage : INetMessage
         InvalidReason = null;
     }
 
+    /// <summary>纯字节外层帧编码（xUnit golden vector 直接测试；发送侧超限在此拒绝）。</summary>
+    internal static byte[] EncodeOuterFrame(uint localTypeId, ReadOnlySpan<byte> frame)
+    {
+        if (frame.Length > MaxFrameBytes)
+        {
+            throw LanConnectProtocolFailureMapper.FromLocalException(
+                "lan_native_frame_invalid",
+                $"Native bus frame length {frame.Length} exceeds the {MaxFrameBytes}-byte send limit.");
+        }
+
+        byte[] payload = new byte[OuterHeaderBytes + frame.Length];
+        payload[0] = MagicFirst;
+        payload[1] = MagicSecond;
+        payload[2] = WireVersion;
+        payload[3] = (byte)(localTypeId >> 24);
+        payload[4] = (byte)(localTypeId >> 16);
+        payload[5] = (byte)(localTypeId >> 8);
+        payload[6] = (byte)(localTypeId & 0xff);
+        payload[7] = (byte)(frame.Length >> 24);
+        payload[8] = (byte)(frame.Length >> 16);
+        payload[9] = (byte)(frame.Length >> 8);
+        payload[10] = (byte)(frame.Length & 0xff);
+        frame.CopyTo(payload.AsSpan(OuterHeaderBytes));
+        return payload;
+    }
+
+    /// <summary>
+    /// 纯字节外层帧解码（非抛出）。输入为原版 9 字节线头之后、从当前字节边界起的剩余载荷；
+    /// 返回消费的字节数（成功 = 11 + frameLen），尾随内容忽略。
+    /// </summary>
+    internal static int TryDecodeOuterFrame(
+        ReadOnlySpan<byte> payload,
+        out byte[]? frame,
+        out uint localTypeId,
+        out string? invalidReason)
+    {
+        frame = null;
+        localTypeId = 0;
+        invalidReason = null;
+        if (payload.Length < OuterHeaderBytes)
+        {
+            invalidReason = $"Outer header truncated: {payload.Length} bytes available, {OuterHeaderBytes} required.";
+            return 0;
+        }
+
+        if (payload[0] != MagicFirst || payload[1] != MagicSecond)
+        {
+            invalidReason = $"Outer magic mismatch: {payload[0]:X2} {payload[1]:X2}.";
+            return 0;
+        }
+
+        if (payload[2] != WireVersion)
+        {
+            invalidReason = $"Outer version {payload[2]} is unsupported.";
+            return 0;
+        }
+
+        localTypeId = (uint)(payload[3] << 24)
+                      | (uint)(payload[4] << 16)
+                      | (uint)(payload[5] << 8)
+                      | payload[6];
+        uint frameLength = (uint)(payload[7] << 24)
+                           | (uint)(payload[8] << 16)
+                           | (uint)(payload[9] << 8)
+                           | payload[10];
+
+        // 接收边界：整包（含原版 9 字节线头）≤ 66000，且 frameLen ≤ 剩余界定内字节。
+        int packetLength = VanillaWireHeaderBytes + payload.Length;
+        if (packetLength > MaxPacketBytes)
+        {
+            invalidReason = $"Packet length {packetLength} exceeds the {MaxPacketBytes}-byte receive limit.";
+            return 0;
+        }
+
+        if (frameLength > payload.Length - OuterHeaderBytes)
+        {
+            invalidReason =
+                $"Frame length {frameLength} exceeds the {payload.Length - OuterHeaderBytes}-byte receive bound.";
+            return 0;
+        }
+
+        frame = payload.Slice(OuterHeaderBytes, checked((int)frameLength)).ToArray();
+        return OuterHeaderBytes + checked((int)frameLength);
+    }
+
     public void Serialize(PacketWriter writer)
     {
         ArgumentNullException.ThrowIfNull(writer);
@@ -74,25 +159,8 @@ public sealed class LanConnectNativeBusMessage : INetMessage
                 "Native bus message has no frame to serialize.");
         }
 
-        if (frame.Length > MaxFrameBytes)
-        {
-            throw LanConnectProtocolFailureMapper.FromLocalException(
-                "lan_native_frame_invalid",
-                $"Native bus frame length {frame.Length} exceeds the {MaxFrameBytes}-byte send limit.");
-        }
-
-        writer.WriteByte(MagicFirst);
-        writer.WriteByte(MagicSecond);
-        writer.WriteByte(WireVersion);
-        writer.WriteByte(checked((byte)(LocalTypeId >> 24)));
-        writer.WriteByte(checked((byte)(LocalTypeId >> 16)));
-        writer.WriteByte(checked((byte)(LocalTypeId >> 8)));
-        writer.WriteByte(checked((byte)(LocalTypeId & 0xff)));
-        writer.WriteByte(checked((byte)(frame.Length >> 24)));
-        writer.WriteByte(checked((byte)(frame.Length >> 16)));
-        writer.WriteByte(checked((byte)(frame.Length >> 8)));
-        writer.WriteByte(checked((byte)(frame.Length & 0xff)));
-        writer.WriteBytes(frame, frame.Length);
+        byte[] payload = EncodeOuterFrame(LocalTypeId, frame);
+        writer.WriteBytes(payload, payload.Length);
     }
 
     public void Deserialize(PacketReader reader)
@@ -102,59 +170,21 @@ public sealed class LanConnectNativeBusMessage : INetMessage
         Frame = null;
         LocalTypeId = 0;
 
-        byte[] buffer = reader.Buffer;
-        int remaining = buffer.Length - (reader.BitPosition + 7) / 8;
-        if (remaining < OuterHeaderBytes)
+        // 进入时恒为字节边界（原版 TryDeserializeMessage 已读 typeId:1 + senderId:8）。
+        int consumed = TryDecodeOuterFrame(
+            reader.Buffer.AsSpan((reader.BitPosition + 7) / 8),
+            out byte[]? frame,
+            out uint localTypeId,
+            out string? invalidReason);
+        InvalidReason = invalidReason;
+        if (frame == null)
         {
-            InvalidReason = $"Outer header truncated: {remaining} bytes available, {OuterHeaderBytes} required.";
             return;
         }
 
-        byte magicFirst = reader.ReadByte();
-        byte magicSecond = reader.ReadByte();
-        byte version = reader.ReadByte();
-        uint localTypeId = (uint)(reader.ReadByte() << 24)
-                           | (uint)(reader.ReadByte() << 16)
-                           | (uint)(reader.ReadByte() << 8)
-                           | reader.ReadByte();
-        uint frameLength = (uint)(reader.ReadByte() << 24)
-                           | (uint)(reader.ReadByte() << 16)
-                           | (uint)(reader.ReadByte() << 8)
-                           | reader.ReadByte();
-
-        if (magicFirst != MagicFirst || magicSecond != MagicSecond)
-        {
-            InvalidReason = $"Outer magic mismatch: {magicFirst:X2} {magicSecond:X2}.";
-            return;
-        }
-
-        if (version != WireVersion)
-        {
-            InvalidReason = $"Outer version {version} is unsupported.";
-            return;
-        }
-
-        if (buffer.Length > MaxPacketBytes)
-        {
-            InvalidReason = $"Packet length {buffer.Length} exceeds the {MaxPacketBytes}-byte receive limit.";
-            return;
-        }
-
-        // 此时 reader.BytePosition == 20（原版 9 字节线头 + 11 字节外层头）。
-        // frameLen 必须落在界定内（packet 长度 − 20），尾随内容忽略。
-        if (frameLength > buffer.Length - VanillaWireHeaderBytes - OuterHeaderBytes)
-        {
-            InvalidReason = $"Frame length {frameLength} exceeds the {buffer.Length - VanillaWireHeaderBytes - OuterHeaderBytes}-byte receive bound.";
-            return;
-        }
-
-        byte[] frame = new byte[frameLength];
-        if (frameLength > 0)
-        {
-            reader.ReadBytes(frame, checked((int)frameLength));
-        }
-
-        LocalTypeId = localTypeId;
         Frame = frame;
+        LocalTypeId = localTypeId;
+        // 推进读取位置到 frameLen 界定边界（尾随内容留给后续读取方）。
+        reader.ReadBytes(new byte[consumed], consumed);
     }
 }

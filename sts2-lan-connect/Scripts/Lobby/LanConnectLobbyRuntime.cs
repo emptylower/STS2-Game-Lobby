@@ -2389,28 +2389,28 @@ internal sealed partial class LanConnectLobbyRuntime :
                         Log.Warn(
                             $"sts2_lan_connect kick binding cache full; ignored playerNetId={envelope.PlayerNetId}");
                     }
-                    if (session.ProtocolSelection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1
-                        && ulong.TryParse(envelope.PlayerNetId, out ulong sidecarPeerId)
+                    if (session.ProtocolSelection.Profile == LanConnectProtocolProfile.TailV1
+                        && ulong.TryParse(envelope.PlayerNetId, out ulong nativePeerId)
                         && !string.IsNullOrWhiteSpace(envelope.ProtocolFlowNonce))
                     {
                         try
                         {
                             byte[] flowNonce = LanConnectSidecarFrameCodec.ParseFlowNonce(envelope.ProtocolFlowNonce);
-                            LanConnectTailMessageRuntime.Shared.PrepareHostTrustedSidecarFlow(
+                            LanConnectTailMessageRuntime.Shared.PrepareHostNativeFlow(
                                 session.NetService,
-                                sidecarPeerId,
+                                nativePeerId,
                                 flowNonce);
-                            if (session.ObserveSidecarControlBinding(sidecarPeerId))
+                            if (session.ObserveNativeControlBinding(nativePeerId))
                             {
-                                LanConnectTailMessageRuntime.Shared.ActivateHostTrustedSidecarFlow(
+                                LanConnectTailMessageRuntime.Shared.ActivateHostNativeFlow(
                                     session.NetService,
-                                    sidecarPeerId);
+                                    nativePeerId);
                             }
                         }
                         catch (Exception exception) when (exception is InvalidDataException or LanConnectProtocolException)
                         {
                             Log.Warn(
-                                $"sts2_lan_connect rejected or failed Ritsu control binding for playerNetId={envelope.PlayerNetId}: {exception.Message}");
+                                $"sts2_lan_connect rejected or failed native control binding for playerNetId={envelope.PlayerNetId}: {exception.Message}");
                         }
                     }
                     if (TryApplyAuthenticatedPlayerName(
@@ -3636,7 +3636,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             }
         }
 
-        public bool ObserveSidecarControlBinding(ulong peerNetId) =>
+        public bool ObserveNativeControlBinding(ulong peerNetId) =>
             _sidecarActivationGate.ObserveControlBinding(peerNetId);
 
         public bool RememberKickBinding(string playerNetId, string bindingId)
@@ -3702,10 +3702,10 @@ internal sealed partial class LanConnectLobbyRuntime :
                 _connectedPeerIds.Add(_);
             }
             _kickTargets.ObserveConnected(_.ToString());
-            if (ProtocolSelection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1 &&
+            if (ProtocolSelection.Profile == LanConnectProtocolProfile.TailV1 &&
                 _sidecarActivationGate.ObservePeerConnected(_))
             {
-                LanConnectTailMessageRuntime.Shared.ActivateHostTrustedSidecarFlow(NetService, _);
+                LanConnectTailMessageRuntime.Shared.ActivateHostNativeFlow(NetService, _);
             }
             if (LanConnectLobbyRuntime.Instance != null)
             {
@@ -3722,9 +3722,9 @@ internal sealed partial class LanConnectLobbyRuntime :
             }
             _sidecarActivationGate.ObservePeerDisconnected(_);
             _kickTargets.ObserveDisconnected(_.ToString());
-            if (ProtocolSelection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1)
+            if (ProtocolSelection.Profile == LanConnectProtocolProfile.TailV1)
             {
-                LanConnectTailMessageRuntime.Shared.ClearSidecarPeer(NetService, _);
+                LanConnectTailMessageRuntime.Shared.ClearNativePeer(NetService, _);
             }
             if (LanConnectLobbyRuntime.Instance != null)
             {

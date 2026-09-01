@@ -41,11 +41,14 @@ internal sealed record LanConnectTailPatchStep(
     }
 }
 
+/// <summary>
+/// native_bus_v1 的唯一补丁计划（原 non_generic_v2 的非泛型形态，全平台统一）。
+/// 步骤数 16：9 serialize（10 kinds 解析到 9 个具体类型）+ 1 writer_reset + 2 receive +
+/// 1 deserialize + 1 dispatch barrier + 2 transport。
+/// 泛型目标与 SetBufferMessages 目标均被禁止（Android gshared 历史教训 / RitsuLib sync 补丁所有权）。
+/// </summary>
 internal sealed class LanConnectTailPatchPlan
 {
-    internal const string DesktopProfile = "desktop_generic_v1";
-    internal const string DefaultProfile = "non_generic_v2";
-
     internal LanConnectTailPatchPlan(
         string profile,
         IReadOnlyList<(LanConnectSidecarMessageKind Kind, Type Type)> resolvedKinds,
@@ -57,7 +60,7 @@ internal sealed class LanConnectTailPatchPlan
         MessageTypes = messageTypes;
         Steps = steps;
 
-        int expectedSteps = profile == DesktopProfile ? 30 : 15;
+        const int expectedSteps = 16;
         if (ResolvedKinds.Count != 10 || MessageTypes.Count != 9 || Steps.Count != expectedSteps)
         {
             throw new InvalidDataException(
@@ -74,14 +77,17 @@ internal sealed class LanConnectTailPatchPlan
             throw new InvalidDataException($"Tail patch plan {profile} contains duplicate ID {duplicateId}.");
         }
 
-        if (profile != DesktopProfile)
+        if (steps.Any(static step => step.Target.Name == nameof(NetMessageBus.SetBufferMessages)))
         {
-            ValidateNonGenericMethodsAreConcrete();
-            if (GenericTargetCount != 0)
-            {
-                throw new InvalidDataException(
-                    $"Tail patch plan {profile} must not contain generic targets; found={GenericTargetCount}.");
-            }
+            throw new InvalidDataException(
+                $"Tail patch plan {profile} must not patch NetMessageBus.SetBufferMessages.");
+        }
+
+        ValidateNonGenericMethodsAreConcrete();
+        if (GenericTargetCount != 0)
+        {
+            throw new InvalidDataException(
+                $"Tail patch plan {profile} must not contain generic targets; found={GenericTargetCount}.");
         }
     }
 
@@ -117,13 +123,7 @@ internal sealed class LanConnectTailPatchPlan
 
 internal static partial class LanConnectTailMessagePatches
 {
-    internal static LanConnectTailPatchPlan ResolvePatchPlan(Assembly sts2Assembly, bool isAndroid)
-        => ResolvePatchPlan(sts2Assembly, isAndroid, preferLegacyDesktopGenericPlan: false);
-
-    internal static LanConnectTailPatchPlan ResolvePatchPlan(
-        Assembly sts2Assembly,
-        bool isAndroid,
-        bool preferLegacyDesktopGenericPlan)
+    internal static LanConnectTailPatchPlan ResolvePatchPlan(Assembly sts2Assembly)
     {
         ArgumentNullException.ThrowIfNull(sts2Assembly);
         IReadOnlyList<(LanConnectSidecarMessageKind Kind, Type Type)> resolvedKinds =
@@ -133,13 +133,122 @@ internal static partial class LanConnectTailMessagePatches
             .Distinct()
             .ToArray();
 
-        // The non-generic plan is the default on every platform: closed generic targets can be
-        // poisoned by foreign patches declared on generic types (RitsuLib), and the non-generic
-        // plan is byte-equivalent per the golden vector runtime tests. The legacy desktop generic
-        // plan remains available as an explicit rollback branch.
-        return isAndroid || !preferLegacyDesktopGenericPlan
-            ? ResolveNonGenericPatchPlan(resolvedKinds, messageTypes)
-            : ResolveDesktopPatchPlan(resolvedKinds, messageTypes);
+        List<LanConnectTailPatchStep> steps = [];
+
+        // 第一级：10 个具体消息 Serialize prefix/postfix（容器生产 seam，不改写原版字节）。
+        MethodInfo serializerPostfix = RequireHook(nameof(AndroidConcreteSerializePostfix));
+        foreach (Type messageType in messageTypes)
+        {
+            MethodInfo serialize = AccessTools.Method(messageType, "Serialize", [typeof(PacketWriter)])
+                ?? throw new MissingMethodException(messageType.FullName, "Serialize(PacketWriter)");
+            steps.Add(new LanConnectTailPatchStep(
+                $"tail.serialize.{StableTypeId(messageType)}",
+                "serialize",
+                messageType,
+                serialize,
+                ResolveSerializePrefix(messageType),
+                serializerPostfix,
+                PrefixPriority: Priority.First + 100));
+        }
+
+        // PacketWriter.Reset prefix：清除该 writer 的 pending（广播批次结束后防误命中残留）。
+        MethodInfo reset = AccessTools.Method(typeof(PacketWriter), nameof(PacketWriter.Reset), Type.EmptyTypes)
+            ?? throw new MissingMethodException(typeof(PacketWriter).FullName, nameof(PacketWriter.Reset));
+        steps.Add(new LanConnectTailPatchStep(
+            "tail.writer_reset",
+            "writer_reset",
+            null,
+            reset,
+            RequireHook(nameof(AndroidWriterResetPrefix)),
+            PrefixPriority: Priority.First + 100));
+
+        // 接收上下文捕获：两个 OnPacketReceived prefix。
+        MethodInfo receivePrefix = RequireHook(nameof(ReceivePrefix));
+        MethodInfo receiveFinalizer = RequireHook(nameof(ReceiveFinalizer));
+        foreach ((Type serviceType, string id) in new[]
+                 {
+                     (typeof(NetHostGameService), "host"),
+                     (typeof(NetClientGameService), "client")
+                 })
+        {
+            MethodInfo receive = AccessTools.Method(
+                serviceType,
+                "OnPacketReceived",
+                [typeof(ulong), typeof(byte[]), typeof(NetTransferMode), typeof(int)])
+                ?? throw new MissingMethodException(serviceType.FullName, "OnPacketReceived");
+            steps.Add(new LanConnectTailPatchStep(
+                $"tail.receive.{id}",
+                "receive",
+                null,
+                receive,
+                receivePrefix,
+                Finalizer: receiveFinalizer));
+        }
+
+        // TryDeserializeMessage：prefix（<9 字节已知 ID 拦截）+ postfix（未知 ID offset-9 捕获）+ finalizer。
+        MethodInfo deserialize = AccessTools.Method(
+            typeof(NetMessageBus),
+            nameof(NetMessageBus.TryDeserializeMessage),
+            [typeof(byte[]), typeof(INetMessage).MakeByRefType(), typeof(ulong?).MakeByRefType()])
+            ?? throw new MissingMethodException(typeof(NetMessageBus).FullName, nameof(NetMessageBus.TryDeserializeMessage));
+        steps.Add(new LanConnectTailPatchStep(
+            "tail.deserialize",
+            "deserialize",
+            null,
+            deserialize,
+            RequireHook(nameof(TryDeserializePrefix)),
+            RequireHook(nameof(TryDeserializePostfix)),
+            RequireHook(nameof(TryDeserializeFinalizer))));
+
+        // 配对屏障：SendMessageToAllHandlers prefix（hold 一帧，零自有队列）。
+        MethodInfo dispatch = AccessTools.Method(
+            typeof(NetMessageBus),
+            nameof(NetMessageBus.SendMessageToAllHandlers),
+            [typeof(INetMessage), typeof(ulong)])
+            ?? throw new MissingMethodException(typeof(NetMessageBus).FullName, nameof(NetMessageBus.SendMessageToAllHandlers));
+        steps.Add(new LanConnectTailPatchStep(
+            "tail.dispatch_barrier",
+            "dispatch_barrier",
+            null,
+            dispatch,
+            RequireHook(nameof(DispatchBarrierPrefix))));
+
+        // 第二/第三级：两个 transport send 点 prefix/postfix/finalizer（prefix 先于第三方发送补丁）。
+        MethodInfo hostSend = AccessTools.Method(
+            typeof(ENetHost),
+            nameof(ENetHost.SendMessageToClient),
+            [typeof(ulong), typeof(byte[]), typeof(int), typeof(NetTransferMode), typeof(int)])
+            ?? throw new MissingMethodException(typeof(ENetHost).FullName, nameof(ENetHost.SendMessageToClient));
+        steps.Add(new LanConnectTailPatchStep(
+            "tail.transport.host",
+            "transport",
+            null,
+            hostSend,
+            RequireHook(nameof(AndroidHostTransportPrefix)),
+            RequireHook(nameof(AndroidHostTransportPostfix)),
+            RequireHook(nameof(AndroidHostTransportFinalizer)),
+            PrefixPriority: Priority.First + 100));
+
+        MethodInfo clientSend = AccessTools.Method(
+            typeof(ENetClient),
+            nameof(ENetClient.SendMessageToHost),
+            [typeof(byte[]), typeof(int), typeof(NetTransferMode), typeof(int)])
+            ?? throw new MissingMethodException(typeof(ENetClient).FullName, nameof(ENetClient.SendMessageToHost));
+        steps.Add(new LanConnectTailPatchStep(
+            "tail.transport.client",
+            "transport",
+            null,
+            clientSend,
+            RequireHook(nameof(AndroidClientTransportPrefix)),
+            RequireHook(nameof(AndroidClientTransportPostfix)),
+            RequireHook(nameof(AndroidClientTransportFinalizer)),
+            PrefixPriority: Priority.First + 100));
+
+        return new LanConnectTailPatchPlan(
+            "native_bus_v1",
+            resolvedKinds,
+            messageTypes,
+            steps);
     }
 
     private static IReadOnlyList<(LanConnectSidecarMessageKind Kind, Type Type)> ResolveAllMessageKinds(
@@ -172,177 +281,11 @@ internal static partial class LanConnectTailMessagePatches
         return resolved;
     }
 
-    private static LanConnectTailPatchPlan ResolveDesktopPatchPlan(
-        IReadOnlyList<(LanConnectSidecarMessageKind Kind, Type Type)> resolvedKinds,
-        IReadOnlyList<Type> messageTypes)
-    {
-        List<LanConnectTailPatchStep> steps = [];
-        MethodInfo serializePostfix = RequireHook(nameof(SerializePostfix));
-        foreach (Type messageType in messageTypes)
-        {
-            MethodInfo serialize = LanConnectSerializationPatches.ResolveGenericSerializeMessageMethod(
-                typeof(NetMessageBus),
-                messageType);
-            steps.Add(new LanConnectTailPatchStep(
-                $"tail.serialize.{StableTypeId(messageType)}",
-                "serialize",
-                messageType,
-                serialize,
-                ResolveSerializePrefix(messageType),
-                serializePostfix,
-                PrefixPriority: Priority.First + 100));
-        }
-
-        AddSharedIncomingSteps(steps);
-
-        MethodInfo hostBroadcastDefinition = typeof(NetHostGameService)
-            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
-            .Single(method => method.Name == nameof(NetHostGameService.SendMessage)
-                              && method.IsGenericMethodDefinition
-                              && method.GetParameters().Length == 1);
-        MethodInfo hostSendInternalDefinition = typeof(NetHostGameService)
-            .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
-            .Single(method => method.Name == "SendMessageToClientInternal"
-                              && method.IsGenericMethodDefinition
-                              && method.GetParameters().Length == 4);
-        MethodInfo hostBroadcastPrefix = RequireHook(nameof(HostBroadcastPrefix));
-        MethodInfo hostSendInternalPrefix = RequireHook(nameof(HostSendInternalPrefix));
-        MethodInfo hostSendFinalizer = RequireHook(nameof(HostSendFinalizer));
-        foreach (Type messageType in messageTypes)
-        {
-            string stableTypeId = StableTypeId(messageType);
-            steps.Add(new LanConnectTailPatchStep(
-                $"tail.host.broadcast.{stableTypeId}",
-                "host_broadcast",
-                messageType,
-                hostBroadcastDefinition.MakeGenericMethod(messageType),
-                hostBroadcastPrefix,
-                Finalizer: hostSendFinalizer));
-            steps.Add(new LanConnectTailPatchStep(
-                $"tail.host.targeted.{stableTypeId}",
-                "host_targeted",
-                messageType,
-                hostSendInternalDefinition.MakeGenericMethod(messageType),
-                hostSendInternalPrefix,
-                Finalizer: hostSendFinalizer));
-        }
-
-        return new LanConnectTailPatchPlan(
-            LanConnectTailPatchPlan.DesktopProfile,
-            resolvedKinds,
-            messageTypes,
-            steps);
-    }
-
-    private static LanConnectTailPatchPlan ResolveNonGenericPatchPlan(
-        IReadOnlyList<(LanConnectSidecarMessageKind Kind, Type Type)> resolvedKinds,
-        IReadOnlyList<Type> messageTypes)
-    {
-        List<LanConnectTailPatchStep> steps = [];
-        MethodInfo serializerPostfix = RequireHook(nameof(AndroidConcreteSerializePostfix));
-        foreach (Type messageType in messageTypes)
-        {
-            MethodInfo serialize = AccessTools.Method(messageType, "Serialize", [typeof(PacketWriter)])
-                ?? throw new MissingMethodException(messageType.FullName, "Serialize(PacketWriter)");
-            steps.Add(new LanConnectTailPatchStep(
-                $"tail.android.serialize.{StableTypeId(messageType)}",
-                "android_concrete_serialize",
-                messageType,
-                serialize,
-                ResolveAndroidSerializePrefix(messageType),
-                serializerPostfix,
-                PrefixPriority: Priority.First + 100));
-        }
-
-        MethodInfo reset = AccessTools.Method(typeof(PacketWriter), nameof(PacketWriter.Reset), Type.EmptyTypes)
-            ?? throw new MissingMethodException(typeof(PacketWriter).FullName, nameof(PacketWriter.Reset));
-        steps.Add(new LanConnectTailPatchStep(
-            "tail.android.writer_reset",
-            "android_writer_reset",
-            null,
-            reset,
-            RequireHook(nameof(AndroidWriterResetPrefix)),
-            PrefixPriority: Priority.First + 100));
-
-        AddSharedIncomingSteps(steps);
-
-        MethodInfo hostSend = AccessTools.Method(
-            typeof(ENetHost),
-            nameof(ENetHost.SendMessageToClient),
-            [typeof(ulong), typeof(byte[]), typeof(int), typeof(NetTransferMode), typeof(int)])
-            ?? throw new MissingMethodException(typeof(ENetHost).FullName, nameof(ENetHost.SendMessageToClient));
-        steps.Add(new LanConnectTailPatchStep(
-            "tail.android.transport.host",
-            "android_transport",
-            null,
-            hostSend,
-            RequireHook(nameof(AndroidHostTransportPrefix)),
-            Finalizer: RequireHook(nameof(AndroidHostTransportFinalizer)),
-            PrefixPriority: Priority.First + 100));
-
-        MethodInfo clientSend = AccessTools.Method(
-            typeof(ENetClient),
-            nameof(ENetClient.SendMessageToHost),
-            [typeof(byte[]), typeof(int), typeof(NetTransferMode), typeof(int)])
-            ?? throw new MissingMethodException(typeof(ENetClient).FullName, nameof(ENetClient.SendMessageToHost));
-        steps.Add(new LanConnectTailPatchStep(
-            "tail.android.transport.client",
-            "android_transport",
-            null,
-            clientSend,
-            RequireHook(nameof(AndroidClientTransportPrefix)),
-            Finalizer: RequireHook(nameof(AndroidClientTransportFinalizer)),
-            PrefixPriority: Priority.First + 100));
-
-        return new LanConnectTailPatchPlan(
-            LanConnectTailPatchPlan.DefaultProfile,
-            resolvedKinds,
-            messageTypes,
-            steps);
-    }
-
-    private static void AddSharedIncomingSteps(List<LanConnectTailPatchStep> steps)
-    {
-        MethodInfo deserialize = AccessTools.Method(
-            typeof(NetMessageBus),
-            nameof(NetMessageBus.TryDeserializeMessage),
-            [typeof(byte[]), typeof(INetMessage).MakeByRefType(), typeof(ulong?).MakeByRefType()])
-            ?? throw new MissingMethodException(typeof(NetMessageBus).FullName, nameof(NetMessageBus.TryDeserializeMessage));
-        steps.Add(new LanConnectTailPatchStep(
-            "tail.deserialize",
-            "deserialize",
-            null,
-            deserialize,
-            Postfix: RequireHook(nameof(DeserializePostfix))));
-
-        MethodInfo receivePrefix = RequireHook(nameof(ReceivePrefix));
-        MethodInfo receiveFinalizer = RequireHook(nameof(ReceiveFinalizer));
-        foreach ((Type serviceType, string id) in new[]
-                 {
-                     (typeof(NetHostGameService), "host"),
-                     (typeof(NetClientGameService), "client")
-                 })
-        {
-            MethodInfo receive = AccessTools.Method(
-                serviceType,
-                "OnPacketReceived",
-                [typeof(ulong), typeof(byte[]), typeof(NetTransferMode), typeof(int)])
-                ?? throw new MissingMethodException(serviceType.FullName, "OnPacketReceived");
-            steps.Add(new LanConnectTailPatchStep(
-                $"tail.receive.{id}",
-                "receive",
-                null,
-                receive,
-                receivePrefix,
-                Finalizer: receiveFinalizer));
-        }
-    }
-
     private static MethodInfo RequireHook(string name) =>
         AccessTools.Method(typeof(LanConnectTailMessagePatches), name)
         ?? throw new MissingMethodException(typeof(LanConnectTailMessagePatches).FullName, name);
 
-    private static MethodInfo ResolveAndroidSerializePrefix(Type messageType)
+    private static MethodInfo ResolveSerializePrefix(Type messageType)
     {
         string methodName = messageType.Name switch
         {
@@ -356,7 +299,7 @@ internal static partial class LanConnectTailMessagePatches
             "PlayerJoinedMessage" => nameof(AndroidSerializePlayerJoinedPrefix),
             "LobbyBeginRunMessage" => nameof(AndroidSerializeLobbyBeginRunPrefix),
             _ => throw new InvalidDataException(
-                $"Message type {messageType.FullName} has no Android concrete serializer prefix.")
+                $"Message type {messageType.FullName} has no concrete serializer prefix.")
         };
         return RequireHook(methodName);
     }
@@ -374,24 +317,4 @@ internal static partial class LanConnectTailMessagePatches
         "LobbyBeginRunMessage" => "lobby_begin_run",
         _ => throw new InvalidDataException($"Unknown Tail concrete message type {type.FullName}.")
     };
-}
-
-internal static class LanConnectTailPlanOverride
-{
-    // Emergency rollback only: launch the desktop game with STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1
-    // to restore the pre-alpha.9 generic plan. Android ignores this because Mono gshared cannot
-    // compile closed generic wrappers there.
-    private const string PlanEnvironmentVariable = "STS2_LAN_CONNECT_TAIL_PLAN";
-
-    private static bool? _preferLegacyDesktopGenericPlanForTesting;
-
-    internal static bool PreferLegacyDesktopGenericPlan =>
-        _preferLegacyDesktopGenericPlanForTesting
-        ?? string.Equals(
-            Environment.GetEnvironmentVariable(PlanEnvironmentVariable),
-            LanConnectTailPatchPlan.DesktopProfile,
-            StringComparison.Ordinal);
-
-    internal static void SetPreferLegacyDesktopGenericPlanForTesting(bool? value) =>
-        _preferLegacyDesktopGenericPlanForTesting = value;
 }

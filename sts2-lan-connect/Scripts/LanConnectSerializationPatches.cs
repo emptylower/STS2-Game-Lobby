@@ -86,9 +86,10 @@ internal static class LanConnectSerializationPatches
         _failedCount = 0;
         _beginRunBoundaryState = BeginRunBoundaryState.NotAttempted;
 
-        bool includeBeginRunMessageBusBoundary = ShouldPatchBeginRunMessageBusBoundary(
-            OperatingSystem.IsAndroid(),
-            LanConnectTailPlanOverride.PreferLegacyDesktopGenericPlan);
+        // The legacy desktop generic plan (and with it the begin-run SerializeMessage boundary
+        // prefix) was removed with the native_bus_v1 migration: tail hooks always live on the
+        // concrete LobbyBeginRunMessage.Serialize now.
+        bool includeBeginRunMessageBusBoundary = false;
         WirePatchPlan patchPlan;
         try
         {

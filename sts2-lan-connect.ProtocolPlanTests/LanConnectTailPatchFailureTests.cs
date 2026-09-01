@@ -31,15 +31,12 @@ public sealed class LanConnectTailPatchFailureTests
         Assert.Same(original, thrown);
     }
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void Every_patch_ordinal_records_the_exact_failure_and_preserves_the_original(bool isAndroid)
+    [Fact]
+    public void Every_patch_ordinal_records_the_exact_failure_and_preserves_the_original()
     {
+        const bool isAndroid = false;
         LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
-            typeof(PacketWriter).Assembly,
-            isAndroid,
-            preferLegacyDesktopGenericPlan: !isAndroid);
+            typeof(PacketWriter).Assembly);
         string diagnosticsRoot = Path.Combine(
             Path.GetTempPath(),
             $"sts2-lan-connect-patch-ordinal-{Guid.NewGuid():N}");

@@ -134,19 +134,8 @@ internal static class LanConnectLobbyJoinFlow
                 }, joinFlow.CancelToken);
                 try
                 {
-                    object initializer = selection.Carrier == LanConnectProtocolCarrier.RitsuLibSidecarV1
-                        ? new RitsuSidecarENetClientConnectionInitializer(
-                            netId,
-                            candidate.Host,
-                            candidate.Port,
-                            service => LanConnectTailMessageRuntime.Shared.PrepareClientHostSidecarFlow(
-                                service,
-                                netId,
-                                service.HostNetId),
-                            service => LanConnectTailMessageRuntime.Shared.ActivateClientHostSidecarFlow(
-                                service,
-                                service.HostNetId))
-                        : new ENetClientConnectionInitializer(netId, candidate.Host, candidate.Port);
+                    // native_bus_v1：客户端 flow 以工单 nonce 在首次发送时即时绑定，无需专用初始化器。
+                    object initializer = new ENetClientConnectionInitializer(netId, candidate.Host, candidate.Port);
                     Log.Info($"sts2_lan_connect attempting lobby join via {candidate.Host}:{candidate.Port} ({candidate.Label}) using netId={netId}.");
                     JoinResult joinResult = await joinFlow.BeginAsync(initializer, stack.GetTree());
                     _ = TaskHelper.RunSafely(ReportConnectionEventSafeAsync(

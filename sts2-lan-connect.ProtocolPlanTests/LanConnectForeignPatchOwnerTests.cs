@@ -46,7 +46,6 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
         }
         finally
         {
-            LanConnectTailPlanOverride.SetPreferLegacyDesktopGenericPlanForTesting(null);
             LanConnectSerializationPatches.ResetAppliedAfterExternalRollback();
             LanConnectDegradedMode.ResetForTesting();
             // Intentionally not restoring the log sinks: no test host can survive a real Log
@@ -74,9 +73,8 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
         MethodInfo initialGameInfoTarget = PatchForeignGenericPostfix(foreign, typeof(InitialGameInfoMessage));
 
         LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
-            typeof(PacketWriter).Assembly,
-            isAndroid: false);
-        Assert.Equal(LanConnectTailPatchPlan.DefaultProfile, plan.Profile);
+            typeof(PacketWriter).Assembly);
+        Assert.Equal("native_bus_v1", plan.Profile);
         Assert.Equal(0, plan.GenericTargetCount);
 
         Harmony ours = CreateHarmony("plan");
@@ -105,8 +103,8 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
         MethodInfo beginRunTarget = PatchForeignGenericPostfix(foreign, typeof(LobbyBeginRunMessage));
 
         List<string> warnings = [];
-        // The boundary prefix is only attempted with the legacy desktop generic plan.
-        LanConnectTailPlanOverride.SetPreferLegacyDesktopGenericPlanForTesting(true);
+        // The legacy desktop generic plan (with its boundary prefix) is gone; the boundary
+        // is permanently skipped under native_bus_v1.
         LanConnectSerializationPatches.ResetAppliedAfterExternalRollback();
         LanConnectSerializationPatches.LogWarnSink = warnings.Add;
         LanConnectSerializationPatches.LogInfoSink = static _ => { };
@@ -118,8 +116,8 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
 
         Assert.Null(failure);
         Assert.True(LanConnectSerializationPatches.IsAppliedForTesting);
-        Assert.Equal("skipped_foreign_owner", LanConnectSerializationPatches.BeginRunBoundaryStateForTesting);
-        Assert.Contains(warnings, line => line.Contains("begin_run_boundary_skipped", StringComparison.Ordinal));
+        // begin-run boundary is permanently skipped under native_bus_v1 (legacy plan removed),
+        // so no boundary warning is emitted any more.
 
         // All six required transpilers must be in place even though the boundary was skipped.
         Assembly sts2 = typeof(PacketWriter).Assembly;
