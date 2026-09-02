@@ -520,10 +520,8 @@ test("active authenticated relay survives room heartbeat timeout and accepts a d
   }
 });
 
-test("HTTP protocol gates reject Ritsu mismatch, bad fingerprints and old clients before tickets", async () => {
+test("HTTP protocol gates reject bad fingerprints and old clients before tickets", async () => {
   const scenarios = [
-    { host: true, joiner: false, joinerSidecar: false, fingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", code: "ritsulib_presence_mismatch" },
-    { host: false, joiner: true, joinerSidecar: true, fingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", code: "ritsulib_presence_mismatch" },
     { host: true, joiner: true, joinerSidecar: false, fingerprint: "sha256:v1:" + "c".repeat(64), code: "lan_registry_fingerprint_mismatch" },
     { host: true, joiner: true, joinerSidecar: false, fingerprint: "not-a-fingerprint", code: "lan_registry_fingerprint_required" },
   ] as const;
@@ -583,6 +581,70 @@ test("HTTP protocol gates reject Ritsu mismatch, bad fingerprints and old client
       }
       assert.equal("ticketId" in body, false);
       assert.equal("connectionPlan" in body, false);
+    } finally {
+      await service.close();
+      cleanupTempDir(config);
+    }
+  }
+});
+
+test("HTTP join tolerates Ritsu presence mismatch for tail rooms", async () => {
+  // native_bus_v1：presence 不一致仍可加入 tail 房间（0.6.1 起 tail_v1 忽略 RitsuLib 安装状态）。
+  const scenarios = [
+    { host: true, joiner: false, joinerSidecar: false },
+    { host: false, joiner: true, joinerSidecar: true },
+  ] as const;
+  for (const scenario of scenarios) {
+    const config = testConfig({ port: 0 });
+    const service = await createLobbyService(config);
+    const address = await service.start();
+    try {
+      const createdResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          roomName: "presence-tolerant",
+          hostPlayerName: "Host",
+          gameMode: "standard",
+          version: "1.0.0",
+          modVersion: "0.6.1-alpha.1",
+          clientVersion: "0.6.1-alpha.1",
+          protocolProfileV2: "tail_v1",
+          protocolOffer: {
+            lanProtocolMin: 1,
+            lanProtocolMax: 1,
+            clientVersion: "0.6.1-alpha.1",
+            ritsuLibPresent: scenario.host,
+            ritsuLibSidecarAvailable: scenario.host,
+            registryFingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          },
+          maxPlayers: 8,
+          hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+        }),
+      });
+      assert.equal(createdResponse.status, 201);
+      const created = await createdResponse.json() as { roomId: string };
+      const joinResponse = await fetch(`http://127.0.0.1:${address.port}/rooms/${created.roomId}/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          playerName: "Guest",
+          version: "1.0.0",
+          modVersion: "0.6.1-alpha.1",
+          clientVersion: "0.6.1-alpha.1",
+          registryFingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          protocolOffer: {
+            lanProtocolMin: 1,
+            lanProtocolMax: 1,
+            clientVersion: "0.6.1-alpha.1",
+            ritsuLibPresent: scenario.joiner,
+            ritsuLibSidecarAvailable: scenario.joinerSidecar,
+          },
+        }),
+      });
+      assert.equal(joinResponse.status, 200);
+      const joined = await joinResponse.json() as { ticketId: string };
+      assert.ok(joined.ticketId);
     } finally {
       await service.close();
       cleanupTempDir(config);

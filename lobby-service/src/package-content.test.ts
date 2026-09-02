@@ -263,9 +263,9 @@ test("service package uses exact production allowlist and deterministic temporar
       version?: unknown;
       packages?: Record<string, { version?: unknown }>;
     };
-    assert.equal(packageJson.version, "0.6.1-alpha.1");
-    assert.equal(packageLock.version, "0.6.1-alpha.1");
-    assert.equal(packageLock.packages?.[""]?.version, "0.6.1-alpha.1");
+    assert.equal(packageJson.version, "0.6.1-alpha.2");
+    assert.equal(packageLock.version, "0.6.1-alpha.2");
+    assert.equal(packageLock.packages?.[""]?.version, "0.6.1-alpha.2");
     assert.match(readFileSync(join(packageDir, "README.md"), "utf8"), /v0\.6\.0/);
 
     for (const packagePath of expectedFiles) {
@@ -339,7 +339,7 @@ test("service package rejects malformed protected traversal and symlink outputs"
   }
 });
 
-test("release sources pin client and service 0.6.1-alpha.1 while preserving older fixtures", () => {
+test("release sources pin client and service 0.6.1-alpha.2 while preserving older fixtures", () => {
   const servicePackage = JSON.parse(readFileSync(join(repositoryRoot, "lobby-service/package.json"), "utf8")) as {
     version?: unknown;
   };
@@ -351,11 +351,11 @@ test("release sources pin client and service 0.6.1-alpha.1 while preserving olde
     version?: unknown;
   };
   const clientProject = readFileSync(join(repositoryRoot, "sts2-lan-connect/sts2_lan_connect.csproj"), "utf8");
-  assert.equal(servicePackage.version, "0.6.1-alpha.1");
-  assert.equal(serviceLock.version, "0.6.1-alpha.1");
-  assert.equal(serviceLock.packages?.[""]?.version, "0.6.1-alpha.1");
-  assert.equal(clientManifest.version, "0.6.1-alpha.1");
-  assert.match(clientProject, /<Version>0\.6\.1-alpha\.1<\/Version>/);
+  assert.equal(servicePackage.version, "0.6.1-alpha.2");
+  assert.equal(serviceLock.version, "0.6.1-alpha.2");
+  assert.equal(serviceLock.packages?.[""]?.version, "0.6.1-alpha.2");
+  assert.equal(clientManifest.version, "0.6.1-alpha.2");
+  assert.match(clientProject, /<Version>0\.6\.1-alpha\.2<\/Version>/);
   assert.match(clientProject, /<AssemblyVersion>0\.6\.1\.0<\/AssemblyVersion>/);
 
   const serviceFixture = readFileSync(

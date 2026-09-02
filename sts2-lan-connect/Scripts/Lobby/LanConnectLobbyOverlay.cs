@@ -617,7 +617,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             .ToArray();
 
     internal IReadOnlyList<string> CreateProtocolOptionLabelsForTests()
-        => ["兼容旧版客户端", "0.6 新协议（RitsuLib 状态必须一致）"];
+        => ["兼容旧版 Mod", "新协议"];
 
     internal IReadOnlyList<bool> CreateProtocolOptionDisabledStatesForTests()
         => [_protocolCompatButton?.Disabled ?? true, _protocolTailButton?.Disabled ?? true];
@@ -2935,14 +2935,14 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         row.AddChild(choices);
 
         _protocolCompatButton = CreateProtocolChoiceButton(
-            "兼容旧版客户端",
-            "支持 0.3-0.5，不支持 RitsuLib",
+            "兼容旧版 Mod",
+            "沿用旧版联机协议，可与 0.3–0.5 旧版客户端同房；不支持 RitsuLib",
             CreateProtocolCompatId);
         choices.AddChild(_protocolCompatButton);
 
         _protocolTailButton = CreateProtocolChoiceButton(
-            "0.6 新协议",
-            "仅支持 0.6+；RitsuLib 状态必须一致",
+            "新协议",
+            "通过官方 Mod 消息注册通道传输，需 0.6.1 及以上客户端；与是否安装 RitsuLib 无关",
             CreateProtocolTailId);
         choices.AddChild(_protocolTailButton);
 
@@ -3638,16 +3638,24 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         string profileLabel = profile switch
         {
             LanConnectProtocolProfileExtensions.CompatCanonical or LanConnectProtocolProfiles.Extended8p =>
-                "compat_4_5_v1",
-            LanConnectProtocolProfileExtensions.TailCanonical => "tail_v1",
-            _ => string.IsNullOrWhiteSpace(profile) ? "compat_4_5_v1" : profile
+                "兼容旧版 Mod",
+            LanConnectProtocolProfileExtensions.TailCanonical => "新协议",
+            _ => string.IsNullOrWhiteSpace(profile) ? "兼容旧版 Mod" : profile
         };
 
         string? carrier = room.ProtocolSelection?.Carrier;
         string carrierLabel = string.IsNullOrWhiteSpace(carrier)
-            ? "none"
-            : carrier;
-        return $"{profileLabel} / {carrierLabel} / {GetRoomRitsuPresencePill(room)}";
+            || string.Equals(carrier, "none", StringComparison.Ordinal)
+                ? "旧版协议"
+                : carrier switch
+                {
+                    "native_bus_v1" => "官方通道",
+                    "standalone_tail_v1" or "ritsulib_sidecar_v1" => "旧载体（需房主升级）",
+                    _ => carrier
+                };
+        return IsCompatRoomProfile(profile)
+            ? $"{profileLabel} / {carrierLabel} / 不支持 RitsuLib"
+            : $"{profileLabel} / {carrierLabel}";
     }
 
     private static string GetRoomProtocolPill(LobbyRoomSummary room)
@@ -3657,15 +3665,25 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             : room.ProtocolProfileV2;
         return profile switch
         {
-            LanConnectProtocolProfileExtensions.TailCanonical => "TAIL",
-            _ => "COMPAT"
+            LanConnectProtocolProfileExtensions.TailCanonical => "新协议",
+            _ => "兼容"
         };
     }
 
-    private static string GetRoomRitsuPresencePill(LobbyRoomSummary room) =>
-        room.ProtocolSelection?.RitsuLibPresent == true
-            ? "需要 RitsuLib"
-            : "无 RitsuLib";
+    private static bool IsCompatRoomProfile(string? profile) => profile switch
+    {
+        LanConnectProtocolProfileExtensions.TailCanonical => false,
+        LanConnectProtocolProfileExtensions.CompatCanonical or LanConnectProtocolProfiles.Extended8p => true,
+        _ => string.IsNullOrWhiteSpace(profile)
+    };
+
+    private static string? GetRoomRitsuPresencePill(LobbyRoomSummary room)
+    {
+        string profile = string.IsNullOrWhiteSpace(room.ProtocolProfileV2)
+            ? room.ProtocolProfile
+            : room.ProtocolProfileV2;
+        return IsCompatRoomProfile(profile) ? "不支持 RitsuLib" : null;
+    }
 
     private Control CreateRoomCard(LobbyRoomSummary room, bool isSelected, bool isHostRoom)
     {
@@ -3778,7 +3796,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         (string modeText, Color modeBorder, Color modeBackground) = GetRoomGameModePill(room.GameMode);
         leftGroup.AddChild(CreateTagPill(modeText, modeBorder, modeBackground, false));
         leftGroup.AddChild(CreateTagPill(GetRoomProtocolPill(room), BorderColor, SecondaryColor, false));
-        leftGroup.AddChild(CreateTagPill(GetRoomRitsuPresencePill(room), BorderColor, SecondaryColor, false));
+        string? ritsuPresencePill = GetRoomRitsuPresencePill(room);
+        if (!string.IsNullOrEmpty(ritsuPresencePill))
+        {
+            leftGroup.AddChild(CreateTagPill(ritsuPresencePill, BorderColor, SecondaryColor, false));
+        }
 
         // PASS REQ: right-aligned, separate from tags
         if (room.RequiresPassword)
@@ -6299,10 +6321,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         LanConnectProtocolProfile profile,
         bool tailRuntimeAvailable) => profile switch
     {
-        LanConnectProtocolProfile.Compat4x5V1 => "支持 0.3-0.5，不支持 RitsuLib",
+        LanConnectProtocolProfile.Compat4x5V1 => "沿用旧版联机协议，可与 0.3–0.5 旧版客户端同房；不支持 RitsuLib",
         LanConnectProtocolProfile.TailV1 => tailRuntimeAvailable
-            ? "仅支持 0.6+；RitsuLib 状态必须一致"
-            : "仅支持 0.6+；当前游戏版本不支持该协议，请使用兼容模式",
+            ? "通过官方 Mod 消息注册通道传输，需 0.6.1 及以上客户端；与是否安装 RitsuLib 无关"
+            : "需要游戏测试分支（0.111+）；当前游戏版本不支持，请选择“兼容旧版 Mod”",
         _ => "当前客户端不支持该房间的联机协议。"
     };
 
@@ -6614,8 +6636,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             && string.Equals(roomProfile, LanConnectProtocolProfileExtensions.TailCanonical, StringComparison.Ordinal))
         {
             reason =
-                $"该房间使用 0.6 新协议（tail_v1），当前游戏版本 {LanConnectBuildInfo.GetGameVersion()} 不支持。"
-                + "请切换到 Steam 测试分支（public-beta）或加入兼容模式房间。";
+                $"该房间使用新协议，需要游戏测试分支（0.111+），当前游戏版本 {LanConnectBuildInfo.GetGameVersion()} 不支持。"
+                + "请切换到 Steam 测试分支（public-beta），或加入“兼容旧版 Mod”房间。";
             return false;
         }
 

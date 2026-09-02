@@ -7,15 +7,21 @@ internal static class LanConnectProtocolUiMessages
         ArgumentNullException.ThrowIfNull(failure);
         return failure.Code switch
         {
-            "client_update_required" => string.IsNullOrWhiteSpace(failure.RequiredClientVersion)
-                ? "客户端版本过旧，请更新后重试。"
-                : $"客户端版本过旧，请更新到 {failure.RequiredClientVersion} 或更高版本。",
+            "client_update_required" or "lan_client_version_too_old" =>
+                string.IsNullOrWhiteSpace(failure.RequiredClientVersion)
+                    ? "客户端版本过旧，请更新后重试。"
+                    : $"客户端版本过旧，请更新到 {failure.RequiredClientVersion} 或更高版本。",
             "protocol_profile_unsupported" => "当前客户端不支持该房间的联机协议。",
-            "ritsulib_not_allowed_in_compat_mode" => "兼容模式不能启用 RitsuLib。请关闭 RitsuLib 后重试。",
+            "ritsulib_not_allowed_in_compat_mode" => "“兼容旧版 Mod”房间不能启用 RitsuLib。请关闭 RitsuLib 后重试，或改用新协议房间。",
             "ritsulib_presence_mismatch" => failure.RequiredRitsuLibPresent == true
-                ? "该房间要求所有玩家启用 RitsuLib。"
-                : "该房间要求所有玩家关闭 RitsuLib。",
-            "ritsulib_sidecar_unavailable" => "RitsuLib 已启用，但公开 sidecar 通道当前不可用。",
+                ? "该房间是旧版本创建的，要求所有玩家启用 RitsuLib；新协议房间不再有此限制。"
+                : "该房间是旧版本创建的，要求所有玩家关闭 RitsuLib；新协议房间不再有此限制。",
+            "ritsulib_sidecar_unavailable" => "该房间使用已停用的旧版 RitsuLib 通道，请房主升级 LAN Connect 后重新建房。",
+            "lan_legacy_carrier_unsupported" => "该房间由旧版 LAN Connect 创建（旧载体），请房主升级后重新建房。",
+            "lan_registry_fingerprint_required" or "lan_registry_fingerprint_mismatch" =>
+                "双方的联机消息注册表不一致（通常是 Mod 列表不同），无法使用新协议加入。",
+            "lan_native_frame_invalid" or "lan_type_id_mismatch" or "lan_extension_missing" =>
+                $"新协议通信帧校验失败（{failure.Code}），连接已停止；请确认双方 LAN Connect 版本一致。",
             "game_version_mismatch" => "游戏版本不匹配，无法加入该房间。",
             "wire_cache_mismatch" => "联机数据版本不匹配，无法加入该房间。",
             "lan_protocol_version_mismatch" => "LAN 协议版本不匹配，无法继续连接。",

@@ -59,12 +59,7 @@ internal sealed record LanConnectProtocolSelection(
                         $"Local offer does not support selected LAN protocol {SelectedLanProtocolVersion}.");
                 }
 
-                if (RitsuLibPresent != localOffer.RitsuLibPresent)
-                {
-                    throw new LanConnectProtocolException(
-                        LanConnectProtocolFailure.RitsuLibPresenceMismatch(RitsuLibPresent));
-                }
-
+                // native_bus_v1 不再要求 RitsuLib presence 一致（0.6.1 起 tail_v1 完全忽略 RitsuLib 安装状态）。
                 if (Carrier is LanConnectProtocolCarrier.LegacyTailV1 or LanConnectProtocolCarrier.LegacySidecarV1)
                 {
                     throw LanConnectProtocolFailureMapper.FromLocalException(

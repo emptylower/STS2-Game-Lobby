@@ -306,10 +306,11 @@ test("Tail create tolerates an unavailable sidecar and rejects a missing fingerp
   assert.equal(store.listRooms().length, 1);
 });
 
-test("Tail join gate chain rejects presence mismatch, joiner-sidecar-free presence, bad fingerprints and old clients before ticket allocation", () => {
+test("Tail join gate chain tolerates presence mismatch, rejects bad fingerprints and old clients before ticket allocation", () => {
   const cases = [
-    { host: true, joiner: false, sidecar: false, code: "ritsulib_presence_mismatch" },
-    { host: false, joiner: true, sidecar: true, code: "ritsulib_presence_mismatch" },
+    // native_bus_v1：presence 不一致照常签发工单（0.6.1 起 tail_v1 忽略 RitsuLib 安装状态）。
+    { host: true, joiner: false, sidecar: false, code: null },
+    { host: false, joiner: true, sidecar: true, code: null },
     { host: true, joiner: true, sidecar: false, code: null },
     { host: true, joiner: true, fingerprint: "sha256:v1:" + "c".repeat(64), code: "lan_registry_fingerprint_mismatch" },
     { host: true, joiner: true, fingerprint: "bad", code: "lan_registry_fingerprint_required" },

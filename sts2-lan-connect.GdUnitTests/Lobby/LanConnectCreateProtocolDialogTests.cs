@@ -96,20 +96,20 @@ public sealed class LanConnectCreateProtocolDialogTests
 
         AssertThat(fixture.Overlay.SelectedCreateProtocolIdForTests).IsEqual(300);
         AssertThat(fixture.Overlay.CreateProtocolOptionLabelsForTests())
-            .Contains("兼容旧版客户端")
-            .Contains("0.6 新协议（RitsuLib 状态必须一致）");
+            .Contains("兼容旧版 Mod")
+            .Contains("新协议");
         AssertThat(fixture.Overlay.CreateProtocolOptionDisabledStatesForTests())
             .IsEqual(new[] { false, false });
         AssertThat(fixture.Overlay.CreateProtocolChoiceRectsForTests()
             .All(static rect => rect.Size.Y >= 76f)).IsTrue();
         AssertThat(fixture.Overlay.CreateProtocolDescriptionForTests)
-            .IsEqual("支持 0.3-0.5，不支持 RitsuLib");
+            .IsEqual("沿用旧版联机协议，可与 0.3–0.5 旧版客户端同房；不支持 RitsuLib");
 
         fixture.Overlay.PressCreateProtocolForTests(301);
         await fixture.Runner.AwaitIdleFrame();
 
         AssertThat(fixture.Overlay.CreateProtocolDescriptionForTests)
-            .IsEqual("仅支持 0.6+；RitsuLib 状态必须一致");
+            .IsEqual("通过官方 Mod 消息注册通道传输，需 0.6.1 及以上客户端；与是否安装 RitsuLib 无关");
     }
 
     [TestCase]
@@ -121,16 +121,18 @@ public sealed class LanConnectCreateProtocolDialogTests
 
         IReadOnlyList<string> labels = fixture.Overlay.VisibleLabelTextsForTests();
 
-        AssertThat(labels.Any(static text => text.Contains("compat_4_5_v1", StringComparison.Ordinal))).IsTrue();
-        AssertThat(labels.Any(static text => text.Contains("none", StringComparison.Ordinal))).IsTrue();
-        AssertThat(labels.Any(static text => text.Contains("无 RitsuLib", StringComparison.Ordinal))).IsTrue();
+        AssertThat(labels.Any(static text => text.Contains("兼容旧版 Mod", StringComparison.Ordinal))).IsTrue();
+        AssertThat(labels.Any(static text => text.Contains("旧版协议", StringComparison.Ordinal))).IsTrue();
+        AssertThat(labels.Any(static text => text.Contains("不支持 RitsuLib", StringComparison.Ordinal))).IsTrue();
 
         fixture.Overlay.SelectRoomForTests("room-b");
         await fixture.Runner.AwaitIdleFrame();
         labels = fixture.Overlay.VisibleLabelTextsForTests();
 
-        AssertThat(labels.Any(static text => text.Contains("tail_v1", StringComparison.Ordinal))).IsTrue();
-        AssertThat(labels.Any(static text => text.Contains("ritsulib_sidecar_v1", StringComparison.Ordinal))).IsTrue();
-        AssertThat(labels.Any(static text => text.Contains("需要 RitsuLib", StringComparison.Ordinal))).IsTrue();
+        AssertThat(labels.Any(static text => text.Contains("新协议", StringComparison.Ordinal))).IsTrue();
+        AssertThat(labels.Any(static text => text.Contains("旧载体（需房主升级）", StringComparison.Ordinal))).IsTrue();
+        AssertThat(labels.All(static text =>
+            !text.Contains("新协议", StringComparison.Ordinal)
+            || !text.Contains("RitsuLib", StringComparison.Ordinal))).IsTrue();
     }
 }

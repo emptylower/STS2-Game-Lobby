@@ -118,14 +118,7 @@ export function assertJoinerCompatible(selection: RoomProtocolSelection, joinerO
     }
     return;
   }
-  if (joinerOffer.ritsuLibPresent !== selection.ritsuLibPresent) {
-    throw new ProtocolContractError(
-      409,
-      "ritsulib_presence_mismatch",
-      "加入者与房间的 RitsuLib 安装状态不一致。",
-      { requiredRitsuLibPresent: selection.ritsuLibPresent },
-    );
-  }
+  // native_bus_v1 不再要求 RitsuLib presence 一致（0.6.1 起 tail_v1 完全忽略 RitsuLib 安装状态）。
   if (selection.carrier === "standalone_tail_v1" || selection.carrier === "ritsulib_sidecar_v1") {
     throw new ProtocolContractError(
       409,

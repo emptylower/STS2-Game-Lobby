@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.6.1-alpha.2] - 2026-09-02
+
+`0.6.1-alpha.2`：协议措辞收敛为「兼容旧版 Mod」/「新协议」，并放开新协议房间的 RitsuLib 安装状态一致性门禁（GitHub-only pre-release，不更新创意工坊）。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ALPHA2_ZH.md`。客户端与 lobby-service 同步 `0.6.1-alpha.2`；tail 房间 `minimumClientVersion` 仍为 `0.6.1-alpha.1`。**服务端需手动升级**（自动更新不接受 pre-release）。
+
+### Changed
+
+- 联机协议前端措辞重构：建房只区分「兼容旧版 Mod」与「新协议」；新协议描述为“通过官方 Mod 消息注册通道传输，需 0.6.1 及以上客户端；与是否安装 RitsuLib 无关”。房间卡片/详情改为「兼容旧版 Mod / 旧版协议 / 不支持 RitsuLib」与「新协议 / 官方通道」，新协议房间不再显示 RitsuLib 标签；加入门禁提示改为“需要游戏测试分支（0.111+）”。线上标识 `compat_4_5_v1` / `tail_v1` 不变。
+- `LanConnectProtocolUiMessages` 补齐 0.6.1 新错误码的中文提示（`lan_legacy_carrier_unsupported`、`lan_registry_fingerprint_required/mismatch`、`lan_client_version_too_old`、`lan_native_frame_invalid`、`lan_type_id_mismatch`、`lan_extension_missing`）。
+
+### Fixed
+
+- 新协议（`tail_v1` / `native_bus_v1`）房间不再要求加入者与房主的 RitsuLib 安装状态一致：lobby-service `assertJoinerCompatible` 与客户端 `LanConnectProtocolSelection.Validate` 删除 `ritsulib_presence_mismatch` 门禁（兼容房继续禁止 RitsuLib；selection 与 capability digest 字段不变）。
+
 ## [0.6.1-alpha.1] - 2026-09-01
 
 `0.6.1-alpha.1`：协议载体切换为 `native_bus_v1` 的首个测试候选（GitHub-only pre-release，真机 E2E 矩阵验收前不更新创意工坊）。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ALPHA1_ZH.md`。客户端与 lobby-service 同步 `0.6.1-alpha.1`（tail 房间 `minimumClientVersion` 同值）。双版本 ABI 对比见 `docs/abi-reports/2026-09-01-native-bus/REPORT.md`。

@@ -23,18 +23,18 @@ const policy = (profile: "compat_4_5_v1" | "tail_v1", ritsuSignature = "aabb") =
   wireCacheSignatureV1: ritsuSignature,
 });
 
-test("freezes native_bus_v1 for both presence states and rejects presence mismatch in both directions", () => {
+test("freezes native_bus_v1 for both presence states and tolerates presence mismatch in both directions", () => {
   const ritsu = selectRoomProtocol(offer(true), policy("tail_v1"));
   const standalone = selectRoomProtocol(offer(false), policy("tail_v1"));
-  // native_bus_v1：tail_v1 一律 native 载体，完全忽略 Ritsu presence。
+  // native_bus_v1：tail_v1 一律 native 载体，完全忽略 Ritsu presence（创建与加入两侧均是）。
   assert.equal(ritsu.carrier, "native_bus_v1");
   assert.equal(standalone.carrier, "native_bus_v1");
   assert.equal(ritsu.registryFingerprint, fingerprint);
   assert.equal(ritsu.minimumClientVersion, "0.6.1-alpha.1");
   assert.doesNotThrow(() => assertJoinerCompatible(ritsu, offer(true)));
   assert.doesNotThrow(() => assertJoinerCompatible(standalone, offer(false)));
-  assert.throws(() => assertJoinerCompatible(ritsu, offer(false)), hasCode("ritsulib_presence_mismatch"));
-  assert.throws(() => assertJoinerCompatible(standalone, offer(true)), hasCode("ritsulib_presence_mismatch"));
+  assert.doesNotThrow(() => assertJoinerCompatible(ritsu, offer(false)));
+  assert.doesNotThrow(() => assertJoinerCompatible(standalone, offer(true)));
   assert.match(ritsu.capabilityDigest, /^[0-9a-f]{64}$/);
   assert.equal(Object.isFrozen(ritsu), true);
 });

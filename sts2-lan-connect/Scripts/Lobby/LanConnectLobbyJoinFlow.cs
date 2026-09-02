@@ -72,8 +72,8 @@ internal static class LanConnectLobbyJoinFlow
             {
                 return new LobbyJoinAttemptResult(
                     LobbyJoinAttemptKind.Failed,
-                    $"该房间使用 0.6 新协议（tail_v1），当前游戏版本 {LanConnectBuildInfo.GetGameVersion()} 不支持。"
-                    + "请切换到 Steam 测试分支（public-beta）或加入兼容模式房间。");
+                    $"该房间使用新协议，需要游戏测试分支（0.111+），当前游戏版本 {LanConnectBuildInfo.GetGameVersion()} 不支持。"
+                    + "请切换到 Steam 测试分支（public-beta），或加入“兼容旧版 Mod”房间。");
             }
             LanConnectProtocolSelection selection = selectionDto.ToValidatedValue(localOffer);
             _ = joinResponse.GetProtocolFlowNonceBytes();

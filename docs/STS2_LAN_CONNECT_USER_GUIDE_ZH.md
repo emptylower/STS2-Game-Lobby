@@ -25,12 +25,12 @@
 
 **双协议房间**
 
-- 建房默认选择兼容模式：固定 `4/5-bit`、2-8 人、不允许 RitsuLib。
-- 0.6 新协议 `tail_v1` 保持原版 `2/3-bit` 主体，以 LAN protocol v1 携带完整 roster；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用公开 typed-sidecar carrier。
-- 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合会在 ticket 与 transport 前拒绝。
+- 建房默认选择「兼容旧版 Mod」：固定 `4/5-bit`、2-8 人、不允许 RitsuLib。
+- 「新协议」`tail_v1`（0.6.1 起）保持原版 `2/3-bit` 主体，以 LAN protocol v1 携带完整 roster，并通过游戏官方 Mod 消息注册通道（`native_bus_v1`）传输协议容器；与是否安装 RitsuLib 无关。
+- 仅旧版客户端创建的房间（旧载体）才要求全员 RitsuLib 状态一致；「新协议」房间不再有此限制。
 - 本版不卸载、不直接调用也不恢复 RitsuLib 私有 Harmony 补丁，不维护 RitsuLib 分支。
 - macOS 与 Android 使用 RitsuLib 时请统一安装官方 v0.5.13 及以上；官方 v0.5.12 不应继续使用。
-- direct-IP 直连只支持兼容模式，本地 Ritsu 或 Tail intent 会在建立连接前拒绝。
+- direct-IP 直连只支持「兼容旧版 Mod」，本地 Ritsu 或 Tail intent 会在建立连接前拒绝。
 - 历史 `0.3.x`-`0.5.x` 客户端与 `0.6.0` 的真实互通不在发布门禁范围内，请全员升级。
 
 **加入前线上编码校验**
@@ -152,7 +152,7 @@
 
 1. 打开 `游戏大厅`，点击 `创建房间`
 2. 填写房间名，选择类型和联机协议，可选填密码；最大人数支持 2-8 人，默认 8 人
-3. 默认 `兼容旧版客户端（默认）` 支持 LAN Connect `0.3-0.5` 加入且禁止 RitsuLib；`0.6 新协议（RitsuLib 状态必须一致）` 仅支持 `0.6+`
+3. 默认「兼容旧版 Mod」支持 LAN Connect `0.3-0.5` 旧版客户端加入且禁止 RitsuLib；「新协议」需 `0.6.1` 及以上客户端，与是否安装 RitsuLib 无关
 4. 发布成功后，客户端会自动启动本地 ENet Host、向大厅注册房间并持续发送心跳保活
 
 ## 玩家流程
@@ -230,7 +230,7 @@
 - 公开包默认使用阿里云大厅 `47.111.146.69:8787` 作为兜底社区节点，并通过 CF 发现入口 `https://sts2-gamelobby-register.xyz` + 内置种子聚合可用服务器；测试节点 `101.35.217.99:8788` 固定排在服务器列表第一位。显示“支持 0.5.1+ MOD 同步”的服务器已实时声明加入前 gameplay MOD 预检/Workshop 同步能力；旧的 `47.111.146.69:18787` 公开目录在 v0.4.0 中不再参与运行时发现
 - 兼容矩阵当前统一规则为：
   - `compat_4_5_v1` 固定使用历史 `4/5-bit`，支持 2-8 人，禁止 RitsuLib
-  - `tail_v1` 固定使用原版 `2/3-bit` 主体和 LAN protocol v1；无 RitsuLib 使用 standalone carrier，有 RitsuLib 必须全员一致并等待公开 sidecar gate
+  - `tail_v1` 固定使用原版 `2/3-bit` 主体和 LAN protocol v1；0.6.1 起经官方 Mod 消息注册通道（`native_bus_v1`）传输，与是否安装 RitsuLib 无关
   - 客户端实际日志 / 调试报告会同时记录 `compatibilityProfile`、`connectionStrategy`、`effectiveMaxPlayers`、`publishedProtocolProfile`、`carrier` 和 `capabilityDigest`
 - MOD 内置 2-8 人支持；房间人数不再决定协议，建房时选择的协议在房间生命周期内冻结
 - 检测到 RMP 等外部扩展人数 MOD 时，内置补丁会自动跳过以避免冲突
