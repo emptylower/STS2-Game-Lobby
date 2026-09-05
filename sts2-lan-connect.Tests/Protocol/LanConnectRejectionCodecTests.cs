@@ -16,6 +16,13 @@ public sealed class LanConnectRejectionCodecTests
     [InlineData("lan_tail_malformed", 8)]
     [InlineData("lan_protocol_version_mismatch", 9)]
     [InlineData("ritsulib_sidecar_unavailable", 10)]
+    [InlineData("lan_legacy_carrier_unsupported", 11)]
+    [InlineData("lan_registry_fingerprint_required", 12)]
+    [InlineData("lan_registry_fingerprint_mismatch", 13)]
+    [InlineData("lan_native_frame_invalid", 14)]
+    [InlineData("lan_client_version_too_old", 15)]
+    [InlineData("lan_type_id_mismatch", 16)]
+    [InlineData("lan_extension_missing", 17)]
     public void Round_trips_all_fixed_reason_codes(string code, int reasonCode)
     {
         LanConnectProtocolFailure failure = new(code, "0.6.0-alpha.1", true, "detail");
@@ -26,13 +33,40 @@ public sealed class LanConnectRejectionCodecTests
     }
 
     [Fact]
+    public void Reason_codes_table_is_pinned_to_the_exact_protocol_order()
+    {
+        string[] expected =
+        [
+            "client_update_required",
+            "protocol_profile_unsupported",
+            "ritsulib_not_allowed_in_compat_mode",
+            "ritsulib_presence_mismatch",
+            "game_version_mismatch",
+            "wire_cache_mismatch",
+            "lan_tail_required",
+            "lan_tail_malformed",
+            "lan_protocol_version_mismatch",
+            "ritsulib_sidecar_unavailable",
+            "lan_legacy_carrier_unsupported",
+            "lan_registry_fingerprint_required",
+            "lan_registry_fingerprint_mismatch",
+            "lan_native_frame_invalid",
+            "lan_client_version_too_old",
+            "lan_type_id_mismatch",
+            "lan_extension_missing"
+        ];
+
+        Assert.Equal(expected, LanConnectRejectionCodec.ReasonCodes);
+    }
+
+    [Fact]
     public void Unknown_reason_is_preserved_as_terminal_generic_protocol_failure()
     {
         byte[] payload = LanConnectRejectionCodec.Encode(
             new LanConnectProtocolFailure("lan_tail_malformed"));
-        BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(1, 2), 11);
+        BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(1, 2), 18);
 
-        Assert.Equal("unknown_tail_rejection_11", LanConnectRejectionCodec.Decode(payload).Code);
+        Assert.Equal("unknown_tail_rejection_18", LanConnectRejectionCodec.Decode(payload).Code);
     }
 
     [Fact]

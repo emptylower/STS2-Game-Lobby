@@ -54,6 +54,31 @@ public sealed class LanConnectNativeBusStartupCheckTests
     }
 
     [TestCase]
+    public void Run_with_the_registry_but_without_AssemblyInfo_returns_pending_and_never_disables()
+    {
+        // 复现 2026-09-05 Windows 0.111.0 反馈：第三方 mod 在 mod 初始化阶段就把 MessageTypes 建好了，
+        // 但 AssemblyInfo.Init() 要到 ExecuteEssential 才跑；此时 ModForType 抛无消息的
+        // InvalidOperationException，自检必须挂起（延后到首次 tail 会话），不能降级。
+        InitializeRegistry();
+        AssemblyInfo.ClearForTests();
+        LanConnectNativeBusSender.TypeIdResolverForTesting = () => 200;
+        LanConnectNativeBusStartupCheck.ResetForTesting();
+
+        try
+        {
+            LanConnectNativeBusStartupCheck.Result result = LanConnectNativeBusStartupCheck.Run();
+            AssertThat(result.Pending).IsTrue();
+            AssertThat(result.Ok).IsFalse();
+        }
+        finally
+        {
+            LanConnectNativeBusSender.TypeIdResolverForTesting = null;
+            AssemblyInfo.Init();
+            LanConnectNativeBusStartupCheck.ResetForTesting();
+        }
+    }
+
+    [TestCase]
     public void Run_against_the_vanilla_registry_reports_ready_with_a_fingerprint()
     {
         InitializeRegistry();

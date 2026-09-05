@@ -20,11 +20,17 @@ internal static class LanConnectRegistryFingerprint
     internal const string Prefix = "sha256:v1:";
 
     /// <summary>
-    /// 枚举全表并计算指纹；仅在游戏消息注册表已初始化后调用。
-    /// 空表（注册表未初始化）抛出而非产出格式合法但内容错误的指纹。
+    /// 枚举全表并计算指纹；仅在游戏消息注册表与 AssemblyInfo 均已初始化后调用。
+    /// 空表（注册表未初始化）或 AssemblyInfo 未初始化时抛出，而非产出格式合法但内容错误的指纹。
     /// </summary>
     internal static string Compute()
     {
+        if (!LanConnectAssemblyInfoAdapter.IsInitialized)
+        {
+            throw new InvalidOperationException(
+                "AssemblyInfo is not initialized; the fingerprint must not be computed before OneTimeInitialization.");
+        }
+
         using MemoryStream stream = new();
         for (int id = 0; ; id++)
         {
@@ -54,7 +60,7 @@ internal static class LanConnectRegistryFingerprint
 
     private static void WriteEntry(MemoryStream stream, int id, Type type)
     {
-        Mod? mod = AssemblyInfo.ModForType(type, out bool isBaseGame);
+        Mod? mod = LanConnectAssemblyInfoAdapter.ModForType(type, out bool isBaseGame);
         string modId = mod?.manifest?.id ?? string.Empty;
         // null-mod（既非基座也无 owning mod）属异常输入：排序退化，交由服务端指纹门禁安全拒绝。
         bool affectsGameplay = mod?.manifest?.affectsGameplay ?? isBaseGame;

@@ -9,7 +9,10 @@ internal static class LanConnectRejectionCodec
     private const int MaxVersionBytes = 32;
     private const int MaxDetailBytes = 512;
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
-    private static readonly string[] ReasonCodes =
+    // 线上协议：reasonCode = index + 1，前 10 项顺序不得变动；11..17 为 0.6.1 新增码。
+    // 与 LanConnectProtocolFailureMapper 共用此表；旧客户端收到 11..17 会解码为
+    // unknown_tail_rejection_N 的通用协议失败，不会崩溃。
+    internal static readonly string[] ReasonCodes =
     [
         "client_update_required",
         "protocol_profile_unsupported",
@@ -20,7 +23,14 @@ internal static class LanConnectRejectionCodec
         "lan_tail_required",
         "lan_tail_malformed",
         "lan_protocol_version_mismatch",
-        "ritsulib_sidecar_unavailable"
+        "ritsulib_sidecar_unavailable",
+        "lan_legacy_carrier_unsupported",
+        "lan_registry_fingerprint_required",
+        "lan_registry_fingerprint_mismatch",
+        "lan_native_frame_invalid",
+        "lan_client_version_too_old",
+        "lan_type_id_mismatch",
+        "lan_extension_missing"
     ];
 
     internal static byte[] Encode(LanConnectProtocolFailure failure)

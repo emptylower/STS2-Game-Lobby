@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.6.1-alpha.3] - 2026-09-05
+
+`0.6.1-alpha.3`：两处 alpha.2 反馈修复——第三方 Mod 提前初始化消息注册表时启动误入联机降级模式；tail 拒绝码表补齐 0.6.1 七个错误码。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ALPHA3_ZH.md`。客户端与 lobby-service 同步 `0.6.1-alpha.3`（服务端代码与 alpha.2 相同，仅对齐版本号）；tail 房间 `minimumClientVersion` 仍为 `0.6.1-alpha.1`。
+
+### Fixed
+
+- 修复 `0.6.1-alpha.2` 启动自检在第三方 Mod 提前初始化消息注册表（此时 `AssemblyInfo` 尚未就绪）时误判为终局失败、导致整个会话误入联机降级模式的问题：该场景下自检改为挂起并延后至首次联机会话补跑。`AssemblyInfo` 改经反射适配器访问，保证 0.107.1（无该类型）上 mod 仍可加载；新增 MemberRef 黑名单契约测试。
+- tail 拒绝码表补齐 0.6.1 七个错误码（`lan_legacy_carrier_unsupported` 等 11..17，含 `lan_type_id_mismatch` / `lan_extension_missing`），运行时失败不再退化为原版“模组不匹配”；旧客户端收到 11..17 会解码为 `unknown_tail_rejection_N` 的通用协议失败，不会崩溃。
+
 ## [0.6.1-alpha.2] - 2026-09-02
 
 `0.6.1-alpha.2`：协议措辞收敛为「兼容旧版 Mod」/「新协议」，并放开新协议房间的 RitsuLib 安装状态一致性门禁（GitHub-only pre-release，不更新创意工坊）。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ALPHA2_ZH.md`。客户端与 lobby-service 同步 `0.6.1-alpha.2`；tail 房间 `minimumClientVersion` 仍为 `0.6.1-alpha.1`。**服务端需手动升级**（自动更新不接受 pre-release）。

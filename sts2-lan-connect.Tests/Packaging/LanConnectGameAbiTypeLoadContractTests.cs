@@ -113,6 +113,45 @@ public sealed class LanConnectGameAbiTypeLoadContractTests
             + string.Join("\n", violations));
     }
 
+    // 第三轮（2026-09-05 alpha.3 冒烟回归）：0.107.1 没有 MegaCrit.Sts2.Core.Modding.AssemblyInfo。
+    // alpha.2 只在 LanConnectRegistryFingerprint.WriteEntry（仅 0.111 tail 路径可达）里引用它；
+    // alpha.3 的启动自检把 AssemblyInfo.ModMap 写进了 Entry 阶段必经的 Run()，0.107.1 上 JIT 即抛
+    // TypeLoadException，整个 mod 初始化失败。任何对该类型成员的直接 MemberRef 都不允许出现，
+    // 一律经反射适配器访问。
+    private static readonly string[] MemberRefBlacklistedGameTypeFullNames =
+    [
+        "sts2::MegaCrit.Sts2.Core.Modding.AssemblyInfo",
+    ];
+
+    [Fact]
+    public void No_memberref_targets_game_types_absent_in_0_107_1()
+    {
+        List<string> violations = [];
+        using PEReader peReader = OpenModPeReader();
+        MetadataReader reader = peReader.GetMetadataReader();
+        foreach (MemberReferenceHandle memberRefHandle in reader.MemberReferences)
+        {
+            MemberReference memberRef = reader.GetMemberReference(memberRefHandle);
+            if (memberRef.Parent.Kind != HandleKind.TypeReference)
+            {
+                continue;
+            }
+
+            string parentFullName = RenderTypeReference(
+                reader,
+                reader.GetTypeReference((TypeReferenceHandle)memberRef.Parent));
+            if (MemberRefBlacklistedGameTypeFullNames.Contains(parentFullName))
+            {
+                violations.Add($"{parentFullName}::{reader.GetString(memberRef.Name)}");
+            }
+        }
+
+        Assert.True(
+            violations.Count == 0,
+            "mod 程序集存在对 0.107.1 不存在的游戏类型成员的 MemberRef（JIT 期即抛 TypeLoadException）：\n"
+            + string.Join("\n", violations));
+    }
+
     private static bool MemberSignatureReferencesPeerVersionInfo(MetadataReader reader, MemberReference memberRef)
     {
         BlobReader signatureReader = reader.GetBlobReader(memberRef.Signature);

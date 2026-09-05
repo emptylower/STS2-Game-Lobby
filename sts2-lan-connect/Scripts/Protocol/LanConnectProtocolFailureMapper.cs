@@ -2,24 +2,8 @@ namespace Sts2LanConnect.Scripts;
 
 internal static class LanConnectProtocolFailureMapper
 {
-    private static readonly string[] TailCodes =
-    [
-        "client_update_required",
-        "protocol_profile_unsupported",
-        "ritsulib_not_allowed_in_compat_mode",
-        "ritsulib_presence_mismatch",
-        "game_version_mismatch",
-        "wire_cache_mismatch",
-        "lan_tail_required",
-        "lan_tail_malformed",
-        "lan_protocol_version_mismatch",
-        "ritsulib_sidecar_unavailable",
-        "lan_legacy_carrier_unsupported",
-        "lan_registry_fingerprint_required",
-        "lan_registry_fingerprint_mismatch",
-        "lan_native_frame_invalid",
-        "lan_client_version_too_old"
-    ];
+    // 与 LanConnectRejectionCodec 共用同一张 tail 拒绝码表，避免两表漂移。
+    private static readonly string[] TailCodes = LanConnectRejectionCodec.ReasonCodes;
 
     public static LanConnectProtocolFailure FromService(LobbyServiceException exception)
     {
@@ -42,7 +26,7 @@ internal static class LanConnectProtocolFailureMapper
         bool? requiredRitsuLibPresent = null,
         string? detail = null)
     {
-        string code = reasonCode is >= 1 and <= 10
+        string code = reasonCode >= 1 && reasonCode <= TailCodes.Length
             ? TailCodes[reasonCode - 1]
             : $"unknown_tail_rejection_{reasonCode}";
         return new LanConnectProtocolFailure(code, requiredClientVersion, requiredRitsuLibPresent, detail).Validate();

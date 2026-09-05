@@ -9,9 +9,11 @@ namespace Sts2LanConnect.Scripts;
 /// （明确报错，不崩溃）。
 ///
 /// 时机（0.111.0 真机实测）：游戏在 OneTimeInitialization.ExecuteEssential()（主菜单显示前）
-/// 才调用 MessageTypes.Initialize()，而 mod 初始化器在它之前运行——Entry 阶段注册表必然
-/// 未就绪。因此 Run() 在注册表未初始化时返回 Pending（不缓存、不禁用），由
-/// EnsureReadyOrThrow() 在首次 tail 绑定（注册表必然已就绪）时补跑并缓存最终裁决。
+/// 才调用 MessageTypes.Initialize() 与 AssemblyInfo.Init()，而 mod 初始化器在它之前运行——
+/// Entry 阶段两者必然未就绪；第三方 mod 也可能提前建好注册表，但 AssemblyInfo 仍未就绪
+/// （注册表可用 ≠ AssemblyInfo 可用）。因此 Run() 在注册表或 AssemblyInfo 未初始化时返回
+/// Pending（不缓存、不禁用），由 EnsureReadyOrThrow() 在首次 tail 绑定（两者必然已就绪）
+/// 时补跑并缓存最终裁决。
 /// </summary>
 internal static class LanConnectNativeBusStartupCheck
 {
@@ -30,6 +32,15 @@ internal static class LanConnectNativeBusStartupCheck
 
         public static Result RegistryPending() =>
             new(false, true, "message registry not yet initialized (deferred to first tail session)", null, null);
+
+        /// <summary>注册表已被其他 mod 提前建好，但 AssemblyInfo 仍未就绪：同样挂起，理由单独标明便于日志定位。</summary>
+        public static Result AssemblyInfoPending() =>
+            new(
+                false,
+                true,
+                "AssemblyInfo not yet initialized while the message registry was pre-initialized by another mod (deferred to first tail session)",
+                null,
+                null);
     }
 
     /// <summary>注册表是否已初始化（未初始化时 TryGetMessageType 抛 InvalidOperationException）。</summary>
@@ -129,6 +140,15 @@ internal static class LanConnectNativeBusStartupCheck
         if (!IsRegistryAvailable())
         {
             return Result.RegistryPending();
+        }
+
+        // 注册表可能被第三方 mod 提前建好，但 AssemblyInfo.Init() 要到 ExecuteEssential 才运行：
+        // ModForType 届时会抛无消息的 InvalidOperationException——属未就绪而非补丁冲突，同样挂起。
+        // 0.107.1 没有 AssemblyInfo 类型（适配器不可用，IsInitialized 恒 false）：同样挂起；
+        // 0.107.1 没有 tail runtime，永远不会走到 EnsureReadyOrThrow，挂起是安全的。
+        if (!LanConnectAssemblyInfoAdapter.IsInitialized)
+        {
+            return Result.AssemblyInfoPending();
         }
 
         try

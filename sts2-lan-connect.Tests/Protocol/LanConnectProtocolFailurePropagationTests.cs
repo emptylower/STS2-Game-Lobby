@@ -28,12 +28,25 @@ public sealed class LanConnectProtocolFailurePropagationTests
         Assert.Equal(expected.RequiredRitsuLibPresent, result.ProtocolFailure.RequiredRitsuLibPresent);
     }
 
+    [Theory]
+    [InlineData(11, "lan_legacy_carrier_unsupported")]
+    [InlineData(12, "lan_registry_fingerprint_required")]
+    [InlineData(13, "lan_registry_fingerprint_mismatch")]
+    [InlineData(14, "lan_native_frame_invalid")]
+    [InlineData(15, "lan_client_version_too_old")]
+    [InlineData(16, "lan_type_id_mismatch")]
+    [InlineData(17, "lan_extension_missing")]
+    public void Native_bus_tail_rejection_codes_map_to_canonical_codes(int reasonCode, string expected)
+    {
+        Assert.Equal(expected, LanConnectProtocolFailureMapper.FromTail(reasonCode).Code);
+    }
+
     [Fact]
     public void Unknown_tail_rejection_retains_raw_reason_code()
     {
-        LanConnectProtocolFailure failure = LanConnectProtocolFailureMapper.FromTail(11);
+        LanConnectProtocolFailure failure = LanConnectProtocolFailureMapper.FromTail(18);
 
-        Assert.Equal("unknown_tail_rejection_11", failure.Code);
+        Assert.Equal("unknown_tail_rejection_18", failure.Code);
     }
 
     [Theory]
