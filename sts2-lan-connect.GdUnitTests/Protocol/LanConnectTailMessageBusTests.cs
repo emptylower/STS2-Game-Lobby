@@ -15,7 +15,7 @@ namespace Sts2LanConnect.GdUnitTests.Protocol;
 public sealed class LanConnectTailMessageBusTests
 {
     [TestCase]
-    public void Default_plan_installs_all_concrete_non_generic_serializer_hooks()
+    public void Default_plan_installs_all_concrete_serializer_hooks_for_the_platform()
     {
         Harmony harmony = new($"sts2_lan_connect.tests.android_tail_plan.{Guid.NewGuid():N}");
 
@@ -26,8 +26,9 @@ public sealed class LanConnectTailMessageBusTests
             LanConnectTailMessagePatches.ApplyPlanForTesting(harmony, plan);
 
             AssertInt(plan.Steps.Count).IsEqual(16);
-            AssertInt(plan.GenericTargetCount).IsEqual(0);
-            foreach (LanConnectTailPatchStep step in plan.Steps.Take(9))
+            // 桌面：9 个 serialize 步是 SerializeMessage 闭合实例化；安卓 gshared：全部非泛型。
+            AssertInt(plan.GenericTargetCount).IsEqual(OperatingSystem.IsAndroid() ? 0 : 9);
+            foreach (LanConnectTailPatchStep step in plan.Steps.Where(static step => step.Category == "serialize"))
             {
                 Patch[] prefixes = Harmony.GetPatchInfo(step.Target)!.Prefixes
                     .Where(patch => patch.owner == harmony.Id)
@@ -50,7 +51,7 @@ public sealed class LanConnectTailMessageBusTests
     }
 
     [TestCase]
-    public void Outgoing_tail_hooks_are_concrete_and_never_touch_closed_generics()
+    public void Outgoing_tail_hooks_follow_the_platform_seam_and_stay_non_generic()
     {
         Harmony harmony = new($"sts2_lan_connect.tests.tail_prefixes.{Guid.NewGuid():N}");
 
@@ -66,34 +67,49 @@ public sealed class LanConnectTailMessageBusTests
                 .Distinct()
                 .ToArray();
 
+            bool android = OperatingSystem.IsAndroid();
             foreach (Type messageType in messageTypes)
             {
-                // The default plan patches the concrete per-type Serialize method with
-                // non-generic hooks...
+                // 桌面 seam 挂闭合泛型总线 serializer（RitsuLib 优化编译体会内联小结构体
+                // Serialize，绕过具体方法 detour）；安卓/回退挂具体 Serialize 方法。
+                // 两侧 hook 本身永远是非泛型具体方法。
                 MethodInfo concreteSerialize = AccessTools.Method(messageType, "Serialize", [typeof(PacketWriter)])!;
-                Patch[] prefixes = Harmony.GetPatchInfo(concreteSerialize)!.Prefixes
-                    .Where(patch => patch.owner == harmony.Id)
-                    .ToArray();
-                Patch[] postfixes = Harmony.GetPatchInfo(concreteSerialize)!.Postfixes
-                    .Where(patch => patch.owner == harmony.Id)
-                    .ToArray();
-
-                AssertThat(prefixes.Length).IsEqual(1);
-                AssertThat(prefixes[0].PatchMethod.IsGenericMethod).IsFalse();
-                AssertThat(prefixes[0].PatchMethod.ContainsGenericParameters).IsFalse();
-                AssertThat(postfixes.Length).IsEqual(1);
-                AssertThat(postfixes[0].PatchMethod.IsGenericMethod).IsFalse();
-                AssertThat(postfixes[0].PatchMethod.ContainsGenericParameters).IsFalse();
-
-                // ...and never touches the closed generic bus serializer, which foreign
-                // generic-declared patches can poison (RitsuLib conflict, see alpha.9 F2).
                 MethodInfo busSerialize = ResolveClosedBusSerializerForTesting(
                     typeof(NetMessageBus),
                     messageType);
-                Patches? busPatches = Harmony.GetPatchInfo(busSerialize);
-                AssertThat(busPatches?.Prefixes.Count(patch => patch.owner == harmony.Id) ?? 0).IsEqual(0);
-                AssertThat(busPatches?.Postfixes.Count(patch => patch.owner == harmony.Id) ?? 0).IsEqual(0);
-                AssertThat(busPatches?.Transpilers.Count(patch => patch.owner == harmony.Id) ?? 0).IsEqual(0);
+                int concretePrefixes = Harmony.GetPatchInfo(concreteSerialize)?.Prefixes
+                    .Count(patch => patch.owner == harmony.Id) ?? 0;
+                int concretePostfixes = Harmony.GetPatchInfo(concreteSerialize)?.Postfixes
+                    .Count(patch => patch.owner == harmony.Id) ?? 0;
+                int busPrefixes = Harmony.GetPatchInfo(busSerialize)?.Prefixes
+                    .Count(patch => patch.owner == harmony.Id) ?? 0;
+                int busPostfixes = Harmony.GetPatchInfo(busSerialize)?.Postfixes
+                    .Count(patch => patch.owner == harmony.Id) ?? 0;
+                if (android)
+                {
+                    AssertInt(concretePrefixes).IsEqual(1);
+                    AssertInt(concretePostfixes).IsEqual(1);
+                    AssertInt(busPrefixes).IsEqual(0);
+                    AssertInt(busPostfixes).IsEqual(0);
+                }
+                else
+                {
+                    AssertInt(concretePrefixes).IsEqual(0);
+                    AssertInt(concretePostfixes).IsEqual(0);
+                    AssertInt(busPrefixes).IsEqual(1);
+                    AssertInt(busPostfixes).IsEqual(1);
+                    foreach (Patch patch in Harmony.GetPatchInfo(busSerialize)!.Prefixes
+                                 .Concat(Harmony.GetPatchInfo(busSerialize)!.Postfixes)
+                                 .Where(patch => patch.owner == harmony.Id))
+                    {
+                        AssertBool(patch.PatchMethod.IsGenericMethod).IsFalse();
+                        AssertBool(patch.PatchMethod.ContainsGenericParameters).IsFalse();
+                    }
+                }
+
+                // 任何平台都不得碰 SendMessage / 缓冲开关（RitsuLib sync 补丁所有权）。
+                AssertThat(Harmony.GetPatchInfo(busSerialize)?.Transpilers.Count(patch => patch.owner == harmony.Id) ?? 0)
+                    .IsEqual(0);
             }
         }
         finally
@@ -183,7 +199,7 @@ public sealed class LanConnectTailMessageBusTests
         AssertThat(snapshot.LegacySidecarAvailable).IsFalse();
     }
 
-    // 测试专用：解析闭环泛型总线 serializer（生产端解析器已删除；本断言只证明我们不碰它）。
+    // 测试专用：解析闭环泛型总线 serializer（与生产端 ResolvePatchPlan 的桌面目标同构）。
     private static MethodInfo ResolveClosedBusSerializerForTesting(Type busType, Type messageType) =>
         busType
             .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)

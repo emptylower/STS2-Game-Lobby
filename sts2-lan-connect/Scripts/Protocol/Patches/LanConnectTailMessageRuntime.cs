@@ -105,6 +105,14 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
 
     internal static LanConnectTailMessageRuntime Shared { get; } = new();
 
+    /// <summary>桌面 seam prefix 在 SerializeMessage 体内触发，writer 只能经 bus 实例反射获取。</summary>
+    internal static PacketWriter GetBusWriter(NetMessageBus messageBus)
+    {
+        ArgumentNullException.ThrowIfNull(messageBus);
+        return NetMessageBusWriter.GetValue(messageBus) as PacketWriter
+            ?? throw new InvalidOperationException("NetMessageBus._writer is unavailable.");
+    }
+
     private static readonly ConcurrentDictionary<Type, object> TailPlayerAccessorsCache = new();
 
     internal static bool HasPendingOutgoingRejectionForCurrentThread =>
@@ -169,6 +177,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     {
         Binding binding = RequireBinding(GetMessageBus(service));
         binding.BindBidirectionalNativeFlow(service.NetId, peerNetId, protocolFlowNonce);
+        Log.Info($"sts2_lan_connect tail: native flow bound for peer {peerNetId} (host side).");
     }
 
     /// <summary>激活宿主侧 native flow：flush 该 peer 的延迟扩展帧（InitialGameInfo/ConnectionFailed）。</summary>
@@ -177,10 +186,14 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         Binding binding = RequireBinding(GetMessageBus(service));
         if (!binding.HasNativePeer(peerNetId))
         {
+            Log.Info($"sts2_lan_connect tail: native flow activation skipped for peer {peerNetId} (no flow bound).");
             return;
         }
 
         PendingOutgoingNative? pending = binding.TakePendingOutgoingNative(peerNetId);
+        Log.Info(
+            $"sts2_lan_connect tail: native flow activated for peer {peerNetId}, " +
+            $"deferred extension={(pending == null ? "none" : pending.MessageKind.ToString())}.");
         if (pending != null)
         {
             SendDeferredHostNative(binding, peerNetId, pending);
@@ -224,12 +237,20 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
 
         if (binding == null)
         {
+            int writerBindingCount;
+            lock (_sync)
+            {
+                writerBindingCount = _writerBindings.Count;
+            }
+
+            Log.Info($"sts2_lan_connect tail: prepare skipped for {messageKind}: writer has no binding (writerBindings={writerBindingCount}).");
             return false;
         }
 
         LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
         if (!snapshot.IsActive || snapshot.Selection?.Profile != LanConnectProtocolProfile.TailV1)
         {
+            Log.Info($"sts2_lan_connect tail: prepare skipped for {messageKind}: session snapshot inactive or not tail (active={snapshot.IsActive}).");
             return false;
         }
 
@@ -242,7 +263,13 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                     "Bound PacketWriter selection differs from the active Tail session.");
             }
 
-            ValidateNativeWriterHeader(writer, binding, message);
+            // 桌面 seam 在 SerializeMessage 体内（Reset/header 写入之前）触发，writer 仍是
+            // 上一条消息的残留：prepare 只校验已绑定 writer 与会话快照，header 校验统一
+            // 延后到 CompleteConcreteOutgoing（android 顺序 header 先写同样满足）。
+            // 体内 Reset() 的 detour 可能被优化编译内联绕过（Harmony 补挂闭合泛型会触发
+            // 优化编译，与 RitsuLib 同机制）：新一轮序列化开始即视为旧 pending 失效，
+            // 与 AndroidWriterResetPrefix 同语义补位。
+            ClearStalePendingForWriter(writer);
             LanConnectPreparedTailMessage runtimePrepared = PrepareOutgoing(
                 binding.MessageBus,
                 messageKind,
@@ -306,6 +333,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                     buffer,
                     length,
                     ComputeHeaderFingerprint(buffer, length)));
+            Log.Info($"sts2_lan_connect tail: pending extension registered for {prepared.MessageKind} (vanilla bytes={length}).");
         }
         catch (Exception exception)
         {
@@ -325,6 +353,25 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         }
 
         pending.Remove(writer);
+        Log.Info($"sts2_lan_connect tail: pending extension for {context.MessageKind} cleared by writer reset before transport.");
+    }
+
+    /// <summary>
+    /// 新一轮矩阵序列化开始：该 writer 的既有 pending 即为残留（体内 Reset 的 detour 被
+    /// 内联绕过时由 prepare 补位清除；detour 正常触发时此处无操作）。
+    /// </summary>
+    private void ClearStalePendingForWriter(PacketWriter writer)
+    {
+        if (_pendingOutgoing is not { } pending
+            || !pending.TryGetValue(writer, out LanConnectNativePendingOutgoing? stale)
+            || !ReferenceEquals(stale.Owner, this))
+        {
+            return;
+        }
+
+        pending.Remove(writer);
+        Log.Info(
+            $"sts2_lan_connect tail: pending extension for {stale.MessageKind} superseded by the next serialization on the same writer.");
     }
 
     public LanConnectNativeSendContext? BeginNativeTransport(
@@ -341,9 +388,34 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             return null;
         }
 
-        LanConnectNativePendingOutgoing? context = ResolvePendingTransportContext(buffer);
+        LanConnectNativePendingOutgoing? context = ResolvePendingTransportContext(
+            buffer,
+            length,
+            out IReadOnlyList<LanConnectNativePendingOutgoing> ambiguousMatches);
+        if (ambiguousMatches.Count > 0)
+        {
+            // 内容匹配出现多候选：无法判定归属，终止全部候选绑定（幂等）。
+            InvalidDataException ambiguous = new(
+                "Native Tail transport buffer content-matched multiple pending contexts.");
+            foreach (LanConnectNativePendingOutgoing candidate in ambiguousMatches)
+            {
+                AbortActiveBinding(candidate.Binding, "native_transport_begin_failure", ambiguous);
+            }
+
+            throw ambiguous;
+        }
+
         if (context == null)
         {
+            if (_pendingOutgoing is { Count: > 0 } unmatched)
+            {
+                string summary = string.Join(
+                    ";",
+                    unmatched.Values.Select(p => $"{p.MessageKind}:len={p.Length}:first={p.Buffer[0]}"));
+                Log.Info(
+                    $"sts2_lan_connect tail: transport buffer matched no pending (length={length}, first={(length > 0 ? buffer[0] : -1)}, pendings={summary}).");
+            }
+
             return null;
         }
 
@@ -413,6 +485,9 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                         state.Pending.MessageKind,
                         state.Pending.SenderPeerId,
                         state.Pending.Container));
+                Log.Info(
+                    $"sts2_lan_connect tail: extension for {state.Pending.MessageKind} to peer {recipient} deferred " +
+                    "(native flow not bound yet; flushed on control-channel binding).");
                 return;
             }
 
@@ -639,6 +714,9 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     {
         BarrierKey key = new(context.SenderPeerId, context.Channel);
         FailPeerCallback fail = (code, detail) => FailPeer(binding, context.SenderPeerId, code, detail);
+        Log.Info(
+            $"sts2_lan_connect tail: extension frame received from peer {context.SenderPeerId} on channel {context.Channel}, " +
+            $"held={(binding.BarrierHolds.ContainsKey(key) ? "yes" : "no")}, invalid={extension.InvalidReason ?? "none"}.");
 
         // 扩展帧仅接受 channel == 0（ENet 入站 mode 恒为 None，不参与判定）。
         if (context.Channel != 0)
@@ -745,6 +823,9 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         }
 
         binding.BarrierHolds[key] = new HeldMessage(message, kind, context, DateTimeOffset.UtcNow);
+        Log.Info($"sts2_lan_connect tail: holding {kind} from peer {context.SenderPeerId} on channel {context.Channel}, awaiting extension frame.");
+        // 屏障超时不再依赖“下一条消息到达时”自巡检：hold 存在期间必有定时清扫兜底。
+        binding.EnsureBarrierSweepScheduled();
         return false;
     }
 
@@ -1422,16 +1503,53 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         }
     }
 
-    private LanConnectNativePendingOutgoing? ResolvePendingTransportContext(byte[] buffer)
+    /// <summary>
+    /// 按“引用相等快路径 + 内容前缀匹配慢路径”解析传输层 buffer 对应的 pending：
+    /// 第三方发送前缀（如 RitsuLib 0.5.18 NativeTrailer）会把原版包复制进加长的新数组，
+    /// 因此慢路径只要求待发内容是传输 buffer 的前缀（后面可挂第三方 trailer）。
+    /// 多于一个候选时通过 <paramref name="ambiguousMatches"/> 上报（走 AbortActiveBinding）。
+    /// </summary>
+    private LanConnectNativePendingOutgoing? ResolvePendingTransportContext(
+        byte[] buffer,
+        int length,
+        out IReadOnlyList<LanConnectNativePendingOutgoing> ambiguousMatches)
     {
+        ambiguousMatches = Array.Empty<LanConnectNativePendingOutgoing>();
         if (_pendingOutgoing is not { Count: > 0 } pending)
         {
             return null;
         }
 
-        return pending.Values
+        List<LanConnectNativePendingOutgoing> owned = pending.Values
             .Where(context => ReferenceEquals(context.Owner, this))
+            .ToList();
+
+        LanConnectNativePendingOutgoing? byReference = owned
             .FirstOrDefault(context => ReferenceEquals(context.Buffer, buffer));
+        if (byReference != null)
+        {
+            return byReference;
+        }
+
+        if (length < 0)
+        {
+            return null;
+        }
+
+        List<LanConnectNativePendingOutgoing> candidates = owned
+            .Where(context => length >= context.Length
+                && buffer.AsSpan(0, context.Length).SequenceEqual(context.Buffer.AsSpan(0, context.Length)))
+            .ToList();
+        switch (candidates.Count)
+        {
+            case 0:
+                return null;
+            case 1:
+                return candidates[0];
+            default:
+                ambiguousMatches = candidates;
+                return null;
+        }
     }
 
     private static void ValidateTransportMatch(
@@ -1463,13 +1581,16 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         byte[] buffer,
         int length)
     {
-        if (!ReferenceEquals(context.Buffer, buffer) || context.Length != length)
+        // 只要求待发内容是传输 buffer 的前缀：第三方发送前缀可在原包之后追加 trailer。
+        if (length < context.Length || length > buffer.Length
+            || !buffer.AsSpan(0, context.Length).SequenceEqual(context.Buffer.AsSpan(0, context.Length)))
         {
             throw new InvalidDataException(
-                "Native Tail pending context buffer reference or length does not match the vanilla transport.");
+                "Native Tail pending context buffer content does not prefix-match the vanilla transport.");
         }
 
-        byte[] fingerprint = ComputeHeaderFingerprint(buffer, length);
+        // 指纹按 pending 自身长度计算（trailer 不参与）。
+        byte[] fingerprint = ComputeHeaderFingerprint(context.Buffer, context.Length);
         if (!CryptographicOperations.FixedTimeEquals(context.HeaderFingerprint, fingerprint))
         {
             throw new InvalidDataException(
@@ -1675,6 +1796,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         private readonly ConditionalWeakTable<INetMessage, LanConnectTransportReceiveContext> _transportContexts = new();
         private LanConnectRosterAuthorityState? _roster;
         private int _terminated;
+        private int _barrierSweepScheduled;
 
         internal void MarkTerminated() => Interlocked.Exchange(ref _terminated, 1);
 
@@ -1873,6 +1995,65 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
 
             context = null!;
             return false;
+        }
+
+        /// <summary>
+        /// 保证 hold 存在期间恰有一次待触发的定时清扫：BarrierHoldTimeout + 50ms 后在
+        /// 消息分发所在的同步上下文（Godot 主线程经 GodotSynchronizationContext.Post；
+        /// 无同步上下文时直接在线程池续体执行）调用 SweepExpiredBarrierHolds。
+        /// 清扫后若仍有未到期 hold 则链式续排；绑定终止或 hold 表清空后链条自然终结。
+        /// </summary>
+        internal void EnsureBarrierSweepScheduled()
+        {
+            if (Volatile.Read(ref _terminated) != 0)
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref _barrierSweepScheduled, 1, 0) != 0)
+            {
+                return;
+            }
+
+            SynchronizationContext? dispatchContext = SynchronizationContext.Current;
+            _ = Task.Delay(BarrierHoldTimeout + TimeSpan.FromMilliseconds(50))
+                .ContinueWith(
+                    _ =>
+                    {
+                        if (dispatchContext != null)
+                        {
+                            dispatchContext.Post(
+                                static state => ((Binding)state!).RunScheduledBarrierSweep(),
+                                this);
+                        }
+                        else
+                        {
+                            RunScheduledBarrierSweep();
+                        }
+                    },
+                    TaskScheduler.Default);
+        }
+
+        private void RunScheduledBarrierSweep()
+        {
+            Interlocked.Exchange(ref _barrierSweepScheduled, 0);
+            if (Volatile.Read(ref _terminated) != 0)
+            {
+                return;
+            }
+
+            SweepExpiredBarrierHolds(DateTimeOffset.UtcNow);
+
+            bool holdsRemain;
+            lock (Sync)
+            {
+                holdsRemain = _barrierHolds.Count > 0;
+            }
+
+            if (holdsRemain)
+            {
+                EnsureBarrierSweepScheduled();
+            }
         }
 
         internal void SweepExpiredBarrierHolds(DateTimeOffset now)

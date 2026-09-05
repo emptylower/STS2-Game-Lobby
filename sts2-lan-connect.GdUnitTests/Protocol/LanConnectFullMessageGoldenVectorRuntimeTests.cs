@@ -67,39 +67,27 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         }
     }
 
-    // alpha.9 audit A1-T2: with both patch sets applied, a begin-run serialize must execute
-    // the concrete LobbyBeginRunMessage.Serialize (where the tail hooks live). If the JIT
-    // ever inlines it into SerializeMessage<T>, the tail would silently vanish. The roster
-    // snapshot in the container is sequence-dependent, so this case asserts execution and
-    // tail presence only; byte equality is covered by the golden cases above.
+    // alpha.9 audit A1-T2, 2026-09-05 更新：默认计划桌面 seam 挂 SerializeMessage<T> 闭合实例化，
+    // 具体 LobbyBeginRunMessage.Serialize 调用会被优化编译体内联（挂在具体方法上的计数 postfix
+    // 观察不到执行）。尾部不再依赖具体方法 detour：断言真实 SerializeMessage 调用链在潜在的
+    // JIT 内联下仍产出 LobbyBeginRun 扩展帧，且原版字节不含容器。
     [TestCase]
-    public void Begin_run_executes_the_concrete_serialize_method_under_the_default_plan()
+    public void Begin_run_tail_survives_potential_jit_inlining_under_the_default_plan()
     {
         InitializeSts2Serialization();
         using NativeTypeIdScope typeId = new();
 
         using RuntimePair pair = new();
-        Harmony harmony = new($"sts2_lan_connect.tests.begin_run_concrete.{Guid.NewGuid():N}");
-        Harmony counter = new($"sts2_lan_connect.tests.begin_run_concrete_counter.{Guid.NewGuid():N}");
+        Harmony harmony = new($"sts2_lan_connect.tests.begin_run_seam.{Guid.NewGuid():N}");
         Harmony productionCleanup = new(LanConnectProtocolPatchDispatcher.HarmonyId);
-        _beginRunConcreteSerializeCalls = 0;
         LanConnectTailMessagePatches.ConfigureRuntime(pair.Runtime);
         try
         {
             LanConnectSerializationPatches.Apply();
             LanConnectTailMessagePatches.Apply(harmony);
-            MethodInfo concreteSerialize = AccessTools.Method(
-                typeof(LobbyBeginRunMessage),
-                "Serialize",
-                [typeof(PacketWriter)])!;
-            counter.Patch(
-                concreteSerialize,
-                postfix: new HarmonyMethod(AccessTools.Method(
-                    typeof(LanConnectFullMessageGoldenVectorRuntimeTests),
-                    nameof(CountBeginRunConcreteSerialize))));
 
             using LanConnectSessionProtocolLease lease =
-                LanConnectSessionProtocolState.Shared.FreezeHost(pair.Selection, "begin-run-concrete-path");
+                LanConnectSessionProtocolState.Shared.FreezeHost(pair.Selection, "begin-run-seam-path");
             LobbyBeginRunMessage message = new()
             {
                 playersInLobby = StartRunPlayers([0, 1, 2, 3]),
@@ -110,7 +98,6 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             byte[] buffer = SerializeMessage(pair.HostBus, pair.HostId, message, out int length);
             byte[] generated = buffer.AsSpan(0, length).ToArray();
 
-            AssertThat(_beginRunConcreteSerializeCalls).IsEqual(1);
             AssertThat(IndexOf(generated, "STSLAN01"u8.ToArray()) >= 0).IsFalse();
             LanConnectSidecarFrame extensionFrame = DeliverExtensionFrame(
                 pair, Direction.HostToClient, buffer, length);
@@ -118,15 +105,12 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         }
         finally
         {
-            counter.UnpatchAll(counter.Id);
             harmony.UnpatchAll(harmony.Id);
             productionCleanup.UnpatchAll(LanConnectProtocolPatchDispatcher.HarmonyId);
             LanConnectSerializationPatches.ResetAppliedAfterExternalRollback();
             LanConnectTailMessagePatches.ConfigureRuntime(LanConnectTailMessageRuntime.Shared);
         }
     }
-
-    private static int _beginRunConcreteSerializeCalls;
 
     private sealed class NativeTypeIdScope : IDisposable
     {
@@ -139,8 +123,6 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
 
         public void Dispose() => LanConnectNativeBusSender.TypeIdResolverForTesting = null;
     }
-
-    private static void CountBeginRunConcreteSerialize() => _beginRunConcreteSerializeCalls++;
 
     private static void RunGoldenVectors()
     {

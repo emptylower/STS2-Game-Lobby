@@ -15,6 +15,9 @@ internal static partial class LanConnectTailMessagePatches
 {
     private static ILanConnectTailMessageRuntime? _runtime;
 
+    // xUnit 宿主无法进入 Godot 日志：serialize 回退告警经可注入 sink 输出（默认产品 Log.Warn）。
+    internal static Action<string> LogWarnSink { get; set; } = static message => Log.Warn(message);
+
     internal static void ConfigureRuntime(ILanConnectTailMessageRuntime runtime) =>
         Volatile.Write(ref _runtime, runtime ?? throw new ArgumentNullException(nameof(runtime)));
 
@@ -70,19 +73,50 @@ internal static partial class LanConnectTailMessagePatches
                     $"patch_id={step.Id} ordinal={ordinal}/{plan.Steps.Count} category={step.Category} " +
                     $"target={FormatMethod(step.Target)}");
             }
+            bool fellBack = false;
             try
             {
-                if (patcher == null)
+                try
                 {
+                    if (patcher == null)
+                    {
+                        harmony.Patch(
+                            step.Target,
+                            prefix: CreateHarmonyMethod(step.Prefix, step.PrefixPriority),
+                            postfix: CreateHarmonyMethod(step.Postfix, step.PostfixPriority),
+                            finalizer: CreateHarmonyMethod(step.Finalizer, step.FinalizerPriority));
+                    }
+                    else
+                    {
+                        patcher(harmony, step);
+                    }
+                }
+                catch (Exception exception)
+                    when (patcher == null && step.FallbackTarget != null && step.FallbackPrefix != null)
+                {
+                    // RitsuLib 先加载时其泛型声明补丁已占用该闭合实例化，wrapper 重建抛
+                    // InvalidProgramException：逐类型回退到 T.Serialize 目标并明确告警；
+                    // 回退本身失败则继续外层失败路径（不得表面成功）。
+                    LogWarnSink(
+                        $"sts2_lan_connect tail: patch {step.Id} failed to hook " +
+                        $"{FormatMethod(step.Target)} ({exception.GetType().Name}: {exception.Message}); " +
+                        "SerializeMessage<T> 已被 RitsuLib 的泛型补丁占用，回退到 Serialize 钩子；" +
+                        "请把 STS2 LAN Connect 排在 RitsuLib 之前。");
+                    if (emitProductLog)
+                    {
+                        Log.Info(
+                            $"sts2_lan_connect patch_diag: event=patch_fallback profile={plan.Profile} " +
+                            $"patch_id={step.Id} ordinal={ordinal}/{plan.Steps.Count} fallback=true " +
+                            $"target={FormatMethod(step.FallbackTarget)} " +
+                            $"exception={exception.GetType().FullName} hresult={exception.HResult}");
+                    }
+
+                    fellBack = true;
                     harmony.Patch(
-                        step.Target,
-                        prefix: CreateHarmonyMethod(step.Prefix, step.PrefixPriority),
+                        step.FallbackTarget,
+                        prefix: CreateHarmonyMethod(step.FallbackPrefix, step.PrefixPriority),
                         postfix: CreateHarmonyMethod(step.Postfix, step.PostfixPriority),
                         finalizer: CreateHarmonyMethod(step.Finalizer, step.FinalizerPriority));
-                }
-                else
-                {
-                    patcher(harmony, step);
                 }
                 applied++;
                 diagnostics?.RecordPatchSuccess(diagnosticDescriptor, diagnosticStarted);
@@ -90,7 +124,8 @@ internal static partial class LanConnectTailMessagePatches
                 {
                     Log.Info(
                         $"sts2_lan_connect patch_diag: event=patch_success profile={plan.Profile} " +
-                        $"patch_id={step.Id} ordinal={ordinal}/{plan.Steps.Count} elapsed_ms={stopwatch.ElapsedMilliseconds}");
+                        $"patch_id={step.Id} ordinal={ordinal}/{plan.Steps.Count} " +
+                        $"elapsed_ms={stopwatch.ElapsedMilliseconds}{(fellBack ? " fallback=true" : string.Empty)}");
                 }
             }
             catch (Exception exception)
@@ -297,7 +332,128 @@ internal static partial class LanConnectTailMessagePatches
 
     // ---- 第一级：10 个具体消息 Serialize prefix（容器生产 seam，不改写原版字节） ----
 
+    // 桌面 seam：prefix 在 SerializeMessage<T> 体内（Reset/header 写入之前）触发，
+    // writer 取自 NetMessageBus._writer；投影结果经 ref message 写回，由原方法体序列化。
     // ReSharper disable UnusedMember.Local -- invoked by Harmony.
+    private static void BusSerializeInitialGameInfoPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref InitialGameInfoMessage message,
+        out LanConnectNativePreparedMessage? __state)
+    {
+        _ = senderId;
+        message = PrepareConcreteMessage(
+            LanConnectTailMessageRuntime.GetBusWriter(__instance),
+            message,
+            out __state);
+    }
+
+    private static void BusSerializeLobbyJoinRequestPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientLobbyJoinRequestMessage message,
+        out LanConnectNativePreparedMessage? __state)
+    {
+        _ = senderId;
+        message = PrepareConcreteMessage(
+            LanConnectTailMessageRuntime.GetBusWriter(__instance),
+            message,
+            out __state);
+    }
+
+    private static void BusSerializeLobbyJoinResponsePrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientLobbyJoinResponseMessage message,
+        out LanConnectNativePreparedMessage? __state)
+    {
+        _ = senderId;
+        message = PrepareConcreteMessage(
+            LanConnectTailMessageRuntime.GetBusWriter(__instance),
+            message,
+            out __state);
+    }
+
+    private static void BusSerializeLoadJoinRequestPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientLoadJoinRequestMessage message,
+        out LanConnectNativePreparedMessage? __state)
+    {
+        _ = senderId;
+        message = PrepareConcreteMessage(
+            LanConnectTailMessageRuntime.GetBusWriter(__instance),
+            message,
+            out __state);
+    }
+
+    private static void BusSerializeLoadJoinResponsePrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientLoadJoinResponseMessage message,
+        out LanConnectNativePreparedMessage? __state)
+    {
+        _ = senderId;
+        message = PrepareConcreteMessage(
+            LanConnectTailMessageRuntime.GetBusWriter(__instance),
+            message,
+            out __state);
+    }
+
+    private static void BusSerializeRejoinRequestPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientRejoinRequestMessage message,
+        out LanConnectNativePreparedMessage? __state)
+    {
+        _ = senderId;
+        message = PrepareConcreteMessage(
+            LanConnectTailMessageRuntime.GetBusWriter(__instance),
+            message,
+            out __state);
+    }
+
+    private static void BusSerializeRejoinResponsePrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref ClientRejoinResponseMessage message,
+        out LanConnectNativePreparedMessage? __state)
+    {
+        _ = senderId;
+        message = PrepareConcreteMessage(
+            LanConnectTailMessageRuntime.GetBusWriter(__instance),
+            message,
+            out __state);
+    }
+
+    private static void BusSerializePlayerJoinedPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref PlayerJoinedMessage message,
+        out LanConnectNativePreparedMessage? __state)
+    {
+        _ = senderId;
+        message = PrepareConcreteMessage(
+            LanConnectTailMessageRuntime.GetBusWriter(__instance),
+            message,
+            out __state);
+    }
+
+    private static void BusSerializeLobbyBeginRunPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ref LobbyBeginRunMessage message,
+        out LanConnectNativePreparedMessage? __state)
+    {
+        _ = senderId;
+        message = PrepareConcreteMessage(
+            LanConnectTailMessageRuntime.GetBusWriter(__instance),
+            message,
+            out __state);
+    }
+
+    // 安卓 seam 与桌面回退路径：prefix 在 T.Serialize 边界（header 已写入）触发。
+
     private static void AndroidSerializeInitialGameInfoPrefix(
         ref InitialGameInfoMessage __instance,
         PacketWriter __0,

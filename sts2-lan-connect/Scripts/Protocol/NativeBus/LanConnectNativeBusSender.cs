@@ -1,3 +1,4 @@
+using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
 using MegaCrit.Sts2.Core.Multiplayer.Transport;
 using MegaCrit.Sts2.Core.Multiplayer.Transport.ENet;
@@ -62,6 +63,9 @@ internal static class LanConnectNativeBusSender
             message.Configure((uint)typeId, encodedFrame);
             message.Serialize(writer);
 
+            Log.Info(
+                $"sts2_lan_connect tail: sending native extension {messageKind} seq={messageSequence} " +
+                $"to peer {recipientPeerId} ({writer.BytePosition} bytes, typeId={typeId}, host={isHostTransport}).");
             if (isHostTransport)
             {
                 ((ENetHost)transport).SendMessageToClient(

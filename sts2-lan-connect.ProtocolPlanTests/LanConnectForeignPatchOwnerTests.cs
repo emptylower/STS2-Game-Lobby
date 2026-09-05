@@ -22,6 +22,7 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
         LanConnectSerializationPatches.LogInfoSink = static _ => { };
         LanConnectSerializationPatches.LogWarnSink = static _ => { };
         LanConnectSerializationPatches.LogErrorSink = static _ => { };
+        LanConnectTailMessagePatches.LogWarnSink = static _ => { };
     }
 
     public void Dispose()
@@ -33,6 +34,7 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
         LanConnectSerializationPatches.LogInfoSink = static _ => { };
         LanConnectSerializationPatches.LogWarnSink = static _ => { };
         LanConnectSerializationPatches.LogErrorSink = static _ => { };
+        LanConnectTailMessagePatches.LogWarnSink = static _ => { };
         try
         {
             // Foreign owners first: while the poisoning postfix is gone, regenerating the
@@ -75,8 +77,10 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
         LanConnectTailPatchPlan plan = LanConnectTailMessagePatches.ResolvePatchPlan(
             typeof(PacketWriter).Assembly);
         Assert.Equal("native_bus_v1", plan.Profile);
-        Assert.Equal(0, plan.GenericTargetCount);
+        Assert.Equal(OperatingSystem.IsAndroid() ? 0 : 9, plan.GenericTargetCount);
 
+        List<string> warnings = [];
+        LanConnectTailMessagePatches.LogWarnSink = warnings.Add;
         Harmony ours = CreateHarmony("plan");
         Exception? failure = Record.Exception(() =>
             LanConnectTailMessagePatches.ApplyPlanQuietlyForTesting(ours, plan));
@@ -91,6 +95,49 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
             [typeof(byte[]), typeof(INetMessage).MakeByRefType(), typeof(ulong?).MakeByRefType()])!;
         Assert.Contains(Harmony.GetPatchInfo(deserialize)!.Postfixes, patch => patch.owner == ours.Id);
 
+        MethodInfo beginRunConcrete = ConcreteSerializeOf(typeof(LobbyBeginRunMessage));
+        MethodInfo initialGameInfoConcrete = ConcreteSerializeOf(typeof(InitialGameInfoMessage));
+        if (OperatingSystem.IsAndroid())
+        {
+            // 安卓不触碰闭合泛型：9 个类型全部直接挂 T.Serialize，无回退告警。
+            Assert.Empty(warnings);
+            Assert.Contains(Harmony.GetPatchInfo(beginRunConcrete)!.Prefixes, patch => patch.owner == ours.Id);
+            Assert.DoesNotContain(
+                Harmony.GetPatchInfo(beginRunTarget)!.Prefixes,
+                patch => patch.owner == ours.Id);
+        }
+        else
+        {
+            // RitsuLib 先占用 SerializeMessage<BeginRun|InitialGameInfo>：这两类回退到
+            // T.Serialize 目标并逐类告警；其余 7 类仍挂 SerializeMessage 闭合实例化。
+            Assert.Equal(2, warnings.Count);
+            Assert.All(warnings, static warning =>
+                Assert.Contains("回退到 Serialize 钩子", warning, StringComparison.Ordinal));
+            Assert.All(warnings, static warning =>
+                Assert.Contains("RitsuLib", warning, StringComparison.Ordinal));
+            foreach (MethodInfo concrete in new[] { beginRunConcrete, initialGameInfoConcrete })
+            {
+                Assert.Contains(Harmony.GetPatchInfo(concrete)!.Prefixes, patch => patch.owner == ours.Id);
+                Assert.Contains(Harmony.GetPatchInfo(concrete)!.Postfixes, patch => patch.owner == ours.Id);
+            }
+
+            Assert.DoesNotContain(
+                Harmony.GetPatchInfo(beginRunTarget)!.Prefixes,
+                patch => patch.owner == ours.Id);
+            Assert.DoesNotContain(
+                Harmony.GetPatchInfo(initialGameInfoTarget)!.Prefixes,
+                patch => patch.owner == ours.Id);
+            foreach (LanConnectTailPatchStep step in plan.Steps.Where(static step =>
+                         step.Category == "serialize"
+                         && step.MessageType != typeof(LobbyBeginRunMessage)
+                         && step.MessageType != typeof(InitialGameInfoMessage)))
+            {
+                Patches info = Harmony.GetPatchInfo(step.Target)!;
+                Assert.Contains(info.Prefixes, patch => patch.owner == ours.Id);
+                Assert.Contains(info.Postfixes, patch => patch.owner == ours.Id);
+            }
+        }
+
         // The foreign owner must survive our plan untouched.
         Assert.Contains(Harmony.GetPatchInfo(beginRunTarget)!.Postfixes, patch => patch.owner == foreign.Id);
         Assert.Contains(Harmony.GetPatchInfo(initialGameInfoTarget)!.Postfixes, patch => patch.owner == foreign.Id);
@@ -104,20 +151,35 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
 
         List<string> warnings = [];
         // The legacy desktop generic plan (with its boundary prefix) is gone; the boundary
-        // is permanently skipped under native_bus_v1.
+        // is permanently skipped under native_bus_v1. New semantics (2026-09-05): the tail
+        // plan still applies next to the six transpilers even though RitsuLib occupies the
+        // begin-run closed generic - that serialize step falls back to T.Serialize and warns.
         LanConnectSerializationPatches.ResetAppliedAfterExternalRollback();
         LanConnectSerializationPatches.LogWarnSink = warnings.Add;
         LanConnectSerializationPatches.LogInfoSink = static _ => { };
         LanConnectSerializationPatches.LogErrorSink = static _ => { };
         LanConnectTranspilerUtils.LogInfoSink = static _ => { };
         LanConnectTranspilerUtils.LogWarnSink = warnings.Add;
+        LanConnectTailMessagePatches.LogWarnSink = warnings.Add;
 
-        Exception? failure = Record.Exception(LanConnectSerializationPatches.Apply);
+        Harmony ours = CreateHarmony("boundary");
+        Exception? failure = Record.Exception(() =>
+        {
+            LanConnectSerializationPatches.Apply();
+            LanConnectTailMessagePatches.ApplyPlanQuietlyForTesting(
+                ours,
+                LanConnectTailMessagePatches.ResolvePatchPlan(typeof(PacketWriter).Assembly));
+        });
 
         Assert.Null(failure);
         Assert.True(LanConnectSerializationPatches.IsAppliedForTesting);
         // begin-run boundary is permanently skipped under native_bus_v1 (legacy plan removed),
-        // so no boundary warning is emitted any more.
+        // so no boundary warning is emitted any more; the serialize fallback warn replaces it.
+        if (!OperatingSystem.IsAndroid())
+        {
+            Assert.Contains(warnings, static warning =>
+                warning.Contains("回退到 Serialize 钩子", StringComparison.Ordinal));
+        }
 
         // All six required transpilers must be in place even though the boundary was skipped.
         Assembly sts2 = typeof(PacketWriter).Assembly;
@@ -142,7 +204,11 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
                 patch => patch.owner == LanConnectProtocolPatchDispatcher.HarmonyId);
         }
 
-        // The foreign postfix on the poisoned closed generic must remain untouched.
+        // The begin-run concrete Serialize carries our fallback prefix, and the foreign
+        // postfix on the poisoned closed generic must remain untouched.
+        Assert.Contains(
+            Harmony.GetPatchInfo(ConcreteSerializeOf(beginRunType))!.Prefixes,
+            patch => patch.owner == ours.Id);
         Assert.Contains(Harmony.GetPatchInfo(beginRunTarget)!.Postfixes, patch => patch.owner == foreign.Id);
     }
 
@@ -245,6 +311,10 @@ public sealed class LanConnectForeignPatchOwnerTests : IDisposable
                 && method.IsGenericMethodDefinition
                 && method.GetParameters().Length == 3)
             .MakeGenericMethod(messageType);
+
+    private static MethodInfo ConcreteSerializeOf(Type messageType) =>
+        AccessTools.Method(messageType, "Serialize", [typeof(PacketWriter)])
+        ?? throw new MissingMethodException(messageType.FullName, "Serialize");
 
     private static string FindRepositoryRoot()
     {

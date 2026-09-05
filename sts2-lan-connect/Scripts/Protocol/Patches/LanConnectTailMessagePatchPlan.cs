@@ -17,7 +17,9 @@ internal sealed record LanConnectTailPatchStep(
     MethodInfo? Finalizer = null,
     int? PrefixPriority = null,
     int? PostfixPriority = null,
-    int? FinalizerPriority = null)
+    int? FinalizerPriority = null,
+    MethodInfo? FallbackTarget = null,
+    MethodInfo? FallbackPrefix = null)
 {
     internal IEnumerable<MethodInfo> Hooks
     {
@@ -37,6 +39,11 @@ internal sealed record LanConnectTailPatchStep(
             {
                 yield return Finalizer;
             }
+
+            if (FallbackPrefix != null)
+            {
+                yield return FallbackPrefix;
+            }
         }
     }
 }
@@ -45,7 +52,10 @@ internal sealed record LanConnectTailPatchStep(
 /// native_bus_v1 的唯一补丁计划（原 non_generic_v2 的非泛型形态，全平台统一）。
 /// 步骤数 16：9 serialize（10 kinds 解析到 9 个具体类型）+ 1 writer_reset + 2 receive +
 /// 1 deserialize + 1 dispatch barrier + 2 transport。
-/// 泛型目标与 SetBufferMessages 目标均被禁止（Android gshared 历史教训 / RitsuLib sync 补丁所有权）。
+/// 桌面平台 9 个 serialize 步骤改挂 NetMessageBus.SerializeMessage&lt;T&gt; 的闭合实例化
+/// （RitsuLib 补丁后优化编译体会内联小结构体 Serialize，绕过 T.Serialize 上的 detour）；
+/// 安卓保持 T.Serialize 目标（gshared 无法为闭合泛型生成 wrapper）。
+/// SetBufferMessages 目标被禁止（RitsuLib sync 补丁所有权）。
 /// </summary>
 internal sealed class LanConnectTailPatchPlan
 {
@@ -83,12 +93,8 @@ internal sealed class LanConnectTailPatchPlan
                 $"Tail patch plan {profile} must not patch NetMessageBus.SetBufferMessages.");
         }
 
-        ValidateNonGenericMethodsAreConcrete();
-        if (GenericTargetCount != 0)
-        {
-            throw new InvalidDataException(
-                $"Tail patch plan {profile} must not contain generic targets; found={GenericTargetCount}.");
-        }
+        ValidateTargets();
+        ValidateNonGenericHooksAreConcrete();
     }
 
     internal string Profile { get; }
@@ -97,11 +103,67 @@ internal sealed class LanConnectTailPatchPlan
     internal IReadOnlyList<LanConnectTailPatchStep> Steps { get; }
     internal int GenericTargetCount => Steps.Count(static step => step.Target.IsGenericMethod);
 
-    private void ValidateNonGenericMethodsAreConcrete()
+    private void ValidateTargets()
+    {
+        // 安卓：Mono/gshared 无法为闭合泛型目标生成 wrapper，全部目标必须非泛型。
+        // 桌面：仅 serialize 类别的 9 步允许（且必须是）SerializeMessage 闭合实例化，
+        // 并携带非泛型的 T.Serialize 回退目标；其余类别目标必须非泛型。
+        if (OperatingSystem.IsAndroid())
+        {
+            foreach (LanConnectTailPatchStep step in Steps)
+            {
+                ValidateConcrete(step.Id, "target", step.Target);
+            }
+
+            if (GenericTargetCount != 0)
+            {
+                throw new InvalidDataException(
+                    $"Tail patch plan {Profile} must not contain generic targets on Android; found={GenericTargetCount}.");
+            }
+
+            return;
+        }
+
+        int serializeGenericTargets = 0;
+        foreach (LanConnectTailPatchStep step in Steps)
+        {
+            if (step.Category != "serialize")
+            {
+                ValidateConcrete(step.Id, "target", step.Target);
+                continue;
+            }
+
+            if (!step.Target.IsGenericMethod
+                || step.Target.IsGenericMethodDefinition
+                || step.Target.ContainsGenericParameters)
+            {
+                throw new InvalidDataException(
+                    $"Tail patch {step.Id} target must be a closed instantiation of the bus serializer on desktop: " +
+                    $"{LanConnectTailMessagePatches.FormatMethod(step.Target)}.");
+            }
+
+            serializeGenericTargets++;
+            if (step.FallbackTarget == null || step.FallbackPrefix == null)
+            {
+                throw new InvalidDataException(
+                    $"Tail patch {step.Id} must carry a T.Serialize fallback target on desktop.");
+            }
+
+            ValidateConcrete(step.Id, "fallback target", step.FallbackTarget!);
+        }
+
+        if (serializeGenericTargets != 9 || GenericTargetCount != 9)
+        {
+            throw new InvalidDataException(
+                $"Tail patch plan {Profile} must expose exactly 9 generic serialize targets on desktop; " +
+                $"serializeGeneric={serializeGenericTargets}, genericTotal={GenericTargetCount}.");
+        }
+    }
+
+    private void ValidateNonGenericHooksAreConcrete()
     {
         foreach (LanConnectTailPatchStep step in Steps)
         {
-            ValidateConcrete(step.Id, "target", step.Target);
             foreach (MethodInfo hook in step.Hooks)
             {
                 ValidateConcrete(step.Id, "hook", hook);
@@ -136,7 +198,16 @@ internal static partial class LanConnectTailMessagePatches
         List<LanConnectTailPatchStep> steps = [];
 
         // 第一级：10 个具体消息 Serialize prefix/postfix（容器生产 seam，不改写原版字节）。
+        // 桌面挂 SerializeMessage<T> 闭合实例化（RitsuLib 补丁会内联小结构体 Serialize，
+        // 绕过 T.Serialize detour）；安卓 gshared 保持 T.Serialize 目标。
         MethodInfo serializerPostfix = RequireHook(nameof(AndroidConcreteSerializePostfix));
+        MethodInfo serializeMessageDefinition = AccessTools.DeclaredMethod(
+            typeof(NetMessageBus),
+            nameof(NetMessageBus.SerializeMessage))
+            ?? throw new MissingMethodException(
+                typeof(NetMessageBus).FullName,
+                nameof(NetMessageBus.SerializeMessage));
+        bool useBusSerializeSeam = !OperatingSystem.IsAndroid();
         foreach (Type messageType in messageTypes)
         {
             MethodInfo serialize = AccessTools.Method(messageType, "Serialize", [typeof(PacketWriter)])
@@ -145,10 +216,14 @@ internal static partial class LanConnectTailMessagePatches
                 $"tail.serialize.{StableTypeId(messageType)}",
                 "serialize",
                 messageType,
-                serialize,
-                ResolveSerializePrefix(messageType),
+                useBusSerializeSeam ? serializeMessageDefinition.MakeGenericMethod(messageType) : serialize,
+                useBusSerializeSeam
+                    ? ResolveBusSerializePrefix(messageType)
+                    : ResolveSerializePrefix(messageType),
                 serializerPostfix,
-                PrefixPriority: Priority.First + 100));
+                PrefixPriority: Priority.First + 100,
+                FallbackTarget: useBusSerializeSeam ? serialize : null,
+                FallbackPrefix: useBusSerializeSeam ? ResolveSerializePrefix(messageType) : null));
         }
 
         // PacketWriter.Reset prefix：清除该 writer 的 pending（广播批次结束后防误命中残留）。
@@ -300,6 +375,25 @@ internal static partial class LanConnectTailMessagePatches
             "LobbyBeginRunMessage" => nameof(AndroidSerializeLobbyBeginRunPrefix),
             _ => throw new InvalidDataException(
                 $"Message type {messageType.FullName} has no concrete serializer prefix.")
+        };
+        return RequireHook(methodName);
+    }
+
+    private static MethodInfo ResolveBusSerializePrefix(Type messageType)
+    {
+        string methodName = messageType.Name switch
+        {
+            "InitialGameInfoMessage" => nameof(BusSerializeInitialGameInfoPrefix),
+            "ClientLobbyJoinRequestMessage" => nameof(BusSerializeLobbyJoinRequestPrefix),
+            "ClientLobbyJoinResponseMessage" => nameof(BusSerializeLobbyJoinResponsePrefix),
+            "ClientLoadJoinRequestMessage" => nameof(BusSerializeLoadJoinRequestPrefix),
+            "ClientLoadJoinResponseMessage" => nameof(BusSerializeLoadJoinResponsePrefix),
+            "ClientRejoinRequestMessage" => nameof(BusSerializeRejoinRequestPrefix),
+            "ClientRejoinResponseMessage" => nameof(BusSerializeRejoinResponsePrefix),
+            "PlayerJoinedMessage" => nameof(BusSerializePlayerJoinedPrefix),
+            "LobbyBeginRunMessage" => nameof(BusSerializeLobbyBeginRunPrefix),
+            _ => throw new InvalidDataException(
+                $"Message type {messageType.FullName} has no bus serializer prefix.")
         };
         return RequireHook(methodName);
     }

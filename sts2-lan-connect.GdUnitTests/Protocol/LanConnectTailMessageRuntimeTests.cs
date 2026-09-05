@@ -352,6 +352,37 @@ public sealed class LanConnectTailMessageRuntimeTests
     }
 
     [TestCase]
+    public void Third_party_send_prefix_that_copies_and_extends_the_buffer_still_emits_the_extension_frame()
+    {
+        // 2026-09-05 本机双实例复现：RitsuLib 0.5.18 的 NativeTrailer 前缀挂在同一个
+        // ENetHost.SendMessageToClient 上，会把 bytes 换成加长 36 字节的新数组。只按数组引用
+        // + 精确长度匹配 pending 会静默失配，扩展帧永远不发，加入方扣住 InitialGameInfo 直到
+        // 房主 10 秒 LobbyJoinTimeout。
+        InitializeSts2Serialization();
+        using RuntimePair pair = new();
+        using IDisposable session = pair.FreezeHostSession();
+        pair.BootstrapHostRoster();
+        PendingVanilla pending = pair.SerializeHostMatrixMessage(
+            LanConnectSidecarMessageKind.PlayerJoined,
+            new PlayerJoinedMessage { lobbyPlayer = StartRunPlayers([0]).Single() });
+
+        byte[] extended = new byte[pending.Length + 36];
+        pending.Buffer.AsSpan(0, pending.Length).CopyTo(extended);
+        LanConnectNativeSendContext? context = pair.Runtime.BeginNativeTransport(
+            pair.HostTransport,
+            isHostTransport: true,
+            pair.ClientId,
+            extended,
+            extended.Length);
+        AssertThat(context != null).IsTrue();
+        pair.Runtime.CompleteNativeTransport(context, vanillaPeerReachable: true);
+
+        CapturedPacket[] extensions = pair.HostTransport.SentToClients.ToArray();
+        AssertThat(extensions.Length).IsEqual(1);
+        AssertThat(extensions[0].Bytes[0]).IsEqual((byte)TestNativeTypeId);
+    }
+
+    [TestCase]
     public void Writer_reset_clears_stale_pending_before_the_next_non_matrix_send()
     {
         InitializeSts2Serialization();
@@ -463,6 +494,26 @@ public sealed class LanConnectTailMessageRuntimeTests
         AssertThat(FrameSequenceOf(new CapturedPacket(0, wire))).IsEqual(1u);
     }
 
+    [TestCase]
+    public void Android_order_prepare_after_the_vanilla_header_still_produces_the_extension()
+    {
+        // 安卓与桌面回退路径的 seam：prefix 在 T.Serialize 边界触发（header 已写入）。
+        // prepare 不再校验 header 边界后，该顺序必须与桌面顺序同样产出扩展帧。
+        InitializeSts2Serialization();
+        using RuntimePair pair = new();
+        using IDisposable session = pair.FreezeHostSession();
+        pair.BootstrapHostRoster();
+        PendingVanilla pending = pair.SerializeHostMatrixMessageAndroidOrder(
+            LanConnectSidecarMessageKind.PlayerJoined,
+            new PlayerJoinedMessage { lobbyPlayer = StartRunPlayers([0]).Single() });
+
+        pair.DeliverPendingToPeer(pending, pair.ClientId);
+
+        AssertThat(pair.HostTransport.SentToClients.Count).IsEqual(1);
+        AssertThat(pair.HostTransport.SentToClients[0].Bytes[0]).IsEqual((byte)TestNativeTypeId);
+        AssertThat(pair.HostTransport.SentToClients[0].PeerId).IsEqual(pair.ClientId);
+    }
+
     // ---- 配对屏障（spec §3.3 / §6.1） ----
 
     [TestCase]
@@ -563,6 +614,28 @@ public sealed class LanConnectTailMessageRuntimeTests
         }
 
         pair.Runtime.SweepBarrierTimeouts(pair.Host, DateTimeOffset.UtcNow.AddSeconds(3));
+
+        AssertThat(pair.HostTransport.DisconnectedPeers.Contains(peerA)).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Barrier_hold_times_out_on_a_timer_without_any_further_traffic()
+    {
+        // 2026-09-05 复现链路的另一半：扩展帧从未发出时，对端此后没有任何后续包，
+        // “下一条消息到达时”的清扫永不触发。定时清扫必须自行兜底。
+        InitializeSts2Serialization();
+        using RuntimePair pair = new();
+        using IDisposable session = pair.FreezeHostSession();
+        pair.HostBus.RegisterMessageHandler<ClientLobbyJoinRequestMessage>(static (_, _) => { });
+        const ulong peerA = 61;
+        using (LanConnectTailMessagePatches.PushTransportReceiveContextForTesting(peerA, channel: 0))
+        {
+            AssertThat(pair.Runtime.TryEnterNativeDispatch(
+                pair.HostBus, new ClientLobbyJoinRequestMessage(), peerA)).IsFalse();
+        }
+
+        // 不再送任何包：2 秒屏障超时 + 定时触发，以 lan_extension_missing 拒绝并断开。
+        await Task.Delay(LanConnectTailMessageRuntime.BarrierHoldTimeout + TimeSpan.FromMilliseconds(500));
 
         AssertThat(pair.HostTransport.DisconnectedPeers.Contains(peerA)).IsTrue();
     }
@@ -934,19 +1007,27 @@ public sealed class LanConnectTailMessageRuntimeTests
             HostTransport.AddConnectedPeer(peerId);
         }
 
-        /// <summary>镜像第一级 prefix + 原版序列化 + postfix 的完整序列化阶段。</summary>
+        /// <summary>镜像桌面第一级 seam：prefix（prepare）先于 header 写入，再投影序列化 + postfix。</summary>
         internal PendingVanilla SerializeHostMatrixMessage(
             LanConnectSidecarMessageKind kind,
             INetMessage message)
         {
-            return SerializeMatrixMessage(HostWriter, HostBus, Runtime, kind, message, Selection, HostId);
+            return SerializeMatrixMessage(HostWriter, HostBus, Runtime, kind, message, Selection, HostId, prepareBeforeHeader: true);
         }
 
         internal PendingVanilla SerializeClientMatrixMessage(
             LanConnectSidecarMessageKind kind,
             INetMessage message)
         {
-            return SerializeMatrixMessage(ClientWriter, ClientBus, Runtime, kind, message, Selection, ClientId);
+            return SerializeMatrixMessage(ClientWriter, ClientBus, Runtime, kind, message, Selection, ClientId, prepareBeforeHeader: true);
+        }
+
+        /// <summary>镜像安卓/回退 seam：header 先写入，prepare 发生在 T.Serialize 边界。</summary>
+        internal PendingVanilla SerializeHostMatrixMessageAndroidOrder(
+            LanConnectSidecarMessageKind kind,
+            INetMessage message)
+        {
+            return SerializeMatrixMessage(HostWriter, HostBus, Runtime, kind, message, Selection, HostId, prepareBeforeHeader: false);
         }
 
         private static PendingVanilla SerializeMatrixMessage(
@@ -956,14 +1037,27 @@ public sealed class LanConnectTailMessageRuntimeTests
             LanConnectSidecarMessageKind kind,
             INetMessage message,
             LanConnectProtocolSelection selection,
-            ulong senderNetId)
+            ulong senderNetId,
+            bool prepareBeforeHeader)
         {
             writer.Reset();
-            writer.WriteByte(checked((byte)message.ToId()));
-            writer.WriteULong(senderNetId);
-            if (!runtime.TryPrepareConcreteOutgoing(writer, kind, message, out LanConnectNativePreparedMessage? prepared))
+            LanConnectNativePreparedMessage? prepared;
+            if (prepareBeforeHeader)
             {
-                throw new InvalidOperationException("matrix message was not prepared");
+                if (!runtime.TryPrepareConcreteOutgoing(writer, kind, message, out prepared))
+                {
+                    throw new InvalidOperationException("matrix message was not prepared");
+                }
+
+                WriteVanillaHeader(writer, message, senderNetId);
+            }
+            else
+            {
+                WriteVanillaHeader(writer, message, senderNetId);
+                if (!runtime.TryPrepareConcreteOutgoing(writer, kind, message, out prepared))
+                {
+                    throw new InvalidOperationException("matrix message was not prepared");
+                }
             }
 
             INetMessage projected = (INetMessage)prepared!.Prepared.Message;
@@ -972,6 +1066,12 @@ public sealed class LanConnectTailMessageRuntimeTests
             _ = bus;
             _ = selection;
             return new PendingVanilla(writer, writer.Buffer, writer.BytePosition);
+        }
+
+        private static void WriteVanillaHeader(PacketWriter writer, INetMessage message, ulong senderNetId)
+        {
+            writer.WriteByte(checked((byte)message.ToId()));
+            writer.WriteULong(senderNetId);
         }
 
         internal void DeliverPendingToPeer(PendingVanilla pending, ulong peerId)

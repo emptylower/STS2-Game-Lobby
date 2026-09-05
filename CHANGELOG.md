@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.6.1-alpha.4] - 2026-09-05
+
+`0.6.1-alpha.4`：与 RitsuLib 0.5.18 共存时新协议房间无法加入（alpha.1 起全部“进不去房间”反馈）的根因修复，本机双实例（两端均装 RitsuLib）验证加入成功。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ALPHA4_ZH.md`。客户端与 lobby-service 同步 `0.6.1-alpha.4`（服务端代码与 alpha.2 相同，仅对齐版本号）；tail 房间 `minimumClientVersion` 仍为 `0.6.1-alpha.1`。
+
+### Fixed
+
+- **根因**：RitsuLib 给 `NetMessageBus.SerializeMessage<InitialGameInfoMessage|LobbyBeginRunMessage|StateDivergenceMessage>` 打补丁后，Harmony 生成的优化编译体会把小结构体 `T.Serialize` 内联进去，本 MOD 挂在 `T.Serialize` 上的容器生产钩子被绕过，扩展帧从未产生（alpha.1 兼容房黑屏同机制）。桌面平台 9 个 tail 序列化钩子改挂 `NetMessageBus.SerializeMessage<T>` 闭合实例化（0.107.1 / 0.111.0 签名相同），安卓因 gshared 限制保持 `T.Serialize`；RitsuLib 先于本 MOD 加载并已占用该方法时，对 InitialGameInfo / LobbyBeginRun 逐类型回退旧钩子并告警（建议把 STS2 LAN Connect 排在 RitsuLib 之前）。
+- 传输层待发扩展帧改为按内容前缀匹配（RitsuLib 的 NativeTrailer 发送前缀会把原版包换成加长 36 字节的新数组，旧的数组引用 + 精确长度匹配会失配）。
+- 配对屏障超时改为定时触发，扩展帧缺失在 2 秒内以 `lan_extension_missing` 明确报错，不再沉默到房主 10 秒踢人。
+- 新增 `tail:` 诊断日志（矩阵消息扣住 / 扩展帧到达 / 待发登记 / 扩展帧发送 / native flow 绑定·激活·延迟），便于反馈定位。
+
 ## [0.6.1-alpha.3] - 2026-09-05
 
 `0.6.1-alpha.3`：两处 alpha.2 反馈修复——第三方 Mod 提前初始化消息注册表时启动误入联机降级模式；tail 拒绝码表补齐 0.6.1 七个错误码。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ALPHA3_ZH.md`。客户端与 lobby-service 同步 `0.6.1-alpha.3`（服务端代码与 alpha.2 相同，仅对齐版本号）；tail 房间 `minimumClientVersion` 仍为 `0.6.1-alpha.1`。
