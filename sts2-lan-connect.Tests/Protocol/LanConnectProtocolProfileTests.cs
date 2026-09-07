@@ -56,4 +56,21 @@ public sealed class LanConnectProtocolProfileTests
 
         Assert.Equal("ritsulib_not_allowed_in_compat_mode", exception.Failure.Code);
     }
+
+    [Fact]
+    public void Every_carrier_round_trips_through_its_wire_value()
+    {
+        foreach (LanConnectProtocolCarrier carrier in Enum.GetValues<LanConnectProtocolCarrier>())
+        {
+            string wire = carrier.ToWireValue();
+
+            Assert.Equal(carrier, LanConnectProtocolProfileExtensions.ParseCarrier(wire));
+        }
+    }
+
+    [Fact]
+    public void Native_bus_carrier_writes_native_bus_v1()
+    {
+        Assert.Equal("native_bus_v1", LanConnectProtocolCarrier.NativeBusV1.ToWireValue());
+    }
 }

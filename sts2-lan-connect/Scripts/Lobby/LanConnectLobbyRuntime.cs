@@ -2141,7 +2141,10 @@ internal sealed partial class LanConnectLobbyRuntime :
     private void OnRunSaved()
     {
         LanConnectSaveDiagnostics.LogNow("save_event:before_persist");
-        PersistBindingForCurrentSave("save_event");
+        LanConnectSaveEventGuard.Run(
+            "save_event",
+            () => PersistBindingForCurrentSave("save_event"),
+            message => Log.Warn(message));
         LanConnectSaveDiagnostics.LogNow("save_event:after_persist");
     }
 

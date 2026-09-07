@@ -62,6 +62,7 @@ internal static class LanConnectProtocolProfileExtensions
         LanConnectProtocolCarrier.None => "none",
         LanConnectProtocolCarrier.LegacyTailV1 => "standalone_tail_v1",
         LanConnectProtocolCarrier.LegacySidecarV1 => "ritsulib_sidecar_v1",
+        LanConnectProtocolCarrier.NativeBusV1 => "native_bus_v1",
         _ => throw LanConnectProtocolFailureMapper.FromLocalException(
             "protocol_profile_unsupported",
             $"Unknown protocol carrier enum value {(int)carrier}.")

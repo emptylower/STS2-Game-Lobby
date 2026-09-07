@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.6.1-alpha.5] - 2026-09-07
+
+`0.6.1-alpha.5`：alpha.4 反馈修复——新协议房间房主每次存档抛 `Unknown protocol carrier enum value 3`，导致"中途保存退出后无法恢复进度开房"、续局被 RitsuLib 门禁拒绝，以及 QuickSL 多人快速 SL（其重载会触发存档）被同一异常打断。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ALPHA5_ZH.md`。客户端与 lobby-service 同步 `0.6.1-alpha.5`（服务端代码与 alpha.2 相同，仅对齐版本号）；tail 房间 `minimumClientVersion` 仍为 `0.6.1-alpha.1`。
+
+### Fixed
+
+- 修复新协议房间房主每次存档抛 `Unknown protocol carrier enum value 3`（`native_bus_v1` 载体在 `ToWireValue` 缺少 wire 值映射），导致房间绑定从未写入、续局时误判为兼容房并被 RitsuLib 门禁拒绝（`ritsulib_not_allowed_in_compat_mode`）；存档事件处理器增加异常兜底（`LanConnectSaveEventGuard`），MOD 内部持久化失败只记录 `sts2_lan_connect save_binding: persist failed` 告警，不再把异常抛进原版存档管线。
+
 ## [0.6.1-alpha.4] - 2026-09-05
 
 `0.6.1-alpha.4`：与 RitsuLib 0.5.18 共存时新协议房间无法加入（alpha.1 起全部“进不去房间”反馈）的根因修复，本机双实例（两端均装 RitsuLib）验证加入成功。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ALPHA4_ZH.md`。客户端与 lobby-service 同步 `0.6.1-alpha.4`（服务端代码与 alpha.2 相同，仅对齐版本号）；tail 房间 `minimumClientVersion` 仍为 `0.6.1-alpha.1`。
