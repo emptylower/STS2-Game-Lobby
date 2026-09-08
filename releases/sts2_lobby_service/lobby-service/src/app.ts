@@ -501,7 +501,8 @@ export async function createLobbyService(
         lanProtocolMin: 1,
         lanProtocolMax: 1,
         minimumClientVersion: "0.3.0",
-        tailV1MinimumClientVersion: "0.6.0-alpha.1",
+        tailV1MinimumClientVersion: "0.6.1-alpha.1",
+        tailV1Carrier: "native_bus_v1",
       },
     });
   });
@@ -761,7 +762,16 @@ export async function createLobbyService(
           body?.clientInstallationId,
           "clientInstallationId",
           MaxNetIdLength),
+        registryFingerprint: typeof body?.registryFingerprint === "string"
+          ? boundedString(body.registryFingerprint, "registryFingerprint", 96)
+          : undefined,
       };
+      // 门禁链（presence → carrier → fingerprint → minimumClientVersion）置于 wire-cache 预检查之前。
+      const protocolGateFailure = store.findJoinProtocolGateFailure(req.params.id, joinInput);
+      if (protocolGateFailure) {
+        throw protocolGateFailure;
+      }
+
       const wireCacheMismatch = store.findWireCacheMismatchForJoin(req.params.id, joinInput);
       if (wireCacheMismatch) {
         throw wireCacheMismatch;
@@ -796,6 +806,7 @@ export async function createLobbyService(
         "gameVersion",
         "modSyncProtocolVersion",
         "localMods",
+        "registryFingerprint",
       ]);
       if (!body || Array.isArray(body) || Object.keys(body).some((key) => !allowedFields.has(key))) {
         throw new InputError("MOD 预检请求包含不支持的字段。");
@@ -815,6 +826,11 @@ export async function createLobbyService(
         Number.MAX_SAFE_INTEGER,
       );
       const localMods = body.localMods;
+
+      // 只读投影：客户端可选携带 fingerprint 做 UX 快速失败（非门禁；200 永不承载失败字段）。
+      const registryFingerprint = typeof body.registryFingerprint === "string"
+        ? boundedString(body.registryFingerprint, "registryFingerprint", 96)
+        : undefined;
 
       if (!serverAdminStateStore.getState().modSyncEnabled || protocolVersion !== MOD_SYNC_PROTOCOL_VERSION) {
         res.json({
@@ -838,6 +854,10 @@ export async function createLobbyService(
         gameVersion,
         localMods,
       });
+      // UX 快速失败：fingerprint 不一致时给出与非 2xx 一致的错误 envelope（不签发工单、不阻断后续修复）。
+      if (registryFingerprint !== undefined) {
+        store.assertPreflightFingerprintAllowed(req.params.id, registryFingerprint);
+      }
       console.log(
         `[lobby] mod preflight roomId=${req.params.id} hostInventory=${result.hostInventoryAvailable ? "available" : "legacy"} inventoryHash=${result.inventoryHash ?? "none"} missingWorkshop=${result.missingWorkshopMods.length} missingManual=${result.missingManualMods.length} extraGameplay=${result.extraGameplayMods.length} versionMismatch=${result.versionMismatches.length}`,
       );

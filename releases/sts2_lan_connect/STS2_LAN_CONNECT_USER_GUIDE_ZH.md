@@ -10,7 +10,35 @@
 
 # STS2 LAN Connect 使用说明
 
-当前正式版为 `0.6.0`，客户端与 lobby-service 版本号已同步对齐。本轮通过 GitHub Release 分发，Steam 创意工坊暂不上传。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+当前正式版为 `0.6.1`，客户端与 lobby-service 版本号已同步对齐。可从 GitHub Release 获取；Steam 创意工坊（条目「游戏大厅」）暂未同步，仍显示 `0.6.0`。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+
+## v0.6.1 正式版
+
+`0.6.1` 收敛了 `0.6.1-alpha.1`~`alpha.5` 全部五个测试候选。完整说明见 `docs/RELEASE_NOTES_V0.6.1_ZH.md`。
+
+**新协议房间与 RitsuLib 彻底解耦**
+
+- 「新协议」`tail_v1` 房间的载体统一改为 `native_bus_v1`（游戏官方 Mod 消息注册通道），**与是否安装 RitsuLib 完全无关**；队友一个装了 RitsuLib、一个没装，现在可以正常同房加入。
+- 「兼容旧版 Mod」`compat_4_5_v1` 不受影响：固定 `4/5-bit`、2-8 人、继续禁止 RitsuLib。
+- 新协议房间不再展示 RitsuLib 相关标签；加入门禁提示改为版本要求。
+- `minimumClientVersion` 升至 `0.6.1-alpha.1`：`0.6.0` 客户端加入新协议房间会被拒绝并提示升级。
+
+**加入失败与黑屏的根因修复**
+
+- 修复了 `0.6.0` 上"进不去新协议房间"（握手后静默、10 秒被踢、或双方准备后黑屏）的共同根因：RitsuLib 给游戏消息序列化方法打补丁后，Harmony 优化编译会把小结构体内联进去，本 MOD 的钩子被绕过、扩展帧从未产生。
+- 桌面端序列化钩子改挂到不受调用方内联影响的目标方法本身；传输层待发扩展帧改为按内容前缀匹配，容忍第三方在发送前给包加 trailer。
+- 配对屏障超时改为定时触发，扩展帧缺失 2 秒内明确报错，不再沉默到房主 10 秒踢人。
+
+**存档、续局与第三方 MOD 兼容**
+
+- 修复新协议房间房主每次存档都会报错（`Unknown protocol carrier enum value 3`）的问题：房间绑定从未写入，续局时被误判为兼容房而遭 RitsuLib 拒绝，QuickSL 等存档后置 MOD 的多人同步重载被同一异常打断而断线。
+- 存档事件处理器增加异常兜底，MOD 内部持久化失败只记录告警，不再把异常抛进原版存档管线，避免波及第三方存档类 MOD。
+- 启动自检覆盖第三方 MOD 提前初始化消息注册表的场景，不再误入联机降级模式；tail 拒绝码表补全，运行时失败不再退化为原版"模组不匹配"。
+
+**升级要求**
+
+- 同房所有成员必须统一使用客户端 `0.6.1` 及以上，安装或更新后完整重启游戏。
+- lobby-service `0.6.1` 与 `0.6.0` 代码功能等价（`0.6.1-alpha.2` 起服务端代码未变，仅对齐版本号）。
 
 ## v0.6.0 正式版
 
@@ -25,12 +53,11 @@
 
 **双协议房间**
 
-- 建房默认选择兼容模式：固定 `4/5-bit`、2-8 人、不允许 RitsuLib。
-- 0.6 新协议 `tail_v1` 保持原版 `2/3-bit` 主体，以 LAN protocol v1 携带完整 roster；无 RitsuLib 使用 standalone carrier，全员 RitsuLib 使用公开 typed-sidecar carrier。
-- 有 RitsuLib 只能连接有 RitsuLib，无 RitsuLib 只能连接无 RitsuLib；混合组合会在 ticket 与 transport 前拒绝。
+- 建房默认选择「兼容旧版 Mod」：固定 `4/5-bit`、2-8 人、不允许 RitsuLib。
+- 「新协议」`tail_v1` 保持原版 `2/3-bit` 主体，以 LAN protocol v1 携带完整 roster；本版仍要求全员 RitsuLib 状态一致（有 RitsuLib 只能连有 RitsuLib，无 RitsuLib 只能连无 RitsuLib），`0.6.1` 起改用与 RitsuLib 无关的 `native_bus_v1` 载体，见上方「v0.6.1 正式版」。
 - 本版不卸载、不直接调用也不恢复 RitsuLib 私有 Harmony 补丁，不维护 RitsuLib 分支。
 - macOS 与 Android 使用 RitsuLib 时请统一安装官方 v0.5.13 及以上；官方 v0.5.12 不应继续使用。
-- direct-IP 直连只支持兼容模式，本地 Ritsu 或 Tail intent 会在建立连接前拒绝。
+- direct-IP 直连只支持「兼容旧版 Mod」，本地 Ritsu 或 Tail intent 会在建立连接前拒绝。
 - 历史 `0.3.x`-`0.5.x` 客户端与 `0.6.0` 的真实互通不在发布门禁范围内，请全员升级。
 
 **加入前线上编码校验**
@@ -152,7 +179,7 @@
 
 1. 打开 `游戏大厅`，点击 `创建房间`
 2. 填写房间名，选择类型和联机协议，可选填密码；最大人数支持 2-8 人，默认 8 人
-3. 默认 `兼容旧版客户端（默认）` 支持 LAN Connect `0.3-0.5` 加入且禁止 RitsuLib；`0.6 新协议（RitsuLib 状态必须一致）` 仅支持 `0.6+`
+3. 默认「兼容旧版 Mod」支持 LAN Connect `0.3-0.5` 旧版客户端加入且禁止 RitsuLib；「新协议」需 `0.6.1` 及以上客户端，与是否安装 RitsuLib 无关
 4. 发布成功后，客户端会自动启动本地 ENet Host、向大厅注册房间并持续发送心跳保活
 
 ## 玩家流程
@@ -230,7 +257,7 @@
 - 公开包默认使用阿里云大厅 `47.111.146.69:8787` 作为兜底社区节点，并通过 CF 发现入口 `https://sts2-gamelobby-register.xyz` + 内置种子聚合可用服务器；测试节点 `101.35.217.99:8788` 固定排在服务器列表第一位。显示“支持 0.5.1+ MOD 同步”的服务器已实时声明加入前 gameplay MOD 预检/Workshop 同步能力；旧的 `47.111.146.69:18787` 公开目录在 v0.4.0 中不再参与运行时发现
 - 兼容矩阵当前统一规则为：
   - `compat_4_5_v1` 固定使用历史 `4/5-bit`，支持 2-8 人，禁止 RitsuLib
-  - `tail_v1` 固定使用原版 `2/3-bit` 主体和 LAN protocol v1；无 RitsuLib 使用 standalone carrier，有 RitsuLib 必须全员一致并等待公开 sidecar gate
+  - `tail_v1` 固定使用原版 `2/3-bit` 主体和 LAN protocol v1；0.6.1 起经官方 Mod 消息注册通道（`native_bus_v1`）传输，与是否安装 RitsuLib 无关
   - 客户端实际日志 / 调试报告会同时记录 `compatibilityProfile`、`connectionStrategy`、`effectiveMaxPlayers`、`publishedProtocolProfile`、`carrier` 和 `capabilityDigest`
 - MOD 内置 2-8 人支持；房间人数不再决定协议，建房时选择的协议在房间生命周期内冻结
 - 检测到 RMP 等外部扩展人数 MOD 时，内置补丁会自动跳过以避免冲突
@@ -295,13 +322,13 @@
 
 ### 安卓端启动就弹"致命错误"
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本文档对应 `0.6.0`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本文档对应 `0.6.1`）
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保 `sts2_lan_connect.dll`、`sts2_lan_connect.pck` 和 `sts2_lan_connect.json` 同步更新
 - 如仍崩溃，将最新 `godot.log` 和本地调试报告一并发给开发者
 
 ### 安卓端进了主菜单，但打开多人页面 / 游戏大厅异常
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本文档对应 `0.6.0`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本文档对应 `0.6.1`）
 - 确认安装的是当前发布的客户端包，而非更早的旧包
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保三个文件来自同一批 release
 - 如问题仍存在，将最新 `godot.log` 和本地调试报告一并发给开发者
@@ -319,7 +346,7 @@
 - **联机大厅 8 群：341498145**
 - **测试群（要求会导出 log）：1093309523**
 
-反馈时请附上双方完整的 `godot.log` 与客户端内的本地调试报告（设置页可导出），并注明客户端版本 `0.6.0`；Android 请按上方「Android 取证」提供 launcher 日志与 `adb logcat`。
+反馈时请附上双方完整的 `godot.log` 与客户端内的本地调试报告（设置页可导出），并注明客户端版本 `0.6.1`；Android 请按上方「Android 取证」提供 launcher 日志与 `adb logcat`。
 
 ---
 
@@ -327,7 +354,34 @@
 
 # STS2 LAN Connect User Guide
 
-The current stable release is `0.6.0`, with the client and lobby-service versions aligned. It ships through GitHub Releases; Steam Workshop is not updated in this round. Every player must use the same client and game version and fully restart after updating.
+The current stable release is `0.6.1`, with the client and lobby-service versions aligned. It ships through GitHub Releases; the Steam Workshop item (游戏大厅) has not been synced yet and still shows `0.6.0`. Every player must use the same client and game version and fully restart after updating.
+
+## v0.6.1 Stable Release
+
+`0.6.1` consolidates every candidate from `0.6.1-alpha.1` through `alpha.5`. Full notes (Chinese): `docs/RELEASE_NOTES_V0.6.1_ZH.md`.
+
+**Tail rooms are now fully decoupled from RitsuLib**
+
+- The `tail_v1` carrier now uses `native_bus_v1` (the game's own official mod-message channel), completely independent of whether RitsuLib is installed. A player with RitsuLib and one without can now share the same new-protocol room.
+- Compat rooms (`compat_4_5_v1`) are unaffected: fixed `4/5-bit`, 2-8 players, RitsuLib still rejected.
+- New-protocol rooms no longer show RitsuLib-related tags; `minimumClientVersion` moved to `0.6.1-alpha.1`, so `0.6.0` clients are rejected with an upgrade prompt.
+
+**Root cause of "cannot join" and black-screen reports**
+
+- Fixed the shared root cause of `0.6.0`'s "cannot join the new-protocol room" reports (silent after handshake, kicked after 10 seconds, or a black screen after both peers ready): RitsuLib's patch on the game's message-serialization method got JIT-inlined together with a tiny struct method, bypassing our hook.
+- Desktop serialization hooks now target a method that inlining cannot bypass; pending extension frames are matched by content prefix, tolerating a third-party send-time trailer.
+- The pairing barrier now times out on a timer: a missing extension frame reports within 2 seconds instead of silently waiting for the host's 10-second kick.
+
+**Save runs, continue-run, and third-party MOD compatibility**
+
+- Fixed every host-side save in a new-protocol room throwing `Unknown protocol carrier enum value 3`, which left the room binding unwritten, broke continue-run restoration, and disconnected clients mid-reload for save-hooking MODs like QuickSL.
+- The save-event handler now guards persistence failures: internal errors are logged and never propagate into the vanilla save pipeline.
+- Startup self-check now tolerates a third-party MOD pre-initializing the message registry; the tail rejection-code table is complete, so runtime failures no longer degrade to vanilla's generic "mod mismatch".
+
+**Upgrade requirements**
+
+- Every peer in a room must run client `0.6.1` or newer and fully restart the game after updating.
+- lobby-service `0.6.1` is functionally equivalent to `0.6.0` (service code unchanged since `0.6.1-alpha.2`, version bump only).
 
 ## v0.6.0 Stable Release
 
@@ -606,13 +660,13 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 
 ### Android: "Fatal Error" on launch
 
-- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this documentation corresponds to `0.6.0`)
+- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this documentation corresponds to `0.6.1`)
 - If you installed over an older package, fully uninstall first and then reinstall to ensure `sts2_lan_connect.dll`, `sts2_lan_connect.pck`, and `sts2_lan_connect.json` are all updated together
 - If the crash persists, send the latest `godot.log` and the local debug report to the developer
 
 ### Android: Main menu loads, but multiplayer page / Game Lobby behaves abnormally
 
-- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this documentation corresponds to `0.6.0`)
+- Confirm the version number in `mods/sts2_lan_connect/sts2_lan_connect.json` matches the current release (this documentation corresponds to `0.6.1`)
 - Confirm you installed the current release package, not an older package
 - If you installed over an older package, fully uninstall first and then reinstall to ensure all three files come from the same release batch
 - If the issue persists, send the latest `godot.log` and the local debug report to the developer
@@ -631,4 +685,4 @@ Chinese-language QQ groups for bug reports and testing:
 - **Game Lobby group 8: 341498145**
 - **Testing group (log export required): 1093309523**
 
-When reporting an issue, attach the complete `godot.log` from both peers plus the in-client local debug report, and state the client version `0.6.0`. On Android, follow the evidence steps above for the launcher log and `adb logcat`.
+When reporting an issue, attach the complete `godot.log` from both peers plus the in-client local debug report, and state the client version `0.6.1`. On Android, follow the evidence steps above for the launcher log and `adb logcat`.
