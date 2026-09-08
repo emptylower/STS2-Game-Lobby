@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-08
+
+`0.6.1` 正式版：客户端与 lobby-service 同步定为 `0.6.1`，收敛 `0.6.1-alpha.1`~`alpha.5` 全部五个测试候选的改动。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ZH.md`。相对 `0.6.0` 的核心变化是新协议房间的载体从「要求全员 RitsuLib presence 一致的 typed-sidecar」换成 **`native_bus_v1`**（游戏官方 MOD 消息注册通道），与是否安装 RitsuLib 完全无关；并修复了该切换过程中暴露的一系列联机与存档问题。
+
+### Added
+
+- `native_bus_v1` 载体：注册自定义 `INetMessage`（游戏官方 mod 消息机制，BaseLib 同用），协议容器经原版 ch0 FIFO 投递，零依赖 RitsuLib 运行时。
+- registry fingerprint（`sha256:v1`）主门禁，置于 wire-cache 预检查之前；服务端与运行时补齐 `0.6.1` 全部错误码（`lan_legacy_carrier_unsupported`、`lan_registry_fingerprint_required/mismatch`、`lan_client_version_too_old`、`lan_native_frame_invalid`、`lan_type_id_mismatch`、`lan_extension_missing`），tail 拒绝码表与运行时失败不再退化为原版"模组不匹配"。
+- 启动自检（消息注册表 ≤256、byte 映射唯一、BaseLib 128/129 冲突检测）与 `native_bus` 就绪诊断行；第三方 MOD 提前初始化消息注册表时自检挂起并延后重跑，不再误判为终局失败并把整个会话打入联机降级模式。
+- `tail:` 诊断日志覆盖矩阵消息扣住 / 扩展帧到达 / 待发登记 / 扩展帧发送 / native flow 绑定·激活·延迟，以及存档持久化失败的 `save_binding: persist failed` 告警。
+- `scripts/check-native-bus-migration.sh` 零引用门禁与 `scripts/abi-compare-sts2.sh` 双版本 ABI 对比。
+
+### Changed
+
+- **tail_v1 房间不再要求加入者与房主的 RitsuLib 安装状态一致**：`ritsulib_presence_mismatch` 门禁整条删除，`0.5.18` 事故状态（RitsuLib 已装但不可用）照常建房 / 加入。兼容模式 `compat_4_5_v1` 继续禁止 RitsuLib。
+- 联机协议前端措辞收敛为「兼容旧版 Mod」/「新协议」；新协议房间不再展示 RitsuLib 相关标签，加入门禁提示改为版本要求。
+- `minimumClientVersion` 升至 `0.6.1-alpha.1`；旧 `0.6.0` 客户端加入新协议房间会被 `lan_registry_fingerprint_required` 拒绝并提示升级，新客户端加入旧载体房间被 `lan_legacy_carrier_unsupported` 拒绝。
+- 传输层待发扩展帧改为按内容前缀匹配（容忍第三方在发送前给包加 trailer）；配对屏障超时改为定时触发。
+
+### Fixed
+
+- **根因**：`0.6.0` 的 `tail_v1` 仍依赖 RitsuLib 的公开 typed-sidecar API，与 RitsuLib 0.5.18 共存时因 Harmony 优化编译内联小结构体 `Serialize` 方法，本 MOD 的容器生产钩子被绕过，扩展帧从未产生，表现为"进不去新协议房间"（握手后静默、10 秒被踢、或黑屏）。`native_bus_v1` 从架构上消除了这层依赖；桌面端序列化钩子改挂 `NetMessageBus.SerializeMessage<T>` 闭合实例化本身，不再受调用方内联影响。
+- 修复新协议房间房主每次存档抛 `Unknown protocol carrier enum value 3`（`native_bus_v1` 载体在 `ToWireValue` 缺少 wire 值映射）：房间绑定从未写入，续局时误判为兼容房被 RitsuLib 门禁拒绝，QuickSL 等第三方存档后置 MOD 的重载流程被同一异常打断而断线。存档事件处理器新增异常兜底（`LanConnectSaveEventGuard`），MOD 内部持久化失败只记录告警，不再把异常抛进原版存档管线。
+- 修复 0.111.0 上 roster slot 投影静默失效（玩家载荷改 struct 后按值写入器不可见）。
+- `LobbyJoinTimeout` 列入可重试原因，中继候选失败后继续尝试直连候选。
+
+### Compatibility
+
+- 同一房间所有成员必须统一使用客户端 `0.6.1` 及以上；安装或更新后必须完整重启游戏。
+- 新协议（`tail_v1` / `native_bus_v1`）房间与 `0.6.0` 及更早客户端不互通：`0.6.0` 客户端加入 `0.6.1` 新协议房间会被 `lan_registry_fingerprint_required` 拒绝并提示升级。兼容模式 `compat_4_5_v1` 房间不受影响，历史客户端互通规则不变。
+
 ## [0.6.1-alpha.5] - 2026-09-07
 
 `0.6.1-alpha.5`：alpha.4 反馈修复——新协议房间房主每次存档抛 `Unknown protocol carrier enum value 3`，导致"中途保存退出后无法恢复进度开房"、续局被 RitsuLib 门禁拒绝，以及 QuickSL 多人快速 SL（其重载会触发存档）被同一异常打断。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ALPHA5_ZH.md`。客户端与 lobby-service 同步 `0.6.1-alpha.5`（服务端代码与 alpha.2 相同，仅对齐版本号）；tail 房间 `minimumClientVersion` 仍为 `0.6.1-alpha.1`。
