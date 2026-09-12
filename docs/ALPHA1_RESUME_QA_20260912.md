@@ -1,8 +1,12 @@
 # Alpha 1 续局修复验收（2026-09-12）
 
+## S/L 定义更正
+
+用户明确：S/L 指「房间管理 → 重开一局」及双端自动重连。此前报告误把退出并恢复存档称为 S/L。原实测结论仅覆盖退出恢复。现已另行补测两次真正的「重开一局」，证据与结果见下节；两种流程分别记录。
+
 ## 结论与构建
 
-本次指定的 Mac + Android 模拟器建房、加入同房、击败第一个怪物、S/L、取消后再次恢复均通过；独立代码与实测证据审查 APPROVE。版本保持 0.6.2-alpha.1，最新本地构建位于 `/Users/mac/Desktop/STS2-alpha1-resume-20260912/`。未发布外部预发布或创意工坊更新。
+本次指定的 Mac + Android 模拟器建房、加入同房、击败第一个怪物、退出并恢复存档、取消后再次恢复及「重开一局」S/L 均通过；独立代码与原实测证据审查 APPROVE，补测 S/L 功能证据审查 PASS（切换期异常见下文）。版本保持 0.6.2-alpha.1，最新本地构建位于 `/Users/mac/Desktop/STS2-alpha1-resume-20260912/`。未发布外部预发布或创意工坊更新。
 
 - 客户端：`client/sts2_lan_connect-release.zip`
 - ZIP SHA-256：`8d0dc09d415b061cd4e6c2bf6a01b4421b2a59e1b1918d024e7a81a9603bee55`
@@ -27,9 +31,23 @@
 | 保存退出 | 首怪后保存退出，正常断开与清理房间 | logs/rooms-after-save-exit.json |
 | 取消后再次恢复 | 连续恢复三次，前两次取消后房间列表为空，第三次重新发布 | logs/rooms-resume-1.json 至 rooms-resume-3.json；rooms-cancel-1.json、rooms-cancel-2.json |
 | 无需重启 | Mac PID 11114 自建房至全部恢复保持不变 | 同一份 macos-final-launch.log、进程检查 |
-| S/L | 第三次恢复后 Android 接管相同 netId 3470906098995623213，双方加载阶段 1、楼层 2、FinishedCombat 奖励页 | logs/rooms-resume-3-joined.json；screenshots/android-restored-slot.png、android-loaded.png |
+| 退出并恢复存档 | 第三次恢复后 Android 接管相同 netId 3470906098995623213，双方加载阶段 1、楼层 2、FinishedCombat 奖励页 | logs/rooms-resume-3-joined.json；screenshots/android-restored-slot.png、android-loaded.png |
 
 读档遵循游戏原有房间保存点：奖励尚未写入下一房间存档，恢复后重新显示同一奖励；未修改保存机制。双端最终日志未检出 StateDivergence 或 checksum mismatch。测试结束再次正常保存退出。
+
+## 「重开一局」S/L 补测
+
+补测使用同一份已验收 Alpha 1 二进制，Mac + Android 模拟器；Mac PID 16433 在两次重开之间保持不变。证据目录：`.omc/artifacts/alpha1-sl-20260912/`。本轮只补充测试和报告，未修改运行时代码或替换构建。
+
+| 场景 | 操作与观察 | 证据 |
+|---|---|---|
+| 首怪奖励阶段重开 | 房主点击「房间管理 → 重开一局」，主机自动恢复房间，Android 自动重新加入原角色；只确认提示和准备，双方回到奖励页 | screenshots/android-sl1-auto.png、android-sl1-loaded.png；logs/rooms-before-sl1.json、rooms-after-sl1.json |
+| 战斗中途再次重开 | 进入楼层 3，房主打击使中型史莱姆 61→55 HP；再次点击同一重开按钮，双端自动恢复，敌人回到 61 HP，房主能量由 2 回到 3 | screenshots/android-sl2-before.png、android-sl2-auto.png、android-sl2-reset.png |
+| 重开后继续战斗 | 双方各打一张打击，中型史莱姆同步为 49/61 HP；双方结束回合，正常进入第 2 回合，两人均 76/80 HP | screenshots/android-sl2-play.png、android-sl2-turn2.png；logs/macos-sl.log、android-sl.log |
+
+两次重开均没有手动进入大厅选房或选择角色。房间 ID 依次由 `9f0d75f9-8235-410a-a4df-94254a9329ff` → `c59a7182-ae59-40da-909a-2967c96df0e3` → `b83e8b48-d6de-42a8-9f1d-41db4d1cacdd`；每次快照只有一个房间、两名玩家。saveKey 保持 `27c62e99249b8ce413cc29de5625ecf36b07147a6814c1a36c69314cdee8546f`，Android desiredNetId 始终为 `3470906098995623213`，种子保持 `4HNAY89W0MTZ`。最后正常保存退出，`logs/rooms-after-cleanup.json` 为空。
+
+功能场景实测通过；切换期并非零错误日志：Mac 两次、Android 第二次出现游戏 `NMultiplayerNetworkProblemIndicator.UpdateLoop` 的 NullReferenceException，另有断开期 ENet `Peer not connected` / 空 peer 信息。它们没有阻止本轮自动恢复、双端同步或继续回合；不将其描述为无异常运行。双端日志未检出 StateDivergence 或 checksum mismatch。独立证据审查：功能 PASS，保留切换异常。归因是既有重开清理将 RunManager.NetService 置空，与旧网络指示器异步任务直接读取 NetService.IsConnected 发生竞争；ENet 心跳在客户端先断开后仍发送。属于既有重开生命周期问题，本次补测未改动此代码；不将其简单归因成纯游戏问题。
 
 ## 自动检查
 
