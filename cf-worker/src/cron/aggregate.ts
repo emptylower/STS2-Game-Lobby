@@ -9,7 +9,7 @@ import {
 
 type FetchLike = (input: RequestInfo, init?: RequestInit) => Promise<Response>;
 
-const SAMPLER_PER_SOURCE = 5;
+const SAMPLER_MAX = 8;
 const PEER_FETCH_TIMEOUT_MS = 5_000;
 // How long to keep a peer in the public list after we last successfully
 // observed it. Without this, transient unreachability from CF edge (e.g.
@@ -26,12 +26,10 @@ export async function aggregateActivePeers(env: Env, fetchImpl: FetchLike = fetc
   const seeds = await loadSeeds(env);
   const previous = await loadActive(env);
 
-  const samplerSet = new Set<string>();
-  for (const s of seeds.slice(0, SAMPLER_PER_SOURCE)) samplerSet.add(s.address);
-  for (const p of previous.slice(0, SAMPLER_PER_SOURCE)) samplerSet.add(p.address);
+  const samplerAddresses = selectSamplerAddresses(seeds, previous);
 
   const fetched = await Promise.allSettled(
-    [...samplerSet].map((addr) => fetchPeers(addr, fetchImpl)),
+    samplerAddresses.map((addr) => fetchPeers(addr, fetchImpl)),
   );
 
   const merged = new Map<string, PeerEntry>();
@@ -63,6 +61,7 @@ export async function aggregateActivePeers(env: Env, fetchImpl: FetchLike = fetc
   // because CF edge can't reach them this tick.
   const filterResults = await Promise.allSettled(
     [...merged.keys()].map(async (addr) => {
+      if (isIpLiteralAddress(addr)) return { addr, wantsListing: null };
       const wantsListing = await fetchWantsPublicListing(addr, fetchImpl);
       return { addr, wantsListing };
     }),
@@ -84,6 +83,45 @@ export async function aggregateActivePeers(env: Env, fetchImpl: FetchLike = fetc
     servers: [...merged.values()],
   };
   await env.DISCOVERY_KV.put(KV_KEY_ACTIVE, JSON.stringify(document));
+}
+
+export function isIpLiteralAddress(address: string): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(address).hostname;
+  } catch {
+    return true;
+  }
+  if (hostname.startsWith("[") && hostname.endsWith("]")) return true;
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) return false;
+  return hostname.split(".").every((part) => Number(part) <= 255);
+}
+
+function selectSamplerAddresses(
+  seeds: Array<{ address: string }>,
+  previous: PeerEntry[],
+): string[] {
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const s of seeds) {
+    if (isIpLiteralAddress(s.address) || seen.has(s.address)) continue;
+    seen.add(s.address);
+    selected.push(s.address);
+  }
+  if (selected.length >= SAMPLER_MAX) return selected.slice(0, SAMPLER_MAX);
+
+  const candidates: string[] = [];
+  for (const p of previous) {
+    if (isIpLiteralAddress(p.address) || seen.has(p.address)) continue;
+    seen.add(p.address);
+    candidates.push(p.address);
+  }
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+  }
+  selected.push(...candidates.slice(0, SAMPLER_MAX - selected.length));
+  return selected;
 }
 
 // Returns true if the peer explicitly wants to be public, false if it

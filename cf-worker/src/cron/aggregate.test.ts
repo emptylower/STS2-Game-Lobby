@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { aggregateActivePeers } from "./aggregate.js";
+import { aggregateActivePeers, isIpLiteralAddress } from "./aggregate.js";
 
 class FakeKV {
   private store = new Map<string, string>();
@@ -217,4 +217,102 @@ test("aggregate evicts previous-active entries past the offline retention TTL", 
     assert.equal(written.servers[0].address, "https://stale");
     assert.equal(written.updated_at, longAgo, "stale entry must not get a fresh updated_at via preservation");
   }
+});
+
+test("isIpLiteralAddress detects IPv4/IPv6 literals and invalid addresses", () => {
+  assert.equal(isIpLiteralAddress("http://47.97.126.98:8787"), true);
+  assert.equal(isIpLiteralAddress("https://[2001:db8::1]:8443"), true);
+  assert.equal(isIpLiteralAddress("https://sts2.gia.dmit.icu.ng"), false);
+  assert.equal(isIpLiteralAddress("http://lt.syx2023.icu:52000"), false);
+  assert.equal(isIpLiteralAddress("not a url"), true);
+});
+
+test("sampler never fetches IP-literal addresses and still samples domain entries from previous", async () => {
+  // Cloudflare Workers fetch() to bare-IP origins is rejected with
+  // error code 1003 before ever reaching the origin, so IP-literal
+  // entries must never be selected as sampler nodes.
+  const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+  const ipAddrs = [
+    "http://47.97.126.98:8787",
+    "http://192.168.1.10:8787",
+    "https://5.6.7.8:8443",
+    "http://9.10.11.12:52000",
+    "https://13.14.15.16",
+  ];
+  const domainAddrs = ["https://prev-domain-6.example", "http://prev-domain-7.example:52000"];
+  const servers = [
+    ...ipAddrs.map((address) => ({ address, publicKey: "ki", lastSeen: recentLastSeen })),
+    ...domainAddrs.map((address) => ({ address, publicKey: "kd", lastSeen: recentLastSeen })),
+  ];
+  const kv = new FakeKV();
+  await kv.put("peers:active", JSON.stringify({
+    version: 1, updated_at: recentLastSeen, servers,
+  }));
+
+  const requestedUrls: string[] = [];
+  const fetchMock = async (input: RequestInfo): Promise<Response> => {
+    const url = typeof input === "string" ? input : input.url;
+    requestedUrls.push(url);
+    if (url.endsWith("/peers")) {
+      const addr = url.replace(/\/peers$/, "");
+      return new Response(JSON.stringify({
+        peers: [{ address: addr, publicKey: "kd", lastSeen: recentLastSeen }],
+      }), { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  await aggregateActivePeers({ DISCOVERY_KV: kv as unknown as KVNamespace }, fetchMock);
+
+  assert.ok(
+    requestedUrls.includes("https://prev-domain-6.example/peers"),
+    "should fetch /peers from previous domain entry #6",
+  );
+  assert.ok(
+    requestedUrls.includes("http://prev-domain-7.example:52000/peers"),
+    "should fetch /peers from previous domain entry #7",
+  );
+  for (const ip of ipAddrs) {
+    assert.ok(
+      !requestedUrls.some((u) => u.startsWith(ip)),
+      `no request should be made to IP literal ${ip}`,
+    );
+  }
+});
+
+test("IP-literal peers reported by a domain sampler stay listed without any direct fetch", async () => {
+  // IP-literal lobbies enter the public list indirectly: a reachable
+  // domain node gossips them via /peers. They must be kept in the
+  // aggregate (retention + no direct metrics probe).
+  const recentLastSeen = new Date(Date.now() - 60_000).toISOString();
+  const kv = new FakeKV();
+  await kv.put("peers:seeds", JSON.stringify({
+    version: 1, updated_at: recentLastSeen,
+    seeds: [{ address: "https://sampler.example" }],
+  }));
+
+  const requestedUrls: string[] = [];
+  const fetchMock = async (input: RequestInfo): Promise<Response> => {
+    const url = typeof input === "string" ? input : input.url;
+    requestedUrls.push(url);
+    if (url === "https://sampler.example/peers") {
+      return new Response(JSON.stringify({
+        peers: [
+          { address: "https://sampler.example", publicKey: "k1", lastSeen: recentLastSeen },
+          { address: "http://10.0.0.5:8787", publicKey: "k2", lastSeen: recentLastSeen },
+        ],
+      }), { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  await aggregateActivePeers({ DISCOVERY_KV: kv as unknown as KVNamespace }, fetchMock);
+
+  const written = JSON.parse(kv.read("peers:active")!);
+  const addrs = written.servers.map((s: { address: string }) => s.address).sort();
+  assert.deepEqual(addrs, ["http://10.0.0.5:8787", "https://sampler.example"]);
+  assert.ok(
+    !requestedUrls.includes("http://10.0.0.5:8787/peers/metrics"),
+    "must not probe /peers/metrics on IP-literal peers",
+  );
 });
