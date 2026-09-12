@@ -133,7 +133,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         NetClientGameService service,
         LanConnectProtocolOffer offer,
         LanConnectProtocolSelection selection,
-        ReadOnlySpan<byte> protocolFlowNonce)
+        ReadOnlySpan<byte> protocolFlowNonce,
+        int? peerNativeBusTypeId)
     {
         ArgumentNullException.ThrowIfNull(service);
         if (protocolFlowNonce.Length != LanConnectSidecarFrameCodec.FlowNonceBytes)
@@ -149,7 +150,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             offer,
             selection,
             isHost: false,
-            protocolFlowNonce.ToArray());
+            protocolFlowNonce.ToArray(),
+            peerNativeBusTypeId);
     }
 
     internal void Unbind(INetGameService service)
@@ -173,11 +175,13 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     internal void PrepareHostNativeFlow(
         NetHostGameService service,
         ulong peerNetId,
-        ReadOnlySpan<byte> protocolFlowNonce)
+        ReadOnlySpan<byte> protocolFlowNonce,
+        int peerNativeBusTypeId)
     {
         Binding binding = RequireBinding(GetMessageBus(service));
-        binding.BindBidirectionalNativeFlow(service.NetId, peerNetId, protocolFlowNonce);
-        Log.Info($"sts2_lan_connect tail: native flow bound for peer {peerNetId} (host side).");
+        binding.BindBidirectionalNativeFlow(service.NetId, peerNetId, protocolFlowNonce, peerNativeBusTypeId);
+        Log.Info(
+            $"sts2_lan_connect tail: native flow bound for peer {peerNetId} (host side, peerNativeBusTypeId={peerNativeBusTypeId}).");
     }
 
     /// <summary>激活宿主侧 native flow：flush 该 peer 的延迟扩展帧（InitialGameInfo/ConnectionFailed）。</summary>
@@ -506,6 +510,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                     binding.IsHost,
                     recipient,
                     binding.Service.NetId,
+                    flow.PeerNativeBusTypeId,
                     state.Pending.MessageKind,
                     flow.FlowNonce,
                     flow.NextOutgoingSequence,
@@ -875,6 +880,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                 isHostTransport: true,
                 recipientPeerId,
                 binding.Service.NetId,
+                flow.PeerNativeBusTypeId,
                 pending.MessageKind,
                 flow.FlowNonce,
                 flow.NextOutgoingSequence,
@@ -1430,13 +1436,14 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         LanConnectProtocolOffer offer,
         LanConnectProtocolSelection selection,
         bool isHost,
-        byte[]? protocolFlowNonce = null)
+        byte[]? protocolFlowNonce = null,
+        int? peerNativeBusTypeId = null)
     {
         // 自检强制执行点：用户已发起 tail 会话，主菜单前的注册表初始化必然已完成。
         LanConnectNativeBusStartupCheck.EnsureReadyOrThrow();
         offer.Validate();
         selection.Validate(offer);
-        Binding binding = new(this, service, offer, selection, isHost, protocolFlowNonce);
+        Binding binding = new(this, service, offer, selection, isHost, protocolFlowNonce, peerNativeBusTypeId);
         lock (_sync)
         {
             if (_bindings.Remove(bus, out Binding? previous))
@@ -1767,7 +1774,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             LanConnectProtocolOffer offer,
             LanConnectProtocolSelection selection,
             bool isHost,
-            byte[]? protocolFlowNonce)
+            byte[]? protocolFlowNonce,
+            int? peerNativeBusTypeId)
         {
             Owner = owner;
             Service = service;
@@ -1775,6 +1783,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             Selection = selection;
             IsHost = isHost;
             ProtocolFlowNonce = protocolFlowNonce?.ToArray();
+            PeerNativeBusTypeId = peerNativeBusTypeId;
             MessageBus = GetMessageBus(service);
             Writer = NetMessageBusWriter.GetValue(MessageBus) as PacketWriter
                 ?? throw new InvalidOperationException("NetMessageBus._writer is unavailable.");
@@ -1788,6 +1797,9 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         internal LanConnectProtocolSelection Selection { get; }
         internal bool IsHost { get; }
         internal byte[]? ProtocolFlowNonce { get; }
+
+        /// <summary>对端声明的 native bus typeId（客户端 binding = 房主 typeId；宿主 binding 为 null，按 peer 记录在 NativeFlow）。</summary>
+        internal int? PeerNativeBusTypeId { get; }
         internal NetMessageBus MessageBus { get; }
         internal PacketWriter Writer { get; }
         private readonly Dictionary<NativeFlowKey, NativeFlow> _nativeFlows = [];
@@ -1888,7 +1900,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         internal void BindBidirectionalNativeFlow(
             ulong localPeerId,
             ulong remotePeerId,
-            ReadOnlySpan<byte> protocolFlowNonce)
+            ReadOnlySpan<byte> protocolFlowNonce,
+            int peerNativeBusTypeId)
         {
             if (protocolFlowNonce.Length != LanConnectSidecarFrameCodec.FlowNonceBytes)
             {
@@ -1897,10 +1910,17 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                     "Native flow binding requires a 16-byte protocol flow nonce.");
             }
 
+            if (peerNativeBusTypeId is < 0 or > 255)
+            {
+                throw Protocol(
+                    "lan_type_id_mismatch",
+                    $"Native flow binding requires the peer native bus type id in 0..255, got {peerNativeBusTypeId}.");
+            }
+
             lock (Sync)
             {
-                BindNativeFlowLocked(localPeerId, remotePeerId, protocolFlowNonce);
-                BindNativeFlowLocked(remotePeerId, localPeerId, protocolFlowNonce);
+                BindNativeFlowLocked(localPeerId, remotePeerId, protocolFlowNonce, peerNativeBusTypeId);
+                BindNativeFlowLocked(remotePeerId, localPeerId, protocolFlowNonce, peerNativeBusTypeId);
             }
         }
 
@@ -1915,7 +1935,12 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
 
                 byte[] nonce = ProtocolFlowNonce
                     ?? throw new InvalidOperationException("Tail client binding has no protocol flow nonce.");
-                BindBidirectionalNativeFlow(Service.NetId, GetHostPeerId(Service), nonce);
+                // 房主 typeId 缺失（join 链路未透传）⇒ 结构化失败，不得静默回退到本机 ID。
+                int peerTypeId = PeerNativeBusTypeId
+                    ?? throw Protocol(
+                        "lan_type_id_mismatch",
+                        "Tail client binding has no host native bus type id to address outgoing frames.");
+                BindBidirectionalNativeFlow(Service.NetId, GetHostPeerId(Service), nonce, peerTypeId);
             }
         }
 
@@ -2137,7 +2162,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         private void BindNativeFlowLocked(
             ulong senderPeerId,
             ulong recipientPeerId,
-            ReadOnlySpan<byte> protocolFlowNonce)
+            ReadOnlySpan<byte> protocolFlowNonce,
+            int peerNativeBusTypeId)
         {
             NativeFlowKey key = new(senderPeerId, recipientPeerId);
             if (_nativeFlows.ContainsKey(key))
@@ -2145,7 +2171,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                 return;
             }
 
-            _nativeFlows.Add(key, new NativeFlow(protocolFlowNonce));
+            _nativeFlows.Add(key, new NativeFlow(protocolFlowNonce, peerNativeBusTypeId));
         }
     }
 
@@ -2182,12 +2208,16 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     {
         private readonly byte[] _flowNonce;
 
-        internal NativeFlow(ReadOnlySpan<byte> flowNonce)
+        internal NativeFlow(ReadOnlySpan<byte> flowNonce, int peerNativeBusTypeId)
         {
             _flowNonce = flowNonce.ToArray();
+            PeerNativeBusTypeId = peerNativeBusTypeId;
         }
 
         internal ReadOnlySpan<byte> FlowNonce => _flowNonce;
+
+        /// <summary>本 flow 出站帧应写入的 typeId（= 对端声明的本类消息 id，按对端寻址）。</summary>
+        internal int PeerNativeBusTypeId { get; }
         internal uint NextOutgoingSequence { get; private set; } = 1;
         internal uint ExpectedIncomingSequence { get; private set; } = 1;
 

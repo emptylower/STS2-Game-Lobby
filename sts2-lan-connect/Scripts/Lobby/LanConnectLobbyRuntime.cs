@@ -2400,10 +2400,21 @@ internal sealed partial class LanConnectLobbyRuntime :
                         try
                         {
                             byte[] flowNonce = LanConnectSidecarFrameCodec.ParseFlowNonce(envelope.ProtocolFlowNonce);
+                            // peerNativeBusTypeId 缺失/越界 ⇒ 与 nonce 非法同一处理分支（拒绝绑定，不默默继续）。
+                            int peerNativeBusTypeId = envelope.PeerNativeBusTypeId
+                                ?? throw new InvalidDataException(
+                                    "Control envelope is missing peerNativeBusTypeId for the native flow binding.");
+                            if (peerNativeBusTypeId is < 0 or > 255)
+                            {
+                                throw new InvalidDataException(
+                                    $"Control envelope peerNativeBusTypeId {peerNativeBusTypeId} is outside 0..255.");
+                            }
+
                             LanConnectTailMessageRuntime.Shared.PrepareHostNativeFlow(
                                 session.NetService,
                                 nativePeerId,
-                                flowNonce);
+                                flowNonce,
+                                peerNativeBusTypeId);
                             if (session.ObserveNativeControlBinding(nativePeerId))
                             {
                                 LanConnectTailMessageRuntime.Shared.ActivateHostNativeFlow(

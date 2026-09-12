@@ -173,6 +173,7 @@ interface ControlPeer {
   ticketId?: string;
   controlBindingId?: string;
   protocolFlowNonce?: string;
+  peerNativeBusTypeId?: number;
   playerNetId?: string;
   playerName?: string;
 }
@@ -237,6 +238,8 @@ const ReservedRelayedIdentityFields = [
   "protocolSelection",
   "capabilityDigest",
   "protocolFlowNonce",
+  "peerNativeBusTypeId",
+  "nativeBusTypeId",
 ] as const;
 
 export function sanitizeRelayedControlEnvelope(
@@ -501,7 +504,7 @@ export async function createLobbyService(
         lanProtocolMin: 1,
         lanProtocolMax: 1,
         minimumClientVersion: "0.3.0",
-        tailV1MinimumClientVersion: "0.6.1-alpha.1",
+        tailV1MinimumClientVersion: "0.6.2-alpha.1",
         tailV1Carrier: "native_bus_v1",
       },
     });
@@ -765,6 +768,9 @@ export async function createLobbyService(
         registryFingerprint: typeof body?.registryFingerprint === "string"
           ? boundedString(body.registryFingerprint, "registryFingerprint", 96)
           : undefined,
+        nativeBusTypeId: typeof body?.nativeBusTypeId === "number"
+          ? body.nativeBusTypeId
+          : undefined,
       };
       // 门禁链（presence → carrier → fingerprint → minimumClientVersion）置于 wire-cache 预检查之前。
       const protocolGateFailure = store.findJoinProtocolGateFailure(req.params.id, joinInput);
@@ -827,10 +833,11 @@ export async function createLobbyService(
       );
       const localMods = body.localMods;
 
-      // 只读投影：客户端可选携带 fingerprint 做 UX 快速失败（非门禁；200 永不承载失败字段）。
-      const registryFingerprint = typeof body.registryFingerprint === "string"
-        ? boundedString(body.registryFingerprint, "registryFingerprint", 96)
-        : undefined;
+      // registryFingerprint 仅保留在白名单里（忽略即可）：0.6.2 起按对端寻址，
+      // 指纹不再是门禁，preflight 也不再据此快速失败。
+      if (typeof body.registryFingerprint !== "string" && body.registryFingerprint !== undefined) {
+        throw new InputError("registryFingerprint 必须是字符串。");
+      }
 
       if (!serverAdminStateStore.getState().modSyncEnabled || protocolVersion !== MOD_SYNC_PROTOCOL_VERSION) {
         res.json({
@@ -854,10 +861,6 @@ export async function createLobbyService(
         gameVersion,
         localMods,
       });
-      // UX 快速失败：fingerprint 不一致时给出与非 2xx 一致的错误 envelope（不签发工单、不阻断后续修复）。
-      if (registryFingerprint !== undefined) {
-        store.assertPreflightFingerprintAllowed(req.params.id, registryFingerprint);
-      }
       console.log(
         `[lobby] mod preflight roomId=${req.params.id} hostInventory=${result.hostInventoryAvailable ? "available" : "legacy"} inventoryHash=${result.inventoryHash ?? "none"} missingWorkshop=${result.missingWorkshopMods.length} missingManual=${result.missingManualMods.length} extraGameplay=${result.extraGameplayMods.length} versionMismatch=${result.versionMismatches.length}`,
       );
@@ -1391,6 +1394,9 @@ export async function createLobbyService(
         ...(joinTicket?.protocolFlowNonce === undefined
           ? {}
           : { protocolFlowNonce: joinTicket.protocolFlowNonce }),
+        ...(joinTicket?.nativeBusTypeId === undefined
+          ? {}
+          : { peerNativeBusTypeId: joinTicket.nativeBusTypeId }),
         ...(joinTicket?.playerNetId === undefined ? {} : { playerNetId: joinTicket.playerNetId }),
         ...(joinTicket?.playerName === undefined
           ? hostSession?.hostPlayerName === undefined
@@ -1442,6 +1448,9 @@ export async function createLobbyService(
             playerName: binding.playerName,
             bindingId: binding.bindingId,
             protocolFlowNonce: binding.protocolFlowNonce,
+            ...(binding.peerNativeBusTypeId === undefined
+              ? {}
+              : { peerNativeBusTypeId: binding.peerNativeBusTypeId }),
           });
         }
       } else if (
@@ -2113,6 +2122,9 @@ export async function createLobbyService(
           playerName: clientPeer.playerName ?? "",
           bindingId: clientPeer.controlBindingId,
           protocolFlowNonce: clientPeer.protocolFlowNonce,
+          ...(clientPeer.peerNativeBusTypeId === undefined
+            ? {}
+            : { peerNativeBusTypeId: clientPeer.peerNativeBusTypeId }),
         });
       }
     }

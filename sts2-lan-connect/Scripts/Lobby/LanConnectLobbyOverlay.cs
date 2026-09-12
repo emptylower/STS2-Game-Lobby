@@ -2942,7 +2942,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _protocolTailButton = CreateProtocolChoiceButton(
             "新协议",
-            "通过官方 Mod 消息注册通道传输，需 0.6.1 及以上客户端；与是否安装 RitsuLib 无关",
+            "通过官方 Mod 消息注册通道传输，需 0.6.2 及以上客户端；与双方是否安装 RitsuLib、Mod 列表是否相同均无关",
             CreateProtocolTailId);
         choices.AddChild(_protocolTailButton);
 
@@ -6323,7 +6323,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         LanConnectProtocolProfile.Compat4x5V1 => "沿用旧版联机协议，可与 0.3–0.5 旧版客户端同房；不支持 RitsuLib",
         LanConnectProtocolProfile.TailV1 => tailRuntimeAvailable
-            ? "通过官方 Mod 消息注册通道传输，需 0.6.1 及以上客户端；与是否安装 RitsuLib 无关"
+            ? "通过官方 Mod 消息注册通道传输，需 0.6.2 及以上客户端；与双方是否安装 RitsuLib、Mod 列表是否相同均无关"
             : "需要游戏测试分支（0.111+）；当前游戏版本不支持，请选择“兼容旧版 Mod”",
         _ => "当前客户端不支持该房间的联机协议。"
     };

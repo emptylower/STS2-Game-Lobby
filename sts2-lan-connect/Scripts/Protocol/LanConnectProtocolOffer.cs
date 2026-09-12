@@ -7,6 +7,7 @@ internal sealed record LanConnectProtocolOffer(
     bool RitsuLibPresent,
     bool LegacySidecarAvailable,
     string? RegistryFingerprint = null,
+    int? NativeBusTypeId = null,
     string? RitsuLibVersion = null)
 {
     public static LanConnectProtocolOffer CreateCurrent()
@@ -27,6 +28,17 @@ internal sealed record LanConnectProtocolOffer(
             // 游戏消息注册表不可用（如测试宿主）：留空；创建门禁会给出结构化错误而非崩溃。
         }
 
+        // 本机 native bus typeId 同样依赖注册表；不可用时留空（tail_v1 创建门禁会拒绝）。
+        int? nativeBusTypeId = null;
+        try
+        {
+            nativeBusTypeId = LanConnectNativeBusSender.ResolveTypeId();
+        }
+        catch (Exception)
+        {
+            // 游戏消息注册表不可用（如测试宿主）：留空；创建门禁会给出结构化错误而非崩溃。
+        }
+
         return new LanConnectProtocolOffer(
             tailLanProtocolVersion,
             tailLanProtocolVersion,
@@ -34,6 +46,7 @@ internal sealed record LanConnectProtocolOffer(
             capabilities.RitsuLibPresent,
             capabilities.LegacySidecarAvailable,
             fingerprint,
+            nativeBusTypeId,
             capabilities.RitsuLibVersion);
     }
 

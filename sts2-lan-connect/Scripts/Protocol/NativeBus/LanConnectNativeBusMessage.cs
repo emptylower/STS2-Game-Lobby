@@ -12,9 +12,13 @@ namespace Sts2LanConnect.Scripts;
 /// 与所有已发布版本断连。
 ///
 /// 外层帧格式（v0.7 spec §3.1；除原版 9 字节线头 senderId 为小端外，本消息字段一律大端）：
-///   [magic:2 = 0x4C 0x42][ver:1 = 1][localTypeId:4 BE][frameLen:4 BE][frame:frameLen][尾随字节:忽略]
+///   [magic:2 = 0x4C 0x42][ver:1 = 2][localTypeId:4 BE][frameLen:4 BE][frame:frameLen][尾随字节:忽略]
 /// frame 为现有 LanConnectSidecarFrame 编码；尾随内容（如 RitsuLib native trailer，0.5.12 布局
 /// 36 字节）由 frameLen 长度边界忽略。
+///
+/// localTypeId 语义（0.6.2 起，按对端寻址）：本帧**寻址到的** typeId，即**接收方**本机的
+/// TypeToId&lt;LanConnectNativeBusMessage&gt;()，不再是发送方自己的 id。发送端必须写对端声明
+/// 的 id；由此可自校验：线头 packet[0] == frame.localTypeId == 接收方本机 id。
 ///
 /// Deserialize 契约：**非抛出**。任何读取失败只记录 InvalidReason 并返回，坏帧绝不炸穿原版
 /// TryDeserializeMessage 接收循环；由配对屏障读取 InvalidReason 后统一转 lan_native_frame_invalid
@@ -24,7 +28,9 @@ public sealed class LanConnectNativeBusMessage : INetMessage
 {
     internal const byte MagicFirst = 0x4C;
     internal const byte MagicSecond = 0x42;
-    internal const byte WireVersion = 1;
+
+    /// <summary>外层帧版本（0.6.2 起为 2：localTypeId 语义改为按对端寻址；收到 ver!=2 一律拒绝）。</summary>
+    internal const byte WireVersion = 2;
 
     /// <summary>外层帧头字节数：magic(2) + ver(1) + localTypeId(4) + frameLen(4)。</summary>
     internal const int OuterHeaderBytes = 11;
@@ -54,7 +60,7 @@ public sealed class LanConnectNativeBusMessage : INetMessage
     /// <summary>仅 [frameLen] 界定内的字节；尾随内容忽略。</summary>
     public byte[]? Frame { get; private set; }
 
-    /// <summary>发送端本机 TypeToId（大端字段）；接收端与本地 TypeToId 比对。</summary>
+    /// <summary>本帧寻址到的 typeId（大端字段）= 接收方本机 TypeToId；接收端与本地 TypeToId 比对。</summary>
     public uint LocalTypeId { get; private set; }
 
     internal void Configure(uint localTypeId, ReadOnlySpan<byte> frame)

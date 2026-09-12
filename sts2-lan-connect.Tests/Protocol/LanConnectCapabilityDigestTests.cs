@@ -18,7 +18,7 @@ public sealed class LanConnectCapabilityDigestTests
                 profile == LanConnectProtocolProfile.Compat4x5V1
                     ? LanConnectProtocolCarrier.None
                     : LanConnectProtocolCarrier.NativeBusV1,
-                profile == LanConnectProtocolProfile.Compat4x5V1 ? "0.3.0" : "0.6.1-alpha.1",
+                profile == LanConnectProtocolProfile.Compat4x5V1 ? "0.3.0" : "0.6.2-alpha.1",
                 vector.Policy.MaxPlayers,
                 vector.Policy.GameVersion,
                 vector.Policy.WireCacheSignatureV1,
@@ -36,7 +36,7 @@ public sealed class LanConnectCapabilityDigestTests
             LanConnectProtocolProfile.TailV1,
             1,
             LanConnectProtocolCarrier.LegacyTailV1,
-            "0.6.1-alpha.1",
+            "0.6.2-alpha.1",
             8,
             "0.110.1",
             "aabb",
@@ -58,7 +58,7 @@ public sealed class LanConnectCapabilityDigestTests
             "standalone_tail_v1",
             "0.6.0-alpha.1",
             new string('a', 64));
-        LanConnectProtocolOffer offer = new(1, 1, "0.6.1-alpha.1", false, false);
+        LanConnectProtocolOffer offer = new(1, 1, "0.6.2-alpha.1", false, false);
 
         LanConnectProtocolException exception = Assert.Throws<LanConnectProtocolException>(
             () => legacyCarrier.ToValidatedValue(offer));
@@ -72,20 +72,20 @@ public sealed class LanConnectCapabilityDigestTests
             LanConnectProtocolProfile.TailV1,
             1,
             LanConnectProtocolCarrier.NativeBusV1,
-            "0.6.1-alpha.1",
+            "0.6.2-alpha.1",
             8,
             "v0.111.0",
             "wcv1:D5-qRxko7ywoZJWzaOM9Q49NNOWP1Jr2qXc_Nk204uU",
             false,
             string.Empty);
         string expectedDigest = LanConnectCapabilityDigest.Compute(template);
-        LanConnectProtocolOffer offer = new(1, 1, "0.6.1-alpha.1", false, false);
+        LanConnectProtocolOffer offer = new(1, 1, "0.6.2-alpha.1", false, false);
 
         LobbyProtocolSelectionDto dto = CreateResponseDto(
             "tail_v1",
             1,
             "native_bus_v1",
-            "0.6.1-alpha.1",
+            "0.6.2-alpha.1",
             expectedDigest);
         Assert.Equal(expectedDigest, dto.ToValidatedValue(offer).CapabilityDigest);
 
@@ -100,7 +100,7 @@ public sealed class LanConnectCapabilityDigestTests
             "tail_v1",
             1,
             "native_bus_v1",
-            "0.6.1-alpha.1",
+            "0.6.2-alpha.1",
             flippedDigest);
         Assert.Throws<LanConnectProtocolException>(() => mismatched.ToValidatedValue(offer));
     }

@@ -23,6 +23,9 @@ internal static class LanConnectNativeBusStartupCheck
     private static readonly object Sync = new();
     private static Result? _cachedVerdict;
 
+    /// <summary>终局裁决的诊断行只输出一次（Entry 阶段恒为 Pending，终局补打由此标志去重）。</summary>
+    private static bool _finalDiagnosticsLogged;
+
     internal sealed record Result(bool Ok, bool Pending, string? Reason, int? LocalTypeId, string? RegistryFingerprint)
     {
         public static Result OkResult(int localTypeId, string fingerprint) =>
@@ -77,6 +80,16 @@ internal static class LanConnectNativeBusStartupCheck
                     // 用户已发起 tail 会话而注册表仍不可用：视为终局失败（Do not guess）。
                     _cachedVerdict = Result.Fail("message registry is unavailable at tail session start.");
                 }
+
+                // Entry 阶段裁决恒为 Pending（native_bus: ready 行从不出现在日志里）；
+                // 得出终局裁决后补打一次诊断，同一裁决只打印一次。
+                if (!_finalDiagnosticsLogged)
+                {
+                    _finalDiagnosticsLogged = true;
+                    LogDiagnostics(
+                        _cachedVerdict,
+                        patchStackOrder: "lan_connect_first_then_ritsulib");
+                }
             }
 
             if (_cachedVerdict.Ok)
@@ -112,6 +125,7 @@ internal static class LanConnectNativeBusStartupCheck
         lock (Sync)
         {
             _cachedVerdict = null;
+            _finalDiagnosticsLogged = false;
         }
     }
 

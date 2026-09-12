@@ -753,6 +753,9 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         internal const ulong DefaultHostId = 1;
         internal const ulong DefaultClientId = 22;
 
+        // 与 NativeTypeIdScope.TestNativeTypeId 同值：两端对称（同表）时对端寻址 id == 本机 id。
+        private const uint TestNativeTypeId = 200;
+
         internal RuntimePair()
         {
             HostTransport = new TestNetHost(Host, DefaultHostId);
@@ -761,8 +764,8 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             ClientTransport = new TestNetClient(Client, DefaultClientId, DefaultHostId);
             Client.Initialize(ClientTransport, default);
             Runtime.BindHost(Host, Offer, Selection);
-            Runtime.BindClient(Client, Offer, Selection, Convert.FromHexString("00112233445566778899aabbccddeeff"));
-            Runtime.PrepareHostNativeFlow(Host, ClientId, Convert.FromHexString("00112233445566778899aabbccddeeff"));
+            Runtime.BindClient(Client, Offer, Selection, Convert.FromHexString("00112233445566778899aabbccddeeff"), (int)TestNativeTypeId);
+            Runtime.PrepareHostNativeFlow(Host, ClientId, Convert.FromHexString("00112233445566778899aabbccddeeff"), (int)TestNativeTypeId);
         }
 
         internal byte[] LastHostExtension => HostTransport.SentToClients[^1].Bytes;

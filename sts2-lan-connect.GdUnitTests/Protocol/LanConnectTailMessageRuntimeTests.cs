@@ -468,7 +468,7 @@ public sealed class LanConnectTailMessageRuntimeTests
         pair.DeliverPendingToPeer(pending, pair.ClientId);
         AssertThat(pair.HostTransport.SentToClients.Count).IsEqual(0);
 
-        pair.Runtime.PrepareHostNativeFlow(pair.Host, pair.ClientId, pair.ProtocolFlowNonce);
+        pair.Runtime.PrepareHostNativeFlow(pair.Host, pair.ClientId, pair.ProtocolFlowNonce, (int)TestNativeTypeId);
         AssertThat(pair.HostTransport.SentToClients.Count).IsEqual(0);
 
         pair.Runtime.ActivateHostNativeFlow(pair.Host, pair.ClientId);
@@ -952,11 +952,11 @@ public sealed class LanConnectTailMessageRuntimeTests
             Offer = new LanConnectProtocolOffer(1, 1, "0.6.1-alpha.1", false, false);
             Selection = CreateSelection();
             Runtime.BindHost(Host, Offer, Selection);
-            Runtime.BindClient(Client, Offer, Selection, ProtocolFlowNonce);
+            Runtime.BindClient(Client, Offer, Selection, ProtocolFlowNonce, (int)TestNativeTypeId);
             _ = bindClientFlow;
             if (bindFlows)
             {
-                Runtime.PrepareHostNativeFlow(Host, ClientId, ProtocolFlowNonce);
+                Runtime.PrepareHostNativeFlow(Host, ClientId, ProtocolFlowNonce, (int)TestNativeTypeId);
                 HostTransport.AddConnectedPeer(ClientId);
             }
         }
@@ -1003,7 +1003,7 @@ public sealed class LanConnectTailMessageRuntimeTests
 
         internal void PrepareHostNativeFlow(ulong peerId, byte[] nonce)
         {
-            Runtime.PrepareHostNativeFlow(Host, peerId, nonce);
+            Runtime.PrepareHostNativeFlow(Host, peerId, nonce, (int)TestNativeTypeId);
             HostTransport.AddConnectedPeer(peerId);
         }
 

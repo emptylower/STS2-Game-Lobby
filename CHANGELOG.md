@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+## [0.6.2-alpha.1] - 2026-09-08
+
+`0.6.2-alpha.1`：native_bus 消息 ID 改为**按对端寻址**的预发布修复候选（GitHub-only pre-release，真机双实例 E2E 验收前不更新创意工坊）。发布说明见 `docs/RELEASE_NOTES_V0.6.2_ALPHA1_ZH.md`。客户端与 lobby-service 同步 `0.6.2-alpha.1`；tail 房间 `minimumClientVersion` 同升 `0.6.2-alpha.1`。正式版仍为 `0.6.1`。
+
+### Added
+
+- 协议链路新增 `nativeBusTypeId`（0-255，整数）：建房 offer / join 请求 / join 响应（`hostNativeBusTypeId`）/ 控制通道 envelope（`peerNativeBusTypeId`）四段透传，轨道与 `protocolFlowNonce` 完全一致；`peerNativeBusTypeId` / `nativeBusTypeId` 列入控制通道中继保留字段，客户端不可伪造。
+- 客户端 `NativeFlow` 记录每对端的 `PeerNativeBusTypeId`，发送时按对端寻址；取不到有效对端 ID 一律结构化失败 `lan_type_id_mismatch`，绝不静默回退本机 ID。
+- 启动自检得出终局裁决后补打一次 `native_bus: ready local_type_id=… registry_fingerprint=…` 诊断行（同一裁决只打印一次），修复该行此前从不出现的问题。
+
+### Changed
+
+- **发送语义**：`typeId` 是接收方本地消息表的下标而非全局身份——发送端线头字节与帧内 `localTypeId` 改写**对端声明的 id**；外层帧版本 `ver` 由 `1` 升为 `2`（`ver != 2` ⇒ `lan_native_frame_invalid` 结构化拒绝）。接收路径校验不变（线头字节 == 帧内 localTypeId == 本机 id）。
+- **撤除 registry fingerprint 主门禁**：`lan_registry_fingerprint_mismatch` 不再拒绝加入，指纹降级为诊断值（双方值随工单 / 绑定记录）；指纹仍必须携带且格式合法（`lan_registry_fingerprint_required` 保留），`/mod-preflight` 不再据此快速失败。
+- tail_v1 创建与加入新增必填 `nativeBusTypeId`（整数 0-255），缺失 / 越界复用 `lan_registry_fingerprint_required`（文案区分）；`native_bus_v1` 的 `minimumClientVersion` 升至 `0.6.2-alpha.1`，`0.6.1` 客户端加入新协议房间得到明确的 426 升级提示。
+- capability digest 输入不包含 `nativeBusTypeId`（与 `registryFingerprint` 同为 selection 独立字段，不制造额外不兼容）。
+
+### Fixed
+
+- 修复 0.6.1 跨端（PC ↔ 安卓等）无法互相加入新协议房间（HTTP 409 `lan_registry_fingerprint_mismatch`）：根因是任何一端多装一个注册 `INetMessage` 的第三方 MOD（如 `Map Enhance Mod`）即触发全表指纹不一致，而该类 MOD 不影响 gameplay、对既有三项 MOD 检查完全隐形。按对端寻址后两表无需任何关系，第三方注册行为与本协议彻底解耦。
+
+### Compatibility
+
+- `0.6.2-alpha.1` ↔ `0.6.2-alpha.1` MOD 集合不同（含跨平台）可正常联机（本候选的目标）。
+- `0.6.1` 客户端加入 `0.6.2-alpha.1` 房间：服务端 `minimumClientVersion` 拒绝（426 `lan_client_version_too_old`），提示升级；`0.6.1` 帧误达 `0.6.2` 客户端按 `lan_native_frame_invalid` 结构化拒绝。`0.6.2` 客户端 ↔ `0.6.1` 服务端行为与 0.6.1 相同（不回归）。compat_4_5_v1 房间完全不受影响。
+
 ## [0.6.1] - 2026-09-08
 
 `0.6.1` 正式版：客户端与 lobby-service 同步定为 `0.6.1`，收敛 `0.6.1-alpha.1`~`alpha.5` 全部五个测试候选的改动。发布说明见 `docs/RELEASE_NOTES_V0.6.1_ZH.md`。相对 `0.6.0` 的核心变化是新协议房间的载体从「要求全员 RitsuLib presence 一致的 typed-sidecar」换成 **`native_bus_v1`**（游戏官方 MOD 消息注册通道），与是否安装 RitsuLib 完全无关；并修复了该切换过程中暴露的一系列联机与存档问题。

@@ -30,13 +30,14 @@ internal sealed class LanConnectLobbyManagedJoinFlow
     private readonly LanConnectProtocolOffer? _protocolOffer;
     private readonly LanConnectProtocolSelection? _protocolSelection;
     private readonly byte[]? _protocolFlowNonce;
+    private readonly int? _peerNativeBusTypeId;
     private string? _protocolMismatchSummary;
     private List<string>? _detectedMissingModsOnLocal;
     private List<string>? _detectedMissingModsOnHost;
     private bool _protocolMismatchEscalated;
 
     public LanConnectLobbyManagedJoinFlow(string compatibilityProfile)
-        : this(compatibilityProfile, null, null, null)
+        : this(compatibilityProfile, null, null, null, null)
     {
     }
 
@@ -44,7 +45,8 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         string compatibilityProfile,
         LanConnectProtocolOffer? protocolOffer,
         LanConnectProtocolSelection? protocolSelection,
-        byte[]? protocolFlowNonce)
+        byte[]? protocolFlowNonce,
+        int? peerNativeBusTypeId)
     {
         _relaxedCompatibility = string.Equals(
             compatibilityProfile,
@@ -53,6 +55,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         _protocolOffer = protocolOffer;
         _protocolSelection = protocolSelection;
         _protocolFlowNonce = protocolFlowNonce?.ToArray();
+        _peerNativeBusTypeId = peerNativeBusTypeId;
     }
 
     public NetClientGameService? NetService { get; private set; }
@@ -78,7 +81,8 @@ internal sealed class LanConnectLobbyManagedJoinFlow
                 NetService,
                 _protocolOffer ?? throw new InvalidOperationException("Tail join has no frozen local offer."),
                 _protocolSelection,
-                _protocolFlowNonce ?? throw new InvalidOperationException("Tail join has no protocol flow nonce."));
+                _protocolFlowNonce ?? throw new InvalidOperationException("Tail join has no protocol flow nonce."),
+                _peerNativeBusTypeId);
         }
         CancelToken.Token.Register(Cancel);
 

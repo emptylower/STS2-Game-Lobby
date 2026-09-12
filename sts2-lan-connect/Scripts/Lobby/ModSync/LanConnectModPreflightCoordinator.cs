@@ -29,7 +29,7 @@ internal sealed record LanConnectModPreflightJoinRequest
     public string GameVersion { get; init; } = string.Empty;
     public string ModVersion { get; init; } = string.Empty;
     public LanConnectProtocolOffer ProtocolOffer { get; init; } =
-        new(1, 1, "0.6.1-alpha.1", false, false);
+        new(1, 1, "0.6.2-alpha.1", false, false);
     public List<string> ModList { get; init; } = [];
     public string? WireCacheSignatureV1 { get; init; }
     public List<LobbyModDescriptor> LocalMods { get; init; } = [];
@@ -226,7 +226,8 @@ internal sealed class LanConnectModPreflightCoordinator
                 WireCacheSignatureV1 = request.WireCacheSignatureV1,
                 DesiredSavePlayerNetId = request.DesiredSavePlayerNetId,
                 PlayerNetId = request.PlayerNetId,
-                RegistryFingerprint = request.ProtocolOffer.RegistryFingerprint
+                RegistryFingerprint = request.ProtocolOffer.RegistryFingerprint,
+                NativeBusTypeId = request.ProtocolOffer.NativeBusTypeId
             },
             cancellationToken);
         return new LanConnectModPreflightJoinResult

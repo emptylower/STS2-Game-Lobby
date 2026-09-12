@@ -77,6 +77,7 @@ internal static class LanConnectLobbyJoinFlow
             }
             LanConnectProtocolSelection selection = selectionDto.ToValidatedValue(localOffer);
             _ = joinResponse.GetProtocolFlowNonceBytes();
+            _ = joinResponse.GetHostNativeBusTypeId();
             if (string.IsNullOrWhiteSpace(joinResponse.ConnectionPlan.ControlChannelId))
             {
                 throw LanConnectProtocolFailureMapper.FromLocalException(
@@ -125,7 +126,8 @@ internal static class LanConnectLobbyJoinFlow
                     LanConnectLobbyEndpointDefaults.GetCompatibilityProfile(),
                     localOffer,
                     selection,
-                    joinResponse.GetProtocolFlowNonceBytes());
+                    joinResponse.GetProtocolFlowNonceBytes(),
+                    joinResponse.HostNativeBusTypeId);
                 using CancellationTokenRegistration cancelRegistration = cancellationToken.Register(static state =>
                 {
                     if (state is CancellationTokenSource source && !source.IsCancellationRequested)

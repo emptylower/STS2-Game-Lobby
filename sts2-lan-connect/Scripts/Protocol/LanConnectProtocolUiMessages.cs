@@ -18,9 +18,15 @@ internal static class LanConnectProtocolUiMessages
                 : "该房间是旧版本创建的，要求所有玩家关闭 RitsuLib；新协议房间不再有此限制。",
             "ritsulib_sidecar_unavailable" => "该房间使用已停用的旧版 RitsuLib 通道，请房主升级 LAN Connect 后重新建房。",
             "lan_legacy_carrier_unsupported" => "该房间由旧版 LAN Connect 创建（旧载体），请房主升级后重新建房。",
-            "lan_registry_fingerprint_required" or "lan_registry_fingerprint_mismatch" =>
-                "双方的联机消息注册表不一致（通常是 Mod 列表不同），无法使用新协议加入。",
-            "lan_native_frame_invalid" or "lan_type_id_mismatch" or "lan_extension_missing" =>
+            // 0.6.2 起两码含义完全不同：required = 本机注册表未就绪/字段缺失；mismatch 只可能来自旧版服务端。
+            "lan_registry_fingerprint_required" =>
+                "本机的联机消息注册表尚未就绪，无法使用新协议。请完整重启游戏后重试；若仍然失败，请更新 LAN Connect。",
+            "lan_registry_fingerprint_mismatch" =>
+                "该大厅服务端为旧版本，仍要求双方 Mod 列表完全一致。请联系服主把 lobby-service 升级到 0.6.2，或改用“兼容旧版 Mod”房间。",
+            // 0.6.2 起按对端寻址：typeId 失败是「寻址/协商」问题，与帧格式问题分开提示。
+            "lan_type_id_mismatch" =>
+                $"新协议消息寻址失败（{failure.Code}），连接已停止；请双方完整重启游戏后重试。",
+            "lan_native_frame_invalid" or "lan_extension_missing" =>
                 $"新协议通信帧校验失败（{failure.Code}），连接已停止；请确认双方 LAN Connect 版本一致。",
             "game_version_mismatch" => "游戏版本不匹配，无法加入该房间。",
             "wire_cache_mismatch" => "联机数据版本不匹配，无法加入该房间。",

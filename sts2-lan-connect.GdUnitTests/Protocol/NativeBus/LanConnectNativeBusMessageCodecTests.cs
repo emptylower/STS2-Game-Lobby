@@ -23,7 +23,7 @@ public sealed class LanConnectNativeBusMessageCodecTests
         AssertThat(payload.AsSpan(0, LanConnectNativeBusMessage.OuterHeaderBytes).ToArray()).IsEqual(new byte[]
         {
             0x4C, 0x42,
-            0x01,
+            0x02,
             0x00, 0x00, 0x00, 0xC8,
             (byte)(frame.Length >> 24),
             (byte)(frame.Length >> 16),
@@ -142,8 +142,9 @@ public sealed class LanConnectNativeBusMessageCodecTests
         AssertThat(magicReason).IsNotNull();
         AssertThat(magicDecoded).IsNull();
 
+        // 0.6.2 起线版本为 2：旧版 ver=1 帧必须被拒绝（升级对端）。
         byte[] badVersion = LanConnectNativeBusMessage.EncodeOuterFrame(LocalTypeId, frame);
-        badVersion[2] = 0x02;
+        badVersion[2] = 0x01;
         LanConnectNativeBusMessage.TryDecodeOuterFrame(
             badVersion, out byte[]? versionDecoded, out _, out string? versionReason);
         AssertThat(versionReason).IsNotNull();

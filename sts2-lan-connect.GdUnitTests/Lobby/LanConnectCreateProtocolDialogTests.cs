@@ -109,7 +109,7 @@ public sealed class LanConnectCreateProtocolDialogTests
         await fixture.Runner.AwaitIdleFrame();
 
         AssertThat(fixture.Overlay.CreateProtocolDescriptionForTests)
-            .IsEqual("通过官方 Mod 消息注册通道传输，需 0.6.1 及以上客户端；与是否安装 RitsuLib 无关");
+            .IsEqual("通过官方 Mod 消息注册通道传输，需 0.6.2 及以上客户端；与双方是否安装 RitsuLib、Mod 列表是否相同均无关");
     }
 
     [TestCase]

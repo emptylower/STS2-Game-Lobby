@@ -142,6 +142,8 @@ test("relayed control envelopes strip reserved identity fields", () => {
     protocolSelection: { carrier: "attacker-carrier" },
     capabilityDigest: "attacker-digest",
     protocolFlowNonce: "attacker-nonce",
+    peerNativeBusTypeId: 255,
+    nativeBusTypeId: 254,
   });
 
   assert.deepEqual(relayed, {
@@ -414,7 +416,7 @@ const CURRENT_PROBE_CAPABILITIES = {
   lanProtocolMin: 1,
   lanProtocolMax: 1,
   minimumClientVersion: "0.3.0",
-  tailV1MinimumClientVersion: "0.6.1-alpha.1",
+  tailV1MinimumClientVersion: "0.6.2-alpha.1",
         tailV1Carrier: "native_bus_v1",
 } as const;
 
@@ -521,8 +523,9 @@ test("active authenticated relay survives room heartbeat timeout and accepts a d
 });
 
 test("HTTP protocol gates reject bad fingerprints and old clients before tickets", async () => {
+  // 0.6.2 起按对端寻址：指纹不一致照常签发工单（不再 mismatch 拒绝）；格式非法仍 409。
   const scenarios = [
-    { host: true, joiner: true, joinerSidecar: false, fingerprint: "sha256:v1:" + "c".repeat(64), code: "lan_registry_fingerprint_mismatch" },
+    { host: true, joiner: true, joinerSidecar: false, fingerprint: "sha256:v1:" + "c".repeat(64), code: null as string | null },
     { host: true, joiner: true, joinerSidecar: false, fingerprint: "not-a-fingerprint", code: "lan_registry_fingerprint_required" },
   ] as const;
   for (const scenario of scenarios) {
@@ -538,16 +541,17 @@ test("HTTP protocol gates reject bad fingerprints and old clients before tickets
           hostPlayerName: "Host",
           gameMode: "standard",
           version: "1.0.0",
-          modVersion: "0.6.1-alpha.1",
-          clientVersion: "0.6.1-alpha.1",
+          modVersion: "0.6.2-alpha.1",
+          clientVersion: "0.6.2-alpha.1",
           protocolProfileV2: "tail_v1",
           protocolOffer: {
             lanProtocolMin: 1,
             lanProtocolMax: 1,
-            clientVersion: "0.6.1-alpha.1",
+            clientVersion: "0.6.2-alpha.1",
             ritsuLibPresent: scenario.host,
             ritsuLibSidecarAvailable: scenario.host,
             registryFingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            nativeBusTypeId: 201,
           },
           maxPlayers: 8,
           hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -555,36 +559,127 @@ test("HTTP protocol gates reject bad fingerprints and old clients before tickets
       });
       assert.equal(createdResponse.status, 201);
       const created = await createdResponse.json() as { roomId: string };
-      const rejected = await fetch(`http://127.0.0.1:${address.port}/rooms/${created.roomId}/join`, {
+      const joinResponse = await fetch(`http://127.0.0.1:${address.port}/rooms/${created.roomId}/join`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           playerName: "Guest",
           version: "1.0.0",
-          modVersion: "0.6.1-alpha.1",
-          clientVersion: "0.6.1-alpha.1",
+          modVersion: "0.6.2-alpha.1",
+          clientVersion: "0.6.2-alpha.1",
           registryFingerprint: scenario.fingerprint,
+          nativeBusTypeId: 202,
           protocolOffer: {
             lanProtocolMin: 1,
             lanProtocolMax: 1,
-            clientVersion: "0.6.1-alpha.1",
+            clientVersion: "0.6.2-alpha.1",
             ritsuLibPresent: scenario.joiner,
             ritsuLibSidecarAvailable: scenario.joinerSidecar,
           },
         }),
       });
-      assert.equal(rejected.status, 409);
-      const body = await rejected.json() as Record<string, unknown>;
-      assert.equal(body.code, scenario.code);
-      if (scenario.code === "lan_registry_fingerprint_mismatch") {
-        assert.equal(typeof (body.details as { expectedFingerprintPrefix?: string }).expectedFingerprintPrefix, "string");
+      if (scenario.code === null) {
+        assert.equal(joinResponse.status, 200);
+        const joined = await joinResponse.json() as { ticketId?: string; hostNativeBusTypeId?: number };
+        assert.ok(joined.ticketId);
+        assert.equal(joined.hostNativeBusTypeId, 201);
+      } else {
+        assert.equal(joinResponse.status, 409);
+        const body = await joinResponse.json() as Record<string, unknown>;
+        assert.equal(body.code, scenario.code);
+        assert.equal("ticketId" in body, false);
+        assert.equal("connectionPlan" in body, false);
       }
-      assert.equal("ticketId" in body, false);
-      assert.equal("connectionPlan" in body, false);
     } finally {
       await service.close();
       cleanupTempDir(config);
     }
+  }
+});
+
+test("HTTP tail gates reject missing or out-of-range nativeBusTypeId and 0.6.1 clients", async () => {
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const address = await service.start();
+  try {
+    const createdResponse = await fetch(`http://127.0.0.1:${address.port}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "type-id-gate",
+        hostPlayerName: "Host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "0.6.2-alpha.1",
+        clientVersion: "0.6.2-alpha.1",
+        protocolProfileV2: "tail_v1",
+        protocolOffer: {
+          lanProtocolMin: 1,
+          lanProtocolMax: 1,
+          clientVersion: "0.6.2-alpha.1",
+          ritsuLibPresent: false,
+          ritsuLibSidecarAvailable: false,
+          registryFingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          nativeBusTypeId: 201,
+        },
+        maxPlayers: 8,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json() as { roomId: string };
+
+    const joinWith = (body: Record<string, unknown>) => fetch(
+      `http://127.0.0.1:${address.port}/rooms/${created.roomId}/join`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          playerName: "Guest",
+          version: "1.0.0",
+          modVersion: "0.6.2-alpha.1",
+          clientVersion: "0.6.2-alpha.1",
+          registryFingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          protocolOffer: {
+            lanProtocolMin: 1,
+            lanProtocolMax: 1,
+            clientVersion: "0.6.2-alpha.1",
+            ritsuLibPresent: false,
+            ritsuLibSidecarAvailable: false,
+          },
+          ...body,
+        }),
+      },
+    );
+
+    for (const nativeBusTypeId of [undefined, 256, -1, 1.5]) {
+      const rejected = await joinWith(
+        nativeBusTypeId === undefined ? {} : { nativeBusTypeId },
+      );
+      assert.equal(rejected.status, 409, `nativeBusTypeId=${String(nativeBusTypeId)}`);
+      assert.equal(((await rejected.json()) as { code: string }).code, "lan_registry_fingerprint_required");
+    }
+
+    // 0.6.1 客户端（携带合法 typeId 与指纹）⇒ 426 明确升级提示。
+    const oldClient = await joinWith({
+      nativeBusTypeId: 202,
+      clientVersion: "0.6.1-alpha.1",
+      modVersion: "0.6.1-alpha.1",
+      protocolOffer: {
+        lanProtocolMin: 1,
+        lanProtocolMax: 1,
+        clientVersion: "0.6.1-alpha.1",
+        ritsuLibPresent: false,
+        ritsuLibSidecarAvailable: false,
+      },
+    });
+    assert.equal(oldClient.status, 426);
+    const oldBody = await oldClient.json() as { code: string; details?: { requiredClientVersion?: string } };
+    assert.equal(oldBody.code, "lan_client_version_too_old");
+    assert.equal(oldBody.details?.requiredClientVersion, "0.6.2-alpha.1");
+  } finally {
+    await service.close();
+    cleanupTempDir(config);
   }
 });
 
@@ -607,16 +702,17 @@ test("HTTP join tolerates Ritsu presence mismatch for tail rooms", async () => {
           hostPlayerName: "Host",
           gameMode: "standard",
           version: "1.0.0",
-          modVersion: "0.6.1-alpha.1",
-          clientVersion: "0.6.1-alpha.1",
+          modVersion: "0.6.2-alpha.1",
+          clientVersion: "0.6.2-alpha.1",
           protocolProfileV2: "tail_v1",
           protocolOffer: {
             lanProtocolMin: 1,
             lanProtocolMax: 1,
-            clientVersion: "0.6.1-alpha.1",
+            clientVersion: "0.6.2-alpha.1",
             ritsuLibPresent: scenario.host,
             ritsuLibSidecarAvailable: scenario.host,
             registryFingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            nativeBusTypeId: 201,
           },
           maxPlayers: 8,
           hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
@@ -630,21 +726,23 @@ test("HTTP join tolerates Ritsu presence mismatch for tail rooms", async () => {
         body: JSON.stringify({
           playerName: "Guest",
           version: "1.0.0",
-          modVersion: "0.6.1-alpha.1",
-          clientVersion: "0.6.1-alpha.1",
+          modVersion: "0.6.2-alpha.1",
+          clientVersion: "0.6.2-alpha.1",
           registryFingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          nativeBusTypeId: 202,
           protocolOffer: {
             lanProtocolMin: 1,
             lanProtocolMax: 1,
-            clientVersion: "0.6.1-alpha.1",
+            clientVersion: "0.6.2-alpha.1",
             ritsuLibPresent: scenario.joiner,
             ritsuLibSidecarAvailable: scenario.joinerSidecar,
           },
         }),
       });
       assert.equal(joinResponse.status, 200);
-      const joined = await joinResponse.json() as { ticketId: string };
+      const joined = await joinResponse.json() as { ticketId: string; hostNativeBusTypeId?: number };
       assert.ok(joined.ticketId);
+      assert.equal(joined.hostNativeBusTypeId, 201);
     } finally {
       await service.close();
       cleanupTempDir(config);
@@ -652,11 +750,14 @@ test("HTTP join tolerates Ritsu presence mismatch for tail rooms", async () => {
   }
 });
 
-test("HTTP create gates reject Ritsu in compat and missing Tail fingerprints without rooms", async () => {
+test("HTTP create gates reject Ritsu in compat, missing Tail fingerprints and missing native bus type ids without rooms", async () => {
   const cases = [
-    { profile: "compat_4_5_v1" as const, fingerprint: undefined as string | undefined, code: "ritsulib_not_allowed_in_compat_mode" },
-    { profile: "tail_v1" as const, fingerprint: undefined as string | undefined, code: "lan_registry_fingerprint_required" },
-    { profile: "tail_v1" as const, fingerprint: "sha256:v1:oops", code: "lan_registry_fingerprint_required" },
+    { profile: "compat_4_5_v1" as const, fingerprint: undefined as string | undefined, nativeBusTypeId: undefined as number | undefined, code: "ritsulib_not_allowed_in_compat_mode" },
+    { profile: "tail_v1" as const, fingerprint: undefined as string | undefined, nativeBusTypeId: 201, code: "lan_registry_fingerprint_required" },
+    { profile: "tail_v1" as const, fingerprint: "sha256:v1:oops", nativeBusTypeId: 201, code: "lan_registry_fingerprint_required" },
+    // 0.6.2：tail_v1 创建必须携带本机 native bus 消息 ID（缺失/越界同码拒绝）。
+    { profile: "tail_v1" as const, fingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nativeBusTypeId: undefined, code: "lan_registry_fingerprint_required" },
+    { profile: "tail_v1" as const, fingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nativeBusTypeId: 256, code: "lan_registry_fingerprint_required" },
   ] as const;
   for (const scenario of cases) {
     const config = testConfig({ port: 0 });
@@ -671,16 +772,17 @@ test("HTTP create gates reject Ritsu in compat and missing Tail fingerprints wit
           hostPlayerName: "Host",
           gameMode: "standard",
           version: "1.0.0",
-          modVersion: "0.6.1-alpha.1",
-          clientVersion: "0.6.1-alpha.1",
+          modVersion: "0.6.2-alpha.1",
+          clientVersion: "0.6.2-alpha.1",
           protocolProfileV2: scenario.profile,
           protocolOffer: {
             lanProtocolMin: 1,
             lanProtocolMax: 1,
-            clientVersion: "0.6.1-alpha.1",
+            clientVersion: "0.6.2-alpha.1",
             ritsuLibPresent: true,
             ritsuLibSidecarAvailable: false,
             ...(scenario.fingerprint === undefined ? {} : { registryFingerprint: scenario.fingerprint }),
+            ...(scenario.nativeBusTypeId === undefined ? {} : { nativeBusTypeId: scenario.nativeBusTypeId }),
           },
           maxPlayers: 8,
           hostConnectionInfo: { enetPort: 7777 },
@@ -1558,6 +1660,114 @@ test("kick still bans the latest slot binding after its control socket disconnec
     const retry = await issueJoin();
     assert.equal(retry.response.status, 403);
     assert.equal(retry.body.code, "kicked");
+  } finally {
+    for (const socket of sockets) {
+      try {
+        socket.terminate();
+      } catch {
+        // ignore test cleanup races
+      }
+    }
+    await service.close();
+    cleanupTempDir(config);
+  }
+});
+
+test("tail control envelopes carry peerNativeBusTypeId alongside the flow nonce", async () => {
+  // 0.6.2 按对端寻址：房主收到的 player_control_binding 必须带服务端认证的
+  // peerNativeBusTypeId（加入者声明的 id），房主重连重放路径同样携带。
+  const config = testConfig({ port: 0 });
+  const service = await createLobbyService(config);
+  const sockets: WebSocket[] = [];
+  try {
+    const address = await service.start();
+    const httpBase = `http://127.0.0.1:${address.port}`;
+    const createResponse = await fetch(`${httpBase}/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        roomName: "peer-type-id-binding",
+        hostPlayerName: "Host",
+        clientInstallationId: "install-host",
+        gameMode: "standard",
+        version: "1.0.0",
+        modVersion: "0.6.2-alpha.1",
+        clientVersion: "0.6.2-alpha.1",
+        protocolProfileV2: "tail_v1",
+        protocolOffer: {
+          lanProtocolMin: 1,
+          lanProtocolMax: 1,
+          clientVersion: "0.6.2-alpha.1",
+          ritsuLibPresent: false,
+          ritsuLibSidecarAvailable: false,
+          registryFingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          nativeBusTypeId: 201,
+        },
+        maxPlayers: 8,
+        hostConnectionInfo: { enetPort: 7777, localAddresses: ["127.0.0.1"] },
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as {
+      roomId: string;
+      controlChannelId: string;
+      hostToken: string;
+      protocolSelection: { capabilityDigest: string };
+    };
+
+    const joinResponse = await fetch(`${httpBase}/rooms/${created.roomId}/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        playerName: "Guest",
+        playerNetId: "save-slot-owner",
+        clientInstallationId: "install-guest",
+        version: "1.0.0",
+        modVersion: "0.6.2-alpha.1",
+        clientVersion: "0.6.2-alpha.1",
+        registryFingerprint: "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        nativeBusTypeId: 202,
+        protocolOffer: {
+          lanProtocolMin: 1,
+          lanProtocolMax: 1,
+          clientVersion: "0.6.2-alpha.1",
+          ritsuLibPresent: false,
+          ritsuLibSidecarAvailable: false,
+        },
+      }),
+    });
+    assert.equal(joinResponse.status, 200);
+    const joined = await joinResponse.json() as {
+      ticketId: string;
+      hostNativeBusTypeId: number;
+      room: { protocolSelection: { capabilityDigest: string } };
+    };
+    assert.equal(joined.hostNativeBusTypeId, 201);
+
+    const wsBase = `ws://127.0.0.1:${address.port}${config.wsPath}`;
+    const client = await openControlWebSocket(
+      `${wsBase}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=client&ticketId=${joined.ticketId}`
+      + `&clientVersion=0.6.2-alpha.1&capabilityDigest=${joined.room.protocolSelection.capabilityDigest}`,
+    );
+    sockets.push(client);
+    await waitForChatFrame(client, (frame) => frame.type === "connected");
+
+    // 房主在客户端绑定之后连接：绑定句柄经重放路径下发（tail 房控制通道需带协议能力查询参数）。
+    const host = await openControlWebSocket(
+      `${wsBase}?roomId=${created.roomId}&controlChannelId=${created.controlChannelId}`
+      + `&role=host&token=${created.hostToken}`
+      + `&clientVersion=0.6.2-alpha.1&capabilityDigest=${created.protocolSelection.capabilityDigest}`,
+    );
+    sockets.push(host);
+    await waitForChatFrame(host, (frame) => frame.type === "connected");
+    const binding = await waitForChatFrame(
+      host,
+      (frame) => frame.type === "player_control_binding"
+        && frame.playerNetId === "save-slot-owner",
+    );
+    assert.equal(typeof binding.protocolFlowNonce, "string");
+    assert.equal(binding.peerNativeBusTypeId, 202);
   } finally {
     for (const socket of sockets) {
       try {

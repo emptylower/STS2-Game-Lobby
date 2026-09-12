@@ -32,7 +32,6 @@ public sealed class LanConnectProtocolUiMessagesTests
 
     [Theory]
     [InlineData("lan_native_frame_invalid")]
-    [InlineData("lan_type_id_mismatch")]
     [InlineData("lan_extension_missing")]
     public void Native_bus_frame_failures_embed_the_code_for_diagnostics(string code)
     {
@@ -40,6 +39,17 @@ public sealed class LanConnectProtocolUiMessagesTests
 
         Assert.Contains("新协议通信帧校验失败", message, StringComparison.Ordinal);
         Assert.Contains(code, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Native_bus_type_id_mismatch_reports_peer_addressing_failure()
+    {
+        // 0.6.2 起按对端寻址：该码含义是「对端消息 ID 寻址失败或未协商到」，与帧格式问题分开提示。
+        string message = LanConnectProtocolUiMessages.Describe(
+            new LanConnectProtocolFailure("lan_type_id_mismatch"));
+
+        Assert.Contains("新协议消息寻址失败", message, StringComparison.Ordinal);
+        Assert.Contains("lan_type_id_mismatch", message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -62,11 +72,12 @@ public sealed class LanConnectProtocolUiMessagesTests
         Assert.Equal(
             "该房间由旧版 LAN Connect 创建（旧载体），请房主升级后重新建房。",
             LanConnectProtocolUiMessages.Describe(new LanConnectProtocolFailure("lan_legacy_carrier_unsupported")));
+        // 0.6.2 起两码拆分：required = 本机注册表未就绪；mismatch 只可能来自旧版服务端（给出可操作出路）。
         Assert.Equal(
-            "双方的联机消息注册表不一致（通常是 Mod 列表不同），无法使用新协议加入。",
+            "本机的联机消息注册表尚未就绪，无法使用新协议。请完整重启游戏后重试；若仍然失败，请更新 LAN Connect。",
             LanConnectProtocolUiMessages.Describe(new LanConnectProtocolFailure("lan_registry_fingerprint_required")));
         Assert.Equal(
-            "双方的联机消息注册表不一致（通常是 Mod 列表不同），无法使用新协议加入。",
+            "该大厅服务端为旧版本，仍要求双方 Mod 列表完全一致。请联系服主把 lobby-service 升级到 0.6.2，或改用“兼容旧版 Mod”房间。",
             LanConnectProtocolUiMessages.Describe(new LanConnectProtocolFailure("lan_registry_fingerprint_mismatch")));
         Assert.Equal(
             "客户端版本过旧，请更新到 0.6.1 或更高版本。",
@@ -89,7 +100,7 @@ public sealed class LanConnectProtocolUiMessagesTests
             "沿用旧版联机协议，可与 0.3–0.5 旧版客户端同房；不支持 RitsuLib",
             LanConnectLobbyOverlay.CreateProtocolDescriptionForTestsStatic(300));
         Assert.Equal(
-            "通过官方 Mod 消息注册通道传输，需 0.6.1 及以上客户端；与是否安装 RitsuLib 无关",
+            "通过官方 Mod 消息注册通道传输，需 0.6.2 及以上客户端；与双方是否安装 RitsuLib、Mod 列表是否相同均无关",
             LanConnectLobbyOverlay.CreateProtocolDescriptionForTestsStatic(301));
     }
 

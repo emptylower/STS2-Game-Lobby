@@ -229,6 +229,8 @@ test("createRoom rejects pre-0.3 callers before allocating a room id", () => {
 
 const tailFingerprint = "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const otherTailFingerprint = "sha256:v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const tailHostNativeBusTypeId = 201;
+const tailJoinerNativeBusTypeId = 202;
 
 function tailCreateInput(ritsuLibPresent: boolean, ritsuLibSidecarAvailable = ritsuLibPresent) {
   return {
@@ -236,16 +238,17 @@ function tailCreateInput(ritsuLibPresent: boolean, ritsuLibSidecarAvailable = ri
     hostPlayerName: "Host",
     gameMode: "standard",
     version: "1.2.3",
-    modVersion: "0.6.1-alpha.1",
-    clientVersion: "0.6.1-alpha.1",
+    modVersion: "0.6.2-alpha.1",
+    clientVersion: "0.6.2-alpha.1",
     protocolProfileV2: "tail_v1" as const,
     protocolOffer: {
       lanProtocolMin: 1,
       lanProtocolMax: 1,
-      clientVersion: "0.6.1-alpha.1",
+      clientVersion: "0.6.2-alpha.1",
       ritsuLibPresent,
       ritsuLibSidecarAvailable,
       registryFingerprint: tailFingerprint,
+      nativeBusTypeId: tailHostNativeBusTypeId,
     },
     maxPlayers: 8,
     hostConnectionInfo: { enetPort: 33771 },
@@ -256,16 +259,17 @@ function tailJoinInput(ritsuLibPresent: boolean, ritsuLibSidecarAvailable = rits
   return {
     playerName: "Guest",
     version: "1.2.3",
-    modVersion: "0.6.1-alpha.1",
-    clientVersion: "0.6.1-alpha.1",
+    modVersion: "0.6.2-alpha.1",
+    clientVersion: "0.6.2-alpha.1",
     protocolOffer: {
       lanProtocolMin: 1,
       lanProtocolMax: 1,
-      clientVersion: "0.6.1-alpha.1",
+      clientVersion: "0.6.2-alpha.1",
       ritsuLibPresent,
       ritsuLibSidecarAvailable,
     },
     registryFingerprint: tailFingerprint,
+    nativeBusTypeId: tailJoinerNativeBusTypeId,
   };
 }
 
@@ -275,7 +279,8 @@ test("Tail rooms freeze deterministic homogeneous carriers and issue per-ticket 
     const created = store.createRoom(tailCreateInput(ritsuLibPresent), "203.0.113.10");
     assert.equal(created.room.protocolSelection.carrier, "native_bus_v1");
     assert.equal(created.room.protocolSelection.registryFingerprint, tailFingerprint);
-    assert.equal(created.room.protocolSelection.minimumClientVersion, "0.6.1-alpha.1");
+    assert.equal(created.room.protocolSelection.nativeBusTypeId, tailHostNativeBusTypeId);
+    assert.equal(created.room.protocolSelection.minimumClientVersion, "0.6.2-alpha.1");
     assert.equal(created.protocolSelection, created.room.protocolSelection);
     assert.equal(created.room.protocolSelection.ritsuLibPresent, ritsuLibPresent);
     const first = store.joinRoom(created.roomId, tailJoinInput(ritsuLibPresent));
@@ -312,7 +317,8 @@ test("Tail join gate chain tolerates presence mismatch, rejects bad fingerprints
     { host: true, joiner: false, sidecar: false, code: null },
     { host: false, joiner: true, sidecar: true, code: null },
     { host: true, joiner: true, sidecar: false, code: null },
-    { host: true, joiner: true, fingerprint: "sha256:v1:" + "c".repeat(64), code: "lan_registry_fingerprint_mismatch" },
+    // 0.6.2 核心回归：指纹不一致不再拒绝（按对端寻址后两表无需相同）。
+    { host: true, joiner: true, fingerprint: "sha256:v1:" + "c".repeat(64), code: null },
     { host: true, joiner: true, fingerprint: "bad", code: "lan_registry_fingerprint_required" },
   ] as Array<{ host: boolean; joiner: boolean; sidecar: boolean; fingerprint?: string; code: string | null }>;
   for (const scenario of cases) {
@@ -372,7 +378,7 @@ test("Tail control binding validates version and digest before allocating a bind
   const joined = store.joinRoom(created.roomId, tailJoinInput(false));
   const afterTicket = idAllocations;
   assert.throws(
-    () => store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId, "0.6.1-alpha.1", "0".repeat(64)),
+    () => store.validateClientControl(created.roomId, created.controlChannelId, joined.ticketId, "0.6.2-alpha.1", "0".repeat(64)),
     (error: unknown) => error instanceof LobbyStoreError && error.code === "capability_digest_mismatch",
   );
   assert.equal(idAllocations, afterTicket);
@@ -380,11 +386,44 @@ test("Tail control binding validates version and digest before allocating a bind
     created.roomId,
     created.controlChannelId,
     joined.ticketId,
-    "0.6.1-alpha.1",
+    "0.6.2-alpha.1",
     created.room.protocolSelection.capabilityDigest,
   );
   assert.equal(redeemed.protocolFlowNonce, joined.protocolFlowNonce);
+  assert.equal(redeemed.nativeBusTypeId, tailJoinerNativeBusTypeId);
+  assert.equal(redeemed.registryFingerprint, tailFingerprint);
   assert.equal(idAllocations, afterTicket + 1);
+});
+
+test("Tail join requires a valid nativeBusTypeId and echoes the host id in the join response", () => {
+  // 缺失 / 越界 / 非整数 ⇒ 复用 lan_registry_fingerprint_required（文案区分）。
+  for (const nativeBusTypeId of [undefined, 256, -1, 1.5]) {
+    let idAllocations = 0;
+    const store = new LobbyStore(baseConfig, { id: () => { idAllocations += 1; return `id-${idAllocations}`; } });
+    const created = store.createRoom(tailCreateInput(true), "203.0.113.10");
+    const afterCreate = idAllocations;
+    const input = tailJoinInput(true);
+    if (nativeBusTypeId === undefined) {
+      delete input.nativeBusTypeId;
+    } else {
+      input.nativeBusTypeId = nativeBusTypeId;
+    }
+    assert.throws(
+      () => store.joinRoom(created.roomId, input),
+      (error: unknown) => error instanceof LobbyStoreError && error.code === "lan_registry_fingerprint_required",
+      `nativeBusTypeId=${String(nativeBusTypeId)}`,
+    );
+    assert.equal(idAllocations, afterCreate);
+  }
+
+  // 指纹不一致 + 合法 typeId ⇒ 照常签发工单，响应回带房主 typeId（加入侧按此对房主寻址）。
+  const store = new LobbyStore(baseConfig);
+  const created = store.createRoom(tailCreateInput(true), "203.0.113.10");
+  const input = tailJoinInput(true);
+  input.registryFingerprint = "sha256:v1:" + "c".repeat(64);
+  const joined = store.joinRoom(created.roomId, input);
+  assert.match(joined.protocolFlowNonce, /^[0-9a-f]{32}$/);
+  assert.equal(joined.hostNativeBusTypeId, tailHostNativeBusTypeId);
 });
 
 test("createRoom preserves explicit protocol profile and echoes it in joins", () => {

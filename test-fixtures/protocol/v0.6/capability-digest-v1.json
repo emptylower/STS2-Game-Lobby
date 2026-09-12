@@ -28,7 +28,8 @@
       "clientVersion": "0.6.1-alpha.1",
       "ritsuLibPresent": false,
       "ritsuLibSidecarAvailable": false,
-      "registryFingerprint": "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "registryFingerprint": "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "nativeBusTypeId": 200
     },
     "policy": {
       "profile": "tail_v1",
@@ -38,7 +39,7 @@
       "gameVersion": "0.110.1",
       "wireCacheSignatureV1": "aabb"
     },
-    "expectedDigest": "59011f3bf8565282a922800189a3ce8d7049a108fa4fc7e162b85fff02da3d33"
+    "expectedDigest": "e8787e7a60993d428e1490d2f27d7be19c5c5be77d16386189df8e769c331abb"
   },
   {
     "name": "tail_v1_ritsulib_sidecar",
@@ -49,7 +50,8 @@
       "clientVersion": "0.6.1-alpha.1",
       "ritsuLibPresent": true,
       "ritsuLibSidecarAvailable": true,
-      "registryFingerprint": "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "registryFingerprint": "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "nativeBusTypeId": 200
     },
     "policy": {
       "profile": "tail_v1",
@@ -59,7 +61,7 @@
       "gameVersion": "0.110.1",
       "wireCacheSignatureV1": "aabb"
     },
-    "expectedDigest": "92e41e6aa5017504bf998d96fd0b2d10e353ef745f4f850dfd5c665000871d09"
+    "expectedDigest": "4d009128a4414e87c282772a127761c36a1f91dbf45d92c9377ebb6668b482e7"
   },
   {
     "name": "compat_4_5_v1_case_sensitive_wire_cache",
@@ -90,7 +92,8 @@
       "clientVersion": "0.6.0-alpha.5",
       "ritsuLibPresent": false,
       "ritsuLibSidecarAvailable": false,
-      "registryFingerprint": "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "registryFingerprint": "sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "nativeBusTypeId": 200
     },
     "policy": {
       "profile": "tail_v1",
@@ -100,6 +103,6 @@
       "gameVersion": "v0.111.0",
       "wireCacheSignatureV1": "wcv1:D5-qRxko7ywoZJWzaOM9Q49NNOWP1Jr2qXc_Nk204uU"
     },
-    "expectedDigest": "5e69ba5f485b9e079ba1433e2ddb78cec31ef49b87e2241f73d2eebd8022a918"
+    "expectedDigest": "dc9cc50f708240892708b08d5f2cee1d05042d3361d3bbb44ccc1d8a5a43e6f6"
   }
 ]

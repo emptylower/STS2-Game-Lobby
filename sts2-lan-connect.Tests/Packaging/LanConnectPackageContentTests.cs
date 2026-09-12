@@ -47,11 +47,11 @@ public sealed class LanConnectPackageContentTests
 
         using JsonDocument manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
-        Assert.Equal("0.6.1", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("0.6.2-alpha.1", manifest.RootElement.GetProperty("version").GetString());
         FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
             Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
-        Assert.Equal("0.6.1.0", assemblyVersion.FileVersion);
-        Assert.StartsWith("0.6.1", assemblyVersion.ProductVersion, StringComparison.Ordinal);
+        Assert.Equal("0.6.2.0", assemblyVersion.FileVersion);
+        Assert.StartsWith("0.6.2-alpha.1", assemblyVersion.ProductVersion, StringComparison.Ordinal);
 
         foreach (string packagePath in ExpectedFiles)
         {
@@ -347,6 +347,31 @@ public sealed class LanConnectPackageContentTests
         Assert.Contains("sts2_lobby_service.zip", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("Steam 创意工坊", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("## [0.6.1] - ", changelog, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Client_v062_alpha1_documents_peer_addressed_type_id_candidate()
+    {
+        using Fixture fixture = new();
+        string releaseNotes = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "RELEASE_NOTES_V0.6.2_ALPHA1_ZH.md"));
+        string changelog = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "CHANGELOG.md"));
+
+        foreach (string text in new[] { releaseNotes, changelog })
+        {
+            Assert.Contains("0.6.2-alpha.1", text, StringComparison.Ordinal);
+            Assert.Contains("按对端寻址", text, StringComparison.Ordinal);
+            Assert.Contains("Map Enhance Mod", text, StringComparison.Ordinal);
+            Assert.Contains("lan_registry_fingerprint_mismatch", text, StringComparison.Ordinal);
+            Assert.Contains("nativeBusTypeId", text, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("pre-release", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("<待打包后填写>", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("compat_4_5_v1", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("## [0.6.2-alpha.1] - ", changelog, StringComparison.Ordinal);
     }
 
     [Fact]

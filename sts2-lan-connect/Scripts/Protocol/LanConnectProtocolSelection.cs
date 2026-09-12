@@ -59,7 +59,8 @@ internal sealed record LanConnectProtocolSelection(
                         $"Local offer does not support selected LAN protocol {SelectedLanProtocolVersion}.");
                 }
 
-                // native_bus_v1 不再要求 RitsuLib presence 一致（0.6.1 起 tail_v1 完全忽略 RitsuLib 安装状态）。
+                // native_bus_v1 不再要求 RitsuLib presence 一致（0.6.1 起 tail_v1 完全忽略 RitsuLib 安装状态）；
+                // 0.6.2 起同时不再要求两端消息注册表一致（typeId 按对端寻址，指纹门禁已撤除）。
                 if (Carrier is LanConnectProtocolCarrier.LegacyTailV1 or LanConnectProtocolCarrier.LegacySidecarV1)
                 {
                     throw LanConnectProtocolFailureMapper.FromLocalException(

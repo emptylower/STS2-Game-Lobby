@@ -295,6 +295,9 @@ internal sealed class LobbyJoinRoomRequest
     public string? PlayerNetId { get; set; }
 
     public string? RegistryFingerprint { get; set; }
+
+    /// <summary>tail_v1 必填：加入者本机 native bus 消息 ID（0-255）。</summary>
+    public int? NativeBusTypeId { get; set; }
 }
 
 internal sealed class LobbyModPreflightRequest
@@ -383,6 +386,9 @@ internal sealed class LobbyJoinRoomResponse
 
     public string? ProtocolFlowNonce { get; set; }
 
+    /// <summary>房主声明的 native bus 消息 ID（0-255）；加入侧发送扩展帧按此寻址。</summary>
+    public int? HostNativeBusTypeId { get; set; }
+
     public byte[] GetProtocolFlowNonceBytes()
     {
         if (ProtocolFlowNonce is null
@@ -396,6 +402,19 @@ internal sealed class LobbyJoinRoomResponse
         }
 
         return Convert.FromHexString(ProtocolFlowNonce);
+    }
+
+    /// <summary>校验并返回房主 native bus typeId（与 GetProtocolFlowNonceBytes 完全平行的取值路径）。</summary>
+    public int GetHostNativeBusTypeId()
+    {
+        if (HostNativeBusTypeId is not (>= 0 and <= 255))
+        {
+            throw LanConnectProtocolFailureMapper.FromLocalException(
+                "lan_type_id_mismatch",
+                "hostNativeBusTypeId must be an integer in 0..255.");
+        }
+
+        return HostNativeBusTypeId.Value;
     }
 }
 
@@ -415,6 +434,9 @@ internal sealed class LobbyProtocolOfferDto
     /// <summary>创建侧必填：本机消息注册表指纹（不参与能力摘要哈希）。</summary>
     public string? RegistryFingerprint { get; set; }
 
+    /// <summary>创建侧必填：本机 native bus 消息 ID（0-255，按对端寻址；不参与能力摘要哈希）。</summary>
+    public int? NativeBusTypeId { get; set; }
+
     /// <summary>可选诊断字段：RitsuLib 版本（缺失 = unknown，仅展示与预检 UX）。</summary>
     public string? RitsuLibVersion { get; set; }
 
@@ -429,6 +451,7 @@ internal sealed class LobbyProtocolOfferDto
         RitsuLibPresent = offer.RitsuLibPresent,
         LegacySidecarAvailable = offer.LegacySidecarAvailable,
         RegistryFingerprint = registryFingerprint ?? offer.RegistryFingerprint,
+        NativeBusTypeId = offer.NativeBusTypeId,
         RitsuLibVersion = ritsuLibVersion ?? offer.RitsuLibVersion
     };
 }
@@ -449,6 +472,9 @@ internal sealed class LobbyProtocolSelectionDto
 
     [JsonPropertyName("wireCacheSignature")]
     public string? WireCacheSignature { get; set; }
+
+    /// <summary>房主创建时冻结的 native bus 消息 ID（0-255，诊断/展示用，不参与客户端校验）。</summary>
+    public int? NativeBusTypeId { get; set; }
 
     public bool RitsuLibPresent { get; set; }
 
@@ -531,6 +557,9 @@ internal sealed class LobbyControlEnvelope
     public string? BindingId { get; set; }
 
     public string? ProtocolFlowNonce { get; set; }
+
+    /// <summary>服务端认证后下发：对端（加入者）声明的 native bus 消息 ID（0-255）；中继路径不可伪造。</summary>
+    public int? PeerNativeBusTypeId { get; set; }
 
     public string? KickRequestId { get; set; }
 

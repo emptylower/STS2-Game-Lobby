@@ -9,10 +9,11 @@ const otherFingerprint = "sha256:v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 const offer = (ritsuLibPresent: boolean, sidecar = ritsuLibPresent) => ({
   lanProtocolMin: 1,
   lanProtocolMax: 1,
-  clientVersion: "0.6.1-alpha.1",
+  clientVersion: "0.6.2-alpha.1",
   ritsuLibPresent,
   ritsuLibSidecarAvailable: sidecar,
   registryFingerprint: fingerprint,
+  nativeBusTypeId: 200,
 });
 const policy = (profile: "compat_4_5_v1" | "tail_v1", ritsuSignature = "aabb") => ({
   profile,
@@ -30,13 +31,19 @@ test("freezes native_bus_v1 for both presence states and tolerates presence mism
   assert.equal(ritsu.carrier, "native_bus_v1");
   assert.equal(standalone.carrier, "native_bus_v1");
   assert.equal(ritsu.registryFingerprint, fingerprint);
-  assert.equal(ritsu.minimumClientVersion, "0.6.1-alpha.1");
+  assert.equal(ritsu.nativeBusTypeId, 200);
+  assert.equal(ritsu.minimumClientVersion, "0.6.2-alpha.1");
   assert.doesNotThrow(() => assertJoinerCompatible(ritsu, offer(true)));
   assert.doesNotThrow(() => assertJoinerCompatible(standalone, offer(false)));
   assert.doesNotThrow(() => assertJoinerCompatible(ritsu, offer(false)));
   assert.doesNotThrow(() => assertJoinerCompatible(standalone, offer(true)));
   assert.match(ritsu.capabilityDigest, /^[0-9a-f]{64}$/);
   assert.equal(Object.isFrozen(ritsu), true);
+  // 0.6.2 起按对端寻址：nativeBusTypeId 不参与 capability digest（与 registryFingerprint 同为独立字段）。
+  assert.equal(
+    selectRoomProtocol({ ...offer(true), nativeBusTypeId: 201 }, policy("tail_v1")).capabilityDigest,
+    ritsu.capabilityDigest,
+  );
 });
 
 test("ignores sidecar availability, requires create fingerprint, and fails closed for bad ranges", () => {
@@ -51,6 +58,19 @@ test("ignores sidecar availability, requires create fingerprint, and fails close
   );
   assert.throws(
     () => selectRoomProtocol({ ...offer(true), registryFingerprint: "sha256:v1:XYZ" }, policy("tail_v1")),
+    hasCode("lan_registry_fingerprint_required"),
+  );
+  // 0.6.2 起创建侧 nativeBusTypeId 必填且 0-255（缺失/越界与指纹同码拒绝）。
+  assert.throws(
+    () => selectRoomProtocol({ ...offer(true), nativeBusTypeId: undefined }, policy("tail_v1")),
+    hasCode("lan_registry_fingerprint_required"),
+  );
+  assert.throws(
+    () => selectRoomProtocol({ ...offer(true), nativeBusTypeId: 256 }, policy("tail_v1")),
+    hasCode("lan_registry_fingerprint_required"),
+  );
+  assert.throws(
+    () => selectRoomProtocol({ ...offer(true), nativeBusTypeId: -1 }, policy("tail_v1")),
     hasCode("lan_registry_fingerprint_required"),
   );
   assert.throws(
@@ -68,6 +88,10 @@ test("strictly parses bounded capability offers", () => {
   assert.throws(() => parseProtocolOffer({ ...offer(false), clientVersion: "" }));
   // 格式非法不在 parse 层拒绝（由 selectRoomProtocol/join 门禁统一 409 lan_registry_fingerprint_required）。
   assert.equal(parseProtocolOffer({ ...offer(false), registryFingerprint: "sha256:v1:abc" }).registryFingerprint, "sha256:v1:abc");
+  // nativeBusTypeId：parse 层只校验整数类型，范围由门禁以同码拒绝。
+  assert.equal(parseProtocolOffer({ ...offer(false), nativeBusTypeId: 255 }).nativeBusTypeId, 255);
+  assert.equal(parseProtocolOffer({ ...offer(false), nativeBusTypeId: 300 }).nativeBusTypeId, 300);
+  assert.throws(() => parseProtocolOffer({ ...offer(false), nativeBusTypeId: "200" }));
   assert.doesNotThrow(() => parseProtocolOffer({ ...offer(false), ritsuLibVersion: "0.5.18" }));
   assert.throws(() => parseProtocolOffer({ ...offer(false), ritsuLibVersion: "x".repeat(33) }));
   assert.equal(
