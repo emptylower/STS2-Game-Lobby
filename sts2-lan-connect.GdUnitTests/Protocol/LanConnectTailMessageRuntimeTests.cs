@@ -30,6 +30,50 @@ public sealed class LanConnectTailMessageRuntimeTests
     private static bool _initialized;
     private const uint TestNativeTypeId = 200;
 
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    public void Join_requests_accept_different_peer_RitsuLib_presence(bool hostPresent, bool clientPresent)
+    {
+        InitializeSts2Serialization();
+        using RuntimePair pair = new(hostRitsuPresent: hostPresent, clientRitsuPresent: clientPresent);
+        foreach ((LanConnectSidecarMessageKind kind, INetMessage message) in JoinRequests())
+        {
+            LanConnectPreparedTailMessage prepared = pair.Runtime.PrepareOutgoing(
+                pair.ClientBus, kind, pair.ClientId, message, pair.Selection);
+            pair.Runtime.ValidateIncoming(
+                pair.HostBus, kind, pair.ClientId, message, prepared.Container, pair.Selection);
+        }
+    }
+
+    [TestCase]
+    public void Join_requests_still_reject_an_unsupported_selected_protocol()
+    {
+        InitializeSts2Serialization();
+        using RuntimePair pair = new();
+        LanConnectProtocolOffer unsupported = pair.Offer with { LanProtocolMin = 2, LanProtocolMax = 2 };
+        foreach ((LanConnectSidecarMessageKind kind, INetMessage message) in JoinRequests())
+        {
+            byte[] container = LanConnectTailMessageProtocol.EncodePeerOffer(kind, unsupported);
+            InvalidDataException? rejection = null;
+            try
+            {
+                pair.Runtime.ValidateIncoming(pair.HostBus, kind, pair.ClientId, message, container, pair.Selection);
+            }
+            catch (InvalidDataException exception)
+            {
+                rejection = exception;
+            }
+            AssertThat(rejection?.Message).IsEqual("Peer offer is incompatible with the frozen Tail selection.");
+        }
+    }
+
+    private static (LanConnectSidecarMessageKind, INetMessage)[] JoinRequests() =>
+    [
+        (LanConnectSidecarMessageKind.LobbyJoinRequest, new ClientLobbyJoinRequestMessage()),
+        (LanConnectSidecarMessageKind.LoadJoinRequest, new ClientLoadJoinRequestMessage()),
+        (LanConnectSidecarMessageKind.RejoinRequest, new ClientRejoinRequestMessage())
+    ];
+
     [TestCase(2)]
     [TestCase(5)]
     public void Normal_join_projects_four_and_restores_the_full_roster(int playerCount)
@@ -939,7 +983,8 @@ public sealed class LanConnectTailMessageRuntimeTests
         internal const ulong DefaultHostId = 1;
         internal const ulong DefaultClientId = 22;
 
-        internal RuntimePair(bool bindFlows = true, bool bindClientFlow = true)
+        internal RuntimePair(bool bindFlows = true, bool bindClientFlow = true,
+            bool hostRitsuPresent = false, bool clientRitsuPresent = false)
         {
             LanConnectNativeBusSender.TypeIdResolverForTesting = () => (int)TestNativeTypeId;
             HostTransport = new TestNetHost(Host, DefaultHostId);
@@ -949,10 +994,11 @@ public sealed class LanConnectTailMessageRuntimeTests
             Client.Initialize(ClientTransport, default);
             typeof(NetClientGameService).GetField("<IsConnected>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(Client, true);
-            Offer = new LanConnectProtocolOffer(1, 1, "0.6.1-alpha.1", false, false);
-            Selection = CreateSelection();
+            Offer = new LanConnectProtocolOffer(1, 1, "0.6.1-alpha.1", hostRitsuPresent, false);
+            Selection = CreateSelection(hostRitsuPresent);
             Runtime.BindHost(Host, Offer, Selection);
-            Runtime.BindClient(Client, Offer, Selection, ProtocolFlowNonce, (int)TestNativeTypeId);
+            Runtime.BindClient(Client, Offer with { RitsuLibPresent = clientRitsuPresent }, Selection,
+                ProtocolFlowNonce, (int)TestNativeTypeId);
             _ = bindClientFlow;
             if (bindFlows)
             {
@@ -1117,7 +1163,7 @@ public sealed class LanConnectTailMessageRuntimeTests
                 .GetValue(bus)!;
     }
 
-    private static LanConnectProtocolSelection CreateSelection()
+    private static LanConnectProtocolSelection CreateSelection(bool ritsuPresent = false)
     {
         LanConnectProtocolSelection selection = new(
             LanConnectProtocolProfile.TailV1,
@@ -1127,7 +1173,7 @@ public sealed class LanConnectTailMessageRuntimeTests
             8,
             "0.111.0",
             "aabb",
-            false,
+            ritsuPresent,
             string.Empty);
         return selection with { CapabilityDigest = LanConnectCapabilityDigest.Compute(selection) };
     }

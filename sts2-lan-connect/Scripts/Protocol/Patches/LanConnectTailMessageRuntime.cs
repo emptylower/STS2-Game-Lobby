@@ -1372,8 +1372,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         LanConnectProtocolSelection selection)
     {
         offer.Validate();
-        if (!offer.Supports(selection.SelectedLanProtocolVersion)
-            || offer.RitsuLibPresent != selection.RitsuLibPresent)
+        if (!offer.Supports(selection.SelectedLanProtocolVersion))
         {
             throw new InvalidDataException("Peer offer is incompatible with the frozen Tail selection.");
         }
