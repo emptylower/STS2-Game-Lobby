@@ -208,7 +208,6 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
         LanConnectContinueRunPublishAttempt attempt,
         string source)
     {
-        ulong instanceId = screen.GetInstanceId();
         try
         {
             LanConnectContinueRunPromptCoordinator.PromptResolution resolution =
@@ -225,6 +224,11 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                     binding.GameMode,
                     choice,
                     "continue_save_channel_prompt"));
+            if (ScreenState.IsAttemptStale(attempt))
+            {
+                return;
+            }
+
             string? selectedHostChannel = resolution.Choice;
             if (selectedHostChannel == null)
             {
@@ -284,7 +288,6 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
         }
         finally
         {
-            PromptCoordinator.ClearScreen(instanceId);
             ScreenState.EndAttempt(attempt);
             QueueRetryForNewerVisit(screen, attempt);
         }
@@ -345,6 +348,11 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                 maxPlayers: LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
                 notifyOnFailure: false,
                 persistedSelection: binding.ProtocolSelection);
+            if (ScreenState.IsAttemptStale(attempt))
+            {
+                return;
+            }
+
             if (!published.Succeeded)
             {
                 if (published.ProtocolFailure != null)

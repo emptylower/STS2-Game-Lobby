@@ -34,13 +34,32 @@ internal sealed class LanConnectContinueRunPromptCoordinator
     {
         try
         {
-            string? choice = await prompt(lease.Cancellation.Token);
-            if (string.IsNullOrWhiteSpace(choice))
+            CancellationToken cancellationToken;
+            lock (_sync)
             {
-                return new PromptResolution(null, false);
+                if (!_leasesByScreen.TryGetValue(lease.ScreenId, out PromptLease? active)
+                    || !ReferenceEquals(active, lease))
+                {
+                    return new PromptResolution(null, false);
+                }
+
+                cancellationToken = lease.Cancellation.Token;
             }
 
-            return new PromptResolution(choice, persistChoice(choice));
+            string? choice = await prompt(cancellationToken);
+            lock (_sync)
+            {
+                // A confirmed dialog can finish after its owner was closed. Never persist
+                // that abandoned visit's choice or overwrite the newly opened prompt.
+                if (string.IsNullOrWhiteSpace(choice)
+                    || !_leasesByScreen.TryGetValue(lease.ScreenId, out PromptLease? active)
+                    || !ReferenceEquals(active, lease))
+                {
+                    return new PromptResolution(null, false);
+                }
+
+                return new PromptResolution(choice, persistChoice(choice));
+            }
         }
         finally
         {

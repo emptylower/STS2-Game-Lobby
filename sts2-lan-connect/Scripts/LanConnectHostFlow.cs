@@ -356,6 +356,17 @@ internal static class LanConnectHostFlow
                     intent,
                     savedRunInfo,
                     requiredSelection));
+            // The cached load screen can be canceled and reopened while this request is
+            // pending. Do not attach its old host or freeze over the newer session.
+            if (!netService.IsConnected)
+            {
+                await DeleteRegisteredRoomSafeAsync(apiClient, registration);
+                apiClient.Dispose();
+                apiClient = null;
+                GD.Print($"sts2_lan_connect host_flow: abandoned continued host after registration source={publishSource}");
+                return LanConnectHostAttemptResult.Failed("续局已取消，请重新恢复房间。");
+            }
+
             LobbyProtocolSelectionDto selectionDto = registration.ProtocolSelection
                 ?? registration.Room.ProtocolSelection
                 ?? throw LanConnectProtocolFailureMapper.FromLocalException(

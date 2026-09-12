@@ -90,4 +90,52 @@ public sealed class LanConnectContinueRunPromptCoordinatorTests
         Assert.Equal(LanConnectHostChannels.Lobby, result.Choice);
         Assert.False(result.Persisted);
     }
+    [Fact]
+    public async Task Late_confirmation_after_cancel_does_not_persist_or_release_the_reopened_prompt()
+    {
+        LanConnectContinueRunPromptCoordinator coordinator = new();
+        TaskCompletionSource<string?> oldChoice = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        List<string> writes = new();
+        Assert.True(coordinator.TryBegin(1, "save-1", out var oldLease));
+        Task<LanConnectContinueRunPromptCoordinator.PromptResolution> pending = coordinator.ResolveAsync(
+            oldLease,
+            _ => oldChoice.Task,
+            choice => { writes.Add(choice); return true; });
+
+        coordinator.ClearScreen(1);
+        Assert.True(coordinator.TryBegin(1, "save-1", out var newLease));
+        oldChoice.SetResult(LanConnectHostChannels.Lobby);
+
+        var abandoned = await pending;
+        Assert.Null(abandoned.Choice);
+        Assert.False(abandoned.Persisted);
+        Assert.Empty(writes);
+        Assert.False(coordinator.TryBegin(2, "save-1", out _));
+
+        var reopened = await coordinator.ResolveAsync(
+            newLease,
+            _ => Task.FromResult<string?>(LanConnectHostChannels.Lan),
+            choice => { writes.Add(choice); return true; });
+        Assert.True(reopened.Persisted);
+        Assert.Equal(LanConnectHostChannels.Lan, Assert.Single(writes));
+    }
+
+    [Fact]
+    public async Task Closing_before_prompt_starts_returns_canceled_without_using_disposed_token()
+    {
+        LanConnectContinueRunPromptCoordinator coordinator = new();
+        Assert.True(coordinator.TryBegin(1, "save-1", out var lease));
+        coordinator.ClearScreen(1);
+
+        var result = await coordinator.ResolveAsync(
+            lease,
+            _ => throw new Xunit.Sdk.XunitException("Closed screen must not open a prompt."),
+            _ => throw new Xunit.Sdk.XunitException("Closed screen must not persist a choice."));
+
+        Assert.Null(result.Choice);
+        Assert.False(result.Persisted);
+        Assert.True(coordinator.TryBegin(1, "save-1", out _));
+        coordinator.ClearScreen(1);
+    }
+
 }

@@ -194,4 +194,26 @@ public sealed class LanConnectContinueRunPublishScreenStateTests
         state.MarkSettled(thirdVisit);
         state.EndAttempt(thirdVisit);
     }
+    [Fact]
+    public void Rapid_reopen_waits_for_old_request_then_retries_without_throttle_or_duplicate_release()
+    {
+        LanConnectContinueRunPublishScreenState state = new(Retry);
+        Assert.True(state.TryBeginAttempt(7, T0, out var oldAttempt));
+        state.NotifyScreenClosed(7);
+
+        Assert.False(state.TryBeginAttempt(7, T0, out _));
+        Assert.True(state.IsAttemptStale(oldAttempt));
+        state.MarkSettled(oldAttempt);
+        state.EndAttempt(oldAttempt);
+
+        Assert.True(state.TryBeginAttempt(7, T0, out var newAttempt));
+        state.EndAttempt(oldAttempt);
+        state.MarkRetryable(oldAttempt);
+        Assert.False(state.TryBeginAttempt(7, T0 + Retry, out _));
+        state.MarkSettled(newAttempt);
+        state.EndAttempt(newAttempt);
+        state.MarkRetryable(oldAttempt);
+        Assert.False(state.TryBeginAttempt(7, T0 + Retry, out _));
+    }
+
 }
