@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Sts2LanConnect.Tests.Packaging;
 
@@ -47,11 +48,11 @@ public sealed class LanConnectPackageContentTests
 
         using JsonDocument manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
-        Assert.Equal("0.6.2-alpha.1", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("0.6.2-alpha.2", manifest.RootElement.GetProperty("version").GetString());
         FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
             Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
         Assert.Equal("0.6.2.0", assemblyVersion.FileVersion);
-        Assert.StartsWith("0.6.2-alpha.1", assemblyVersion.ProductVersion, StringComparison.Ordinal);
+        Assert.StartsWith("0.6.2-alpha.2", assemblyVersion.ProductVersion, StringComparison.Ordinal);
 
         foreach (string packagePath in ExpectedFiles)
         {
@@ -369,9 +370,35 @@ public sealed class LanConnectPackageContentTests
         }
 
         Assert.Contains("pre-release", releaseNotes, StringComparison.Ordinal);
-        Assert.Contains("<待打包后填写>", releaseNotes, StringComparison.Ordinal);
+        // The alpha1 checksums were filled in after packaging (commit 279549b);
+        // assert the filled shape instead of the historical placeholder.
+        Assert.DoesNotContain("<待打包后填写>", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("## 校验和", releaseNotes, StringComparison.Ordinal);
+        Assert.Equal(1, Regex.Matches(releaseNotes, @"客户端 ZIP SHA-256：`[0-9a-f]{64}`").Count);
+        Assert.Equal(1, Regex.Matches(releaseNotes, @"服务端 ZIP SHA-256：`[0-9a-f]{64}`").Count);
         Assert.Contains("compat_4_5_v1", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("## [0.6.2-alpha.1] - ", changelog, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Client_v062_alpha2_documents_server_picker_ranking()
+    {
+        using Fixture fixture = new();
+        string releaseNotes = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "RELEASE_NOTES_V0.6.2_ALPHA2_ZH.md"));
+        string changelog = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "CHANGELOG.md"));
+
+        Assert.Contains("0.6.2-alpha.2", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("pre-release", releaseNotes, StringComparison.Ordinal);
+        Assert.DoesNotContain("<待打包后填写>", releaseNotes, StringComparison.Ordinal);
+        Assert.Equal(1, Regex.Matches(releaseNotes, @"客户端 ZIP SHA-256：`[0-9a-f]{64}`").Count);
+        Assert.Equal(1, Regex.Matches(releaseNotes, @"服务端 ZIP SHA-256：`[0-9a-f]{64}`").Count);
+        Assert.Contains("serviceVersion", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("服务端版本过旧", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("魔仙堡", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("## [0.6.2-alpha.2] - ", changelog, StringComparison.Ordinal);
     }
 
     [Fact]

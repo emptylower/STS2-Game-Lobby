@@ -55,6 +55,7 @@ export interface MetricsResponse {
   serverTime: string;
   displayName?: string;
   publicListing: boolean;
+  serviceVersion: string;
   rooms: number;
   currentBandwidthMbps: number;
   bandwidthCapacityMbps: number | null;

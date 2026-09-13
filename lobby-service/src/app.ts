@@ -498,6 +498,7 @@ export async function createLobbyService(
         modSyncProtocolVersion: MOD_SYNC_PROTOCOL_VERSION,
         modSyncEnabled: serverAdminStateStore.getState().modSyncEnabled,
         modSyncMinimumClientVersion: MOD_SYNC_MINIMUM_CLIENT_VERSION,
+        serviceVersion: lobbyServiceVersion,
         wireCacheSignatureV1Enforced: true,
         dualProtocolApiVersion: 1,
         supportedProtocolProfiles: ["compat_4_5_v1", "tail_v1"],
@@ -1730,6 +1731,7 @@ export async function createLobbyService(
       address: peerEnv.selfAddress,
       getDisplayName: resolvePeerDisplayName,
       getPublicListing: resolvePublicListing,
+      getServiceVersion: () => lobbyServiceVersion,
       getModSyncCapability: () => ({
         protocolVersion: MOD_SYNC_PROTOCOL_VERSION,
         enabled: serverAdminStateStore.getState().modSyncEnabled,

@@ -129,6 +129,65 @@ test("/peers/metrics surfaces publicListing=false so CF aggregator can drop the 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("/peers/metrics reports the injected lobby-service version for the picker", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "metrics-"));
+  try {
+    const identity = await loadOrCreateIdentity(dir);
+    const app = express();
+    mountMetrics(app, {
+      identity,
+      address: "https://self.example",
+      getPublicListing: () => true,
+      getServiceVersion: () => "0.6.2-alpha.2",
+      getSnapshot: () => ({
+        rooms: 0,
+        currentBandwidthMbps: 0,
+        bandwidthCapacityMbps: null,
+        resolvedCapacityMbps: null,
+        bandwidthUtilizationRatio: undefined,
+        capacitySource: "unknown",
+        createRoomGuardApplies: false,
+        createRoomGuardStatus: "unknown",
+      }),
+    });
+    const server = app.listen(0);
+    const port = (server.address() as { port: number }).port;
+    const res = await fetch(`http://127.0.0.1:${port}/peers/metrics`);
+    server.close();
+    const body = await res.json() as { serviceVersion: string };
+    assert.equal(body.serviceVersion, "0.6.2-alpha.2");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("/peers/metrics falls back to unknown serviceVersion when not provided", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "metrics-"));
+  try {
+    const identity = await loadOrCreateIdentity(dir);
+    const app = express();
+    mountMetrics(app, {
+      identity,
+      address: "https://self.example",
+      getPublicListing: () => true,
+      getSnapshot: () => ({
+        rooms: 0,
+        currentBandwidthMbps: 0,
+        bandwidthCapacityMbps: null,
+        resolvedCapacityMbps: null,
+        bandwidthUtilizationRatio: undefined,
+        capacitySource: "unknown",
+        createRoomGuardApplies: false,
+        createRoomGuardStatus: "unknown",
+      }),
+    });
+    const server = app.listen(0);
+    const port = (server.address() as { port: number }).port;
+    const res = await fetch(`http://127.0.0.1:${port}/peers/metrics`);
+    server.close();
+    const body = await res.json() as { serviceVersion: string };
+    assert.equal(body.serviceVersion, "unknown");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("/peers/metrics omits bandwidthUtilizationRatio when undefined", async () => {
   // Lobby has no traffic → utilization can't be computed. The field should
   // be absent rather than serialized as null so clients can render

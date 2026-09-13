@@ -46,7 +46,8 @@ public sealed class LanConnectServerListBootstrapTests
             new()
             {
                 Address = "https://recent.example",
-                LastSuccessConnect = DateTime.UtcNow,
+                ProbeState = ServerProbeState.Reachable,
+                Version = new ServerVersionInfo(ServerVersionSource.Inferred, 0, 6, "0.6.x（推断）"),
                 Bucket = PingBucket.Low,
                 PingMs = 1
             },
@@ -54,6 +55,8 @@ public sealed class LanConnectServerListBootstrapTests
             {
                 Address = LanConnectServerListBootstrap.FeaturedServerAddress,
                 IsPinned = true,
+                ProbeState = ServerProbeState.Unreachable,
+                Version = new ServerVersionInfo(ServerVersionSource.Inferred, 0, 4, "0.4.x 或更早（推断）"),
                 Bucket = PingBucket.High,
                 PingMs = 2000
             }
@@ -62,6 +65,104 @@ public sealed class LanConnectServerListBootstrapTests
         List<ServerListEntry> ordered = LanConnectServerListBootstrap.OrderForDisplay(entries).ToList();
 
         Assert.Equal(LanConnectServerListBootstrap.FeaturedServerAddress, ordered[0].Address);
+    }
+
+    [Fact]
+    public void OrderForDisplay_ranks_reachable_before_unreachable_and_version_tiers_descending()
+    {
+        List<ServerListEntry> entries =
+        [
+            new() { Address = "https://unknown.example", ProbeState = ServerProbeState.Reachable },
+            new() { Address = "https://old-04.example", ProbeState = ServerProbeState.Reachable, Version = new ServerVersionInfo(ServerVersionSource.Inferred, 0, 4, "0.4.x 或更早（推断）"), PingMs = 10 },
+            new() { Address = "https://mid-05.example", ProbeState = ServerProbeState.Reachable, Version = new ServerVersionInfo(ServerVersionSource.Inferred, 0, 5, "0.5.x（推断）"), PingMs = 10 },
+            new() { Address = "https://new-06.example", ProbeState = ServerProbeState.Reachable, Version = new ServerVersionInfo(ServerVersionSource.Reported, 0, 6, "0.6.1"), PingMs = 10 },
+            new() { Address = "https://dead-07.example", ProbeState = ServerProbeState.Unreachable, Version = new ServerVersionInfo(ServerVersionSource.Reported, 0, 7, "0.7.0") },
+            new() { Address = "https://dead-04.example", ProbeState = ServerProbeState.Unreachable, Version = new ServerVersionInfo(ServerVersionSource.Inferred, 0, 4, "0.4.x 或更早（推断）") },
+            new() { Address = "https://pending.example", ProbeState = ServerProbeState.Pending },
+        ];
+
+        List<string> ordered = LanConnectServerListBootstrap.OrderForDisplay(entries)
+            .Select(entry => entry.Address)
+            .ToList();
+
+        Assert.Equal(
+        [
+            "https://new-06.example",
+            "https://mid-05.example",
+            "https://old-04.example",
+            "https://unknown.example",
+            "https://dead-07.example",
+            "https://dead-04.example",
+            "https://pending.example",
+        ], ordered);
+    }
+
+    [Fact]
+    public void OrderForDisplay_breaks_version_tier_ties_by_exact_milliseconds_then_address()
+    {
+        List<ServerListEntry> entries =
+        [
+            new() { Address = "https://slow.example", ProbeState = ServerProbeState.Reachable, Version = new ServerVersionInfo(ServerVersionSource.Reported, 0, 6, "0.6.1"), PingMs = 42 },
+            new() { Address = "https://alpha.example", ProbeState = ServerProbeState.Reachable, Version = new ServerVersionInfo(ServerVersionSource.Reported, 0, 6, "0.6.2-alpha.1"), PingMs = 41 },
+            new() { Address = "https://fast-a.example", ProbeState = ServerProbeState.Reachable, Version = new ServerVersionInfo(ServerVersionSource.Reported, 0, 6, "0.6.2-alpha.1"), PingMs = 41 },
+            new() { Address = "https://fast-b.example", ProbeState = ServerProbeState.Reachable, Version = new ServerVersionInfo(ServerVersionSource.Reported, 0, 6, "0.6.2-alpha.1"), PingMs = 41 },
+        ];
+
+        List<string> ordered = LanConnectServerListBootstrap.OrderForDisplay(entries)
+            .Select(entry => entry.Address)
+            .ToList();
+
+        Assert.Equal(
+        [
+            "https://alpha.example",
+            "https://fast-a.example",
+            "https://fast-b.example",
+            "https://slow.example",
+        ], ordered);
+    }
+
+    [Fact]
+    public void OrderForDisplay_groups_pending_with_unreachable_and_sorts_by_version_then_address()
+    {
+        List<ServerListEntry> entries =
+        [
+            new() { Address = "https://pending-b.example", ProbeState = ServerProbeState.Pending, Version = new ServerVersionInfo(ServerVersionSource.Inferred, 0, 5, "0.5.x（推断）") },
+            new() { Address = "https://pending-a.example", ProbeState = ServerProbeState.Pending },
+            new() { Address = "https://dead-b.example", ProbeState = ServerProbeState.Unreachable, Version = new ServerVersionInfo(ServerVersionSource.Inferred, 0, 5, "0.5.x（推断）") },
+            new() { Address = "https://dead-a.example", ProbeState = ServerProbeState.Unreachable, Version = new ServerVersionInfo(ServerVersionSource.Inferred, 0, 5, "0.5.x（推断）") },
+            new() { Address = "https://dead-06.example", ProbeState = ServerProbeState.Unreachable, Version = new ServerVersionInfo(ServerVersionSource.Inferred, 0, 6, "0.6.x（推断）") },
+        ];
+
+        List<string> ordered = LanConnectServerListBootstrap.OrderForDisplay(entries)
+            .Select(entry => entry.Address)
+            .ToList();
+
+        Assert.Equal(
+        [
+            "https://dead-06.example",
+            "https://dead-a.example",
+            "https://dead-b.example",
+            "https://pending-b.example",
+            "https://pending-a.example",
+        ], ordered);
+    }
+
+    [Fact]
+    public void OrderForDisplay_ignores_ping_within_the_unreachable_group()
+    {
+        List<ServerListEntry> entries =
+        [
+            new() { Address = "https://z.example", ProbeState = ServerProbeState.Unreachable, Version = new ServerVersionInfo(ServerVersionSource.Inferred, 0, 5, "0.5.x（推断）"), PingMs = 7 },
+            new() { Address = "https://a.example", ProbeState = ServerProbeState.Unreachable, Version = new ServerVersionInfo(ServerVersionSource.Inferred, 0, 5, "0.5.x（推断）"), PingMs = 42 },
+        ];
+
+        List<string> ordered = LanConnectServerListBootstrap.OrderForDisplay(entries)
+            .Select(entry => entry.Address)
+            .ToList();
+
+        // Same tier, both unreachable, different PingMs — the latency key is
+        // reachable-group-only, so the address tiebreak decides.
+        Assert.Equal(["https://a.example", "https://z.example"], ordered);
     }
 
     [Fact]

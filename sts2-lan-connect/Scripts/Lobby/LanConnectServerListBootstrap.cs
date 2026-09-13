@@ -12,11 +12,12 @@ internal sealed class ServerListEntry
     public string? DisplayName { get; set; }
     public string Source { get; set; } = "unknown"; // cache | cf | seed
     public bool IsFavorite { get; set; }
-    public DateTime? LastSuccessConnect { get; set; }
     public PingBucket Bucket { get; set; } = PingBucket.Unreachable;
     public int? PingMs { get; set; }
     public bool IsPinned { get; set; }
     public bool SupportsModSyncV051Plus { get; set; }
+    public ServerVersionInfo Version { get; set; } = ServerVersionInfo.Unknown;
+    public ServerProbeState ProbeState { get; set; } = ServerProbeState.Pending;
 
     // Live metrics from `/peers/metrics`, populated by PingAllAsync after the
     // initial pre-warmed gather. All nullable — older v0.2/v0.3 nodes don't
@@ -61,7 +62,6 @@ internal static class LanConnectServerListBootstrap
                 DisplayName = cachedPeer.DisplayName,
                 Source = "cache",
                 IsFavorite = cachedPeer.IsFavorite,
-                LastSuccessConnect = DateTime.TryParse(cachedPeer.LastSuccessConnect ?? "", out var connectedAt) ? connectedAt : null,
             };
         }
 
@@ -157,16 +157,16 @@ internal static class LanConnectServerListBootstrap
 
         var tasks = entryList.Select(async entry =>
         {
-            // Probe first for the latency bucket + signed-challenge liveness.
-            // Metrics fetched in parallel, since they're a different endpoint
-            // that doesn't share state with the probe.
+            // Latency probe and the metrics/version snapshot run in parallel —
+            // they hit different endpoints and share no state.
             var probeTask = LanConnectPeerPing.ProbeAsync(entry.Address, ct);
-            var metricsTask = LanConnectPeerMetricsClient.FetchAsync(entry.Address, ct);
-            await Task.WhenAll(probeTask, metricsTask);
+            var snapshotTask = LanConnectPeerMetricsClient.FetchSnapshotAsync(entry.Address, ct);
+            await Task.WhenAll(probeTask, snapshotTask);
 
             PeerProbeResult result = probeTask.Result;
             entry.PingMs = result.Ms >= 0 ? result.Ms : null;
             entry.Bucket = result.Bucket;
+            entry.ProbeState = result.Ms >= 0 ? ServerProbeState.Reachable : ServerProbeState.Unreachable;
             // Probe is the freshest source — it's a live round-trip to the
             // server itself. Prefer it over the CF/cache value when present so
             // operator name changes propagate immediately in the picker
@@ -176,8 +176,9 @@ internal static class LanConnectServerListBootstrap
                 entry.DisplayName = result.DisplayName;
             }
 
-            PeerMetricsResponse? metrics = metricsTask.Result;
-            if (metrics != null) ApplyMetrics(entry, metrics);
+            LanConnectPeerMetricsClient.PeerDiscoverySnapshot snapshot = snapshotTask.Result;
+            entry.Version = snapshot.Version;
+            if (snapshot.Metrics != null) ApplyMetrics(entry, snapshot.Metrics);
         }).ToList();
 
         await Task.WhenAll(tasks);
@@ -208,11 +209,19 @@ internal static class LanConnectServerListBootstrap
         featured.IsPinned = true;
     }
 
+    // Full ranking (plan §3): pinned first, then reachability (Reachable above
+    // Pending/Unreachable), then version tier descending by (Major, Minor)
+    // with Unknown below every known tier, then exact ping milliseconds
+    // ascending (reachable group only — the unreachable group ties on this
+    // key and falls through to address), then address for determinism.
     internal static IOrderedEnumerable<ServerListEntry> OrderForDisplay(IEnumerable<ServerListEntry> entries) =>
         entries
             .OrderByDescending(entry => entry.IsPinned)
-            .ThenByDescending(entry => entry.LastSuccessConnect ?? DateTime.MinValue)
-            .ThenBy(entry => entry.Bucket)
+            .ThenBy(entry => entry.ProbeState == ServerProbeState.Reachable ? 0 : 1)
+            .ThenByDescending(entry => entry.Version.Source != ServerVersionSource.Unknown ? 1 : 0)
+            .ThenByDescending(entry => entry.Version.Major)
+            .ThenByDescending(entry => entry.Version.Minor)
+            .ThenBy(entry => entry.ProbeState == ServerProbeState.Reachable ? (entry.PingMs ?? int.MaxValue) : 0)
             .ThenBy(entry => entry.Address, StringComparer.OrdinalIgnoreCase);
 
     internal static void ApplyMetrics(ServerListEntry entry, PeerMetricsResponse metrics)
@@ -233,7 +242,7 @@ internal static class LanConnectServerListBootstrap
     private static bool IsFeaturedAddress(string address) =>
         string.Equals(NormalizeAddress(address), NormalizeAddress(FeaturedServerAddress), StringComparison.OrdinalIgnoreCase);
 
-    private static string NormalizeAddress(string address) => address.Trim().TrimEnd('/');
+    internal static string NormalizeAddress(string address) => address.Trim().TrimEnd('/');
 
     private static bool MergeEntry(ServerListEntry target, ServerListEntry incoming)
     {

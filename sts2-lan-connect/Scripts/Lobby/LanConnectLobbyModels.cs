@@ -171,6 +171,8 @@ internal sealed class LobbyProbeCapabilities
 
     public string ModSyncMinimumClientVersion { get; set; } = string.Empty;
 
+    public string? ServiceVersion { get; set; }
+
     public bool WireCacheSignatureV1Enforced { get; set; }
 
     [JsonIgnore]
@@ -774,4 +776,7 @@ internal sealed class PeerMetricsResponse
 
     [JsonPropertyName("modSyncMinimumClientVersion")]
     public string ModSyncMinimumClientVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("serviceVersion")]
+    public string? ServiceVersion { get; set; }
 }

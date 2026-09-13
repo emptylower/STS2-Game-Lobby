@@ -410,6 +410,7 @@ const CURRENT_PROBE_CAPABILITIES = {
   modSyncProtocolVersion: 1,
   modSyncEnabled: true,
   modSyncMinimumClientVersion: "0.5.1",
+  serviceVersion: "0.6.2-alpha.2",
   wireCacheSignatureV1Enforced: true,
   dualProtocolApiVersion: 1,
   supportedProtocolProfiles: ["compat_4_5_v1", "tail_v1"],
@@ -428,10 +429,15 @@ test("GET /probe returns exact current chat capabilities", async () => {
   try {
     const probe = await fetch(`http://127.0.0.1:${address.port}/probe`);
     assert.equal(probe.status, 200);
-    assert.deepEqual(await probe.json(), {
+    const probeBody = await probe.json() as { capabilities: { serviceVersion: string } };
+    assert.deepEqual(probeBody, {
       ok: true,
       capabilities: CURRENT_PROBE_CAPABILITIES,
     });
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { version?: unknown };
+    assert.equal(probeBody.capabilities.serviceVersion, packageJson.version);
 
     const health = await fetch(`http://127.0.0.1:${address.port}/health`);
     assert.equal(health.status, 200);

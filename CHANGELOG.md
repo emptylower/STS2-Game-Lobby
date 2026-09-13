@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+## [0.6.2-alpha.2] - 2026-09-13
+
+`0.6.2-alpha.2`：选服列表排序重做（版本优先 + 真实延迟）的预发布候选（GitHub-only pre-release，不更新创意工坊；真机 E2E 已通过）。发布说明见 `docs/RELEASE_NOTES_V0.6.2_ALPHA2_ZH.md`。客户端与 lobby-service 同步 `0.6.2-alpha.2`；本版不改 wire 协议，tail 房间 `minimumClientVersion` 保持 `0.6.2-alpha.1`，正式版仍为 `0.6.1`。
+
+### Added
+
+- 服务端公开接口新增版本号字段：`/probe` 的 `capabilities.serviceVersion` 与 `/peers/metrics` 的 `serviceVersion`（值为 lobby-service 版本，读不到输出 `unknown`）；未升级的旧服务端靠 `/probe` 能力字段推断版本档（`0.6.x（推断）` / `0.5.x（推断）` / `0.4.x 或更早（推断）`），metrics 报告的合法版本永远优先于推断。
+- 选服列表新增结构化日志（`refresh:` / `render:` / `order:` / `closed:`，带 `dialog` 窗口与 `generation` 轮次标识），供 E2E 自动核对最终排序与不跳动断言。
+- 选服行新增「服务端版本过旧」红色徽章与 tooltip 说明：版本档低于 0.6 的服务器明确标注「该服务器的 lobby-service 低于 0.6.0，当前客户端无法在此创建或加入房间。」（不禁止点击。）
+
+### Changed
+
+- **选服列表排序规则重做**：置顶 → 可达性 → 服务端大版本档（降序，未知最低）→ 真实延迟（升序，精确毫秒，每次探测取两次采样较小值）→ 地址。删除从未在生产写入的 `LastSuccessConnect` 排序条件与延迟容差档。
+- **列表刷新不再跳动**：一轮刷新中每批探测结果只更新行内数据（保持当前顺序、新条目追加末尾），全部任务（含 Cloudflare 发现与全部探测）结束后只做一次最终重排；异常分支同样等待全部任务结束。
+- 延迟探测改为每台服务器每次两级各最多两次采样取较小值；调用方取消后立即停止后续采样与回退请求。
+
+### Compatibility
+
+- 旧客户端忽略新增 `serviceVersion` 字段，行为不变；0.6.2-alpha.2 客户端与 0.6.0～0.6.2-alpha.1 服务端正常互通（推断为 0.6 档），与 0.5.x / 0.4.x 服务端排序靠后并标注「服务端版本过旧」。
+- 不改任何 wire 协议、`protocolSelection`、`minimumClientVersion`、`tailV1MinimumClientVersion`；Cloudflare Worker、KV、节点网络均不变。
+
 ## [0.6.2-alpha.1] - 2026-09-08
 
 `0.6.2-alpha.1`：native_bus 消息 ID 改为**按对端寻址**的预发布修复候选（GitHub-only pre-release，真机双实例 E2E 验收前不更新创意工坊）。发布说明见 `docs/RELEASE_NOTES_V0.6.2_ALPHA1_ZH.md`。客户端与 lobby-service 同步 `0.6.2-alpha.1`；tail 房间 `minimumClientVersion` 同升 `0.6.2-alpha.1`。正式版仍为 `0.6.1`。

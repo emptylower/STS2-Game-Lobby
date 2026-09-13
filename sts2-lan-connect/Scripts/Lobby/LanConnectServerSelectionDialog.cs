@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Godot;
+using MegaCrit.Sts2.Core.Logging;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -16,6 +17,9 @@ public partial class LanConnectServerSelectionDialog : Control
     private const float ServerListWheelStep = 120f;
     private const float ServerListTouchDragThreshold = 20f;
     private const float ServerListTouchTapMovementThreshold = ServerListTouchDragThreshold;
+
+    // Per-process picker window id used by the E2E log contract (plan §6).
+    private static int _nextDialogId;
 
     // Mirror of the palette used by LanConnectLobbyOverlay so the picker
     // matches the lobby style without extracting shared theme infra.
@@ -40,6 +44,14 @@ public partial class LanConnectServerSelectionDialog : Control
     private Label? _statusLabel;
     private CancellationTokenSource? _refreshCts;
     private int _refreshGeneration;
+    private readonly int _dialogId = Interlocked.Increment(ref _nextDialogId);
+    private readonly object _canceledGenerationsSync = new();
+    private readonly HashSet<int> _canceledGenerations = new();
+
+    // Normalized addresses in the order they were last rendered. Rewritten
+    // after EVERY render (resort or not) so mid-refresh updates keep the
+    // visible order stable (plan §6).
+    private List<string> _displayOrder = new();
 
     private System.Collections.Generic.List<ServerListEntry> _entries = new();
     private bool _serverListTouchActive;
@@ -72,6 +84,7 @@ public partial class LanConnectServerSelectionDialog : Control
     public override void _ExitTree()
     {
         CancelRefresh();
+        Log.Info(LanConnectServerPickerLogLines.Closed(_dialogId));
         base._ExitTree();
     }
 
@@ -257,6 +270,7 @@ public partial class LanConnectServerSelectionDialog : Control
     private async Task RefreshAsync()
     {
         var (refreshGeneration, refreshToken) = BeginRefresh();
+        Log.Info(LanConnectServerPickerLogLines.Refresh(_dialogId, refreshGeneration, "started"));
 
         try
         {
@@ -268,43 +282,52 @@ public partial class LanConnectServerSelectionDialog : Control
             _entries = LanConnectServerListBootstrap.GatherInitialCandidates();
             if (!CanApplyRefresh(refreshGeneration, refreshToken))
             {
+                LogCanceledOnce(refreshGeneration);
                 return;
             }
 
-            Render();
+            Render(refreshGeneration, resort: true);
             SetRefreshStatus(enrichmentPending: true);
 
             Task cfDiscoveryTask = EnrichWithCloudflareResultsAsync(refreshGeneration, refreshToken);
             Task pingTask = EnrichVisibleEntriesAsync(refreshGeneration, refreshToken, _entries.ToList());
 
-            await cfDiscoveryTask;
-            await pingTask;
+            // Wait for BOTH branches (even if one faults) before the single
+            // final resort, so the list never reorders while probes are still
+            // landing (plan §6).
+            await LanConnectServerListDisplayOrder.AwaitRefreshTasksAsync(cfDiscoveryTask, pingTask);
 
             if (!CanApplyRefresh(refreshGeneration, refreshToken))
             {
+                LogCanceledOnce(refreshGeneration);
                 return;
             }
 
-            Render();
+            List<ServerListEntry> finalOrder = Render(refreshGeneration, resort: true);
+            Log.Info(LanConnectServerPickerLogLines.OrderSnapshot(_dialogId, refreshGeneration, finalOrder));
             SetRefreshStatus(enrichmentPending: false);
+            Log.Info(LanConnectServerPickerLogLines.Refresh(_dialogId, refreshGeneration, "completed"));
         }
         catch (OperationCanceledException)
         {
+            LogCanceledOnce(refreshGeneration);
         }
         catch (Exception)
         {
             if (!CanApplyRefresh(refreshGeneration, refreshToken))
             {
+                LogCanceledOnce(refreshGeneration);
                 return;
             }
 
-            Render();
+            Render(refreshGeneration, resort: true);
             if (_statusLabel != null)
             {
                 _statusLabel.Text = _entries.Count > 0
                     ? $"已显示 {_entries.Count} 个候选服务器，后台刷新失败。"
                     : "刷新失败，请稍后重试。";
             }
+            Log.Info(LanConnectServerPickerLogLines.Refresh(_dialogId, refreshGeneration, "failed"));
         }
     }
 
@@ -326,6 +349,7 @@ public partial class LanConnectServerSelectionDialog : Control
 
         if (!CanApplyRefresh(refreshGeneration, refreshToken))
         {
+            LogCanceledOnce(refreshGeneration);
             return;
         }
 
@@ -335,7 +359,7 @@ public partial class LanConnectServerSelectionDialog : Control
             return;
         }
 
-        Render();
+        Render(refreshGeneration, resort: false);
         SetRefreshStatus(enrichmentPending: true);
 
         if (mergeResult.AddedEntries.Count > 0)
@@ -349,11 +373,29 @@ public partial class LanConnectServerSelectionDialog : Control
         await LanConnectServerListBootstrap.PingAllAsync(entries, refreshToken);
         if (!CanApplyRefresh(refreshGeneration, refreshToken))
         {
+            LogCanceledOnce(refreshGeneration);
             return;
         }
 
-        Render();
+        Render(refreshGeneration, resort: false);
         SetRefreshStatus(enrichmentPending: true);
+    }
+
+    // Records the `canceled` state line at most once per refresh round. The
+    // dedup key is the refresh generation CAPTURED BY THE TASK (never the
+    // current field, which a newer round may already have bumped) so parent,
+    // CF-branch, and probe-branch early returns share one record (plan §6).
+    private void LogCanceledOnce(int refreshGeneration)
+    {
+        lock (_canceledGenerationsSync)
+        {
+            if (!_canceledGenerations.Add(refreshGeneration))
+            {
+                return;
+            }
+        }
+
+        Log.Info(LanConnectServerPickerLogLines.Refresh(_dialogId, refreshGeneration, "canceled"));
     }
 
     private (int RefreshGeneration, CancellationToken RefreshToken) BeginRefresh()
@@ -403,30 +445,43 @@ public partial class LanConnectServerSelectionDialog : Control
             : $"共 {_entries.Count} 个候选服务器";
     }
 
-    private void Render()
+    private List<ServerListEntry> Render(int refreshGeneration, bool resort)
     {
-        if (_list == null) return;
-        foreach (var child in _list.GetChildren()) child.QueueFree();
+        List<ServerListEntry> ordered = LanConnectServerListDisplayOrder.Apply(_displayOrder, _entries, resort);
 
-        var ordered = LanConnectServerListBootstrap.OrderForDisplay(_entries);
+        // Write the freshly rendered (normalized) addresses back after EVERY
+        // render, resort or not, so the next resort=false pass anchors against
+        // what is actually on screen (plan §6).
+        _displayOrder = ordered
+            .Select(entry => LanConnectServerListBootstrap.NormalizeAddress(entry.Address))
+            .ToList();
 
-        bool any = false;
-        foreach (var e in ordered)
+        Log.Info(LanConnectServerPickerLogLines.Render(_dialogId, refreshGeneration, resort, ordered));
+
+        if (_list != null)
         {
-            any = true;
-            _list.AddChild(BuildServerRow(e));
+            foreach (var child in _list.GetChildren()) child.QueueFree();
+
+            bool any = false;
+            foreach (var e in ordered)
+            {
+                any = true;
+                _list.AddChild(BuildServerRow(e));
+            }
+
+            if (!any)
+            {
+                var empty = new Label { Text = "暂无可用服务器，可手动输入或重置缓存重试。" };
+                empty.AddThemeColorOverride("font_color", TextMutedColor);
+                empty.AddThemeFontSizeOverride("font_size", 14);
+                empty.CustomMinimumSize = new Vector2(0f, 60f);
+                empty.HorizontalAlignment = HorizontalAlignment.Center;
+                empty.VerticalAlignment = VerticalAlignment.Center;
+                _list.AddChild(empty);
+            }
         }
 
-        if (!any)
-        {
-            var empty = new Label { Text = "暂无可用服务器，可手动输入或重置缓存重试。" };
-            empty.AddThemeColorOverride("font_color", TextMutedColor);
-            empty.AddThemeFontSizeOverride("font_size", 14);
-            empty.CustomMinimumSize = new Vector2(0f, 60f);
-            empty.HorizontalAlignment = HorizontalAlignment.Center;
-            empty.VerticalAlignment = VerticalAlignment.Center;
-            _list.AddChild(empty);
-        }
+        return ordered;
     }
 
     private Control BuildServerRow(ServerListEntry e)
@@ -456,11 +511,17 @@ public partial class LanConnectServerSelectionDialog : Control
             ? $"{FormatMbps(e.CurrentBandwidthMbps)} / {FormatMbps(e.ResolvedCapacityMbps ?? e.BandwidthCapacityMbps)}"
             : "未上报";
 
+        string tooltip = $"{e.Address}\n来源：{e.Source}\nMOD 同步：{(e.SupportsModSyncV051Plus ? "支持 0.5.1+" : "未声明")}\n利用率：{utilization}\n带宽：{bandwidth}\n服务端版本：{e.Version.Display}";
+        if (e.Version.IsTooOldForThisClient)
+        {
+            tooltip += "\n该服务器的 lobby-service 低于 0.6.0，当前客户端无法在此创建或加入房间。";
+        }
+
         var card = new Button
         {
             CustomMinimumSize = new Vector2(0f, 92f),
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            TooltipText = $"{e.Address}\n来源：{e.Source}\nMOD 同步：{(e.SupportsModSyncV051Plus ? "支持 0.5.1+" : "未声明")}\n利用率：{utilization}\n带宽：{bandwidth}",
+            TooltipText = tooltip,
             Text = string.Empty,
         };
         ApplyServerCardStyle(card);
@@ -543,6 +604,14 @@ public partial class LanConnectServerSelectionDialog : Control
                 "ModSyncSupportBadge",
                 "支持 0.5.1+ MOD 同步",
                 SuccessColor));
+        }
+
+        if (e.Version.IsTooOldForThisClient)
+        {
+            bottomRow.AddChild(CreateServerBadge(
+                "ServiceTooOldBadge",
+                "服务端版本过旧",
+                DangerColor));
         }
 
         var guardLabel = new Label
