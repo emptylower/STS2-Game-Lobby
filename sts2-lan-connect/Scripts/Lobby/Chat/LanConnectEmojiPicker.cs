@@ -20,10 +20,11 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
     internal const string ButtonPrefix = "ChatEmoji_";
     internal const int Columns = 6;
 
-    private static readonly Color LobbySurfaceColor = new(0.99f, 0.97f, 0.93f, 1f);
-    private static readonly Color LobbySecondaryColor = new(0.93f, 0.89f, 0.82f, 1f);
-    private static readonly Color LobbyAccentColor = new(0.87f, 0.41f, 0.00f, 1f);
-    private static readonly Color LobbyBorderColor = new(0.80f, 0.65f, 0.53f, 1f);
+    // Wired to the active lobby theme (LanConnectLobbyThemes.Current).
+    private static Color LobbySurfaceColor => LanConnectLobbyThemes.Current.Palette.Surface;
+    private static Color LobbySecondaryColor => LanConnectLobbyThemes.Current.Palette.Secondary;
+    private static Color LobbyAccentColor => LanConnectLobbyThemes.Current.Palette.Accent;
+    private static Color LobbyBorderColor => LanConnectLobbyThemes.Current.Palette.Border;
 
     private readonly List<Button> _buttons = [];
     private LanConnectRichDraftEditor? _editor;
@@ -571,42 +572,58 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
             CreatePickerButtonStyle(LobbySurfaceColor, LobbyAccentColor, 2));
     }
 
-    private static StyleBoxFlat CreatePickerPanelStyle() => new()
+    private static StyleBoxFlat CreatePickerPanelStyle()
     {
-        BgColor = LobbySurfaceColor,
-        BorderColor = LobbyBorderColor,
-        BorderWidthLeft = 2,
-        BorderWidthTop = 2,
-        BorderWidthRight = 2,
-        BorderWidthBottom = 2,
-        CornerRadiusTopLeft = 4,
-        CornerRadiusTopRight = 4,
-        CornerRadiusBottomLeft = 4,
-        CornerRadiusBottomRight = 4,
-        ContentMarginLeft = 10,
-        ContentMarginTop = 10,
-        ContentMarginRight = 10,
-        ContentMarginBottom = 10
-    };
+        LanConnectLobbyShape shape = LanConnectLobbyThemes.Current.Shape;
+        int borderWidth = shape.PressDepth ? 2 : shape.PanelBorderWidth;
+        int radius = shape.CornerRadius;
+        return new StyleBoxFlat
+        {
+            BgColor = LobbySurfaceColor,
+            BorderColor = LobbyBorderColor,
+            BorderWidthLeft = borderWidth,
+            BorderWidthTop = borderWidth,
+            BorderWidthRight = borderWidth,
+            BorderWidthBottom = borderWidth,
+            CornerRadiusTopLeft = radius,
+            CornerRadiusTopRight = radius,
+            CornerRadiusBottomLeft = radius,
+            CornerRadiusBottomRight = radius,
+            AntiAliasing = radius > 0,
+            ContentMarginLeft = 10,
+            ContentMarginTop = 10,
+            ContentMarginRight = 10,
+            ContentMarginBottom = 10
+        };
+    }
 
     private static StyleBoxFlat CreatePickerButtonStyle(
         Color background,
         Color border,
-        int borderWidth) => new()
+        int borderWidth)
     {
-        BgColor = background,
-        BorderColor = border,
-        BorderWidthLeft = borderWidth,
-        BorderWidthTop = borderWidth,
-        BorderWidthRight = borderWidth,
-        BorderWidthBottom = borderWidth,
-        CornerRadiusTopLeft = 4,
-        CornerRadiusTopRight = 4,
-        CornerRadiusBottomLeft = 4,
-        CornerRadiusBottomRight = 4,
-        ContentMarginLeft = 6,
-        ContentMarginTop = 6,
-        ContentMarginRight = 6,
-        ContentMarginBottom = 6
-    };
+        LanConnectLobbyShape shape = LanConnectLobbyThemes.Current.Shape;
+        int effectiveBorderWidth = shape.PressDepth
+            ? borderWidth
+            : borderWidth > 0 ? shape.ControlBorderWidth : 0;
+        int radius = shape.CornerRadius;
+        return new StyleBoxFlat
+        {
+            BgColor = background,
+            BorderColor = border,
+            BorderWidthLeft = effectiveBorderWidth,
+            BorderWidthTop = effectiveBorderWidth,
+            BorderWidthRight = effectiveBorderWidth,
+            BorderWidthBottom = effectiveBorderWidth,
+            CornerRadiusTopLeft = radius,
+            CornerRadiusTopRight = radius,
+            CornerRadiusBottomLeft = radius,
+            CornerRadiusBottomRight = radius,
+            AntiAliasing = radius > 0,
+            ContentMarginLeft = 6,
+            ContentMarginTop = 6,
+            ContentMarginRight = 6,
+            ContentMarginBottom = 6
+        };
+    }
 }

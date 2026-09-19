@@ -12,15 +12,15 @@ internal readonly record struct LanConnectLobbyDialogChoice(
 
 internal partial class LanConnectLobbyChoiceDialog : Control
 {
-    private static readonly Color CardColor = new(0.99f, 0.97f, 0.93f, 1f);
-    private static readonly Color SecondaryColor = new(0.93f, 0.89f, 0.82f, 1f);
-    private static readonly Color BorderColor = new(0.80f, 0.65f, 0.53f, 1f);
-    private static readonly Color AccentColor = new(0.87f, 0.41f, 0.00f, 1f);
-    private static readonly Color AccentBrightColor = new(0.93f, 0.50f, 0.08f, 1f);
-    private static readonly Color TextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);
-    private static readonly Color TextMutedColor = new(0.46f, 0.36f, 0.31f, 1f);
-    private static readonly Color DangerColor = new(0.80f, 0.15f, 0.18f, 1f);
-    private static readonly Color SuccessColor = new(0.10f, 0.60f, 0.19f, 1f);
+    private static Color CardColor => LanConnectLobbyThemes.Current.Palette.Card;
+    private static Color SecondaryColor => LanConnectLobbyThemes.Current.Palette.Secondary;
+    private static Color BorderColor => LanConnectLobbyThemes.Current.Palette.Border;
+    private static Color AccentColor => LanConnectLobbyThemes.Current.Palette.Accent;
+    private static Color AccentBrightColor => LanConnectLobbyThemes.Current.Palette.AccentBright;
+    private static Color TextStrongColor => LanConnectLobbyThemes.Current.Palette.TextStrong;
+    private static Color TextMutedColor => LanConnectLobbyThemes.Current.Palette.TextMuted;
+    private static Color DangerColor => LanConnectLobbyThemes.Current.Palette.Danger;
+    private static Color SuccessColor => LanConnectLobbyThemes.Current.Palette.Success;
 
     private readonly List<Button> _choiceButtons = [];
     private IReadOnlyList<LanConnectLobbyDialogChoice> _choices = [];
@@ -160,7 +160,7 @@ internal partial class LanConnectLobbyChoiceDialog : Control
         _built = true;
         ColorRect veil = new()
         {
-            Color = new Color(0f, 0f, 0f, 0.52f),
+            Color = LanConnectLobbyThemes.Current.Palette.ModalVeil,
             MouseFilter = MouseFilterEnum.Stop
         };
         veil.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
@@ -385,17 +385,19 @@ internal partial class LanConnectLobbyChoiceDialog : Control
 
     private static void ApplyButtonStyle(Button button, bool primary, bool danger)
     {
+        LanConnectLobbyPalette palette = LanConnectLobbyThemes.Current.Palette;
         Color background = danger ? DangerColor : primary ? AccentColor : SecondaryColor;
         Color foreground = primary || danger ? CardColor : TextStrongColor;
-        Color hover = danger ? new Color(0.67f, 0.10f, 0.13f, 1f) : primary ? AccentBrightColor : SuccessColor;
+        Color hover = danger ? palette.DangerHover : primary ? AccentBrightColor : palette.HoverBg;
+        Color hoverForeground = primary || danger ? CardColor : palette.HoverFg;
         button.AddThemeStyleboxOverride("normal", CreatePixelStyle(background, danger ? DangerColor : BorderColor, 2, 12, 3));
         button.AddThemeStyleboxOverride("hover", CreatePixelStyle(hover, BorderColor, 2, 12, 2));
         button.AddThemeStyleboxOverride("pressed", CreatePixelStyle(new Color(hover, 0.82f), AccentColor, 2, 12, 0));
         button.AddThemeStyleboxOverride("focus", CreatePixelStyle(background, AccentColor, 3, 11, 2));
         button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(new Color(background, 0.42f), new Color(BorderColor, 0.45f), 2, 12, 0));
         button.AddThemeColorOverride("font_color", foreground);
-        button.AddThemeColorOverride("font_hover_color", CardColor);
-        button.AddThemeColorOverride("font_pressed_color", CardColor);
+        button.AddThemeColorOverride("font_hover_color", hoverForeground);
+        button.AddThemeColorOverride("font_pressed_color", hoverForeground);
         button.AddThemeColorOverride("font_focus_color", foreground);
         button.AddThemeColorOverride("font_disabled_color", new Color(foreground, 0.62f));
     }
@@ -407,24 +409,53 @@ internal partial class LanConnectLobbyChoiceDialog : Control
         int padding,
         int shadowSize)
     {
-        return new StyleBoxFlat
+        LanConnectLobbyShape shape = LanConnectLobbyThemes.Current.Shape;
+        int effectiveRadius = shape.CornerRadius;
+        int effectiveBorderWidth = shape.PressDepth
+            ? borderWidth
+            : borderWidth >= 3 ? shape.PanelBorderWidth : borderWidth > 0 ? shape.ControlBorderWidth : 0;
+
+        StyleBoxFlat style = new()
         {
             BgColor = background,
             BorderColor = border,
-            BorderWidthLeft = borderWidth,
-            BorderWidthTop = borderWidth,
-            BorderWidthRight = borderWidth,
-            BorderWidthBottom = borderWidth,
+            BorderWidthLeft = effectiveBorderWidth,
+            BorderWidthTop = effectiveBorderWidth,
+            BorderWidthRight = effectiveBorderWidth,
+            BorderWidthBottom = effectiveBorderWidth,
             ContentMarginLeft = padding,
             ContentMarginTop = padding,
             ContentMarginRight = padding,
             ContentMarginBottom = padding,
-            ShadowColor = new Color(border, 0.72f),
-            ShadowSize = shadowSize,
-            CornerRadiusTopLeft = 0,
-            CornerRadiusTopRight = 0,
-            CornerRadiusBottomLeft = 0,
-            CornerRadiusBottomRight = 0
+            CornerRadiusTopLeft = effectiveRadius,
+            CornerRadiusTopRight = effectiveRadius,
+            CornerRadiusBottomLeft = effectiveRadius,
+            CornerRadiusBottomRight = effectiveRadius,
+            AntiAliasing = effectiveRadius > 0
         };
+
+        if (shadowSize > 0)
+        {
+            switch (shape.Shadow)
+            {
+                case LanConnectLobbyShadowStyle.HardOffset:
+                    style.ShadowColor = new Color(border, 0.72f);
+                    style.ShadowSize = shadowSize;
+                    style.ShadowOffset = new Vector2(shadowSize, shadowSize);
+                    break;
+                case LanConnectLobbyShadowStyle.SoftGlow:
+                    style.ShadowColor = LanConnectLobbyThemes.Current.Palette.Glow;
+                    style.ShadowSize = shape.PanelShadowSize;
+                    style.ShadowOffset = new Vector2(0, 2);
+                    break;
+                default:
+                    style.ShadowColor = new Color(0f, 0f, 0f, 0f);
+                    style.ShadowSize = 0;
+                    style.ShadowOffset = Vector2.Zero;
+                    break;
+            }
+        }
+
+        return style;
     }
 }

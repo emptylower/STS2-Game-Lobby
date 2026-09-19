@@ -59,23 +59,44 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private const int CreateProtocolTailId = 301;
     private const double JoinCancelRevealDelaySeconds = 3d;
 
-    // ── Retro pixel-art palette (converted from reference UI oklch values) ──
-    private static readonly Color BackdropColor = new(0.97f, 0.95f, 0.89f, 1f);        // #F8F1E3 oklch(0.96,0.02,85)
-    private static readonly Color FrameColor = new(0.80f, 0.65f, 0.53f, 1f);           // #CBA688 oklch(0.75,0.06,60)
-    private static readonly Color SurfaceColor = new(0.99f, 0.97f, 0.93f, 1f);         // #FDF8ED oklch(0.98,0.015,85)
-    private static readonly Color SurfaceMutedColor = new(0.89f, 0.87f, 0.81f, 1f);    // #E4DDCF oklch(0.90,0.02,85)
-    private static readonly Color AccentColor = new(0.87f, 0.41f, 0.00f, 1f);          // #DF6900 oklch(0.65,0.18,55)
-    private static readonly Color AccentBrightColor = new(0.93f, 0.50f, 0.08f, 1f);    // #ED7F14 brighter hover
-    private static readonly Color AccentMutedColor = new(0.87f, 0.41f, 0.00f, 0.10f);  // primary/10 per reference
-    private static readonly Color TextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);      // #341A09 oklch(0.25,0.05,50)
-    private static readonly Color TextMutedColor = new(0.46f, 0.36f, 0.31f, 1f);       // #775D4F oklch(0.50,0.04,50)
-    private static readonly Color SuccessColor = new(0.10f, 0.60f, 0.19f, 1f);         // #189A30 oklch(0.60,0.18,145)
-    private static readonly Color DangerColor = new(0.80f, 0.15f, 0.18f, 1f);          // #CC272E oklch(0.55,0.20,25)
-    private static readonly Color CardColor = new(0.99f, 0.97f, 0.93f, 1f);            // #FDF8ED oklch(0.98,0.015,85)
-    private static readonly Color SecondaryColor = new(0.93f, 0.89f, 0.82f, 1f);       // #ECE4D2 oklch(0.92,0.025,85)
-    private static readonly Color InputBgColor = new(0.95f, 0.92f, 0.86f, 1f);         // #F1EADC oklch(0.94,0.02,85)
-    private static readonly Color BorderColor = new(0.80f, 0.65f, 0.53f, 1f);          // #CBA688 oklch(0.75,0.06,60)
-    private static readonly Color PrimaryFgColor = new(0.15f, 0.05f, 0.00f, 1f);       // #270E01 oklch(0.20,0.05,50)
+    // ── Palette / geometry, resolved from the active lobby theme ──
+    // Every accessor below reads LanConnectLobbyThemes.Current, so a theme switch only needs
+    // the node tree to be rebuilt (see RebuildForThemeChange) — no call site changes.
+    private static LanConnectLobbyTheme LobbyTheme => LanConnectLobbyThemes.Current;
+    private static LanConnectLobbyShape Shape => LobbyTheme.Shape;
+
+    private static Color BackdropColor => LobbyTheme.Palette.Backdrop;
+    private static Color FrameColor => LobbyTheme.Palette.Frame;
+    private static Color SurfaceColor => LobbyTheme.Palette.Surface;
+    private static Color SurfaceMutedColor => LobbyTheme.Palette.SurfaceMuted;
+    private static Color AccentColor => LobbyTheme.Palette.Accent;
+    private static Color AccentBrightColor => LobbyTheme.Palette.AccentBright;
+    private static Color AccentMutedColor => LobbyTheme.Palette.AccentMuted;
+    private static Color TextStrongColor => LobbyTheme.Palette.TextStrong;
+    private static Color TextMutedColor => LobbyTheme.Palette.TextMuted;
+    private static Color SuccessColor => LobbyTheme.Palette.Success;
+    private static Color DangerColor => LobbyTheme.Palette.Danger;
+    private static Color CardColor => LobbyTheme.Palette.Card;
+    private static Color SecondaryColor => LobbyTheme.Palette.Secondary;
+    private static Color InputBgColor => LobbyTheme.Palette.InputBg;
+    private static Color BorderColor => LobbyTheme.Palette.Border;
+    private static Color PrimaryFgColor => LobbyTheme.Palette.PrimaryFg;
+
+    private static Color CardSelectedColor => LobbyTheme.Palette.CardSelected;
+    private static Color BorderStrongColor => LobbyTheme.Palette.BorderStrong;
+    private static Color WarningColor => LobbyTheme.Palette.Warning;
+    private static Color DangerHoverColor => LobbyTheme.Palette.DangerHover;
+    private static Color HoverBgColor => LobbyTheme.Palette.HoverBg;
+    private static Color HoverFgColor => LobbyTheme.Palette.HoverFg;
+    private static Color PressedBgColor => LobbyTheme.Palette.PressedBg;
+    private static Color GlowColor => LobbyTheme.Palette.Glow;
+    private static Color ModalVeilColor => LobbyTheme.Palette.ModalVeil;
+    private static Color AccentSecondaryColor => LobbyTheme.Palette.AccentSecondary;
+    private static Color SelectBadgeBgColor => LobbyTheme.Palette.SelectBadgeBg;
+    private static Color SelectBadgeFgColor => LobbyTheme.Palette.SelectBadgeFg;
+
+    /// <summary>Readable text/icon colour on top of the solid <see cref="DangerColor"/> fill.</summary>
+    private static Color DangerFgColor => LobbyTheme.IsDark ? LobbyTheme.Palette.Backdrop : LobbyTheme.Palette.Card;
 
     private readonly List<LobbyRoomSummary> _rooms = new();
     private readonly List<LobbyAnnouncementItem> _announcements = new();
@@ -159,6 +180,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Button? _closeRoomButton;
     private Button? _closeButton;
     private Button? _settingsButton;
+    private Button? _themeButton;
+    private Control? _themeMenuContainer;
+    private PanelContainer? _themeMenuPanel;
     private Button? _repairSaveButton;
     private Button? _copyDebugReportButton;
     private Control? _createDialogContainer;
@@ -236,6 +260,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Control? _dialogReturnFocusTarget;
     private Control? _progressDialogReturnFocusTarget;
     private string? _pendingRoomCardFocusRestoreId;
+    /// <summary>Room id the room stage last rendered as selected (focus can move _selectedRoomId ahead of it).</summary>
+    private string? _stageSelectedRoomId;
     private LanConnectChatChannelState? _testServerChatState;
     private Func<string, Task>? _testServerChatSend;
     private Func<string, Task>? _testServerChatRetry;
@@ -662,6 +688,40 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     internal void OpenServerPickerForTests() => OpenServerPicker();
 
+    /// <summary>
+    /// Replays what a real mouse click does to a room card: the viewport grabs focus first
+    /// (FocusEntered → OnRoomCardFocused), then gui_input delivers the button press.
+    /// </summary>
+    internal void ClickRoomCardForTests(string roomId)
+    {
+        Control? card = _roomListContainer?.GetChildren().OfType<Control>()
+            .FirstOrDefault(c => c.HasMeta("room_id") && c.GetMeta("room_id").AsString() == roomId);
+        if (card == null)
+        {
+            throw new InvalidOperationException($"room card {roomId} not rendered");
+        }
+
+        card.GrabFocus();
+        InputEventMouseButton press = new() { ButtonIndex = MouseButton.Left, Pressed = true };
+        card.EmitSignal(Control.SignalName.GuiInput, press);
+    }
+
+    internal bool RoomCardShowsSelectBadgeForTests(string roomId)
+    {
+        Control? card = _roomListContainer?.GetChildren().OfType<Control>()
+            .FirstOrDefault(c => c.HasMeta("room_id") && c.GetMeta("room_id").AsString() == roomId);
+        return card != null && card.FindChildren("*", "Label", recursive: true, owned: false)
+            .OfType<Label>().Any(l => l.Text == UiText("SELECT"));
+    }
+
+    internal void OpenThemeMenuForTests()
+    {
+        if (_themeMenuContainer is { Visible: false })
+        {
+            ToggleThemeMenu();
+        }
+    }
+
     public override void _Process(double delta)
     {
         AnimateProgressDialog(delta);
@@ -838,6 +898,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private bool CloseTopmostDialogFromKeyboard()
     {
+        if (_themeMenuContainer?.Visible == true)
+        {
+            CloseThemeMenu();
+            return true;
+        }
+
         if (_progressDialogContainer?.Visible == true)
         {
             if (_progressDialogAllowCancel)
@@ -1021,11 +1087,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         SetAnchorsPreset(LayoutPreset.FullRect);
         Connect(Control.SignalName.Resized, Callable.From(ApplyResponsiveLayout));
 
-        ColorRect backdrop = new()
-        {
-            Color = BackdropColor,
-            MouseFilter = MouseFilterEnum.Stop
-        };
+        LobbyBackdrop backdrop = new();
         backdrop.SetAnchorsPreset(LayoutPreset.FullRect);
         AddChild(backdrop);
 
@@ -1061,6 +1123,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         AddChild(BuildResumeSlotDialog());
         AddChild(BuildFilterDialog());
         AddChild(BuildInviteConfirmDialog());
+        AddChild(BuildThemeMenu());
         ApplyResponsiveLayout();
     }
 
@@ -1090,7 +1153,23 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         _headerBrandRow.AddThemeConstantOverride("separation", 14);
 
-        PanelContainer badge = CreatePixelBorderSmPanel(background: AccentColor, padding: 0);
+        // 午夜玻璃: the brand chip is an opaque accent→violet gradient with a neon halo,
+        // not a flat accent block.
+        PanelContainer badge = Shape.Glass
+            ? new PixelBorderPanel
+            {
+                BgColor = AccentColor,
+                GlassTintBottom = AccentSecondaryColor,
+                PixelBorderColor = new Color(1f, 1f, 1f, 0.35f),
+                PixelBorderWidth = 2,
+                ShadowPixelOffset = 0,
+                Padding = 0,
+                GlassOpaque = true,
+                GlassGlowSize = 8,
+                GlassGlow = new Color(AccentColor, 0.45f),
+                GlassHighlight = 0.14f
+            }
+            : CreatePixelBorderSmPanel(background: AccentColor, padding: 0);
         badge.CustomMinimumSize = new Vector2(48f, 48f);
         _headerBrandRow.AddChild(badge);
 
@@ -1160,6 +1239,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         _chooseDirectoryServerButton = CreateToolbarButton("SERVER", "打开公共服务器列表，切换到其他大厅。", OpenServerPicker, GlyphIconKind.Server, accent: true);
         _headerToolbar.AddChild(_chooseDirectoryServerButton);
+
+        _themeButton = CreateToolbarIconButton("切换大厅主题", ToggleThemeMenu, GlyphIconKind.Palette);
+        _headerToolbar.AddChild(_themeButton);
 
         _settingsButton = CreateToolbarIconButton("展开或收起设置", ToggleSettingsVisibility, GlyphIconKind.Gear);
         _headerToolbar.AddChild(_settingsButton);
@@ -1392,12 +1474,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         _clearRoomSearchButton = clearButton;
         // Ghost style normally, green bg + white text + press animation on hover/press
         clearButton.AddThemeStyleboxOverride("normal", new StyleBoxEmpty { ContentMarginLeft = 15, ContentMarginRight = 15, ContentMarginTop = 9, ContentMarginBottom = 9 });
-        clearButton.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(SuccessColor, BorderColor, 2, 10, 3, 1));
-        clearButton.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(new Color(SuccessColor, 0.8f), BorderColor, 2, 10, 3, 3));
-        clearButton.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(SuccessColor, BorderColor, 2, 10, 3, 1));
+        clearButton.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(HoverBgColor, BorderColor, 2, 10, 3, 1));
+        clearButton.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(PressedBgColor, BorderColor, 2, 10, 3, 3));
+        clearButton.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(HoverBgColor, BorderColor, 2, 10, 3, 1));
         clearButton.AddThemeColorOverride("font_color", TextMutedColor);
-        clearButton.AddThemeColorOverride("font_hover_color", CardColor);     // white on green
-        clearButton.AddThemeColorOverride("font_pressed_color", CardColor);
+        clearButton.AddThemeColorOverride("font_hover_color", HoverFgColor);
+        clearButton.AddThemeColorOverride("font_pressed_color", HoverFgColor);
         clearButton.AddThemeFontSizeOverride("font_size", 18);
         clearButton.Connect(BaseButton.SignalName.Pressed, Callable.From(ClearRoomFiltersAndSearch));
         container.AddChild(clearButton);
@@ -1546,6 +1628,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         List<Control> targets = new();
 
         AddFocusTarget(targets, _chooseDirectoryServerButton);
+        AddFocusTarget(targets, _themeButton);
         AddFocusTarget(targets, _settingsButton);
         AddFocusTarget(targets, _closeButton);
 
@@ -1995,6 +2078,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             _chooseDirectoryServerButton.CustomMinimumSize = new Vector2(compact ? 148f : 170f, compact ? 46f : 50f);
             SetButtonText(_chooseDirectoryServerButton, "SERVER");
+        }
+
+        if (_themeButton != null)
+        {
+            _themeButton.CustomMinimumSize = new Vector2(compact ? 46f : 50f, compact ? 46f : 50f);
         }
 
         if (_settingsButton != null)
@@ -2614,17 +2702,24 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             CustomMinimumSize = new Vector2(44f, 44f),
             TooltipText = UiText("关闭筛选面板")
         };
-        // Red close button with press animation
-        Color dangerHover = new(0.90f, 0.22f, 0.22f, 1f);
-        Color dangerPressed = new(0.65f, 0.12f, 0.12f, 1f);
-        closeBtn.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(DangerColor, DangerColor, 2, 10, 3, 0));
-        closeBtn.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(dangerHover, DangerColor, 2, 10, 3, 1));
-        closeBtn.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(dangerPressed, DangerColor, 2, 10, 3, 3));
-        closeBtn.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(dangerHover, DangerColor, 2, 10, 3, 1));
-        closeBtn.AddThemeColorOverride("font_color", CardColor);
-        closeBtn.AddThemeColorOverride("font_hover_color", CardColor);
-        closeBtn.AddThemeColorOverride("font_pressed_color", CardColor);
-        closeBtn.AddThemeFontSizeOverride("font_size", 18);
+        if (Shape.Glass)
+        {
+            ApplyGlassDestructiveStyle(closeBtn, 10, fontSize: 18);
+        }
+        else
+        {
+            // Red close button with press animation
+            Color dangerHover = DangerHoverColor;
+            Color dangerPressed = new(DangerHoverColor, 0.85f);
+            closeBtn.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(DangerColor, DangerColor, 2, 10, 3, 0));
+            closeBtn.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(dangerHover, DangerColor, 2, 10, 3, 1));
+            closeBtn.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(dangerPressed, DangerColor, 2, 10, 3, 3));
+            closeBtn.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(dangerHover, DangerColor, 2, 10, 3, 1));
+            closeBtn.AddThemeColorOverride("font_color", DangerFgColor);
+            closeBtn.AddThemeColorOverride("font_hover_color", DangerFgColor);
+            closeBtn.AddThemeColorOverride("font_pressed_color", DangerFgColor);
+            closeBtn.AddThemeFontSizeOverride("font_size", 18);
+        }
         closeBtn.Connect(BaseButton.SignalName.Pressed, Callable.From(CloseFilterDialog));
         header.AddChild(closeBtn);
 
@@ -2749,6 +2844,251 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         RestoreDialogReturnFocus();
     }
 
+    // ── Theme picker ───────────────────────────────────────────────────────────
+
+    private Control BuildThemeMenu()
+    {
+        Control shell = new()
+        {
+            Name = "LanConnectThemeMenu",
+            Visible = false,
+            MouseFilter = MouseFilterEnum.Stop
+        };
+        shell.SetAnchorsPreset(LayoutPreset.FullRect);
+        shell.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnThemeMenuBackgroundInput));
+        _themeMenuContainer = shell;
+
+        PanelContainer panel = CreatePixelBorderSmPanel(background: CardColor, padding: 8);
+        panel.MouseFilter = MouseFilterEnum.Stop;
+        panel.CustomMinimumSize = new Vector2(220f, 0f);
+        shell.AddChild(panel);
+        _themeMenuPanel = panel;
+
+        VBoxContainer rows = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        rows.AddThemeConstantOverride("separation", 4);
+        panel.AddChild(rows);
+
+        foreach (LanConnectLobbyTheme theme in LanConnectLobbyThemes.All)
+        {
+            rows.AddChild(CreateThemeMenuRow(theme));
+        }
+
+        return shell;
+    }
+
+    private Button CreateThemeMenuRow(LanConnectLobbyTheme theme)
+    {
+        bool current = ReferenceEquals(theme, LobbyTheme);
+        Button button = new()
+        {
+            Text = string.Empty,
+            Name = $"ThemeRow_{theme.Id}",
+            TooltipText = UiText($"切换到{theme.DisplayName}"),
+            CustomMinimumSize = new Vector2(0f, 40f),
+            Alignment = HorizontalAlignment.Left
+        };
+        ApplyInlineButtonStyle(button, accent: false);
+        if (current)
+        {
+            button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(AccentMutedColor, BorderColor, 2, 12, 3, 0));
+        }
+
+        MarginContainer host = new()
+        {
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+        host.SetAnchorsPreset(LayoutPreset.FullRect);
+        host.AddThemeConstantOverride("margin_left", 10);
+        host.AddThemeConstantOverride("margin_right", 10);
+        button.AddChild(host);
+        SetupPressShift(button, host, 3);
+
+        HBoxContainer row = new()
+        {
+            MouseFilter = MouseFilterEnum.Ignore,
+            SizeFlagsVertical = SizeFlags.ShrinkCenter
+        };
+        row.AddThemeConstantOverride("separation", 10);
+        host.AddChild(row);
+
+        row.AddChild(new GlyphIcon
+        {
+            Kind = GlyphIconKind.Palette,
+            GlyphColor = TextMutedColor,
+            CustomMinimumSize = new Vector2(18f, 18f),
+            SizeFlagsVertical = SizeFlags.ShrinkCenter
+        });
+
+        Label label = new()
+        {
+            Text = UiText(theme.DisplayName),
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            SizeFlagsVertical = SizeFlags.ShrinkCenter
+        };
+        label.AddThemeColorOverride("font_color", TextStrongColor);
+        label.AddThemeFontSizeOverride("font_size", 15);
+        row.AddChild(label);
+
+        row.AddChild(new GlyphIcon
+        {
+            Kind = GlyphIconKind.Check,
+            GlyphColor = AccentColor,
+            CustomMinimumSize = new Vector2(18f, 18f),
+            SizeFlagsVertical = SizeFlags.ShrinkCenter,
+            Visible = current
+        });
+
+        SetupChildHoverTint(button, TextStrongColor, HoverFgColor);
+
+        string themeId = theme.Id;
+        button.Connect(BaseButton.SignalName.Pressed, Callable.From(() => SelectTheme(themeId)));
+        return button;
+    }
+
+    private void OnThemeMenuBackgroundInput(InputEvent inputEvent)
+    {
+        if (inputEvent is InputEventMouseButton { Pressed: true } || inputEvent.IsActionPressed("ui_cancel"))
+        {
+            CloseThemeMenu();
+            _themeMenuContainer?.AcceptEvent();
+        }
+    }
+
+    private bool AnyLobbyDialogVisible() =>
+        _createDialogContainer?.Visible == true
+        || _createGuardDialogContainer?.Visible == true
+        || _joinPasswordDialogContainer?.Visible == true
+        || _progressDialogContainer?.Visible == true
+        || _resumeSlotDialogContainer?.Visible == true
+        || _filterDialogContainer?.Visible == true
+        || _inviteConfirmDialogContainer?.Visible == true;
+
+    private void ToggleThemeMenu()
+    {
+        if (_themeMenuContainer == null)
+        {
+            return;
+        }
+
+        if (_themeMenuContainer.Visible)
+        {
+            CloseThemeMenu();
+            return;
+        }
+
+        if (AnyLobbyDialogVisible())
+        {
+            return;
+        }
+
+        _themeMenuContainer.Visible = true;
+        PositionThemeMenu();
+        CallDeferred(MethodName.PositionThemeMenu);
+    }
+
+    private void CloseThemeMenu()
+    {
+        if (_themeMenuContainer != null)
+        {
+            _themeMenuContainer.Visible = false;
+        }
+    }
+
+    private void PositionThemeMenu()
+    {
+        if (_themeMenuContainer is not { Visible: true } || _themeMenuPanel == null || _themeButton == null)
+        {
+            return;
+        }
+
+        Vector2 panelSize = _themeMenuPanel.Size;
+        Vector2 minimum = _themeMenuPanel.GetCombinedMinimumSize();
+        panelSize = new Vector2(Math.Max(panelSize.X, minimum.X), Math.Max(panelSize.Y, minimum.Y));
+
+        Rect2 anchor = _themeButton.GetGlobalRect();
+        Vector2 origin = new(
+            anchor.End.X - panelSize.X - GlobalPosition.X,
+            anchor.End.Y + 6f - GlobalPosition.Y);
+
+        Vector2 bounds = _themeMenuContainer.Size;
+        if (bounds.X > 0f && bounds.Y > 0f)
+        {
+            origin = new Vector2(
+                Math.Clamp(origin.X, 8f, Math.Max(8f, bounds.X - panelSize.X - 8f)),
+                Math.Clamp(origin.Y, 8f, Math.Max(8f, bounds.Y - panelSize.Y - 8f)));
+        }
+
+        _themeMenuPanel.Position = origin;
+        _themeMenuPanel.Size = panelSize;
+    }
+
+    private void SelectTheme(string themeId)
+    {
+        CloseThemeMenu();
+        if (!LanConnectLobbyThemes.Select(themeId))
+        {
+            return;
+        }
+
+        GD.Print($"sts2_lan_connect overlay: theme -> {themeId}");
+        RebuildForThemeChange();
+    }
+
+    /// <summary>
+    /// Rebuilds the lobby with the new theme. BuildUi assigns ~100 node fields, so the only safe
+    /// rebuild is to replace the whole node: a fresh overlay takes this one's place in the parent.
+    /// </summary>
+    private void RebuildForThemeChange()
+    {
+        if (_testMode || _submenu == null || _stack == null || _loadingOverlay == null)
+        {
+            return;
+        }
+
+        Node? parent = GetParent();
+        if (parent == null)
+        {
+            return;
+        }
+
+        bool settingsVisible = _settingsSection?.Visible == true;
+        PersistSettings();
+
+        LanConnectLobbyOverlay fresh = new();
+        // Initialize discards templateButton (it is only kept for the legacy signature).
+        fresh.Initialize(_submenu, null!, _stack, _loadingOverlay);
+
+        // Carry light state across so the room list does not flash empty.
+        fresh._rooms.AddRange(_rooms);
+        fresh._selectedRoomId = _selectedRoomId;
+        fresh._roomSearchQuery = _roomSearchQuery;
+        fresh._joinableOnlyFilter = _joinableOnlyFilter;
+        fresh._showPublicRooms = _showPublicRooms;
+        fresh._showLockedRooms = _showLockedRooms;
+        fresh._showStandardMode = _showStandardMode;
+        fresh._showDailyMode = _showDailyMode;
+        fresh._showCustomMode = _showCustomMode;
+        fresh._currentPageIndex = _currentPageIndex;
+
+        int index = GetIndex();
+        Name = LanConnectConstants.LobbyOverlayName + "_retired";
+        Visible = false;
+        parent.AddChild(fresh);
+        parent.MoveChild(fresh, index);
+
+        // Initialize() ended with HideOverlay(); ShowOverlayCore re-hides the underlying menu.
+        fresh.ShowOverlayCore(startConnectivity: true, publishChatVisibility: true);
+        if (settingsVisible)
+        {
+            fresh.ToggleSettingsVisibility();
+        }
+
+        QueueFree();
+    }
+
     private Control CreateDialogShell(out VBoxContainer body, bool spacious = false)
     {
         Control shell = new()
@@ -2761,7 +3101,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         ColorRect veil = new()
         {
-            Color = new Color(0f, 0f, 0f, 0.45f),
+            Color = ModalVeilColor,
             MouseFilter = MouseFilterEnum.Stop
         };
         veil.SetAnchorsPreset(LayoutPreset.FullRect);
@@ -3291,6 +3631,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             bool isSelected = room.RoomId == _selectedRoomId;
             bool isHostRoom = LanConnectLobbyRuntime.Instance?.ActiveRoomId == room.RoomId;
             _roomListContainer.AddChild(CreateRoomCard(room, isSelected, isHostRoom));
+            _stageSelectedRoomId = _selectedRoomId;
         }
 
         // Pad with invisible spacers so the 5-slot grid is always full.
@@ -3349,8 +3690,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         scrollbar.CustomMinimumSize = new Vector2(20f, 0f);
         scrollbar.AddThemeStyleboxOverride("scroll", CreatePixelStyle(SurfaceMutedColor, BorderColor, borderWidth: 1, padding: 4, shadowSize: 0));
         scrollbar.AddThemeStyleboxOverride("grabber", CreatePixelStyle(AccentColor, BorderColor, borderWidth: 0, padding: 8, shadowSize: 0));
-        scrollbar.AddThemeStyleboxOverride("grabber_highlight", CreatePanelStyle(new Color(0.64f, 0.24f, 0.13f, 0.94f), new Color(AccentBrightColor, 0.34f), radius: 999, borderWidth: 0, padding: 8));
-        scrollbar.AddThemeStyleboxOverride("grabber_pressed", CreatePanelStyle(new Color(0.72f, 0.28f, 0.15f, 0.96f), new Color(AccentBrightColor, 0.38f), radius: 999, borderWidth: 0, padding: 8));
+        scrollbar.AddThemeStyleboxOverride("grabber_highlight", CreatePanelStyle(new Color(AccentBrightColor, 0.94f), new Color(AccentBrightColor, 0.34f), radius: 999, borderWidth: 0, padding: 8));
+        scrollbar.AddThemeStyleboxOverride("grabber_pressed", CreatePanelStyle(AccentBrightColor, new Color(AccentBrightColor, 0.38f), radius: 999, borderWidth: 0, padding: 8));
     }
 
     private bool HandleRoomListPointerInput(InputEvent inputEvent, LobbyRoomSummary? room)
@@ -3496,13 +3837,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             int availableSlots = GetAvailableSavedRunSlots(room).Count;
             return availableSlots > 0
-                ? ($"{availableSlots} 可接管", AccentColor, new Color(AccentColor, 0.15f))
+                ? ($"{availableSlots} 可接管", WarningColor, new Color(WarningColor, 0.15f))
                 : ("续局已满", DangerColor, new Color(DangerColor, 0.12f));
         }
 
         if (room.RequiresPassword)
         {
-            return ("已上锁", BorderColor, SecondaryColor);
+            return ("已上锁", WarningColor, new Color(WarningColor, 0.15f));
         }
 
         return ("可加入", SuccessColor, new Color(SuccessColor, 0.15f));
@@ -3517,8 +3858,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         return gameMode?.Trim().ToLowerInvariant() switch
         {
-            "daily" => ("挑战", BorderColor, new Color(0.95f, 0.90f, 0.80f, 1f)),
-            "custom" => ("自定义", BorderColor, new Color(0.88f, 0.94f, 0.92f, 1f)),
+            "daily" => ("挑战", BorderColor, SurfaceMutedColor),
+            "custom" => ("自定义", BorderColor, AccentMutedColor),
             _ => ("STD", BorderColor, SecondaryColor)
         };
     }
@@ -3576,7 +3917,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (room.SavedRun != null || room.RequiresPassword || string.Equals(room.RelayState, "planned", StringComparison.OrdinalIgnoreCase))
         {
-            return AccentColor;
+            return WarningColor;
         }
 
         return TextMutedColor;
@@ -3688,28 +4029,48 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Control CreateRoomCard(LobbyRoomSummary room, bool isSelected, bool isHostRoom)
     {
         string? detailText = BuildRoomDetailLine(room, isHostRoom);
-        // Reference: bg-primary/10 — blend AccentColor at 10% over CardColor
-        Color background = isSelected
-            ? new Color(
-                CardColor.R * 0.9f + AccentColor.R * 0.1f,
-                CardColor.G * 0.9f + AccentColor.G * 0.1f,
-                CardColor.B * 0.9f + AccentColor.B * 0.1f, 1f)
-            : CardColor;
+        Color background = isSelected ? CardSelectedColor : CardColor;
         Color border = isHostRoom
             ? SuccessColor
-            : BorderColor;
+            : isSelected ? BorderStrongColor : BorderColor;
 
         // Selected card: thicker border + much larger shadow for emphasis
         int cardBorder = isSelected ? 3 : 2;
-        PanelContainer card = new() { ClipContents = false };
-        if (isSelected)
+        PanelContainer card;
+        if (Shape.Glass)
         {
-            // Selected card shadow — same depth as normal buttons (3px)
-            card.AddThemeStyleboxOverride("panel", CreatePixelStyle(background, border, borderWidth: cardBorder, padding: 16, shadowSize: 4));
+            // Frosted glass card; the selected one is lit with an accent→violet tint and a wide glow.
+            card = new PixelBorderPanel
+            {
+                BgColor = background,
+                PixelBorderColor = isSelected ? new Color(AccentBrightColor, 0.95f) : border,
+                PixelBorderWidth = cardBorder,
+                Padding = 16,
+                ShadowPixelOffset = 0,
+                GlassGlowSize = isSelected ? 14 : 6,
+                GlassGlow = isSelected ? new Color(AccentColor, 0.55f) : null,
+                GlassHighlight = isSelected ? 0.10f : 0.05f,
+                GlassInnerGlowSize = isSelected ? 18 : 10,
+                GlassTintBottom = isSelected ? new Color(AccentSecondaryColor, 0.34f) : null,
+                GlassHoverable = !isSelected,
+                ClipContents = false
+            };
         }
         else
         {
-            card.AddThemeStyleboxOverride("panel", CreatePixelStyle(background, border, borderWidth: cardBorder, padding: 16, shadowSize: 2));
+            PanelContainer flatCard = new() { ClipContents = false };
+            StyleBoxFlat normalStyle = CreatePixelStyle(background, border, borderWidth: cardBorder, padding: 16, shadowSize: isSelected ? 4 : 2);
+            flatCard.AddThemeStyleboxOverride("panel", normalStyle);
+            if (!isSelected)
+            {
+                // Hover feedback: tinted fill + strong border, no layout change.
+                Color hoverBg = LobbyTheme.IsDark ? new Color(HoverBgColor, 0.5f) : CardSelectedColor;
+                StyleBoxFlat hoverStyle = CreatePixelStyle(hoverBg, BorderStrongColor, borderWidth: cardBorder, padding: 16, shadowSize: 3);
+                flatCard.Connect(Control.SignalName.MouseEntered, Callable.From(() => flatCard.AddThemeStyleboxOverride("panel", hoverStyle)));
+                flatCard.Connect(Control.SignalName.MouseExited, Callable.From(() => flatCard.AddThemeStyleboxOverride("panel", normalStyle)));
+            }
+
+            card = flatCard;
         }
         card.SizeFlagsHorizontal = SizeFlags.ExpandFill;
         card.SizeFlagsVertical = SizeFlags.ExpandFill;
@@ -3785,7 +4146,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (isSelected)
         {
-            leftGroup.AddChild(CreateTagPill("SELECT", AccentColor, AccentColor, true));
+            leftGroup.AddChild(CreateTagPill("SELECT", SelectBadgeBgColor, SelectBadgeBgColor, true));
         }
 
         if (room.RequiresPassword)
@@ -3795,11 +4156,18 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         (string modeText, Color modeBorder, Color modeBackground) = GetRoomGameModePill(room.GameMode);
         leftGroup.AddChild(CreateTagPill(modeText, modeBorder, modeBackground, false));
-        leftGroup.AddChild(CreateTagPill(GetRoomProtocolPill(room), BorderColor, SecondaryColor, false));
+        string protocolPill = GetRoomProtocolPill(room);
+        leftGroup.AddChild(LobbyTheme.SemanticTags
+            ? CreateSemanticTagPill(
+                protocolPill,
+                string.Equals(protocolPill, "新协议", StringComparison.Ordinal) ? AccentColor : SuccessColor)
+            : CreateTagPill(protocolPill, BorderColor, SecondaryColor, false));
         string? ritsuPresencePill = GetRoomRitsuPresencePill(room);
         if (!string.IsNullOrEmpty(ritsuPresencePill))
         {
-            leftGroup.AddChild(CreateTagPill(ritsuPresencePill, BorderColor, SecondaryColor, false));
+            leftGroup.AddChild(LobbyTheme.SemanticTags
+                ? CreateSemanticTagPill(ritsuPresencePill, DangerColor)
+                : CreateTagPill(ritsuPresencePill, BorderColor, SecondaryColor, false));
         }
 
         // PASS REQ: right-aligned, separate from tags
@@ -3807,7 +4175,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         {
             Label passReq = CreateBodyLabel("PASS REQ");
             passReq.SizeFlagsHorizontal = SizeFlags.ShrinkEnd;
-            passReq.AddThemeColorOverride("font_color", AccentColor);
+            passReq.AddThemeColorOverride("font_color", WarningColor);
             passReq.AddThemeFontSizeOverride("font_size", 13);
             topRow.AddChild(passReq);
         }
@@ -3924,12 +4292,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return new string(chars);
     }
 
-    private Control CreateTagPill(string text, Color border, Color background, bool isPrimary)
+    private Control CreateTagPill(string text, Color border, Color background, bool isPrimary, Color? textColor = null)
     {
         PanelContainer pill = CreateSurfacePanel(background, border, borderWidth: 2, padding: 7);
 
         Label label = CreateBodyLabel(text);
-        label.AddThemeColorOverride("font_color", isPrimary ? PrimaryFgColor : TextStrongColor);
+        label.AddThemeColorOverride("font_color", textColor ?? (isPrimary ? SelectBadgeFgColor : TextStrongColor));
         label.AddThemeFontSizeOverride("font_size", 13);
         pill.AddChild(label);
         return pill;
@@ -3963,6 +4331,15 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Control CreateTagPill(string text, Color border, Color background)
     {
         return CreateTagPill(text, border, background, false);
+    }
+
+    /// <summary>
+    /// Colour-coded pill used when the theme opts into <see cref="LanConnectLobbyTheme.SemanticTags"/>
+    /// (SaaS 简洁): tinted fill, matching outline and matching label.
+    /// </summary>
+    private Control CreateSemanticTagPill(string text, Color tone)
+    {
+        return CreateTagPill(text, new Color(tone, 0.45f), new Color(tone, 0.12f), false, tone);
     }
 
     private void OnRoomCardGuiInput(LobbyRoomSummary room, InputEvent inputEvent)
@@ -4006,7 +4383,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
-        if (_selectedRoomId == room.RoomId)
+        // A click grabs focus before gui_input arrives, so OnRoomCardFocused may already have
+        // moved _selectedRoomId. Only skip the rebuild when the stage really shows this card.
+        if (_selectedRoomId == room.RoomId && _stageSelectedRoomId == room.RoomId)
         {
             return;
         }
@@ -5360,6 +5739,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         if (_chooseDirectoryServerButton != null)
         {
             _chooseDirectoryServerButton.Disabled = IsServerSwitchUiBusy;
+        }
+
+        if (_themeButton != null)
+        {
+            // A theme switch replaces this node; block it while a refresh could still touch it.
+            _themeButton.Disabled = IsServerSwitchUiBusy;
         }
 
         if (_clearNetworkOverridesButton != null)
@@ -7096,7 +7481,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             Alignment = HorizontalAlignment.Center
         };
         ApplyDestructiveToolbarButtonStyle(button);
-        AttachToolbarIconContent(button, iconKind, CardColor);
+        AttachToolbarIconContent(button, iconKind, Shape.Glass ? DangerColor : DangerFgColor);
         button.Connect(Button.SignalName.Pressed, Callable.From(() =>
         {
             GD.Print($"sts2_lan_connect overlay: destructive toolbar icon button pressed");
@@ -7288,28 +7673,64 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         return panel;
     }
 
+    /// <summary>
+    /// Maps a caller-supplied border width onto the active theme. Arcade keeps the literal value
+    /// (the pixel look depends on it); themed looks collapse it to panel/control widths.
+    /// </summary>
+    private static int ThemedBorderWidth(int borderWidth)
+    {
+        if (Shape.PressDepth)
+        {
+            return borderWidth;
+        }
+
+        return borderWidth >= 3 ? Shape.PanelBorderWidth
+            : borderWidth > 0 ? Shape.ControlBorderWidth
+            : 0;
+    }
+
     private static StyleBoxFlat CreatePixelStyle(Color background, Color border, int borderWidth = 3, int padding = 18, int shadowSize = 4)
     {
+        int radius = Shape.CornerRadius;
+        int width = ThemedBorderWidth(borderWidth);
         StyleBoxFlat style = new()
         {
             BgColor = background,
             BorderColor = border,
-            BorderWidthLeft = borderWidth,
-            BorderWidthTop = borderWidth,
-            BorderWidthRight = borderWidth,
-            BorderWidthBottom = borderWidth,
-            CornerRadiusTopLeft = 0,
-            CornerRadiusTopRight = 0,
-            CornerRadiusBottomRight = 0,
-            CornerRadiusBottomLeft = 0,
+            BorderWidthLeft = width,
+            BorderWidthTop = width,
+            BorderWidthRight = width,
+            BorderWidthBottom = width,
+            CornerRadiusTopLeft = radius,
+            CornerRadiusTopRight = radius,
+            CornerRadiusBottomRight = radius,
+            CornerRadiusBottomLeft = radius,
+            AntiAliasing = radius > 0,
             ContentMarginLeft = padding,
             ContentMarginTop = padding,
             ContentMarginRight = padding,
             ContentMarginBottom = padding
         };
-        style.ShadowColor = new Color(border, 0.55f);
-        style.ShadowSize = shadowSize;
-        style.ShadowOffset = new Vector2(shadowSize, shadowSize);
+
+        switch (Shape.Shadow)
+        {
+            case LanConnectLobbyShadowStyle.SoftGlow:
+                style.ShadowColor = GlowColor;
+                style.ShadowSize = shadowSize > 0
+                    ? (shadowSize >= 4 ? Shape.PanelShadowSize : Shape.ControlShadowSize)
+                    : 0;
+                style.ShadowOffset = new Vector2(0, 2);
+                break;
+            case LanConnectLobbyShadowStyle.None:
+                style.ShadowSize = 0;
+                break;
+            default:
+                style.ShadowColor = new Color(border, 0.55f);
+                style.ShadowSize = shadowSize;
+                style.ShadowOffset = new Vector2(shadowSize, shadowSize);
+                break;
+        }
+
         return style;
     }
 
@@ -7328,6 +7749,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     /// </summary>
     private static StyleBoxFlat CreatePixelPressStyle(Color background, Color border, int borderWidth, int padding, int maxShadow, int depth)
     {
+        if (!Shape.PressDepth)
+        {
+            return CreateFlatPressStyle(background, border, borderWidth, padding, maxShadow, depth);
+        }
+
         int shadow = Math.Max(0, maxShadow - depth);
         return new StyleBoxFlat
         {
@@ -7360,6 +7786,59 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     }
 
     /// <summary>
+    /// Non-arcade button style: rounded, no expand-margin shift. Hover/focus (depth 1) lights the
+    /// border and (for glass themes) the glow; the pressed state (depth 3) drops the glow entirely.
+    /// </summary>
+    private static StyleBoxFlat CreateFlatPressStyle(Color background, Color border, int borderWidth, int padding, int maxShadow, int depth)
+    {
+        int radius = Shape.CornerRadius;
+        int width = ThemedBorderWidth(borderWidth);
+        bool hovered = depth == 1;
+        bool pressed = depth >= 3;
+        StyleBoxFlat style = new()
+        {
+            BgColor = background,
+            BorderColor = hovered ? BorderStrongColor : border,
+            BorderWidthLeft = width,
+            BorderWidthTop = width,
+            BorderWidthRight = width,
+            BorderWidthBottom = width,
+            CornerRadiusTopLeft = radius,
+            CornerRadiusTopRight = radius,
+            CornerRadiusBottomRight = radius,
+            CornerRadiusBottomLeft = radius,
+            AntiAliasing = radius > 0,
+            ContentMarginLeft = padding,
+            ContentMarginTop = padding,
+            ContentMarginRight = padding,
+            ContentMarginBottom = padding
+        };
+
+        if (Shape.Shadow == LanConnectLobbyShadowStyle.SoftGlow && maxShadow > 0 && !pressed)
+        {
+            if (hovered)
+            {
+                // Hover on glass: BorderStrongColor above plus a faint accent halo.
+                style.ShadowColor = new Color(AccentColor, 0.35f);
+                style.ShadowSize = 8;
+                style.ShadowOffset = Vector2.Zero;
+            }
+            else
+            {
+                style.ShadowColor = GlowColor;
+                style.ShadowSize = 0;
+                style.ShadowOffset = new Vector2(0, 2);
+            }
+        }
+        else
+        {
+            style.ShadowSize = 0;
+        }
+
+        return style;
+    }
+
+    /// <summary>
     /// Connects mouse_entered/mouse_exited on a Button to tint all child
     /// Labels and GlyphIcons between normal and hover colors.
     /// Fixes the issue where Button.font_hover_color only affects Button.Text
@@ -7383,6 +7862,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     /// </summary>
     private static void SetupPressShift(Button button, Control contentHost, int maxShadow)
     {
+        if (!Shape.PressDepth)
+        {
+            // Themed looks do not sink into a hard shadow, so the content must not shift either.
+            return;
+        }
+
         bool hovering = false;
         button.Connect(Control.SignalName.MouseEntered, Callable.From(() =>
         {
@@ -7404,6 +7889,11 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private static void ApplyContentShift(Control host, int depth)
     {
+        if (!Shape.PressDepth)
+        {
+            return;
+        }
+
         host.OffsetLeft = depth;
         host.OffsetTop = depth;
         host.OffsetRight = depth;
@@ -7497,15 +7987,21 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private static void ApplyButtonStyle(Button button, bool primary, bool danger)
     {
+        if (Shape.Glass && primary)
+        {
+            ApplyGlassPrimaryButtonStyle(button);
+            return;
+        }
+
         Color normalBg = primary ? AccentColor
-            : danger ? new Color(0.63f, 0.24f, 0.24f, 0.9f)
+            : danger ? new Color(DangerColor, 0.9f)
             : CardColor;
         Color hoverBg = primary ? AccentBrightColor
-            : danger ? new Color(0.73f, 0.30f, 0.30f, 1f)
-            : SuccessColor;
+            : danger ? DangerHoverColor
+            : HoverBgColor;
         Color pressedBg = primary ? new Color(AccentColor, 0.85f)
-            : danger ? new Color(0.55f, 0.20f, 0.20f, 1f)
-            : new Color(SuccessColor, 0.8f);
+            : danger ? new Color(DangerHoverColor, 0.85f)
+            : PressedBgColor;
         Color border = danger ? DangerColor : BorderColor;
 
         // Physical press: content shifts toward shadow → depth 0/1/3
@@ -7515,8 +8011,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(WithAlpha(normalBg, 0.45f), WithAlpha(border, 0.4f), borderWidth: 2, padding: 14, shadowSize: 0));
         button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, border, 2, 14, 3, 1));
         // Primary (CREATE) keeps dark text; all others → white on hover/press
-        Color normalText = primary ? PrimaryFgColor : (danger ? CardColor : TextStrongColor);
-        Color activeText = primary ? PrimaryFgColor : CardColor;
+        Color normalText = primary ? PrimaryFgColor : (danger ? HoverFgColor : TextStrongColor);
+        Color activeText = primary ? PrimaryFgColor : HoverFgColor;
         button.AddThemeColorOverride("font_color", normalText);
         button.AddThemeColorOverride("font_hover_color", activeText);
         button.AddThemeColorOverride("font_pressed_color", activeText);
@@ -7530,12 +8026,90 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
     }
 
+    /// <summary>
+    /// 午夜玻璃 primary: the stylebox only supplies the lit outline and the accent halo; the
+    /// accent→violet gradient itself is a full-rect child panel inserted *before* the icon/label
+    /// host so the content still draws on top. Skipped for text-only primaries, whose
+    /// <see cref="Button.Text"/> is drawn by the button itself and would end up under the fill.
+    /// </summary>
+    private static void ApplyGlassPrimaryButtonStyle(Button button)
+    {
+        StyleBoxFlat Make(float bgAlpha)
+        {
+            StyleBoxFlat style = CreatePixelStyle(
+                new Color(AccentColor, bgAlpha),
+                new Color(AccentBrightColor, 0.6f),
+                borderWidth: 2,
+                padding: 14,
+                shadowSize: 0);
+            style.ShadowColor = new Color(AccentColor, 0.40f);
+            style.ShadowSize = 8;
+            style.ShadowOffset = Vector2.Zero;
+            return style;
+        }
+
+        button.AddThemeStyleboxOverride("normal", Make(0.20f));
+        button.AddThemeStyleboxOverride("hover", Make(0.20f));
+        button.AddThemeStyleboxOverride("pressed", Make(0.20f));
+        button.AddThemeStyleboxOverride("focus", Make(0.20f));
+        button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(
+            new Color(AccentColor, 0.10f),
+            new Color(AccentBrightColor, 0.30f),
+            borderWidth: 2,
+            padding: 14,
+            shadowSize: 0));
+        button.AddThemeColorOverride("font_color", PrimaryFgColor);
+        button.AddThemeColorOverride("font_hover_color", PrimaryFgColor);
+        button.AddThemeColorOverride("font_pressed_color", PrimaryFgColor);
+        button.AddThemeColorOverride("font_focus_color", PrimaryFgColor);
+        button.AddThemeColorOverride("font_disabled_color", WithAlpha(TextMutedColor, 0.65f));
+        button.AddThemeFontSizeOverride("font_size", 16);
+
+        if (!string.IsNullOrEmpty(button.Text))
+        {
+            return;
+        }
+
+        PixelBorderPanel fill = new()
+        {
+            BgColor = AccentColor,
+            GlassTintBottom = AccentSecondaryColor,
+            PixelBorderColor = new Color(1f, 1f, 1f, 0.25f),
+            PixelBorderWidth = 2,
+            ShadowPixelOffset = 0,
+            Padding = 0,
+            GlassOpaque = true,
+            GlassGlowSize = 0,
+            GlassHighlight = 0.16f,
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+        fill.SetAnchorsPreset(LayoutPreset.FullRect);
+        button.AddChild(fill);
+
+        bool hovered = false;
+        void RefreshFill()
+        {
+            Color target = button.Disabled
+                ? new Color(1f, 1f, 1f, 0.45f)
+                : hovered ? new Color(1.12f, 1.12f, 1.12f) : Colors.White;
+            if (fill.Modulate != target)
+            {
+                fill.Modulate = target;
+            }
+        }
+
+        button.Connect(Control.SignalName.MouseEntered, Callable.From(() => { hovered = true; RefreshFill(); }));
+        button.Connect(Control.SignalName.MouseExited, Callable.From(() => { hovered = false; RefreshFill(); }));
+        // Disabled has no signal; the button redraws when it flips, so follow its draw pass.
+        button.Connect(CanvasItem.SignalName.Draw, Callable.From(RefreshFill));
+    }
+
     private static void ApplyToolbarButtonStyle(Button button, bool accent, bool iconOnly)
     {
         int pad = iconOnly ? 10 : 14;
         Color bg = SecondaryColor;
-        Color hoverBg = SuccessColor;
-        Color pressedBg = new Color(SuccessColor, 0.8f);
+        Color hoverBg = HoverBgColor;
+        Color pressedBg = PressedBgColor;
 
         // Physical press animation
         button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(bg, BorderColor, 2, pad, 3, 0));
@@ -7544,42 +8118,80 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(WithAlpha(bg, 0.45f), WithAlpha(BorderColor, 0.4f), borderWidth: 2, padding: pad, shadowSize: 0));
         button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, BorderColor, 2, pad, 3, 1));
         button.AddThemeColorOverride("font_color", TextStrongColor);
-        button.AddThemeColorOverride("font_hover_color", CardColor);
-        button.AddThemeColorOverride("font_pressed_color", CardColor);
-        button.AddThemeColorOverride("font_focus_color", CardColor);
+        button.AddThemeColorOverride("font_hover_color", HoverFgColor);
+        button.AddThemeColorOverride("font_pressed_color", HoverFgColor);
+        button.AddThemeColorOverride("font_focus_color", HoverFgColor);
         button.AddThemeColorOverride("font_disabled_color", WithAlpha(TextMutedColor, 0.65f));
         button.AddThemeFontSizeOverride("font_size", iconOnly ? 18 : 15);
-        // Tint child icons/labels white on hover
-        SetupChildHoverTint(button, TextStrongColor, CardColor);
+        // Tint child icons/labels to the hover foreground
+        SetupChildHoverTint(button, TextStrongColor, HoverFgColor);
     }
 
     private static void ApplyDestructiveToolbarButtonStyle(Button button)
     {
         int pad = 10;
-        Color bg = DangerColor;
-        Color hoverBg = new Color(0.65f, 0.10f, 0.12f, 1f);   // darker red on hover
-        Color pressedBg = new Color(0.55f, 0.08f, 0.10f, 1f);  // even darker on press
+        if (Shape.Glass)
+        {
+            // Glass: a solid red block fights the frosted surface — use a lit red outline instead.
+            ApplyGlassDestructiveStyle(button, pad, fontSize: 18);
+            SetupChildHoverTint(button, DangerColor, DangerColor);
+            return;
+        }
 
-        button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(bg, new Color(0.60f, 0.10f, 0.12f, 1f), 2, pad, 3, 0));
-        button.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(hoverBg, new Color(0.50f, 0.08f, 0.10f, 1f), 2, pad, 3, 1));
-        button.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(pressedBg, new Color(0.45f, 0.06f, 0.08f, 1f), 2, pad, 3, 3));
+        Color bg = DangerColor;
+        Color hoverBg = DangerHoverColor;                        // darker red on hover
+        Color pressedBg = new Color(DangerHoverColor, 0.85f);    // even darker on press
+        Color border = DangerHoverColor;
+        Color fg = DangerFgColor;
+
+        button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(bg, border, 2, pad, 3, 0));
+        button.AddThemeStyleboxOverride("hover", CreatePixelPressStyle(hoverBg, border, 2, pad, 3, 1));
+        button.AddThemeStyleboxOverride("pressed", CreatePixelPressStyle(pressedBg, border, 2, pad, 3, 3));
         button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(WithAlpha(bg, 0.45f), WithAlpha(BorderColor, 0.4f), borderWidth: 2, padding: pad, shadowSize: 0));
-        button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, new Color(0.50f, 0.08f, 0.10f, 1f), 2, pad, 3, 1));
-        button.AddThemeColorOverride("font_color", CardColor);
-        button.AddThemeColorOverride("font_hover_color", CardColor);
-        button.AddThemeColorOverride("font_pressed_color", CardColor);
-        button.AddThemeColorOverride("font_focus_color", CardColor);
-        button.AddThemeColorOverride("font_disabled_color", WithAlpha(CardColor, 0.65f));
+        button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, border, 2, pad, 3, 1));
+        button.AddThemeColorOverride("font_color", fg);
+        button.AddThemeColorOverride("font_hover_color", fg);
+        button.AddThemeColorOverride("font_pressed_color", fg);
+        button.AddThemeColorOverride("font_focus_color", fg);
+        button.AddThemeColorOverride("font_disabled_color", WithAlpha(fg, 0.65f));
         button.AddThemeFontSizeOverride("font_size", 18);
-        // Icon starts white on red bg — stays white on hover
-        SetupChildHoverTint(button, CardColor, CardColor);
+        // Icon sits on the red fill — keeps the same colour on hover
+        SetupChildHoverTint(button, fg, fg);
+    }
+
+    /// <summary>
+    /// Glass destructive look: translucent red wash, bright red outline and a red halo, with the
+    /// glyph/text kept bright red. Shared by the header close button and the filter dialog's ✕.
+    /// </summary>
+    private static void ApplyGlassDestructiveStyle(Button button, int pad, int fontSize)
+    {
+        StyleBoxFlat Make(Color bg, Color border, bool glow)
+        {
+            StyleBoxFlat style = CreatePixelStyle(bg, border, borderWidth: 2, padding: pad, shadowSize: 0);
+            // Plain red glass: no halo (the user explicitly does not want the close button to glow).
+            _ = glow;
+            style.ShadowSize = 0;
+            return style;
+        }
+
+        button.AddThemeStyleboxOverride("normal", Make(new Color(DangerColor, 0.16f), new Color(DangerColor, 0.55f), true));
+        button.AddThemeStyleboxOverride("hover", Make(new Color(DangerColor, 0.30f), DangerColor, true));
+        button.AddThemeStyleboxOverride("pressed", Make(new Color(DangerColor, 0.45f), DangerColor, true));
+        button.AddThemeStyleboxOverride("focus", Make(new Color(DangerColor, 0.30f), DangerColor, true));
+        button.AddThemeStyleboxOverride("disabled", Make(new Color(DangerColor, 0.10f), new Color(DangerColor, 0.30f), false));
+        button.AddThemeColorOverride("font_color", DangerColor);
+        button.AddThemeColorOverride("font_hover_color", DangerColor);
+        button.AddThemeColorOverride("font_pressed_color", DangerColor);
+        button.AddThemeColorOverride("font_focus_color", DangerColor);
+        button.AddThemeColorOverride("font_disabled_color", new Color(DangerColor, 0.55f));
+        button.AddThemeFontSizeOverride("font_size", fontSize);
     }
 
     private static void ApplyInlineButtonStyle(Button button, bool accent)
     {
         Color bg = accent ? SecondaryColor : CardColor;
-        Color hoverBg = SuccessColor;
-        Color pressedBg = new Color(SuccessColor, 0.8f);
+        Color hoverBg = HoverBgColor;
+        Color pressedBg = PressedBgColor;
 
         // Physical press animation
         button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(bg, BorderColor, 2, 12, 3, 0));
@@ -7588,9 +8200,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         button.AddThemeStyleboxOverride("disabled", CreatePixelStyle(WithAlpha(bg, 0.45f), WithAlpha(BorderColor, 0.4f), borderWidth: 2, padding: 12, shadowSize: 0));
         button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, BorderColor, 2, 12, 3, 1));
         button.AddThemeColorOverride("font_color", TextStrongColor);
-        button.AddThemeColorOverride("font_hover_color", CardColor);
-        button.AddThemeColorOverride("font_pressed_color", CardColor);
-        button.AddThemeColorOverride("font_focus_color", CardColor);
+        button.AddThemeColorOverride("font_hover_color", HoverFgColor);
+        button.AddThemeColorOverride("font_pressed_color", HoverFgColor);
+        button.AddThemeColorOverride("font_focus_color", HoverFgColor);
         button.AddThemeColorOverride("font_disabled_color", WithAlpha(TextMutedColor, 0.65f));
         button.AddThemeFontSizeOverride("font_size", 17);
     }
@@ -7633,8 +8245,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private static void ApplyFilterChipStyle(Button button, bool active)
     {
         Color bg = active ? AccentColor : SecondaryColor;
-        Color hoverBg = active ? AccentBrightColor : SuccessColor;
-        Color pressedBg = active ? new Color(AccentColor, 0.85f) : new Color(SuccessColor, 0.8f);
+        Color hoverBg = active ? AccentBrightColor : HoverBgColor;
+        Color pressedBg = active ? new Color(AccentColor, 0.85f) : PressedBgColor;
 
         // Physical press animation
         button.AddThemeStyleboxOverride("normal", CreatePixelPressStyle(bg, BorderColor, 2, 10, 3, 0));
@@ -7644,9 +8256,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         button.AddThemeStyleboxOverride("focus", CreatePixelPressStyle(hoverBg, BorderColor, 2, 10, 3, 1));
         Color normalText = active ? PrimaryFgColor : TextStrongColor;
         button.AddThemeColorOverride("font_color", normalText);
-        button.AddThemeColorOverride("font_hover_color", CardColor);
-        button.AddThemeColorOverride("font_pressed_color", CardColor);
-        button.AddThemeColorOverride("font_focus_color", CardColor);
+        button.AddThemeColorOverride("font_hover_color", active ? PrimaryFgColor : HoverFgColor);
+        button.AddThemeColorOverride("font_pressed_color", active ? PrimaryFgColor : HoverFgColor);
+        button.AddThemeColorOverride("font_focus_color", active ? PrimaryFgColor : HoverFgColor);
         button.AddThemeColorOverride("font_disabled_color", WithAlpha(TextMutedColor, 0.65f));
         button.AddThemeFontSizeOverride("font_size", 15);
     }
@@ -7850,7 +8462,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         Zap,
         Users,
         Share2,
-        XClose
+        XClose,
+        Palette,
+        Check
     }
 
     private sealed partial class GlyphIcon : Control
@@ -7903,6 +8517,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             // Replace stroke color with white so modulate tinting works correctly.
             // White (#FFFFFF) * modulate color = desired color.
             svgData = svgData.Replace("stroke=\"currentColor\"", "stroke=\"#FFFFFF\"");
+            svgData = svgData.Replace("fill=\"currentColor\"", "fill=\"#FFFFFF\"");
 
             Image image = new();
             float scale = SvgRenderSize / 24f;
@@ -7938,6 +8553,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             GlyphIconKind.Users => SvgUsers,
             GlyphIconKind.Share2 => SvgShare2,
             GlyphIconKind.XClose => SvgXClose,
+            GlyphIconKind.Palette => SvgPalette,
+            GlyphIconKind.Check => SvgCheck,
             _ => null,
         };
 
@@ -8081,6 +8698,16 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             </svg>
             """;
 
+        private const string SvgPalette = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/></svg>
+            """;
+
+        private const string SvgCheck = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 6 9 17l-5-5"/>
+            </svg>
+            """;
+
         private const string SvgXClose = """
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M18 6 6 18"/>
@@ -8151,27 +8778,413 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     }
 
     /// <summary>
+    /// Full-rect backdrop behind the lobby. Solid themes paint a flat colour; the night-sky theme
+    /// paints a gradient with stars, a moon glow and a vignette (or a shipped background image when
+    /// <c>res://assets/themes/midnight_glass_bg.png</c> is present).
+    /// </summary>
+    private sealed partial class LobbyBackdrop : Control
+    {
+        private const string NightSkyTexturePath = "res://assets/themes/midnight_glass_bg.png";
+        private const int StarCount = 140;
+        private const int StarSeed = 20260919;
+
+        private static readonly Color NightTop = new(0.043f, 0.055f, 0.145f, 1f);    // #0B0E25
+        private static readonly Color NightMid = new(0.082f, 0.102f, 0.271f, 1f);    // #151A45
+        private static readonly Color NightTint = new(0.165f, 0.118f, 0.361f, 1f);   // #2A1E5C
+        private static readonly Color NightBottom = new(0.039f, 0.051f, 0.133f, 1f); // #0A0D22
+        private static readonly Color MoonGlow = new(0.81f, 0.85f, 1.00f, 1f);       // pale blue-white
+        private static readonly Color MoonDisc = new(0.867f, 0.890f, 1.00f, 0.85f);  // #DDE3FF
+
+        private Texture2D? _nightTexture;
+        private bool _nightTextureProbed;
+
+        public LobbyBackdrop()
+        {
+            MouseFilter = MouseFilterEnum.Stop;
+            ClipContents = true;
+        }
+
+        public override void _Ready()
+        {
+            base._Ready();
+            SetAnchorsPreset(LayoutPreset.FullRect);
+            Connect(Control.SignalName.Resized, Callable.From(QueueRedraw));
+        }
+
+        public override void _Draw()
+        {
+            float w = Size.X;
+            float h = Size.Y;
+            if (w <= 0f || h <= 0f)
+            {
+                return;
+            }
+
+            if (LobbyTheme.Backdrop != LanConnectLobbyBackdropKind.NightSky)
+            {
+                DrawRect(new Rect2(0f, 0f, w, h), BackdropColor);
+                return;
+            }
+
+            DrawNightGradient(w, h);
+
+            Texture2D? texture = ResolveNightTexture();
+            if (texture != null)
+            {
+                DrawCoveringTexture(texture, w, h);
+            }
+            else
+            {
+                DrawStars(w, h);
+                DrawMoon(w, h);
+            }
+
+            DrawVignette(w, h);
+        }
+
+        private void DrawNightGradient(float w, float h)
+        {
+            // #0B0E25 → #151A45 (40%) → purple-tinted band (55%) → #0A0D22
+            Color band55 = NightMid.Lerp(NightBottom, 0.25f).Lerp(NightTint, 0.30f);
+            (float Stop, Color Color)[] stops =
+            [
+                (0f, NightTop),
+                (0.40f, NightMid),
+                (0.55f, band55),
+                (1f, NightBottom)
+            ];
+
+            for (int i = 0; i < stops.Length - 1; i++)
+            {
+                float y0 = stops[i].Stop * h;
+                float y1 = stops[i + 1].Stop * h;
+                DrawPolygon(
+                    [new Vector2(0f, y0), new Vector2(w, y0), new Vector2(w, y1), new Vector2(0f, y1)],
+                    [stops[i].Color, stops[i].Color, stops[i + 1].Color, stops[i + 1].Color]);
+            }
+        }
+
+        private void DrawStars(float w, float h)
+        {
+            Random random = new(StarSeed);
+            float maxY = h * 0.75f;
+            for (int i = 0; i < StarCount; i++)
+            {
+                float x = (float)random.NextDouble() * w;
+                float y = (float)random.NextDouble() * maxY;
+                float size = 1f + (float)random.NextDouble() * 1.6f;
+                float alpha = 0.35f + (float)random.NextDouble() * 0.6f;
+                Color tint = new(0.88f, 0.92f, 1f, alpha);
+                DrawCircle(new Vector2(x, y), size, tint);
+                if (i % 9 == 0)
+                {
+                    // A few brighter stars get a soft halo so the sky reads as depth, not noise.
+                    DrawCircle(new Vector2(x, y), size * 2.6f, new Color(0.75f, 0.82f, 1f, alpha * 0.18f));
+                }
+            }
+        }
+
+        private void DrawMoon(float w, float h)
+        {
+            Vector2 centre = new(w * 0.88f, h * 0.22f);
+            for (int i = 0; i < 8; i++)
+            {
+                float t = i / 7f;
+                float radius = Mathf.Lerp(140f, 38f, t);
+                float alpha = Mathf.Lerp(0.03f, 0.16f, t);
+                DrawCircle(centre, radius, new Color(MoonGlow, alpha));
+            }
+
+            DrawCircle(centre, 30f, MoonDisc);
+        }
+
+        private void DrawVignette(float w, float h)
+        {
+            float bandX = w * 0.22f;
+            float bandY = h * 0.22f;
+            Color dark = new(0f, 0f, 0f, 0.38f);
+            Color clear = new(0f, 0f, 0f, 0f);
+
+            // left → right
+            DrawPolygon(
+                [new Vector2(0f, 0f), new Vector2(bandX, 0f), new Vector2(bandX, h), new Vector2(0f, h)],
+                [dark, clear, clear, dark]);
+            DrawPolygon(
+                [new Vector2(w - bandX, 0f), new Vector2(w, 0f), new Vector2(w, h), new Vector2(w - bandX, h)],
+                [clear, dark, dark, clear]);
+            DrawPolygon(
+                [new Vector2(0f, 0f), new Vector2(w, 0f), new Vector2(w, bandY), new Vector2(0f, bandY)],
+                [dark, dark, clear, clear]);
+            DrawPolygon(
+                [new Vector2(0f, h - bandY), new Vector2(w, h - bandY), new Vector2(w, h), new Vector2(0f, h)],
+                [clear, clear, dark, dark]);
+        }
+
+        private void DrawCoveringTexture(Texture2D texture, float w, float h)
+        {
+            Vector2 source = texture.GetSize();
+            if (source.X <= 0f || source.Y <= 0f)
+            {
+                return;
+            }
+
+            float scale = Math.Max(w / source.X, h / source.Y);
+            Vector2 target = source * scale;
+            Vector2 origin = new((w - target.X) * 0.5f, (h - target.Y) * 0.5f);
+            DrawTextureRect(texture, new Rect2(origin, target), false);
+        }
+
+        private Texture2D? ResolveNightTexture()
+        {
+            if (_nightTextureProbed)
+            {
+                return _nightTexture;
+            }
+
+            _nightTextureProbed = true;
+            // The mod pck is packed from raw files (no .import metadata), so ResourceLoader
+            // cannot import the PNG. Read the bytes through FileAccess (works for res:// inside
+            // the mounted pck and for a loose file in the mod directory during development).
+            string? assetsOverride = System.Environment.GetEnvironmentVariable("STS2_LAN_THEME_ASSETS_DIR");
+            foreach (string candidate in new[]
+                     {
+                         NightSkyTexturePath,
+                         System.IO.Path.Combine(LanConnectPaths.ResolveModDirectory(), "assets", "themes", "midnight_glass_bg.png"),
+                         string.IsNullOrWhiteSpace(assetsOverride) ? string.Empty : System.IO.Path.Combine(assetsOverride, "midnight_glass_bg.png")
+                     })
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(candidate) || !Godot.FileAccess.FileExists(candidate))
+                    {
+                        continue;
+                    }
+
+                    byte[] bytes = Godot.FileAccess.GetFileAsBytes(candidate);
+                    if (bytes.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    Image image = new();
+                    Error err = candidate.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || candidate.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase)
+                        ? image.LoadJpgFromBuffer(bytes)
+                        : image.LoadPngFromBuffer(bytes);
+                    if (err != Error.Ok)
+                    {
+                        GD.PrintErr($"sts2_lan_connect overlay: night sky texture decode failed ({candidate}): {err}");
+                        continue;
+                    }
+
+                    _nightTexture = ImageTexture.CreateFromImage(image);
+                    GD.Print($"sts2_lan_connect overlay: night sky texture loaded from {candidate}");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    GD.PrintErr($"sts2_lan_connect overlay: night sky texture load failed ({candidate}): {ex.Message}");
+                    _nightTexture = null;
+                }
+            }
+
+            return _nightTexture;
+        }
+    }
+
+    /// <summary>
     /// Custom PanelContainer that draws pixel-art borders with hard-edged offset shadows,
     /// matching CSS box-shadow: Npx Npx 0 0 (no blur).
     /// Replaces StyleBoxFlat which only supports blurred shadows.
     /// </summary>
+    /// <summary>
+    /// Shared frosted-glass canvas shader. Samples the screen texture through mipmaps for a cheap
+    /// blur, tints it with a vertical gradient, adds an inner top highlight, a 1px gradient border
+    /// and a soft outer glow. The panel draws an over-sized white quad so the glow can extend past
+    /// its own rect; the shader maps UV back into panel pixels.
+    /// </summary>
+    private static class LobbyGlass
+    {
+        private static Shader? _shader;
+        private static ImageTexture? _white;
+
+        public static Shader Shader => _shader ??= new Shader { Code = ShaderCode };
+
+        public static ImageTexture White
+        {
+            get
+            {
+                if (_white == null)
+                {
+                    Image image = Image.CreateEmpty(2, 2, false, Image.Format.Rgba8);
+                    image.Fill(Colors.White);
+                    _white = ImageTexture.CreateFromImage(image);
+                }
+
+                return _white;
+            }
+        }
+
+        private const string ShaderCode = """
+            shader_type canvas_item;
+            render_mode blend_mix;
+
+            // iOS-style glass: a thin bright rim, a faint inner refraction band just inside the
+            // rim, a soft outer ring of light, and a lightly tinted, barely blurred fill.
+            uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap, repeat_disable;
+            uniform vec2 rect_size = vec2(200.0, 100.0);
+            uniform float corner_radius = 12.0;
+            uniform float border_width = 1.0;
+            uniform float blur_lod = 1.0;
+            uniform float glow_size = 6.0;
+            uniform float inner_glow_size = 10.0;
+            uniform float highlight_strength = 0.05;
+            uniform float opaque = 0.0;
+            uniform vec4 tint_top : source_color = vec4(0.05, 0.07, 0.19, 0.34);
+            uniform vec4 tint_bottom : source_color = vec4(0.05, 0.07, 0.19, 0.34);
+            uniform vec4 border_color : source_color = vec4(0.66, 0.74, 1.0, 0.55);
+            uniform vec4 glow_color : source_color = vec4(0.50, 0.60, 1.0, 0.35);
+
+            float sd_round_rect(vec2 p, vec2 half_size, float r) {
+                vec2 q = abs(p) - half_size + vec2(r);
+                return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - r;
+            }
+
+            void fragment() {
+                vec2 quad = rect_size + vec2(2.0 * glow_size);
+                vec2 px = UV * quad - vec2(glow_size);
+                vec2 half_size = rect_size * 0.5;
+                float r = min(corner_radius, min(half_size.x, half_size.y));
+                float d = sd_round_rect(px - half_size, half_size, r);
+                vec2 local = clamp(px / rect_size, 0.0, 1.0);
+
+                float inside = 1.0 - smoothstep(-0.75, 0.75, d);
+
+                // fill: what is behind, lightly softened, plus a faint tint
+                vec3 behind = textureLod(screen_tex, SCREEN_UV, blur_lod).rgb;
+                vec4 tint = mix(tint_top, tint_bottom, local.y);
+                float tint_a = mix(tint.a, 1.0, opaque);
+                vec3 fill = mix(behind, tint.rgb, tint_a);
+
+                // very soft top light so the pane reads as a lit sheet, not a flat block
+                fill += vec3((1.0 - smoothstep(0.0, 0.5, local.y)) * highlight_strength);
+
+                // inner refraction band: brightens the first few px inside the rim
+                float band = 1.0 - smoothstep(0.0, inner_glow_size, -d);
+                band *= band;
+                fill += border_color.rgb * band * border_color.a * 0.28;
+
+                // the rim itself: crisp, brightest at the top, still visible at the bottom
+                float ring = 1.0 - smoothstep(border_width - 0.5, border_width + 0.75, -d);
+                ring *= inside;
+                float ring_a = border_color.a * mix(1.0, 0.62, local.y);
+                fill = mix(fill, border_color.rgb, ring * ring_a);
+                float fill_a = mix(max(tint_a + band * 0.12, ring * ring_a), 1.0, opaque);
+
+                // outer ring of light hugging the rim
+                float glow = 0.0;
+                if (glow_size > 0.5) {
+                    float t = clamp(d / glow_size, 0.0, 1.0);
+                    glow = pow(1.0 - t, 2.2) * glow_color.a * (1.0 - inside);
+                }
+
+                vec3 col = mix(glow_color.rgb, fill, inside);
+                float alpha = inside * fill_a + glow;
+                COLOR = vec4(col, alpha);
+            }
+            """;
+    }
+
     private sealed partial class PixelBorderPanel : PanelContainer
     {
-        public Color BgColor { get; set; } = new(1f, 0.99f, 0.98f, 1f); // CardColor
-        public Color PixelBorderColor { get; set; } = new(0.77f, 0.70f, 0.62f, 1f); // BorderColor
+        public Color BgColor { get; set; } = CardColor;
+        public Color PixelBorderColor { get; set; } = BorderColor;
         public int PixelBorderWidth { get; set; } = 3;
         public int ShadowPixelOffset { get; set; } = 4;
         public bool DrawInsetBevel { get; set; } = true;
         public int Padding { get; set; } = 18;
+
+        // ── glass-only knobs (ignored unless Shape.Glass) ──
+        /// <summary>Second tint colour for the bottom edge; null = derive from BgColor.</summary>
+        public Color? GlassTintBottom { get; set; }
+        /// <summary>Outer glow colour; null = theme GlowColor.</summary>
+        public Color? GlassGlow { get; set; }
+        /// <summary>Outer ring-of-light radius in px (0 = none).</summary>
+        public int GlassGlowSize { get; set; } = 6;
+        /// <summary>Strength of the soft top light (0–0.2 is sensible).</summary>
+        public float GlassHighlight { get; set; } = 0.05f;
+        /// <summary>Width of the inner refraction band just inside the rim.</summary>
+        public int GlassInnerGlowSize { get; set; } = 10;
+        /// <summary>When true the tint is opaque (gradient badge / primary button surface), no blur.</summary>
+        public bool GlassOpaque { get; set; }
+        /// <summary>Lift applied while hovered (border/tint brighten).</summary>
+        public bool GlassHoverable { get; set; }
+
+        private ShaderMaterial? _glassMaterial;
+        private bool _hovered;
+
+        /// <summary>True when the active theme draws this panel with a StyleBox instead of _Draw().</summary>
+        private static bool UsesStyleBox => !Shape.Glass && (Shape.CornerRadius > 0 || !Shape.InsetBevel);
+
+        private static bool UsesGlass => Shape.Glass;
 
         public PixelBorderPanel()
         {
             ClipContents = false;
         }
 
+        /// <summary>Re-applies glass uniforms after a property change (e.g. selection).</summary>
+        public void RefreshGlass()
+        {
+            if (_glassMaterial != null)
+            {
+                ApplyGlassUniforms();
+                QueueRedraw();
+            }
+        }
+
         public override void _Ready()
         {
             base._Ready();
+            if (UsesGlass)
+            {
+                StyleBoxEmpty glassPad = new()
+                {
+                    ContentMarginLeft = Padding,
+                    ContentMarginTop = Padding,
+                    ContentMarginRight = Padding,
+                    ContentMarginBottom = Padding
+                };
+                AddThemeStyleboxOverride("panel", glassPad);
+                _glassMaterial = new ShaderMaterial { Shader = LobbyGlass.Shader };
+                Material = _glassMaterial;
+                ApplyGlassUniforms();
+                Connect(Control.SignalName.Resized, Callable.From(() =>
+                {
+                    _glassMaterial?.SetShaderParameter("rect_size", Size);
+                    QueueRedraw();
+                }));
+                if (GlassHoverable)
+                {
+                    Connect(Control.SignalName.MouseEntered, Callable.From(() => { _hovered = true; RefreshGlass(); }));
+                    Connect(Control.SignalName.MouseExited, Callable.From(() => { _hovered = false; RefreshGlass(); }));
+                }
+
+                return;
+            }
+
+            if (UsesStyleBox)
+            {
+                // Themed looks (rounded / flat / glass) draw through StyleBoxFlat so they get
+                // corner radii, soft glow and translucent fills that _Draw() cannot express.
+                AddThemeStyleboxOverride("panel", CreatePixelStyle(
+                    BgColor,
+                    PixelBorderColor,
+                    borderWidth: PixelBorderWidth,
+                    padding: Padding,
+                    shadowSize: ShadowPixelOffset));
+                return;
+            }
+
             // Use a transparent StyleBox with padding only — all visuals come from _Draw()
             StyleBoxEmpty padStyle = new()
             {
@@ -8183,8 +9196,54 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             AddThemeStyleboxOverride("panel", padStyle);
         }
 
+        private void ApplyGlassUniforms()
+        {
+            if (_glassMaterial == null)
+            {
+                return;
+            }
+
+            Color top = BgColor;
+            Color bottom = GlassTintBottom ?? BgColor;
+            Color border = PixelBorderColor;
+            Color glow = GlassGlow ?? GlowColor;
+            float highlight = GlassHighlight;
+            if (_hovered)
+            {
+                top = new Color(Math.Min(1f, top.R + 0.05f), Math.Min(1f, top.G + 0.05f), Math.Min(1f, top.B + 0.08f), top.A);
+                border = new Color(border.R, border.G, border.B, Math.Min(1f, border.A + 0.35f));
+                glow = new Color(glow.R, glow.G, glow.B, Math.Min(1f, glow.A + 0.15f));
+                highlight += 0.05f;
+            }
+
+            _glassMaterial.SetShaderParameter("rect_size", Size);
+            _glassMaterial.SetShaderParameter("corner_radius", (float)Shape.CornerRadius);
+            _glassMaterial.SetShaderParameter("border_width", (float)Math.Max(1, PixelBorderWidth >= 3 ? Shape.PanelBorderWidth : Shape.ControlBorderWidth));
+            _glassMaterial.SetShaderParameter("blur_lod", GlassOpaque ? 0f : Shape.GlassBlurLod);
+            _glassMaterial.SetShaderParameter("tint_top", top);
+            _glassMaterial.SetShaderParameter("tint_bottom", bottom);
+            _glassMaterial.SetShaderParameter("border_color", border);
+            _glassMaterial.SetShaderParameter("glow_color", glow);
+            _glassMaterial.SetShaderParameter("glow_size", (float)GlassGlowSize);
+            _glassMaterial.SetShaderParameter("inner_glow_size", (float)GlassInnerGlowSize);
+            _glassMaterial.SetShaderParameter("highlight_strength", highlight);
+            _glassMaterial.SetShaderParameter("opaque", GlassOpaque ? 1f : 0f);
+        }
+
         public override void _Draw()
         {
+            if (UsesGlass)
+            {
+                float g = GlassGlowSize;
+                DrawTextureRect(LobbyGlass.White, new Rect2(-g, -g, Size.X + 2f * g, Size.Y + 2f * g), false);
+                return;
+            }
+
+            if (UsesStyleBox)
+            {
+                return;
+            }
+
             float w = Size.X;
             float h = Size.Y;
             int bw = PixelBorderWidth;

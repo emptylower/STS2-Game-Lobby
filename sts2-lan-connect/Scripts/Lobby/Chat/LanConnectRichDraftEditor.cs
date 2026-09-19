@@ -39,12 +39,14 @@ internal sealed partial class LanConnectRichDraftEditor : Control
     private static readonly Color DarkTextStrongColor = new(0.94f, 0.91f, 0.84f, 1f);
     private static readonly Color DarkTextMutedColor = new(0.68f, 0.65f, 0.6f, 1f);
     private static readonly Color DarkAccentColor = new(0.88f, 0.58f, 0.17f, 1f);
-    private static readonly Color LobbyTextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);
-    private static readonly Color LobbyTextMutedColor = new(0.46f, 0.36f, 0.31f, 1f);
-    private static readonly Color LobbyAccentColor = new(0.87f, 0.41f, 0.00f, 1f);
-    private static readonly Color LobbyInputColor = new(0.95f, 0.92f, 0.86f, 1f);
-    private static readonly Color LobbySecondaryColor = new(0.93f, 0.89f, 0.82f, 1f);
-    private static readonly Color LobbyBorderColor = new(0.80f, 0.65f, 0.53f, 1f);
+    // Wired to the active lobby theme (LanConnectLobbyThemes.Current); the Dark* colours
+    // above are the in-game HUD chat palette and stay hard-coded on purpose.
+    private static Color LobbyTextStrongColor => LanConnectLobbyThemes.Current.Palette.TextStrong;
+    private static Color LobbyTextMutedColor => LanConnectLobbyThemes.Current.Palette.TextMuted;
+    private static Color LobbyAccentColor => LanConnectLobbyThemes.Current.Palette.Accent;
+    private static Color LobbyInputColor => LanConnectLobbyThemes.Current.Palette.InputBg;
+    private static Color LobbySecondaryColor => LanConnectLobbyThemes.Current.Palette.Secondary;
+    private static Color LobbyBorderColor => LanConnectLobbyThemes.Current.Palette.Border;
 
     private readonly object _bindingSync = new();
     private readonly LanConnectChatLocalizer _localizer;

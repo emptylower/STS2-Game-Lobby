@@ -45,6 +45,9 @@ internal sealed class LanConnectConfigData
     public bool AutoConnectLastServer { get; set; } = true;
 
     public string LastUsedServerAddress { get; set; } = string.Empty;
+
+    /// <summary>Selected lobby theme id (see LanConnectLobbyThemes). Empty = default.</summary>
+    public string LobbyThemeId { get; set; } = string.Empty;
 }
 
 internal static class LanConnectConfig
@@ -388,6 +391,24 @@ internal static class LanConnectConfig
             SetString(
                 static (data, next) => data.LastUsedServerAddress = next,
                 static data => data.LastUsedServerAddress,
+                value?.Trim() ?? string.Empty);
+        }
+    }
+
+    public static string LobbyThemeId
+    {
+        get
+        {
+            lock (Sync)
+            {
+                return _data.LobbyThemeId;
+            }
+        }
+        set
+        {
+            SetString(
+                static (data, next) => data.LobbyThemeId = next,
+                static data => data.LobbyThemeId,
                 value?.Trim() ?? string.Empty);
         }
     }

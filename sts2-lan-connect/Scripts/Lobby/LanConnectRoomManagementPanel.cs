@@ -10,17 +10,17 @@ namespace Sts2LanConnect.Scripts;
 
 internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
 {
-    // Lobby warm color palette (matches LanConnectLobbyOverlay)
-    private static readonly Color CardColor = new(0.99f, 0.97f, 0.93f, 1f);
-    private static readonly Color BorderColor = new(0.80f, 0.65f, 0.53f, 1f);
-    private static readonly Color AccentColor = new(0.87f, 0.41f, 0.00f, 1f);
-    private static readonly Color TextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);
-    private static readonly Color TextMutedColor = new(0.46f, 0.36f, 0.31f, 1f);
-    private static readonly Color DangerColor = new(0.80f, 0.15f, 0.18f, 1f);
-    private static readonly Color DangerHoverColor = new(0.90f, 0.25f, 0.20f, 1f);
-    private static readonly Color SecondaryColor = new(0.93f, 0.89f, 0.82f, 1f);
-    private static readonly Color SurfaceMutedColor = new(0.89f, 0.87f, 0.81f, 1f);
-    private static readonly Color SuccessColor = new(0.10f, 0.60f, 0.19f, 1f);
+    // Wired to the active lobby theme (LanConnectLobbyThemes.Current)
+    private static Color CardColor => LanConnectLobbyThemes.Current.Palette.Card;
+    private static Color BorderColor => LanConnectLobbyThemes.Current.Palette.Border;
+    private static Color AccentColor => LanConnectLobbyThemes.Current.Palette.Accent;
+    private static Color TextStrongColor => LanConnectLobbyThemes.Current.Palette.TextStrong;
+    private static Color TextMutedColor => LanConnectLobbyThemes.Current.Palette.TextMuted;
+    private static Color DangerColor => LanConnectLobbyThemes.Current.Palette.Danger;
+    private static Color DangerHoverColor => LanConnectLobbyThemes.Current.Palette.DangerHover;
+    private static Color SecondaryColor => LanConnectLobbyThemes.Current.Palette.Secondary;
+    private static Color SurfaceMutedColor => LanConnectLobbyThemes.Current.Palette.SurfaceMuted;
+    private static Color SuccessColor => LanConnectLobbyThemes.Current.Palette.Success;
 
     private static LanConnectRoomManagementPanel? _instance;
 
@@ -98,7 +98,7 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
 
         ColorRect veil = new()
         {
-            Color = new Color(0f, 0f, 0f, 0.45f),
+            Color = LanConnectLobbyThemes.Current.Palette.ModalVeil,
             MouseFilter = Control.MouseFilterEnum.Stop
         };
         veil.SetAnchorsPreset(Control.LayoutPreset.FullRect);
@@ -119,21 +119,12 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
         {
             BgColor = CardColor,
             BorderColor = BorderColor,
-            BorderWidthLeft = 3,
-            BorderWidthTop = 3,
-            BorderWidthRight = 3,
-            BorderWidthBottom = 3,
-            CornerRadiusTopLeft = 0,
-            CornerRadiusTopRight = 0,
-            CornerRadiusBottomRight = 0,
-            CornerRadiusBottomLeft = 0,
             ContentMarginLeft = 28,
             ContentMarginTop = 24,
             ContentMarginRight = 28,
             ContentMarginBottom = 24,
-            ShadowSize = 4,
         };
-        cardStyle.ShadowColor = new Color(BorderColor, 0.55f);
+        ApplyThemedGeometry(cardStyle, BorderColor, requestedBorderWidth: 3, requestedShadowSize: 4);
         card.AddThemeStyleboxOverride("panel", cardStyle);
         center.AddChild(card);
 
@@ -337,17 +328,12 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
             {
                 BgColor = SecondaryColor,
                 BorderColor = BorderColor,
-                BorderWidthLeft = 2,
-                BorderWidthTop = 2,
-                BorderWidthRight = 2,
-                BorderWidthBottom = 2,
                 ContentMarginLeft = 16,
                 ContentMarginRight = 16,
                 ContentMarginTop = 14,
                 ContentMarginBottom = 14,
-                ShadowSize = 2,
             };
-            rowStyle.ShadowColor = new Color(BorderColor, 0.3f);
+            ApplyThemedGeometry(rowStyle, BorderColor, requestedBorderWidth: 2, requestedShadowSize: 2, shadowColorOverride: new Color(BorderColor, 0.3f));
             rowBg.AddThemeStyleboxOverride("panel", rowStyle);
             _playerList.AddChild(rowBg);
 
@@ -600,21 +586,66 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
         {
             BgColor = bgColor,
             BorderColor = borderColor,
-            BorderWidthLeft = borderWidth,
-            BorderWidthTop = borderWidth,
-            BorderWidthRight = borderWidth,
-            BorderWidthBottom = borderWidth,
-            CornerRadiusTopLeft = 0,
-            CornerRadiusTopRight = 0,
-            CornerRadiusBottomRight = 0,
-            CornerRadiusBottomLeft = 0,
             ContentMarginLeft = padding,
             ContentMarginTop = padding,
             ContentMarginRight = padding,
             ContentMarginBottom = padding,
         };
-        style.ShadowColor = new Color(borderColor, 0.4f);
-        style.ShadowSize = 2;
+        ApplyThemedGeometry(style, borderColor, requestedBorderWidth: borderWidth, requestedShadowSize: 2, shadowColorOverride: new Color(borderColor, 0.4f));
         return style;
+    }
+
+    /// <summary>
+    /// Applies the active theme's <c>Shape</c> (corner radius, border width, shadow style) to a
+    /// pre-populated <see cref="StyleBoxFlat"/>. <paramref name="requestedBorderWidth"/> and
+    /// <paramref name="requestedShadowSize"/> are the caller's original pixel-art intent (0 = no
+    /// border/shadow); the theme decides the actual widths/shadow treatment from there.
+    /// </summary>
+    private static void ApplyThemedGeometry(
+        StyleBoxFlat style,
+        Color border,
+        int requestedBorderWidth,
+        int requestedShadowSize,
+        Color? shadowColorOverride = null)
+    {
+        LanConnectLobbyShape shape = LanConnectLobbyThemes.Current.Shape;
+        int effectiveBorderWidth = shape.PressDepth
+            ? requestedBorderWidth
+            : requestedBorderWidth >= 3 ? shape.PanelBorderWidth : requestedBorderWidth > 0 ? shape.ControlBorderWidth : 0;
+        int effectiveRadius = shape.CornerRadius;
+
+        style.BorderWidthLeft = effectiveBorderWidth;
+        style.BorderWidthTop = effectiveBorderWidth;
+        style.BorderWidthRight = effectiveBorderWidth;
+        style.BorderWidthBottom = effectiveBorderWidth;
+        style.CornerRadiusTopLeft = effectiveRadius;
+        style.CornerRadiusTopRight = effectiveRadius;
+        style.CornerRadiusBottomRight = effectiveRadius;
+        style.CornerRadiusBottomLeft = effectiveRadius;
+        style.AntiAliasing = effectiveRadius > 0;
+
+        if (requestedShadowSize <= 0)
+        {
+            return;
+        }
+
+        switch (shape.Shadow)
+        {
+            case LanConnectLobbyShadowStyle.HardOffset:
+                style.ShadowColor = shadowColorOverride ?? new Color(border, 0.55f);
+                style.ShadowSize = requestedShadowSize;
+                style.ShadowOffset = new Vector2(requestedShadowSize, requestedShadowSize);
+                break;
+            case LanConnectLobbyShadowStyle.SoftGlow:
+                style.ShadowColor = LanConnectLobbyThemes.Current.Palette.Glow;
+                style.ShadowSize = shape.PanelShadowSize;
+                style.ShadowOffset = new Vector2(0, 2);
+                break;
+            default:
+                style.ShadowColor = new Color(0f, 0f, 0f, 0f);
+                style.ShadowSize = 0;
+                style.ShadowOffset = Vector2.Zero;
+                break;
+        }
     }
 }

@@ -82,16 +82,18 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
     private static readonly Color DarkAccentColor = new(0.88f, 0.58f, 0.17f, 1f);
     private static readonly Color DarkDangerColor = new(0.94f, 0.38f, 0.34f, 1f);
     private static readonly Color DarkWarningColor = new(0.94f, 0.7f, 0.26f, 1f);
-    private static readonly Color LobbyTextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);
-    private static readonly Color LobbyTextMutedColor = new(0.46f, 0.36f, 0.31f, 1f);
-    private static readonly Color LobbyAccentColor = new(0.87f, 0.41f, 0.00f, 1f);
-    private static readonly Color LobbyDangerColor = new(0.80f, 0.15f, 0.18f, 1f);
-    private static readonly Color LobbyWarningColor = new(0.72f, 0.34f, 0.02f, 1f);
-    private static readonly Color LobbySurfaceColor = new(0.99f, 0.97f, 0.93f, 1f);
-    private static readonly Color LobbySecondaryColor = new(0.93f, 0.89f, 0.82f, 1f);
-    private static readonly Color LobbyInputColor = new(0.95f, 0.92f, 0.86f, 1f);
-    private static readonly Color LobbyBorderColor = new(0.80f, 0.65f, 0.53f, 1f);
-    private static readonly Color LobbyPrimaryForegroundColor = new(0.15f, 0.05f, 0.00f, 1f);
+    // Wired to the active lobby theme (LanConnectLobbyThemes.Current); the Dark* colours
+    // above are the in-game HUD chat palette and stay hard-coded on purpose.
+    private static Color LobbyTextStrongColor => LanConnectLobbyThemes.Current.Palette.TextStrong;
+    private static Color LobbyTextMutedColor => LanConnectLobbyThemes.Current.Palette.TextMuted;
+    private static Color LobbyAccentColor => LanConnectLobbyThemes.Current.Palette.Accent;
+    private static Color LobbyDangerColor => LanConnectLobbyThemes.Current.Palette.Danger;
+    private static Color LobbyWarningColor => LanConnectLobbyThemes.Current.Palette.Warning;
+    private static Color LobbySurfaceColor => LanConnectLobbyThemes.Current.Palette.Surface;
+    private static Color LobbySecondaryColor => LanConnectLobbyThemes.Current.Palette.Secondary;
+    private static Color LobbyInputColor => LanConnectLobbyThemes.Current.Palette.InputBg;
+    private static Color LobbyBorderColor => LanConnectLobbyThemes.Current.Palette.Border;
+    private static Color LobbyPrimaryForegroundColor => LanConnectLobbyThemes.Current.Palette.PrimaryFg;
 
     // Messages plate content-sizing (room chat HUD redesign, real-device fix): the plate
     // used to render at a fixed 390px (180 compact) via
@@ -944,7 +946,8 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         _emojiButton = CreateButton(string.Empty, accent: false);
         _emojiButton.Name = LanConnectEmojiPicker.ToggleButtonName;
-        _emojiButton.Icon = _icons.Get("smile", 20, AccentColor);
+        // Lobby glass: a blue icon on a blue frosted button is unreadable — use the muted text tone.
+        _emojiButton.Icon = _icons.Get("smile", 20, UsesLobbyStyle ? LobbyTextMutedColor : AccentColor);
         _emojiButton.ExpandIcon = true;
         _emojiButton.TooltipText = Localize("chat.tooltip.emoji_picker");
         _emojiButton.AccessibilityName = Localize("chat.emoji.button");
@@ -959,7 +962,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
         _referenceButton = CreateButton(string.Empty, accent: false);
         _referenceButton.Name = LanConnectConstants.ChatReferenceButtonName;
-        _referenceButton.Icon = _icons.Get("link-2", 20, AccentColor);
+        _referenceButton.Icon = _icons.Get("link-2", 20, UsesLobbyStyle ? LobbyTextMutedColor : AccentColor);
         _referenceButton.ExpandIcon = true;
         _referenceButton.ToggleMode = true;
         _referenceButton.TooltipText = Localize("chat.reference.tooltip");

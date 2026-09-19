@@ -6,14 +6,14 @@ namespace Sts2LanConnect.Scripts;
 
 internal sealed partial class LobbyAnnouncementCarousel : Control
 {
-    // ── Retro pixel-art palette (converted from reference UI oklch values) ──
-    private static readonly Color CardColor = new(0.99f, 0.97f, 0.93f, 1f);                 // #FDF8ED oklch(0.98,0.015,85)
-    private static readonly Color BaseBackgroundColor = new(0.97f, 0.95f, 0.89f, 1f);       // #F8F1E3 oklch(0.96,0.02,85)
-    private static readonly Color TextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);          // #341A09 oklch(0.25,0.05,50)
-    private static readonly Color TextMutedColor = new(0.46f, 0.36f, 0.31f, 1f);           // #775D4F oklch(0.50,0.04,50)
-    private static readonly Color AccentColor = new(0.87f, 0.41f, 0.00f, 1f);              // #DF6900 oklch(0.65,0.18,55)
-    private static readonly Color AccentBrightColor = new(0.93f, 0.50f, 0.08f, 1f);        // #ED7F14 brighter hover
-    private static readonly Color BorderColor = new(0.80f, 0.65f, 0.53f, 1f);              // #CBA688 oklch(0.75,0.06,60)
+    // ── Theme-driven palette (see LanConnectLobbyThemes.Current) ──
+    private static Color CardColor => LanConnectLobbyThemes.Current.Palette.Card;
+    private static Color BaseBackgroundColor => LanConnectLobbyThemes.Current.Palette.Backdrop;
+    private static Color TextStrongColor => LanConnectLobbyThemes.Current.Palette.TextStrong;
+    private static Color TextMutedColor => LanConnectLobbyThemes.Current.Palette.TextMuted;
+    private static Color AccentColor => LanConnectLobbyThemes.Current.Palette.Accent;
+    private static Color AccentBrightColor => LanConnectLobbyThemes.Current.Palette.AccentBright;
+    private static Color BorderColor => LanConnectLobbyThemes.Current.Palette.Border;
 
     private readonly List<LobbyAnnouncementItem> _announcements = new();
 
@@ -577,26 +577,59 @@ internal sealed partial class LobbyAnnouncementCarousel : Control
 
     private static StyleBoxFlat CreatePanelStyle(Color background, Color border, int radius, int borderWidth, int padding, int shadowSize = 0, Color? shadowColor = null)
     {
+        LanConnectLobbyShape shape = LanConnectLobbyThemes.Current.Shape;
+        int effectiveRadius = shape.CornerRadius;
+        int effectiveBorderWidth = shape.PressDepth
+            ? borderWidth
+            : borderWidth >= 3 ? shape.PanelBorderWidth : borderWidth > 0 ? shape.ControlBorderWidth : 0;
+
         StyleBoxFlat style = new()
         {
             BgColor = background,
             BorderColor = border,
-            BorderWidthLeft = borderWidth,
-            BorderWidthTop = borderWidth,
-            BorderWidthRight = borderWidth,
-            BorderWidthBottom = borderWidth,
-            CornerRadiusTopLeft = radius,
-            CornerRadiusTopRight = radius,
-            CornerRadiusBottomRight = radius,
-            CornerRadiusBottomLeft = radius,
+            BorderWidthLeft = effectiveBorderWidth,
+            BorderWidthTop = effectiveBorderWidth,
+            BorderWidthRight = effectiveBorderWidth,
+            BorderWidthBottom = effectiveBorderWidth,
+            CornerRadiusTopLeft = effectiveRadius,
+            CornerRadiusTopRight = effectiveRadius,
+            CornerRadiusBottomRight = effectiveRadius,
+            CornerRadiusBottomLeft = effectiveRadius,
+            AntiAliasing = effectiveRadius > 0,
             ContentMarginLeft = padding,
             ContentMarginTop = padding,
             ContentMarginRight = padding,
             ContentMarginBottom = padding
         };
-        style.ShadowColor = shadowColor ?? new Color(0f, 0f, 0f, 0f);
-        style.ShadowSize = shadowSize;
-        style.ShadowOffset = shadowSize > 0 ? new Vector2(shadowSize, shadowSize) : Vector2.Zero;
+
+        if (shadowSize > 0)
+        {
+            switch (shape.Shadow)
+            {
+                case LanConnectLobbyShadowStyle.HardOffset:
+                    style.ShadowColor = shadowColor ?? new Color(0f, 0f, 0f, 0f);
+                    style.ShadowSize = shadowSize;
+                    style.ShadowOffset = new Vector2(shadowSize, shadowSize);
+                    break;
+                case LanConnectLobbyShadowStyle.SoftGlow:
+                    style.ShadowColor = LanConnectLobbyThemes.Current.Palette.Glow;
+                    style.ShadowSize = shape.PanelShadowSize;
+                    style.ShadowOffset = new Vector2(0, 2);
+                    break;
+                default:
+                    style.ShadowColor = new Color(0f, 0f, 0f, 0f);
+                    style.ShadowSize = 0;
+                    style.ShadowOffset = Vector2.Zero;
+                    break;
+            }
+        }
+        else
+        {
+            style.ShadowColor = new Color(0f, 0f, 0f, 0f);
+            style.ShadowSize = 0;
+            style.ShadowOffset = Vector2.Zero;
+        }
+
         return style;
     }
 
