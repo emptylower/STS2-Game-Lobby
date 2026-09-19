@@ -31,6 +31,7 @@ interface Deps {
   getDisplayName?: () => string;
   getPublicListing: () => boolean;
   getModSyncCapability?: () => ModSyncCapabilitySnapshot;
+  getServiceVersion?: () => string;
   getSnapshot: () => MetricsSnapshot;
 }
 
@@ -47,6 +48,7 @@ export function mountMetrics(app: Express, deps: Deps): void {
       publicKey: deps.identity.publicKey,
       serverTime: new Date().toISOString(),
       publicListing: deps.getPublicListing(),
+      serviceVersion: deps.getServiceVersion?.() ?? "unknown",
       rooms: snapshot.rooms,
       currentBandwidthMbps: snapshot.currentBandwidthMbps,
       bandwidthCapacityMbps: snapshot.bandwidthCapacityMbps ?? null,

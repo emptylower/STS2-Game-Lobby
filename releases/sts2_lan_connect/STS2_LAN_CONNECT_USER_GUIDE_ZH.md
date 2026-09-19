@@ -10,7 +10,18 @@
 
 # STS2 LAN Connect 使用说明
 
-当前正式版为 `0.6.1`，客户端与 lobby-service 版本号已同步对齐。可从 GitHub Release 获取；Steam 创意工坊（条目「游戏大厅」）暂未同步，仍显示 `0.6.0`。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+当前正式版为 `0.6.2`，客户端与 lobby-service 版本号已同步对齐。可从 GitHub Release 或 Steam 创意工坊（条目「游戏大厅」）获取。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+
+## v0.6.2 正式版
+
+`0.6.2` 收敛了 `0.6.2-alpha.1`、`0.6.2-alpha.2` 两个测试候选及其后的修复。完整说明见 `docs/RELEASE_NOTES_V0.6.2_ZH.md`。
+
+- **跨端与"多装一个 MOD"不再阻断加入**：新协议房间的消息 ID 改为按对端寻址，两端的 MOD 消息注册表不必完全相同；PC 与安卓、或一方多装了 Map Enhance 等第三方 MOD 时，现在可以正常同房。`0.6.1` 及更早客户端加入新协议房间会被提示升级。
+- **选服列表按版本与真实延迟排序**：置顶服务器优先，之后按服务端版本档降序、延迟升序；低于 0.6 的服务器标红「服务端版本过旧」；刷新过程中列表不再来回跳动。
+- **续局恢复修复**：恢复多人存档房间时取消后再次点击「恢复大厅房间」现在会正常重试，不再需要重启游戏；已取消的提示框结果不再写入存档绑定。
+- **大厅主题**：设置齿轮旁新增调色盘按钮，可在「街机复古」（默认）、「午夜玻璃」与「SaaS 简洁」三套外观间切换，选择会记住。点击房间卡片立即高亮，鼠标悬停有反馈。
+- **公共服务器列表恢复更新**：公共节点发现聚合器不再对 IP 直连地址采样，新开的大厅能正常出现在列表中。
+- 同房所有成员必须统一使用客户端 `0.6.2`，安装或更新后完整重启游戏；自建大厅需把 lobby-service 升级到 `0.6.2`（与 `0.6.1` 不等价）。
 
 ## v0.6.1 正式版
 
@@ -179,7 +190,7 @@
 
 1. 打开 `游戏大厅`，点击 `创建房间`
 2. 填写房间名，选择类型和联机协议，可选填密码；最大人数支持 2-8 人，默认 8 人
-3. 默认「兼容旧版 Mod」支持 LAN Connect `0.3-0.5` 旧版客户端加入且禁止 RitsuLib；「新协议」需 `0.6.1` 及以上客户端，与是否安装 RitsuLib 无关
+3. 默认「兼容旧版 Mod」支持 LAN Connect `0.3-0.5` 旧版客户端加入且禁止 RitsuLib；「新协议」需 `0.6.2` 及以上客户端，与是否安装 RitsuLib 无关
 4. 发布成功后，客户端会自动启动本地 ENet Host、向大厅注册房间并持续发送心跳保活
 
 ## 玩家流程
@@ -322,13 +333,13 @@
 
 ### 安卓端启动就弹"致命错误"
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本文档对应 `0.6.1`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本文档对应 `0.6.2`）
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保 `sts2_lan_connect.dll`、`sts2_lan_connect.pck` 和 `sts2_lan_connect.json` 同步更新
 - 如仍崩溃，将最新 `godot.log` 和本地调试报告一并发给开发者
 
 ### 安卓端进了主菜单，但打开多人页面 / 游戏大厅异常
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本文档对应 `0.6.1`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本文档对应 `0.6.2`）
 - 确认安装的是当前发布的客户端包，而非更早的旧包
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保三个文件来自同一批 release
 - 如问题仍存在，将最新 `godot.log` 和本地调试报告一并发给开发者
@@ -346,7 +357,7 @@
 - **联机大厅 8 群：341498145**
 - **测试群（要求会导出 log）：1093309523**
 
-反馈时请附上双方完整的 `godot.log` 与客户端内的本地调试报告（设置页可导出），并注明客户端版本 `0.6.1`；Android 请按上方「Android 取证」提供 launcher 日志与 `adb logcat`。
+反馈时请附上双方完整的 `godot.log` 与客户端内的本地调试报告（设置页可导出），并注明客户端版本 `0.6.2`；Android 请按上方「Android 取证」提供 launcher 日志与 `adb logcat`。
 
 ---
 
@@ -354,7 +365,18 @@
 
 # STS2 LAN Connect User Guide
 
-The current stable release is `0.6.1`, with the client and lobby-service versions aligned. It ships through GitHub Releases; the Steam Workshop item (游戏大厅) has not been synced yet and still shows `0.6.0`. Every player must use the same client and game version and fully restart after updating.
+The current stable release is `0.6.2`, with the client and lobby-service versions aligned. It ships through GitHub Releases and the Steam Workshop item (游戏大厅). Every player must use the same client and game version and fully restart after updating.
+
+## v0.6.2 Stable Release
+
+`0.6.2` consolidates the `0.6.2-alpha.1` and `0.6.2-alpha.2` candidates plus the fixes that followed. Full notes (Chinese): `docs/RELEASE_NOTES_V0.6.2_ZH.md`.
+
+- New-protocol message ids are now peer-addressed, so the two peers' MOD message registries no longer have to match: PC ↔ Android pairs and "one side has an extra MOD" pairs can join each other. `0.6.1` and older clients are told to upgrade.
+- The server picker sorts by service version tier and measured latency, flags pre-0.6 servers as too old, and no longer reorders mid-refresh.
+- Continue-run restore: cancelling and retrying "restore lobby room" now works without restarting the game; cancelled prompt results are never written to the save binding.
+- Lobby themes: a palette button next to the settings gear switches between 街机复古 (default), 午夜玻璃 and SaaS 简洁; clicking a room card highlights it immediately.
+- The public server list updates again (the discovery aggregator no longer samples IP-literal peers).
+- Every participant must use client `0.6.2` and fully restart; self-hosted lobbies must upgrade lobby-service to `0.6.2`.
 
 ## v0.6.1 Stable Release
 

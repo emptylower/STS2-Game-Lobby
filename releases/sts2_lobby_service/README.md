@@ -12,13 +12,13 @@
 
 # STS2 Lobby Service
 
-> 本文档对应正式版 **v0.6.1**。客户端与服务必须同步升级；部署时重启服务进程以清除内存中的旧房间。
+> 本文档对应正式版 **v0.6.2**。客户端与服务必须同步升级；部署时重启服务进程以清除内存中的旧房间。
 
-`0.6.1` 与 `0.6.0` **代码功能等价**（`0.6.1-alpha.2` 起服务端代码未再变过），只对齐版本号。仍在 `0.6.0` 的节点属于可选升级：本轮客户端改动集中在协议载体切换与存档修复，服务端字段自 `0.6.1-alpha.1` 起就已支持，无需额外配置。[GitHub Release v0.6.1](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.1) 附带 `sts2_lobby_service.zip`，且不是 pre-release，因此已开启自动更新的节点会自动升级到 `0.6.1`。
+`0.6.2` 与 `0.6.1` **不等价**：`tail_v1` 的创建 / 加入链路新增 `nativeBusTypeId` 四段透传（建房 offer、join 请求、join 响应的 `hostNativeBusTypeId`、控制通道 envelope 的 `peerNativeBusTypeId`），`/probe` 的 `capabilities.serviceVersion` 与 `/peers/metrics` 的 `serviceVersion` 公开本节点版本号。`0.6.2` 客户端需要 `0.6.2`（或 `0.6.2-alpha.x`）服务端才能建 / 加新协议房间，仍在 `0.6.1` 及更早的节点**必须升级**，升级本身无需额外配置。[GitHub Release v0.6.2](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.2) 附带 `sts2_lobby_service.zip`，且不是 pre-release，因此已开启自动更新的节点会自动升级到 `0.6.2`。
 
 本版保留 Base64URL WireCache 大小写修复，并在房间心跳超时时保留仍有已认证活跃房主的 relay，避免移动端开局加载期间误断开正在进行的游戏。relay 自身的空闲超时仍负责最终回收。
 
-v0.6 新增 `compat_4_5_v1` / `tail_v1` profile、冻结的 protocol selection 与 capability digest。`compat_4_5_v1` 禁止 RitsuLib；`tail_v1` 自 `0.6.1` 起统一使用 `native_bus_v1` 载体，**不再要求 RitsuLib presence 一致**（`0.6.0` 时期的 `ritsulib_presence_mismatch` 门禁已删除）。历史 `0.3.x`-`0.5.x` 客户端与 `0.6.1` 的真实互通不属于发布门禁。
+v0.6 新增 `compat_4_5_v1` / `tail_v1` profile、冻结的 protocol selection 与 capability digest。`compat_4_5_v1` 禁止 RitsuLib；`tail_v1` 自 `0.6.1` 起统一使用 `native_bus_v1` 载体，**不再要求 RitsuLib presence 一致**（`0.6.0` 时期的 `ritsulib_presence_mismatch` 门禁已删除）；`0.6.2` 起消息 ID 按对端寻址，`native_bus_v1` 的 `minimumClientVersion` 为 `0.6.2-alpha.1`，`0.6.1` 及更早客户端会被 426 `lan_client_version_too_old` 拒绝。历史 `0.3.x`-`0.5.x` 客户端与 `0.6.2` 的真实互通不属于发布门禁。
 
 ## 文档定位
 
@@ -27,7 +27,7 @@ v0.6 新增 `compat_4_5_v1` / `tail_v1` profile、冻结的 protocol selection �
 它主要回答：
 
 - 该服务负责什么、**不**负责什么
-- 当前 v0.6.1 推荐的部署路径是什么
+- 当前 v0.6.2 推荐的部署路径是什么
 - 首次部署完成后先检查哪些项目
 - 如何配置节点网络、私有访问、管理面板与客户端默认大厅
 - 需要深入查阅时，环境变量和 API 在哪里看
@@ -584,9 +584,9 @@ API Key 明文不会写盘或通过 GET 返回。请求端点默认必须使用 
 
 # STS2 Lobby Service
 
-> Targets source/build version **v0.6.1** (stable). It retains the peer, chat, AI moderation, and MOD-preflight protocols and adds the v0.6 `compat_4_5_v1` / `tail_v1` profiles, frozen protocol selection, and capability digests. As of `0.6.1`, `tail_v1` no longer requires matching RitsuLib presence — it uses the `native_bus_v1` carrier and is fully independent of RitsuLib.
+> Targets source/build version **v0.6.2** (stable). It retains the peer, chat, AI moderation, and MOD-preflight protocols and adds the v0.6 `compat_4_5_v1` / `tail_v1` profiles, frozen protocol selection, and capability digests. As of `0.6.1`, `tail_v1` no longer requires matching RitsuLib presence — it uses the `native_bus_v1` carrier and is fully independent of RitsuLib. As of `0.6.2` it also passes `nativeBusTypeId` through the create/join chain and publishes `serviceVersion` on `/probe` and `/peers/metrics`.
 
-The published service package is `sts2_lobby_service.zip` in the [GitHub v0.6.1 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.1). `0.6.1` is functionally equivalent to `0.6.0` (service code unchanged since `0.6.1-alpha.2`); because the release is not a prerelease and ships that asset, nodes with auto-update enabled upgrade themselves.
+The published service package is `sts2_lobby_service.zip` in the [GitHub v0.6.2 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.2). `0.6.2` is *not* equivalent to `0.6.1` — nodes still on `0.6.1` or older must upgrade before `0.6.2` clients can create or join new-protocol rooms; because the release is not a prerelease and ships that asset, nodes with auto-update enabled upgrade themselves.
 
 This README is the **operator/admin guide** for `lobby-service`.
 

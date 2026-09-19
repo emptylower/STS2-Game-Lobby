@@ -11,6 +11,7 @@ export interface ProtocolOffer {
   readonly ritsuLibPresent: boolean;
   readonly ritsuLibSidecarAvailable: boolean;
   readonly registryFingerprint?: string | undefined;
+  readonly nativeBusTypeId?: number | undefined;
   readonly ritsuLibVersion?: string | undefined;
 }
 
@@ -19,6 +20,11 @@ export const RegistryFingerprintPattern = /^sha256:v1:[0-9a-f]{64}$/;
 
 export function isValidRegistryFingerprint(value: string | undefined): value is string {
   return typeof value === "string" && RegistryFingerprintPattern.test(value);
+}
+
+/** native bus 消息 ID（按对端寻址，0.6.2 起）：整数且 0 <= value <= 255。 */
+export function isValidNativeBusTypeId(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 255;
 }
 
 export interface ServerProtocolPolicy {
@@ -41,6 +47,7 @@ export interface RoomProtocolSelection {
   readonly ritsuLibPresent: boolean;
   readonly capabilityDigest: string;
   readonly registryFingerprint?: string | undefined;
+  readonly nativeBusTypeId?: number | undefined;
   readonly ritsuLibVersion?: string | undefined;
 }
 
@@ -70,7 +77,7 @@ export function selectRoomProtocol(hostOffer: ProtocolOffer, policy: ServerProto
         "客户端与服务器没有共同的 LAN 协议版本。",
       );
     }
-    minimumClientVersion = "0.6.1-alpha.1";
+    minimumClientVersion = "0.6.2-alpha.1";
     // native_bus_v1：tail_v1 一律 native 载体，完全忽略 Ritsu presence 与 sidecar 可用性。
     carrier = "native_bus_v1";
     // 创建侧 fingerprint 必填（房间分配前拒绝，杜绝无冻结指纹房间流入 join 门禁）。
@@ -79,6 +86,14 @@ export function selectRoomProtocol(hostOffer: ProtocolOffer, policy: ServerProto
         409,
         "lan_registry_fingerprint_required",
         "创建 tail_v1 房间必须携带格式合法的消息注册表指纹（sha256:v1:<64 位小写 hex>）。",
+      );
+    }
+    // 0.6.2 起按对端寻址：创建侧必须声明本机 native bus 消息 ID（缺失/越界与指纹同码拒绝）。
+    if (!isValidNativeBusTypeId(hostOffer.nativeBusTypeId)) {
+      throw new ProtocolContractError(
+        409,
+        "lan_registry_fingerprint_required",
+        "创建新协议房间必须携带本机 native bus 消息 ID（0-255），请升级 LAN Connect。",
       );
     }
   }
@@ -96,6 +111,7 @@ export function selectRoomProtocol(hostOffer: ProtocolOffer, policy: ServerProto
     ritsuLibPresent: hostOffer.ritsuLibPresent,
     ...(policy.profile === "compat_4_5_v1" ? {} : {
       registryFingerprint: hostOffer.registryFingerprint,
+      nativeBusTypeId: hostOffer.nativeBusTypeId,
       ...(hostOffer.ritsuLibVersion === undefined ? {} : { ritsuLibVersion: hostOffer.ritsuLibVersion }),
     }),
   } as const;
@@ -173,6 +189,7 @@ export function parseProtocolOffer(value: unknown): ProtocolOffer {
     "ritsuLibPresent",
     "ritsuLibSidecarAvailable",
     "registryFingerprint",
+    "nativeBusTypeId",
     "ritsuLibVersion",
   ]);
   if (Object.keys(candidate).some((key) => !allowed.has(key))) {
@@ -180,9 +197,13 @@ export function parseProtocolOffer(value: unknown): ProtocolOffer {
   }
   // fingerprint 格式不在此处拒绝（避免 400 抢先）：合法性统一由 selectRoomProtocol /
   // join 门禁以 lan_registry_fingerprint_required 拒绝（缺失与格式非法同一码）。
+  // nativeBusTypeId 同策略：此处只校验整数类型，0-255 范围由门禁以同码拒绝。
   const registryFingerprint = candidate.registryFingerprint === undefined
     ? undefined
     : boundedRegistryFingerprint(candidate.registryFingerprint);
+  const nativeBusTypeId = candidate.nativeBusTypeId === undefined
+    ? undefined
+    : requireInteger(candidate.nativeBusTypeId, "nativeBusTypeId");
   const ritsuLibVersion = candidate.ritsuLibVersion === undefined
     ? undefined
     : normalizeBoundedUtf8(requireString(candidate.ritsuLibVersion, "ritsuLibVersion"), "ritsuLibVersion", 32);
@@ -193,6 +214,7 @@ export function parseProtocolOffer(value: unknown): ProtocolOffer {
     ritsuLibPresent: requireBoolean(candidate.ritsuLibPresent, "ritsuLibPresent"),
     ritsuLibSidecarAvailable: requireBoolean(candidate.ritsuLibSidecarAvailable, "ritsuLibSidecarAvailable"),
     ...(registryFingerprint === undefined ? {} : { registryFingerprint }),
+    ...(nativeBusTypeId === undefined ? {} : { nativeBusTypeId }),
     ...(ritsuLibVersion === undefined ? {} : { ritsuLibVersion }),
   };
   validateOffer(offer);
@@ -232,6 +254,13 @@ function boundedRegistryFingerprint(value: unknown): string {
 function requireUint16(value: unknown, name: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 0xffff) {
     throw new TypeError(`${name} 必须是 uint16。`);
+  }
+  return value;
+}
+
+function requireInteger(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new TypeError(`${name} 必须是整数。`);
   }
   return value;
 }

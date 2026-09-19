@@ -14,13 +14,13 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.6.1`（正式版） |
-| lobby-service 版本 | `0.6.1`（正式版，与 `0.6.0` 代码功能等价） |
+| 客户端版本 | `0.6.2`（正式版） |
+| lobby-service 版本 | `0.6.2`（正式版，与 `0.6.1` 不等价，自建大厅需升级） |
 | 默认大厅 | `sts2-test.43.133.192.249.nip.io`（可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `strict + relay-only` |
 
-`0.6.1` 是 `0.6.0` 之后的第一个正式版，收敛了 `0.6.1-alpha.1`~`alpha.5` 全部五个测试候选；客户端与 lobby-service 的版本号同步对齐为 `0.6.1`。本版通过 GitHub Release 分发；Steam 创意工坊条目「游戏大厅」暂未同步，仍显示 `0.6.0`。安装或更新后必须完整重启游戏。完整说明见 `docs/RELEASE_NOTES_V0.6.1_ZH.md`。
+`0.6.2` 是 `0.6.1` 之后的正式版，收敛了 `0.6.2-alpha.1`、`0.6.2-alpha.2` 两个测试候选，以及其后的续局恢复修复、公共节点发现修复与大厅主题系统；客户端与 lobby-service 的版本号同步对齐为 `0.6.2`。本版的主线是把 `native_bus_v1` 的消息 ID 改为**按对端寻址**，两端的联机消息注册表从此无需相同，跨端（PC ↔ 安卓）与「一端多装一个第三方 MOD」不再被拒绝加入。本版通过 GitHub Release 分发，并同步更新 Steam 创意工坊条目「游戏大厅」。安装或更新后必须完整重启游戏。完整说明见 `docs/RELEASE_NOTES_V0.6.2_ZH.md`。
 
 **新协议房间不再要求 RitsuLib 状态一致**：0.6 新协议 `tail_v1` 的载体从依赖 RitsuLib 公开 typed-sidecar API 的方案，换成 `native_bus_v1`（游戏官方 MOD 消息注册通道），与是否安装 RitsuLib 完全无关。队友一个装了 RitsuLib、一个没装，现在可以正常同房；旧版本"有 RitsuLib 只能连有 RitsuLib"的限制不再存在。兼容模式 `compat_4_5_v1` 不受影响，继续固定 `4/5-bit` 并禁止 RitsuLib。
 
@@ -28,11 +28,11 @@
 
 本版还修复了新协议房间房主每次存档都会报错的问题：该错误会导致房间绑定丢失、续局时被误判为兼容房而遭 RitsuLib 拒绝，以及 QuickSL 等第三方存档类 MOD 的多人同步重载被打断而断线。存档持久化失败现在只记录告警，不会再影响原版存档流程。
 
-同一房间内所有玩家必须统一使用客户端 `0.6.1` 及以上；lobby-service 建议使用 `0.6.1`（与 `0.6.0` 功能等价）。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。历史 `0.3.x`-`0.5.x` 客户端与 `0.6.1` 的真实互通不在发布门禁范围内。
+同一房间内所有玩家必须统一使用客户端 `0.6.2`；lobby-service 必须升级到 `0.6.2`（新增 `nativeBusTypeId` 透传与 `serviceVersion` 字段，与 `0.6.1` 不等价）。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。历史 `0.3.x`-`0.5.x` 客户端与 `0.6.2` 的真实互通不在发布门禁范围内。
 
-本正式版是在既有功能之上叠加的，先前版本的能力全部保留：`0.6.0` 的双协议房间与加入前线上编码校验、`0.5.5` 的游戏 ABI 向下兼容、`0.5.4` 的 AI 审核交互，以及 `0.5.3` 的 LAN/大厅续局通道拆分、续局身份码、存档保护和聊天 HUD。
+本正式版是在既有功能之上叠加的，先前版本的能力全部保留：`0.6.1` 的 `native_bus_v1` 载体与 RitsuLib 解耦、`0.6.0` 的双协议房间与加入前线上编码校验、`0.5.5` 的游戏 ABI 向下兼容、`0.5.4` 的 AI 审核交互，以及 `0.5.3` 的 LAN/大厅续局通道拆分、续局身份码、存档保护和聊天 HUD。
 
-### v0.6.1 安装后自查
+### v0.6.2 安装后自查
 
 - 启动日志应正常出现新协议初始化的 `plan_success profile=native_bus_v1` 与 `native_bus` 就绪诊断行；第三方 MOD 提前初始化消息注册表时自检应挂起并延后补跑，不应把会话打入联机降级模式。
 - 一方装 RitsuLib、一方不装时，双方都能创建 / 加入同一个新协议房间。
@@ -189,7 +189,7 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 ## 自建大厅服说明
 
-v0.6 不再支持 `0.2.x` 客户端。自建大厅建议升级到 lobby-service `0.6.1`（与 `0.6.0` 功能等价），同房客户端统一升级到 `0.6.1`；`0.3-0.5` 客户端只能加入兼容房，不能加入 `tail_v1` 房间。
+v0.6 不再支持 `0.2.x` 客户端。自建大厅必须升级到 lobby-service `0.6.2`（与 `0.6.1` 不等价），同房客户端统一升级到 `0.6.2`；`0.3-0.5` 客户端只能加入兼容房，不能加入 `tail_v1` 房间。
 
 ---
 
@@ -200,7 +200,7 @@ v0.6 不再支持 `0.2.x` 客户端。自建大厅建议升级到 lobby-service 
 - **联机大厅 8 群：341498145**
 - **测试群（要求会导出 log）：1093309523**
 
-反馈时请附上双方完整的 `godot.log`（Android 见上方「Android 启动取证」）和客户端内的本地调试报告，并注明客户端版本 `0.6.1`。
+反馈时请附上双方完整的 `godot.log`（Android 见上方「Android 启动取证」）和客户端内的本地调试报告，并注明客户端版本 `0.6.2`。
 
 ---
 
@@ -216,13 +216,13 @@ v0.6 不再支持 `0.2.x` 客户端。自建大厅建议升级到 lobby-service 
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.6.1` (stable) |
-| Lobby-service version | `0.6.1` (stable; functionally equivalent to `0.6.0`) |
+| Client version | `0.6.2` (stable) |
+| Lobby-service version | `0.6.2` (stable; not equivalent to `0.6.1` — self-hosted lobbies must upgrade) |
 | Default lobby | `sts2-test.43.133.192.249.nip.io` |
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `strict + relay-only` |
 
-`0.6.1` is the first stable release after `0.6.0`, consolidating every candidate from `0.6.1-alpha.1` through `alpha.5`. The client and lobby-service versions are aligned at `0.6.1`. It ships through GitHub Releases; the Steam Workshop item (游戏大厅) has not been synced yet and still shows `0.6.0`. Fully restart the game after updating.
+`0.6.2` is the stable release after `0.6.1`, consolidating the `0.6.2-alpha.1` and `0.6.2-alpha.2` candidates plus the continue-run, peer-discovery and lobby-theme work that followed them. The client and lobby-service versions are aligned at `0.6.2`. Its headline change makes `native_bus_v1` message ids peer-addressed, so the two peers' message registries no longer have to match and cross-platform (PC ↔ Android) or "one side has one extra MOD" pairs are no longer rejected. It ships through GitHub Releases and this release also updates the Steam Workshop item (游戏大厅). Fully restart the game after updating.
 
 **Tail rooms no longer require matching RitsuLib presence.** The `tail_v1` carrier moves from relying on RitsuLib's public typed-sidecar API to `native_bus_v1` (the game's own official mod-message channel), so joining no longer depends on whether RitsuLib is installed. A player with RitsuLib and one without can now share the same new-protocol room; the old "Ritsu can only join Ritsu" restriction is gone. Compat rooms (`compat_4_5_v1`) are unaffected and still forbid RitsuLib.
 
@@ -230,9 +230,9 @@ This release also fixes the root cause behind `0.6.0`'s "cannot join the new-pro
 
 It also fixes every host-side save in a new-protocol room throwing an error, which broke the room binding, broke continue-run restoration (misdetected as a compat room and rejected by the RitsuLib gate), and disconnected clients mid-reload for save-hooking MODs like QuickSL. Save persistence failures are now logged, not surfaced as a game-breaking error.
 
-Every participant must use client `0.6.1` or newer; self-hosted lobby services should run `0.6.1` (functionally equivalent to `0.6.0`). This release builds on top of `0.6.0`'s feature set — dual-protocol rooms, pre-join wire-encoding checks, the lobby-visibility fix, and continue-run/restart handling all remain.
+Every participant must use client `0.6.2`; self-hosted lobby services must upgrade to `0.6.2` (it adds `nativeBusTypeId` passthrough and the `serviceVersion` fields, so it is not equivalent to `0.6.1`). This release builds on top of `0.6.0`'s feature set — dual-protocol rooms, pre-join wire-encoding checks, the lobby-visibility fix, and continue-run/restart handling all remain.
 
-### v0.6.1 Post-Install Checks
+### v0.6.2 Post-Install Checks
 
 - Startup should report `plan_success profile=native_bus_v1` and the `native_bus` readiness diagnostic line; a third-party MOD pre-initializing the message registry should defer the self-check instead of entering degraded mode.
 - A player with RitsuLib and one without should both be able to create/join the same new-protocol room.
@@ -376,7 +376,7 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 ## Self-Hosted Lobby Notes
 
-v0.6 no longer supports `0.2.x` clients. Self-hosted lobbies should run lobby-service `0.6.1` (functionally equivalent to `0.6.0`), and every peer in a room must use client `0.6.1`. Clients `0.3-0.5` can only join compat rooms and cannot join `tail_v1` rooms.
+v0.6 no longer supports `0.2.x` clients. Self-hosted lobbies must run lobby-service `0.6.2` (not equivalent to `0.6.1`), and every peer in a room must use client `0.6.2`. Clients `0.3-0.5` can only join compat rooms and cannot join `tail_v1` rooms.
 
 
 ---
@@ -388,4 +388,4 @@ Chinese-language QQ groups for bug reports and testing:
 - **Game Lobby group 8: 341498145**
 - **Testing group (log export required): 1093309523**
 
-When reporting an issue, attach the complete `godot.log` from both peers (Android: see the evidence steps above) plus the in-client local debug report, and state the client version `0.6.1`.
+When reporting an issue, attach the complete `godot.log` from both peers (Android: see the evidence steps above) plus the in-client local debug report, and state the client version `0.6.2`.

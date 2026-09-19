@@ -10,6 +10,7 @@ import {
 } from "./client-version.js";
 import {
   assertJoinerCompatible,
+  isValidNativeBusTypeId,
   isValidRegistryFingerprint,
   selectRoomProtocol,
   type ProtocolOffer,
@@ -124,6 +125,10 @@ export interface JoinTicket {
   protocolSelection: RoomProtocolSelection;
   joinerCapabilityDigest: string;
   protocolFlowNonce: string;
+  /** 加入者声明的 native bus 消息 ID（0.6.2 起按对端寻址，经控制通道下发给房主）。 */
+  nativeBusTypeId?: number | undefined;
+  /** 加入者携带的消息注册表指纹（0.6.2 起仅诊断记录，不再作为门禁）。 */
+  registryFingerprint?: string | undefined;
 }
 
 export interface ClientControlBinding {
@@ -136,6 +141,10 @@ export interface ClientControlBinding {
   identityKind: "installation" | "legacy";
   boundAt: Date;
   protocolFlowNonce: string;
+  /** 加入者声明的 native bus 消息 ID（下发给房主用于按对端寻址）。 */
+  nativeBusTypeId?: number | undefined;
+  /** 加入者携带的消息注册表指纹（诊断记录）。 */
+  registryFingerprint?: string | undefined;
 }
 
 export type KickPlayerResult =
@@ -162,6 +171,7 @@ export interface ClientControlBindingHandle {
   playerNetId: string;
   playerName: string;
   protocolFlowNonce: string;
+  peerNativeBusTypeId?: number | undefined;
 }
 
 export interface RoomSettings {
@@ -234,6 +244,8 @@ export interface JoinRoomInput {
   desiredSavePlayerNetId?: string | undefined;
   playerNetId?: string | undefined;
   registryFingerprint?: string | undefined;
+  /** 加入者声明的 native bus 消息 ID（0-255；tail_v1 join 必填）。 */
+  nativeBusTypeId?: number | undefined;
 }
 
 export interface ModPreflightInput {
@@ -287,6 +299,8 @@ export interface JoinRoomResult {
   room: RoomSummary;
   connectionPlan: ConnectionPlan;
   protocolFlowNonce: string;
+  /** 房主创建时冻结的 native bus 消息 ID（加入侧按此对房主寻址）。 */
+  hostNativeBusTypeId?: number | undefined;
 }
 
 interface JoinCompatibilityContext {
@@ -547,9 +561,12 @@ export class LobbyStore {
       protocolSelection: room.protocolSelection,
       joinerCapabilityDigest: room.protocolSelection.capabilityDigest,
       protocolFlowNonce,
+      ...(input.nativeBusTypeId === undefined ? {} : { nativeBusTypeId: input.nativeBusTypeId }),
+      ...(input.registryFingerprint === undefined ? {} : { registryFingerprint: input.registryFingerprint.trim() }),
     };
     this.tickets.set(ticket.ticketId, ticket);
 
+    const hostNativeBusTypeId = room.protocolSelection.nativeBusTypeId;
     return {
       ticketId: ticket.ticketId,
       roomId,
@@ -559,6 +576,7 @@ export class LobbyStore {
       room: this.toRoomSummary(room),
       connectionPlan,
       protocolFlowNonce,
+      ...(hostNativeBusTypeId === undefined ? {} : { hostNativeBusTypeId }),
     };
   }
 
@@ -595,10 +613,10 @@ export class LobbyStore {
     }
 
     // tail_v1 统一加入门禁链（spec §5）：presence → carrier（上方 assertJoinerCompatible）→
-    // registry fingerprint → minimumClientVersion →（后续既有 mod 列表校验）。
-    // compat_4_5_v1 房间沿用旧合同，不走 fingerprint/minVersion 门禁。
+    // registry fingerprint 格式 → nativeBusTypeId → minimumClientVersion →（后续既有 mod 列表校验）。
+    // compat_4_5_v1 房间沿用旧合同，不走 fingerprint/nativeBusTypeId/minVersion 门禁。
     if (room.protocolSelection.profile !== "compat_4_5_v1") {
-      this.runTailJoinGates(room, joinerVersion, input.registryFingerprint);
+      this.runTailJoinGates(room, joinerVersion, input.registryFingerprint, input.nativeBusTypeId);
     }
 
     const clientInstallationId = this.resolveClientInstallationIdentity(
@@ -665,27 +683,6 @@ export class LobbyStore {
   }
 
   /** 工单签发前的门禁链快查（app 层在 wire-cache 预检查之前调用，保证错误优先级）。 */
-  /** preflight UX 快速失败：fingerprint 与房间冻结值不一致时抛非 2xx（不承担门禁）。 */
-  assertPreflightFingerprintAllowed(roomId: string, registryFingerprint: string): void {
-    const room = this.requireRoom(roomId);
-    const selection = room.protocolSelection;
-    if (selection.profile === "compat_4_5_v1" || !isValidRegistryFingerprint(selection.registryFingerprint)) {
-      return;
-    }
-
-    if (!isValidRegistryFingerprint(registryFingerprint) || registryFingerprint.trim() !== selection.registryFingerprint) {
-      throw new LobbyStoreError(
-        409,
-        "lan_registry_fingerprint_mismatch",
-        "双端 MOD 消息注册表不一致，请统一房间与本地 MOD 集合后重试。",
-        {
-          expectedFingerprintPrefix: selection.registryFingerprint.slice(0, "sha256:v1:".length + 8),
-          receivedFingerprintPrefix: registryFingerprint.trim().slice(0, "sha256:v1:".length + 8),
-        },
-      );
-    }
-  }
-
   findJoinProtocolGateFailure(roomId: string, input: JoinRoomInput): LobbyStoreError | undefined {
     try {
       const room = this.requireRoom(roomId);
@@ -717,7 +714,7 @@ export class LobbyStore {
       }
 
       try {
-        this.runTailJoinGates(room, joinerVersion, input.registryFingerprint);
+        this.runTailJoinGates(room, joinerVersion, input.registryFingerprint, input.nativeBusTypeId);
       } catch (error) {
         if (error instanceof LobbyStoreError) {
           return error;
@@ -738,6 +735,7 @@ export class LobbyStore {
     room: Room,
     joinerVersion: string,
     registryFingerprint: string | undefined,
+    nativeBusTypeId: number | undefined,
   ): void {
     const selection = room.protocolSelection;
     if (!isValidRegistryFingerprint(registryFingerprint) || !isValidRegistryFingerprint(selection.registryFingerprint)) {
@@ -748,17 +746,24 @@ export class LobbyStore {
       );
     }
 
+    // 0.6.2 起按对端寻址：指纹不一致不再拒绝（第三方 MOD 集合差异是合法状态），
+    // 双方值随工单/绑定记录供诊断（expected=房主冻结值，received=加入者携带值）。
     const received = registryFingerprint.trim();
     const expected = selection.registryFingerprint;
     if (received !== expected) {
+      this.warn(
+        `[lobby] registry fingerprint differs (allowed) roomId=${room.roomId} `
+        + `expectedPrefix=${expected.slice(0, "sha256:v1:".length + 8)} `
+        + `receivedPrefix=${received.slice(0, "sha256:v1:".length + 8)}`,
+      );
+    }
+
+    // 加入侧必须声明本机 native bus 消息 ID（0-255），供房主按对端寻址（缺失/越界同码拒绝）。
+    if (!isValidNativeBusTypeId(nativeBusTypeId)) {
       throw new LobbyStoreError(
         409,
-        "lan_registry_fingerprint_mismatch",
-        "双端 MOD 消息注册表不一致，请统一房间与本地 MOD 集合后重试。",
-        {
-          expectedFingerprintPrefix: expected.slice(0, "sha256:v1:".length + 8),
-          receivedFingerprintPrefix: received.slice(0, "sha256:v1:".length + 8),
-        },
+        "lan_registry_fingerprint_required",
+        "加入 tail_v1 房间必须携带本机 native bus 消息 ID（0-255），请升级 LAN Connect。",
       );
     }
 
@@ -966,6 +971,8 @@ export class LobbyStore {
       identityKind: ticket.identityKind,
       boundAt: new Date(),
       protocolFlowNonce: ticket.protocolFlowNonce,
+      ...(ticket.nativeBusTypeId === undefined ? {} : { nativeBusTypeId: ticket.nativeBusTypeId }),
+      ...(ticket.registryFingerprint === undefined ? {} : { registryFingerprint: ticket.registryFingerprint }),
     };
     if (binding.playerNetId !== undefined) {
       this.rememberClientControlBinding(binding);
@@ -1067,6 +1074,7 @@ export class LobbyStore {
           playerNetId: binding.playerNetId,
           playerName: binding.playerName,
           protocolFlowNonce: binding.protocolFlowNonce,
+          ...(binding.nativeBusTypeId === undefined ? {} : { peerNativeBusTypeId: binding.nativeBusTypeId }),
         });
       }
     }
