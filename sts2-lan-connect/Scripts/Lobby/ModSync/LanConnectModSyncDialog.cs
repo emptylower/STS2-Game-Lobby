@@ -16,18 +16,19 @@ internal sealed record LanConnectModSyncDialogTestState(
     bool PrimaryButtonDisabled,
     bool RelaxedButtonVisible,
     string RelaxedButtonAccessibilityName,
-    string FocusOwnerName);
+    string FocusOwnerName,
+    bool PrimaryButtonVisible = true);
 
 internal sealed partial class LanConnectModSyncDialog : Control
 {
-    private static readonly Color PageColor = new(0.94f, 0.92f, 0.87f, 1f);
-    private static readonly Color CardColor = new(0.99f, 0.97f, 0.93f, 1f);
-    private static readonly Color SurfaceMutedColor = new(0.89f, 0.87f, 0.81f, 1f);
-    private static readonly Color BorderColor = new(0.28f, 0.16f, 0.08f, 1f);
-    private static readonly Color TextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);
-    private static readonly Color TextMutedColor = new(0.42f, 0.34f, 0.25f, 1f);
-    private static readonly Color AccentColor = new(0.67f, 0.24f, 0.12f, 1f);
-    private static readonly Color SuccessColor = new(0.16f, 0.42f, 0.23f, 1f);
+    private static Color PageColor => LanConnectModSyncPalette.Page;
+    private static Color CardColor => LanConnectModSyncPalette.Card;
+    private static Color SurfaceMutedColor => LanConnectModSyncPalette.SurfaceMuted;
+    private static Color BorderColor => LanConnectModSyncPalette.Border;
+    private static Color TextStrongColor => LanConnectModSyncPalette.TextStrong;
+    private static Color TextMutedColor => LanConnectModSyncPalette.TextMuted;
+    private static Color AccentColor => LanConnectModSyncPalette.Accent;
+    private static Color SuccessColor => LanConnectModSyncPalette.Success;
 
     private LanConnectModSyncViewState _state = LanConnectModSyncViewState.Checking();
     private PanelContainer? _panel;
@@ -191,7 +192,8 @@ internal sealed partial class LanConnectModSyncDialog : Control
                 _primaryButton?.Disabled ?? true,
                 _relaxedButton?.Visible == true,
                 _relaxedButton?.AccessibilityName.ToString() ?? string.Empty,
-                GetViewport()?.GuiGetFocusOwner()?.Name.ToString() ?? string.Empty);
+                GetViewport()?.GuiGetFocusOwner()?.Name.ToString() ?? string.Empty,
+                _primaryButton?.Visible == true);
         }
     }
 
@@ -274,7 +276,7 @@ internal sealed partial class LanConnectModSyncDialog : Control
         ColorRect veil = new()
         {
             Name = "ModSyncVeil",
-            Color = new Color(0f, 0f, 0f, 0.48f),
+            Color = LanConnectModSyncPalette.Veil,
             MouseFilter = MouseFilterEnum.Stop
         };
         veil.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
@@ -403,9 +405,12 @@ internal sealed partial class LanConnectModSyncDialog : Control
         }
         _primaryButton.Text = LanConnectModSyncLocalizer.Action(_state.PrimaryAction);
         _primaryButton.AccessibilityName = _primaryButton.Text;
-        ApplyActionIcon(_primaryButton, _state.PrimaryAction);
+        ApplyActionIcon(_primaryButton, _state.PrimaryAction, primary: true);
         _primaryButton.SetMeta("action", (int)_state.PrimaryAction);
-        _primaryButton.Visible = _state.PrimaryAction != LanConnectModSyncAction.None;
+        // When the only thing left to do is cancel, the dedicated cancel button already says so;
+        // showing the primary button too rendered two identical "取消" buttons side by side.
+        _primaryButton.Visible = _state.PrimaryAction != LanConnectModSyncAction.None &&
+                                 _state.PrimaryAction != LanConnectModSyncAction.Cancel;
         _primaryButton.Disabled = _state.PrimaryAction == LanConnectModSyncAction.ApplyChanges &&
                                   _state.Kind == LanConnectModSyncViewKind.ExtraGameplaySelection &&
                                   _rowControls.All(row => !row.Selected);
@@ -439,14 +444,14 @@ internal sealed partial class LanConnectModSyncDialog : Control
         };
         button.SetMeta("action", (int)action);
         Color background = primary ? AccentColor : CardColor;
-        Color foreground = primary ? CardColor : TextStrongColor;
+        Color foreground = primary ? LanConnectModSyncPalette.PrimaryFg : TextStrongColor;
         button.AddThemeStyleboxOverride("normal", LanConnectModSyncRow.PixelStyle(background, BorderColor, 2, 10, 2));
-        button.AddThemeStyleboxOverride("hover", LanConnectModSyncRow.PixelStyle(primary ? SuccessColor : PageColor, AccentColor, 2, 10, 1));
+        button.AddThemeStyleboxOverride("hover", LanConnectModSyncRow.PixelStyle(primary ? LanConnectModSyncPalette.AccentHover : PageColor, AccentColor, 2, 10, 1));
         button.AddThemeStyleboxOverride("pressed", LanConnectModSyncRow.PixelStyle(SurfaceMutedColor, AccentColor, 2, 10));
         button.AddThemeStyleboxOverride("focus", LanConnectModSyncRow.PixelStyle(background, AccentColor, 3, 9));
         button.AddThemeStyleboxOverride("disabled", LanConnectModSyncRow.PixelStyle(new Color(background, 0.45f), new Color(BorderColor, 0.45f), 2, 10));
         button.AddThemeColorOverride("font_color", foreground);
-        button.AddThemeColorOverride("font_hover_color", primary ? CardColor : TextStrongColor);
+        button.AddThemeColorOverride("font_hover_color", foreground);
         button.AddThemeColorOverride("font_pressed_color", TextStrongColor);
         button.AddThemeColorOverride("font_focus_color", foreground);
         button.AddThemeColorOverride("font_disabled_color", new Color(foreground, 0.72f));
@@ -514,7 +519,7 @@ internal sealed partial class LanConnectModSyncDialog : Control
         return label;
     }
 
-    private static void ApplyActionIcon(Button button, LanConnectModSyncAction action)
+    private static void ApplyActionIcon(Button button, LanConnectModSyncAction action, bool primary = false)
     {
         string iconName = action switch
         {
@@ -523,7 +528,10 @@ internal sealed partial class LanConnectModSyncDialog : Control
             LanConnectModSyncAction.ContinueRelaxed => "shield",
             _ => "check"
         };
-        button.Icon = LanConnectChatUiComposition.Icons.Get(iconName, 18, TextStrongColor);
+        button.Icon = LanConnectChatUiComposition.Icons.Get(
+            iconName,
+            18,
+            primary ? LanConnectModSyncPalette.PrimaryIcon : TextStrongColor);
         button.AddThemeConstantOverride("icon_max_width", 18);
         button.ExpandIcon = false;
     }

@@ -133,6 +133,61 @@ public sealed class LanConnectModSyncDialogTests
         }
     }
 
+    /// <summary>
+    /// The preflight dialog is a lobby surface: it must follow the lobby theme instead of always
+    /// rendering the arcade palette. Renders one PNG per theme for human review and asserts the
+    /// panel colour actually changes with the theme.
+    /// </summary>
+    [TestCase]
+    public async Task Dialog_follows_the_lobby_theme()
+    {
+        Vector2I size = new(1280, 720);
+        string outputRoot = Path.Combine(Path.GetTempPath(), "sts2-lobby-theme-review");
+        Directory.CreateDirectory(outputRoot);
+        Dictionary<string, Color> panelColors = new();
+        try
+        {
+            foreach (LanConnectLobbyTheme theme in LanConnectLobbyThemes.All)
+            {
+                LanConnectLobbyThemes.SetForTests(theme);
+                using ModSyncDialogFixture fixture = await ModSyncDialogFixture.Create(size, ExtraState(4));
+                // One ticked row so both checkbox glyphs are reviewable.
+                fixture.Dialog.SetRowSelectedForTests("extra-1", true);
+                using Image image = await fixture.CaptureImage();
+                AssertThat(image.SavePng(Path.Combine(outputRoot, $"{theme.Id}-modsync.png"))).IsEqual(Error.Ok);
+                Rect2 panel = fixture.Dialog.TestState.PanelRect;
+                panelColors[theme.Id] = image.GetPixel((int)panel.Position.X + 12, (int)panel.Position.Y + 12);
+            }
+        }
+        finally
+        {
+            LanConnectLobbyThemes.SetForTests(LanConnectLobbyThemes.Default);
+        }
+
+        Color arcade = panelColors[LanConnectLobbyThemes.ArcadeRetroId];
+        Color glass = panelColors[LanConnectLobbyThemes.MidnightGlassId];
+        // Arcade is a light cream card; midnight glass must be a dark one.
+        AssertThat(arcade.R + arcade.G + arcade.B).IsGreater(2.4f);
+        AssertThat(glass.R + glass.G + glass.B).IsLess(1.2f);
+    }
+
+    /// <summary>
+    /// When the only remaining action is Cancel, the primary button used to render a second
+    /// "取消" next to the dedicated cancel button.
+    /// </summary>
+    [TestCase]
+    public async Task Cancel_only_state_shows_a_single_cancel_button()
+    {
+        using ModSyncDialogFixture fixture = await ModSyncDialogFixture.Create(
+            new Vector2I(1280, 720),
+            StateFor(LanConnectModSyncViewKind.GameVersionMismatch));
+        LanConnectModSyncDialogTestState state = fixture.Dialog.TestState;
+
+        AssertThat(state.PrimaryAction).IsEqual(LanConnectModSyncAction.Cancel);
+        AssertThat(state.PrimaryButtonVisible).IsFalse();
+        AssertInside(state.CancelButtonRect, state.PanelRect, "cancel");
+    }
+
     private static LanConnectModSyncViewState ExtraState(int count)
     {
         LobbyModPreflightResponse response = new()

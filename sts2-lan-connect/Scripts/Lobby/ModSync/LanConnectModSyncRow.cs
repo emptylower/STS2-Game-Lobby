@@ -1,14 +1,19 @@
+using System;
+using System.Collections.Generic;
 using Godot;
 
 namespace Sts2LanConnect.Scripts;
 
 internal sealed partial class LanConnectModSyncRow : PanelContainer
 {
-    private static readonly Color CardColor = new(0.99f, 0.97f, 0.93f, 1f);
-    private static readonly Color SurfaceMutedColor = new(0.89f, 0.87f, 0.81f, 1f);
-    private static readonly Color BorderColor = new(0.28f, 0.16f, 0.08f, 1f);
-    private static readonly Color TextStrongColor = new(0.21f, 0.10f, 0.04f, 1f);
-    private static readonly Color TextMutedColor = new(0.42f, 0.34f, 0.25f, 1f);
+    // Colours follow the lobby theme. The default arcade theme keeps this dialog's original
+    // "printed manifest" palette (darker brown rules than the lobby chrome) so existing installs
+    // look exactly as before; every other theme maps onto its palette.
+    private static Color CardColor => LanConnectModSyncPalette.Card;
+    private static Color SurfaceMutedColor => LanConnectModSyncPalette.SurfaceMuted;
+    private static Color BorderColor => LanConnectModSyncPalette.Border;
+    private static Color TextStrongColor => LanConnectModSyncPalette.TextStrong;
+    private static Color TextMutedColor => LanConnectModSyncPalette.TextMuted;
 
     private readonly LanConnectModSyncRowState _state;
     private CheckBox? _selector;
@@ -56,6 +61,7 @@ internal sealed partial class LanConnectModSyncRow : PanelContainer
                 CustomMinimumSize = new Vector2(42f, 42f),
                 SizeFlagsVertical = SizeFlags.ShrinkCenter
             };
+            LanConnectModSyncPalette.ApplyCheckBoxIcons(_selector);
             _selector.Toggled += selected => SelectionChanged?.Invoke(this, selected);
             layout.AddChild(_selector);
         }
@@ -180,21 +186,161 @@ internal sealed partial class LanConnectModSyncRow : PanelContainer
         int padding,
         int shadowSize = 0)
     {
+        LanConnectLobbyShape shape = LanConnectLobbyThemes.Current.Shape;
+        bool pixel = shape.PressDepth;
+        int width = pixel
+            ? borderWidth
+            : borderWidth >= 3 ? Math.Max(1, shape.PanelBorderWidth) : borderWidth > 0 ? Math.Max(1, shape.ControlBorderWidth) : 0;
+        int radius = shape.CornerRadius;
         StyleBoxFlat style = new()
         {
             BgColor = background,
             BorderColor = border,
-            BorderWidthLeft = borderWidth,
-            BorderWidthTop = borderWidth,
-            BorderWidthRight = borderWidth,
-            BorderWidthBottom = borderWidth,
-            ContentMarginLeft = padding,
-            ContentMarginTop = padding,
-            ContentMarginRight = padding,
-            ContentMarginBottom = padding,
-            ShadowColor = new Color(0.12f, 0.06f, 0.02f, 0.24f),
-            ShadowSize = shadowSize
+            BorderWidthLeft = width,
+            BorderWidthTop = width,
+            BorderWidthRight = width,
+            BorderWidthBottom = width,
+            CornerRadiusTopLeft = radius,
+            CornerRadiusTopRight = radius,
+            CornerRadiusBottomLeft = radius,
+            CornerRadiusBottomRight = radius,
+            AntiAliasing = radius > 0,
+            // Keep the content box identical across themes: a thinner border gets its pixels back as padding.
+            ContentMarginLeft = padding + (borderWidth - width),
+            ContentMarginTop = padding + (borderWidth - width),
+            ContentMarginRight = padding + (borderWidth - width),
+            ContentMarginBottom = padding + (borderWidth - width)
         };
+        switch (shape.Shadow)
+        {
+            case LanConnectLobbyShadowStyle.HardOffset:
+                style.ShadowColor = new Color(0.12f, 0.06f, 0.02f, 0.24f);
+                style.ShadowSize = shadowSize;
+                break;
+            case LanConnectLobbyShadowStyle.SoftGlow:
+                style.ShadowColor = LanConnectLobbyThemes.Current.Palette.Glow;
+                style.ShadowSize = shadowSize >= 5 ? shape.PanelShadowSize : shadowSize > 0 ? shape.ControlShadowSize : 0;
+                break;
+            default:
+                style.ShadowSize = 0;
+                break;
+        }
+
         return style;
     }
+}
+
+/// <summary>
+/// Palette shared by the MOD preflight dialog and its rows. Arcade keeps the dialog's original
+/// colours; other lobby themes map onto their palette, with an opaque panel so a modal full of
+/// small text stays readable over translucent glass.
+/// </summary>
+internal static class LanConnectModSyncPalette
+{
+    private static LanConnectLobbyTheme Theme => LanConnectLobbyThemes.Current;
+    private static LanConnectLobbyPalette P => Theme.Palette;
+    private static bool Legacy => ReferenceEquals(Theme, LanConnectLobbyThemes.ArcadeRetro);
+
+    private static Color Opaque(Color color, Color over)
+    {
+        float a = color.A;
+        return new Color(color.R * a + over.R * (1f - a), color.G * a + over.G * (1f - a), color.B * a + over.B * (1f - a), 1f);
+    }
+
+    public static Color Page => Legacy ? new Color(0.94f, 0.92f, 0.87f, 1f) : Opaque(P.SurfaceMuted, P.Backdrop);
+    public static Color Card => Legacy ? new Color(0.99f, 0.97f, 0.93f, 1f) : Opaque(P.Surface, P.Backdrop);
+    public static Color SurfaceMuted => Legacy ? new Color(0.89f, 0.87f, 0.81f, 1f) : Opaque(P.Secondary, P.Backdrop);
+    public static Color Border => Legacy ? new Color(0.28f, 0.16f, 0.08f, 1f) : P.Border;
+    public static Color TextStrong => Legacy ? new Color(0.21f, 0.10f, 0.04f, 1f) : P.TextStrong;
+    public static Color TextMuted => Legacy ? new Color(0.42f, 0.34f, 0.25f, 1f) : P.TextMuted;
+    public static Color Accent => Legacy ? new Color(0.67f, 0.24f, 0.12f, 1f) : P.Accent;
+    public static Color AccentHover => Legacy ? new Color(0.16f, 0.42f, 0.23f, 1f) : P.AccentBright;
+    public static Color Success => Legacy ? new Color(0.16f, 0.42f, 0.23f, 1f) : P.Success;
+    public static Color PrimaryFg => Legacy ? new Color(0.99f, 0.97f, 0.93f, 1f) : P.PrimaryFg;
+    /// <summary>Icon on the accent-filled primary button (arcade kept its original dark glyph).</summary>
+    public static Color PrimaryIcon => Legacy ? new Color(0.21f, 0.10f, 0.04f, 1f) : P.PrimaryFg;
+    /// <summary>
+    /// Godot's stock checkbox glyphs are dark grey and vanish on dark themes. Non-arcade themes get
+    /// palette-coloured glyphs: a bright hollow box, and an accent-filled box with a tick.
+    /// </summary>
+    public static void ApplyCheckBoxIcons(CheckBox box)
+    {
+        if (Legacy)
+        {
+            return;
+        }
+
+        ImageTexture off = CheckGlyph(false);
+        ImageTexture on = CheckGlyph(true);
+        foreach (string name in new[] { "unchecked", "unchecked_disabled" })
+        {
+            box.AddThemeIconOverride(name, off);
+        }
+
+        foreach (string name in new[] { "checked", "checked_disabled" })
+        {
+            box.AddThemeIconOverride(name, on);
+        }
+    }
+
+    private static readonly Dictionary<string, ImageTexture> CheckGlyphCache = new();
+
+    private static ImageTexture CheckGlyph(bool isChecked)
+    {
+        string key = $"{Theme.Id}:{isChecked}";
+        if (CheckGlyphCache.TryGetValue(key, out ImageTexture? cached))
+        {
+            return cached;
+        }
+
+        const int size = 20;
+        const int radius = 4;
+        Color rim = isChecked ? P.Accent : new Color(P.TextMuted, 0.9f);
+        Color fill = isChecked ? P.Accent : new Color(P.TextMuted, 0.10f);
+        Image image = Image.CreateEmpty(size, size, false, Image.Format.Rgba8);
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                // distance outside the rounded square, in px
+                float dx = Math.Max(Math.Max(radius - x, x - (size - 1 - radius)), 0);
+                float dy = Math.Max(Math.Max(radius - y, y - (size - 1 - radius)), 0);
+                float corner = MathF.Sqrt(dx * dx + dy * dy);
+                if (corner > radius + 0.5f)
+                {
+                    continue;
+                }
+
+                int edge = Math.Min(Math.Min(x, size - 1 - x), Math.Min(y, size - 1 - y));
+                bool onRim = edge < 2 || corner > radius - 1.5f;
+                image.SetPixel(x, y, onRim ? rim : fill);
+            }
+        }
+
+        if (isChecked)
+        {
+            // tick: (5,10) → (8,13) → (14,6), 2px thick
+            (int X, int Y)[] points = [(5, 10), (8, 13), (14, 6)];
+            for (int i = 0; i < points.Length - 1; i++)
+            {
+                (int x0, int y0) = points[i];
+                (int x1, int y1) = points[i + 1];
+                int steps = Math.Max(Math.Abs(x1 - x0), Math.Abs(y1 - y0)) * 2;
+                for (int step = 0; step <= steps; step++)
+                {
+                    float t = step / (float)steps;
+                    int px = (int)MathF.Round(x0 + (x1 - x0) * t);
+                    int py = (int)MathF.Round(y0 + (y1 - y0) * t);
+                    image.SetPixel(px, py, P.PrimaryFg);
+                    image.SetPixel(px, Math.Min(size - 1, py + 1), P.PrimaryFg);
+                }
+            }
+        }
+
+        ImageTexture texture = ImageTexture.CreateFromImage(image);
+        CheckGlyphCache[key] = texture;
+        return texture;
+    }
+
+    public static Color Veil => Legacy ? new Color(0f, 0f, 0f, 0.48f) : P.ModalVeil;
 }
