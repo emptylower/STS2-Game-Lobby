@@ -4,7 +4,9 @@
 
 ## [Unreleased]
 
-计划作为 `0.6.3-alpha.1` 发布，内容仍在累积；版本号保持 `0.6.2`，待 Alpha 1 内容齐备后统一切换。
+## [0.6.3-alpha.1] - 2026-09-19
+
+`0.6.3-alpha.1` 预发布（仅 GitHub pre-release，不更新 Steam 创意工坊；当前正式版仍为 `0.6.2`）：客户端与 lobby-service 版本号同步为 `0.6.3-alpha.1`。修复均在客户端，lobby-service 仅版本号变化，不改 wire 协议，tail 房间 `minimumClientVersion` 保持 `0.6.2-alpha.1`。
 
 ### Fixed
 
