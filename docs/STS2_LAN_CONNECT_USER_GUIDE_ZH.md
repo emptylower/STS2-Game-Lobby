@@ -60,7 +60,7 @@
 - 修复 RitsuLib 先于本 MOD 初始化时大厅不出现（`InvalidProgramException` 中断初始化）的问题；旧版「关 RitsuLib 再开」的绕过办法不再需要，任意加载顺序下大厅都会正常出现。
 - Tail 补丁全平台默认使用 15 项 `non_generic_v2` 非泛型计划；`desktop_generic_v1` 保留为紧急回滚分支（桌面环境变量 `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`）。
 - 协议补丁失败时大厅仍然可见可浏览，但建房 / 加入会被拒绝，并通过游戏原生弹窗说明原因与恢复步骤。
-- 启动日志自查：`beginRunMessageBusBoundary=skipped_non_generic_plan` 或 `skipped_foreign_owner` 均为正常值。
+- 启动日志自查：`beginRunMessageBusBoundary=patched`（桌面端，0.6.3-alpha.2 起）、`skipped_android`（安卓）或 `skipped_foreign_owner` 均为正常值；0.6.1～0.6.3-alpha.1 显示 `skipped_non_generic_plan`。
 
 **双协议房间**
 
@@ -414,7 +414,7 @@ The current stable release is `0.6.2`, with the client and lobby-service version
 - Fixes the race where RitsuLib initializing first made our protocol patches throw `InvalidProgramException` so the lobby UI was never installed. The old workaround (toggle RitsuLib off, launch once, re-enable) is no longer needed; the lobby appears under any mod load order.
 - The Tail patch plan defaults to the 15-step, non-generic `non_generic_v2` plan on every platform; `desktop_generic_v1` remains available as an emergency rollback branch (desktop environment variable `STS2_LAN_CONNECT_TAIL_PLAN=desktop_generic_v1`).
 - When protocol patches fail, the lobby stays visible and browsable, but hosting/joining is refused and a native in-game popup explains the cause and the recovery steps.
-- Startup log self-check: `beginRunMessageBusBoundary=skipped_non_generic_plan` or `skipped_foreign_owner` are both expected values.
+- Startup log self-check: `beginRunMessageBusBoundary=patched` (desktop, since 0.6.3-alpha.2), `skipped_android` (Android) or `skipped_foreign_owner` are expected values; 0.6.1 through 0.6.3-alpha.1 print `skipped_non_generic_plan`.
 
 **Dual-protocol rooms**
 

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 修复 `0.6.1` 起桌面端（Windows/macOS）作房主、协议选「兼容旧版 Mod」（compat_4_5_v1）时开局后客机解码乱码、房主永久等待的回归：`native_bus_v1` 桌面 seam 把 `NetMessageBus.SerializeMessage<T>` 闭合实例化替换为全优化 DynamicMethod，RyuJIT 会把 `LobbyBeginRunMessage.Serialize` 等小结构体方法按原始 IL 内联进去，绕过挂在具体方法上的 compat 位宽 transpiler，导致房主按原版位宽（3 bit 玩家列表 / 2 bit slotId）写 begin-run，而客机按 compat 位宽（5 bit / 4 bit）读取。现桌面端在 compat 活动时于消息总线边界重新挂回强制 prefix（0.6.0 的既有机制），由 prefix 显式按 `GetActiveLobbyListBitWidth()` 写出 begin-run 与 join-response（后者同为 seam 目标且携带 `playersInLobby`，一并处理），线上字节不再依赖 JIT 内联决策；tail_v1 与无活动 profile 时 prefix 直接放行走原路径（字节逐位不变），Android 路径不受影响（gshared 不挂闭合泛型，状态如实记为 `skipped_android`），补丁失败时明确 Warn 且 `beginRunMessageBusBoundary=` / `joinResponseMessageBusBoundary=` 诊断字段如实反映 applied / failed / skipped 状态。compat 强制路径命中时日志保留 `lobby begin-run forced at message-bus boundary players=…, lobbyListBits=…, bodyBytes=…`（join-response 同构一行）供实机核对。
+
 ## [0.6.3-alpha.1] - 2026-09-19
 
 `0.6.3-alpha.1` 预发布（仅 GitHub pre-release，不更新 Steam 创意工坊；当前正式版仍为 `0.6.2`）：客户端与 lobby-service 版本号同步为 `0.6.3-alpha.1`。修复均在客户端，lobby-service 仅版本号变化，不改 wire 协议，tail 房间 `minimumClientVersion` 保持 `0.6.2-alpha.1`。

@@ -54,7 +54,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         {
             LanConnectSerializationPatches.Apply();
             AssertThat(LanConnectSerializationPatches.BeginRunBoundaryStateForTesting)
-                .IsEqual("skipped_non_generic_plan");
+                .IsEqual("patched");
             LanConnectTailMessagePatches.Apply(harmony);
             AssertAllGoldenVectors(pair, fixtureRoot);
         }

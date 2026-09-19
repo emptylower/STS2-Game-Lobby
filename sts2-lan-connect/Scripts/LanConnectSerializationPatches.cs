@@ -24,7 +24,8 @@ internal static class LanConnectSerializationPatches
     private static bool _applied;
     private static int _patchedCount;
     private static int _failedCount;
-    private static BeginRunBoundaryState _beginRunBoundaryState;
+    private static MessageBusBoundaryState _beginRunBoundaryState;
+    private static MessageBusBoundaryState _joinResponseBoundaryState;
 
     // Test seam: xUnit hosts cannot enter Godot's GD-based logging (native bootstrap is
     // absent outside the game process), so tests swap these sinks.
@@ -84,18 +85,22 @@ internal static class LanConnectSerializationPatches
 
         _patchedCount = 0;
         _failedCount = 0;
-        _beginRunBoundaryState = BeginRunBoundaryState.NotAttempted;
+        _beginRunBoundaryState = MessageBusBoundaryState.NotAttempted;
+        _joinResponseBoundaryState = MessageBusBoundaryState.NotAttempted;
 
-        // The legacy desktop generic plan (and with it the begin-run SerializeMessage boundary
-        // prefix) was removed with the native_bus_v1 migration: tail hooks always live on the
-        // concrete LobbyBeginRunMessage.Serialize now.
-        bool includeBeginRunMessageBusBoundary = false;
+        // native_bus_v1 桌面 seam 会把 SerializeMessage<T> 闭合实例化替换为全优化
+        // DynamicMethod，RyuJIT 按原始 IL 内联其中的小结构体 T.Serialize，绕过挂在
+        // T.Serialize 上的 compat 位宽 transpiler（0.6.1 起 compat 房主的回归根因）。
+        // 桌面因此在消息总线边界为 begin-run / join-response 重新挂强制 prefix；
+        // Android gshared 无法编译闭合泛型包装，保持跳过（具体 T.Serialize 仍生效）。
+        bool includeCompatMessageBusBoundary = ShouldPatchCompatMessageBusBoundary(
+            OperatingSystem.IsAndroid());
         WirePatchPlan patchPlan;
         try
         {
             patchPlan = ResolveRequiredPatchPlan(
                 typeof(PacketWriter).Assembly,
-                includeBeginRunMessageBusBoundary);
+                includeCompatMessageBusBoundary);
         }
         catch (Exception ex)
         {
@@ -115,35 +120,41 @@ internal static class LanConnectSerializationPatches
 
         if (patchPlan.BeginRunMessageBusSerialize != null)
         {
-            TrySafeBeginRunPrefixPatch(
+            TrySafeBoundaryPrefixPatch(
                 patchPlan.BeginRunMessageBusSerialize,
                 nameof(SerializeBeginRunAtMessageBusPrefix),
-                $"NetMessageBus.SerializeMessage<{patchPlan.BeginRunMessageType.Name}>");
+                $"NetMessageBus.SerializeMessage<{patchPlan.BeginRunMessageType.Name}>",
+                "begin_run_boundary_skipped",
+                ref _beginRunBoundaryState);
         }
         else
         {
-            if (OperatingSystem.IsAndroid())
-            {
-                _beginRunBoundaryState = BeginRunBoundaryState.SkippedAndroid;
-                LogInfoSink(
-                    "sts2_lan_connect serialization: skipped the begin-run message-bus boundary patch " +
-                    "on Android because Harmony cannot compile closed generic wrappers under gshared.");
-            }
-            else
-            {
-                _beginRunBoundaryState = BeginRunBoundaryState.SkippedNonGenericPlan;
-                LogInfoSink(
-                    "sts2_lan_connect serialization: skipped the begin-run message-bus boundary patch " +
-                    "because the non-generic tail plan carries begin-run through the concrete serializer.");
-            }
+            _beginRunBoundaryState = MessageBusBoundaryState.SkippedAndroid;
+            LogInfoSink(
+                "sts2_lan_connect serialization: skipped the begin-run message-bus boundary patch " +
+                "on Android because Harmony cannot compile closed generic wrappers under gshared.");
         }
 
-        // The begin-run message-bus boundary is best-effort, and only attempted with the
-        // legacy desktop generic plan (where the begin-run tail lives on the same generic
-        // method). When it is attempted, it can only fail when a foreign patch (RitsuLib's
-        // generic-declared SerializePatch<TMessage>.Postfix) already holds the closed generic
-        // target, and that situation implies TailV1, where this prefix reproduces vanilla
-        // output bit for bit.
+        if (patchPlan.JoinResponseMessageBusSerialize != null)
+        {
+            TrySafeBoundaryPrefixPatch(
+                patchPlan.JoinResponseMessageBusSerialize,
+                nameof(SerializeJoinResponseAtMessageBusPrefix),
+                $"NetMessageBus.SerializeMessage<{patchPlan.JoinResponseMessageType.Name}>",
+                "join_response_boundary_skipped",
+                ref _joinResponseBoundaryState);
+        }
+        else
+        {
+            _joinResponseBoundaryState = MessageBusBoundaryState.SkippedAndroid;
+            LogInfoSink(
+                "sts2_lan_connect serialization: skipped the join-response message-bus boundary patch " +
+                "on Android because Harmony cannot compile closed generic wrappers under gshared.");
+        }
+
+        // 两个消息总线边界均为 best-effort：失败只 Warn 并如实上报诊断字段，不并入必需
+        // 补丁数。失败仅发生在外部补丁（如 RitsuLib 的泛型声明 SerializePatch<T>）先占用
+        // 同一闭合实例化时；compat 本就不支持与 RitsuLib 共存，故无需升级为硬失败。
         int requiredWirePatchCount = patchPlan.Targets.Count;
         if (_patchedCount != requiredWirePatchCount || _failedCount != 0)
         {
@@ -164,8 +175,11 @@ internal static class LanConnectSerializationPatches
             $"sts2_lan_connect serialization: patches applied={_patchedCount}, failed={_failedCount}. " +
             $"runtimePlayerType={patchPlan.SlotIdCarrierType.FullName}, " +
             $"activeProfile={LanConnectProtocolProfiles.GetActiveProfile()}, slotId=dynamic, lobbyList=dynamic, " +
-            $"beginRunMessageBusBoundary={FormatBeginRunBoundaryState(_beginRunBoundaryState)}");
+            $"beginRunMessageBusBoundary={FormatMessageBusBoundaryState(_beginRunBoundaryState)}, " +
+            $"joinResponseMessageBusBoundary={FormatMessageBusBoundaryState(_joinResponseBoundaryState)}");
     }
+
+    internal static bool ShouldPatchCompatMessageBusBoundary(bool isAndroid) => !isAndroid;
 
     private static void TrySafePatch(WirePatchTarget target)
     {
@@ -182,67 +196,80 @@ internal static class LanConnectSerializationPatches
         }
     }
 
-    private static void TrySafeBeginRunPrefixPatch(MethodInfo method, string prefixName, string label)
+    private static void TrySafeBoundaryPrefixPatch(
+        MethodInfo method,
+        string prefixName,
+        string label,
+        string diagnosticEventName,
+        ref MessageBusBoundaryState state)
     {
         try
         {
             HarmonyInstance.Patch(method, prefix: new HarmonyMethod(
                 typeof(LanConnectSerializationPatches), prefixName));
-            _beginRunBoundaryState = BeginRunBoundaryState.Patched;
+            state = MessageBusBoundaryState.Patched;
         }
         catch (Exception ex)
         {
             string[] externalOwners = LanConnectProtocolPatchDispatcher.GetExternalPatchOwners(method);
-            _beginRunBoundaryState = externalOwners.Length > 0
-                ? BeginRunBoundaryState.SkippedForeignOwner
-                : BeginRunBoundaryState.Failed;
+            state = externalOwners.Length > 0
+                ? MessageBusBoundaryState.SkippedForeignOwner
+                : MessageBusBoundaryState.Failed;
             LanConnectDiagnosticException description = LanConnectDiagnosticRedactor.DescribeException(ex);
             LogWarnSink(
-                "sts2_lan_connect patch_diag: event=begin_run_boundary_skipped " +
-                $"target={label} state={FormatBeginRunBoundaryState(_beginRunBoundaryState)} " +
+                $"sts2_lan_connect patch_diag: event={diagnosticEventName} " +
+                $"target={label} state={FormatMessageBusBoundaryState(state)} " +
                 $"exception={description.Type} hresult=0x{description.HResult:X8} " +
                 $"fingerprint={description.Fingerprint} " +
                 $"external_owners={(externalOwners.Length > 0 ? string.Join(",", externalOwners) : "none")}");
         }
     }
 
-    private enum BeginRunBoundaryState
+    private enum MessageBusBoundaryState
     {
         NotAttempted,
         Patched,
         SkippedAndroid,
-        SkippedNonGenericPlan,
         SkippedForeignOwner,
         Failed
     }
 
-    private static string FormatBeginRunBoundaryState(BeginRunBoundaryState state) => state switch
+    private static string FormatMessageBusBoundaryState(MessageBusBoundaryState state) => state switch
     {
-        BeginRunBoundaryState.Patched => "patched",
-        BeginRunBoundaryState.SkippedAndroid => "skipped_android",
-        BeginRunBoundaryState.SkippedNonGenericPlan => "skipped_non_generic_plan",
-        BeginRunBoundaryState.SkippedForeignOwner => "skipped_foreign_owner",
-        BeginRunBoundaryState.Failed => "failed",
+        MessageBusBoundaryState.Patched => "patched",
+        MessageBusBoundaryState.SkippedAndroid => "skipped_android",
+        MessageBusBoundaryState.SkippedForeignOwner => "skipped_foreign_owner",
+        MessageBusBoundaryState.Failed => "failed",
         _ => "not_attempted"
     };
 
     internal static string BeginRunBoundaryStateForTesting =>
-        FormatBeginRunBoundaryState(_beginRunBoundaryState);
+        FormatMessageBusBoundaryState(_beginRunBoundaryState);
+
+    internal static string JoinResponseBoundaryStateForTesting =>
+        FormatMessageBusBoundaryState(_joinResponseBoundaryState);
 
     private static WirePatchPlan ResolveRequiredPatchPlan(
         Assembly sts2Assembly,
-        bool includeBeginRunMessageBusBoundary)
+        bool includeCompatMessageBusBoundary)
     {
         Type joinResponseType = RequireType(sts2Assembly, ClientLobbyJoinResponseTypeName);
         Type beginRunType = RequireType(sts2Assembly, LobbyBeginRunTypeName);
         Type slotIdCarrierType = ResolveSlotIdCarrierType(joinResponseType, beginRunType);
         string slotIdCarrierName = slotIdCarrierType.FullName ?? slotIdCarrierType.Name;
         ValidateBeginRunWireSchema(beginRunType);
+        ValidateJoinResponseWireSchema(joinResponseType);
         _ = NetMessageBusWriter
             ?? throw new MissingFieldException(typeof(NetMessageBus).FullName, "_writer");
-        // begin-run 边界 prefix 只服务于已删除的桌面泛型计划；native_bus_v1 恒为 null。
-        _ = includeBeginRunMessageBusBoundary;
-        MethodInfo? beginRunMessageBusSerialize = null;
+        // 桌面 seam 替换体会按原始 IL 内联 T.Serialize（见 Apply 注释）：两个携带
+        // playersInLobby（compat 列表位宽）的消息必须由边界 prefix 显式产出字节；
+        // Android gshared 下保持 null，具体 T.Serialize 上的 transpiler 仍然生效。
+        MethodInfo? beginRunMessageBusSerialize = includeCompatMessageBusBoundary
+            ? ResolveGenericSerializeMessageMethod(typeof(NetMessageBus), beginRunType)
+            : null;
+        MethodInfo? joinResponseMessageBusSerialize = includeCompatMessageBusBoundary
+            ? ResolveGenericSerializeMessageMethod(typeof(NetMessageBus), joinResponseType)
+            : null;
 
         WirePatchTarget[] targets =
         {
@@ -276,7 +303,35 @@ internal static class LanConnectSerializationPatches
             slotIdCarrierType,
             beginRunType,
             beginRunMessageBusSerialize,
+            joinResponseType,
+            joinResponseMessageBusSerialize,
             targets);
+    }
+
+    internal static MethodInfo ResolveGenericSerializeMessageMethod(Type messageBusType, Type messageType)
+    {
+        MethodInfo[] matches = messageBusType
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Where(static method => method.Name == nameof(NetMessageBus.SerializeMessage))
+            .Where(static method => method.IsGenericMethodDefinition)
+            .Where(static method => method.ReturnType == typeof(byte[]))
+            .Where(static method =>
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                return parameters.Length == 3
+                    && parameters[0].ParameterType == typeof(ulong)
+                    && parameters[1].ParameterType.IsGenericParameter
+                    && parameters[2].ParameterType == typeof(int).MakeByRefType();
+            })
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            throw new MissingMethodException(
+                messageBusType.FullName,
+                $"SerializeMessage<T>(UInt64, T, out Int32) unique overload; found={matches.Length}");
+        }
+
+        return matches[0].MakeGenericMethod(messageType);
     }
 
     private static void ValidateBeginRunWireSchema(Type beginRunType)
@@ -285,6 +340,16 @@ internal static class LanConnectSerializationPatches
         RequireField(beginRunType, "seed", static type => type == typeof(string));
         RequireField(beginRunType, "modifiers", static type => IsList(type));
         RequireField(beginRunType, "act1", static type => type == typeof(string));
+    }
+
+    private static void ValidateJoinResponseWireSchema(Type joinResponseType)
+    {
+        RequireField(joinResponseType, PlayersInLobbyFieldName, static type => IsList(type));
+        RequireField(joinResponseType, "dailyTime", static type => type.IsGenericType
+            && type.GetGenericTypeDefinition() == typeof(Nullable<>));
+        RequireField(joinResponseType, "seed", static type => type == typeof(string));
+        RequireField(joinResponseType, "ascension", static type => type == typeof(int));
+        RequireField(joinResponseType, "modifiers", static type => IsList(type));
     }
 
     private static void RequireField(Type declaringType, string fieldName, Func<Type, bool> isExpectedType)
@@ -376,7 +441,8 @@ internal static class LanConnectSerializationPatches
         _applied = false;
         _patchedCount = 0;
         _failedCount = 0;
-        _beginRunBoundaryState = BeginRunBoundaryState.NotAttempted;
+        _beginRunBoundaryState = MessageBusBoundaryState.NotAttempted;
+        _joinResponseBoundaryState = MessageBusBoundaryState.NotAttempted;
     }
 
     internal static bool IsAppliedForTesting => _applied;
@@ -384,6 +450,11 @@ internal static class LanConnectSerializationPatches
     internal static void SetAppliedForTesting(bool applied) => _applied = applied;
 
     // ReSharper disable UnusedMember.Local — invoked by Harmony via reflection
+
+    // 两个边界 prefix 与同一方法上的 tail seam 补丁共存：tail prefix（Priority.First+100）
+    // 先运行，compat 下其 __state 恒为 null（PrepareConcreteMessage 对非 tail_v1 profile
+    // 直接原样返回），故此处跳过原方法体后 tail 的 postfix 不会补发扩展帧，也不会留下
+    // pending 状态；tail_v1 下本 prefix 直接放行，完全走原路径。
 
     [HarmonyPriority(Priority.First)]
     private static bool SerializeBeginRunAtMessageBusPrefix(
@@ -393,23 +464,81 @@ internal static class LanConnectSerializationPatches
         ref int length,
         ref byte[] __result)
     {
-        FieldInfo writerField = NetMessageBusWriter
-            ?? throw new MissingFieldException(typeof(NetMessageBus).FullName, "_writer");
-        PacketWriter writer = writerField.GetValue(__instance) as PacketWriter
-            ?? throw new InvalidOperationException("NetMessageBus._writer is unavailable.");
+        if (!LanConnectCompatWirePatches.ShouldForceCompatWireAtMessageBusBoundary())
+        {
+            return true;
+        }
 
-        writer.Reset();
-        writer.WriteByte(checked((byte)message.ToId()));
-        writer.WriteULong(senderId);
+        PacketWriter writer = RequireBusWriter(__instance);
         int listBitWidth = LanConnectProtocolProfiles.GetActiveLobbyListBitWidth();
-        SerializeBeginRunBody(writer, message, listBitWidth);
-        length = checked((int)(((long)writer.BitPosition + ByteBits - 1) / ByteBits));
-        __result = writer.Buffer;
-        Log.Info(
+        WriteCompatHeaderAndMeasure(
+            writer,
+            senderId,
+            message,
+            () => SerializeBeginRunBody(writer, message, listBitWidth),
+            ref length,
+            ref __result);
+        LogInfoSink(
             $"sts2_lan_connect serialization: lobby begin-run forced at message-bus boundary " +
             $"players={message.playersInLobby?.Count ?? 0}, lobbyListBits={listBitWidth}, " +
             $"bodyBytes={length}");
         return false;
+    }
+
+    [HarmonyPriority(Priority.First)]
+    private static bool SerializeJoinResponseAtMessageBusPrefix(
+        NetMessageBus __instance,
+        ulong senderId,
+        ClientLobbyJoinResponseMessage message,
+        ref int length,
+        ref byte[] __result)
+    {
+        if (!LanConnectCompatWirePatches.ShouldForceCompatWireAtMessageBusBoundary())
+        {
+            return true;
+        }
+
+        PacketWriter writer = RequireBusWriter(__instance);
+        int listBitWidth = LanConnectProtocolProfiles.GetActiveLobbyListBitWidth();
+        WriteCompatHeaderAndMeasure(
+            writer,
+            senderId,
+            message,
+            () => SerializeJoinResponseBody(writer, message, listBitWidth),
+            ref length,
+            ref __result);
+        LogInfoSink(
+            $"sts2_lan_connect serialization: lobby join-response forced at message-bus boundary " +
+            $"players={message.playersInLobby?.Count ?? 0}, lobbyListBits={listBitWidth}, " +
+            $"bodyBytes={length}");
+        return false;
+    }
+
+    private static PacketWriter RequireBusWriter(NetMessageBus messageBus)
+    {
+        FieldInfo writerField = NetMessageBusWriter
+            ?? throw new MissingFieldException(typeof(NetMessageBus).FullName, "_writer");
+        return writerField.GetValue(messageBus) as PacketWriter
+            ?? throw new InvalidOperationException("NetMessageBus._writer is unavailable.");
+    }
+
+    // header（ToId() 字节 + senderId）与 length/__result 的产生方式和原版
+    // SerializeMessage<T> 一致：Reset → WriteByte(ToId) → WriteULong(senderId) → body →
+    // length = Ceil(BitPosition / 8)（即原版 BytePosition）、__result = Buffer。
+    private static void WriteCompatHeaderAndMeasure(
+        PacketWriter writer,
+        ulong senderId,
+        INetMessage message,
+        Action writeBody,
+        ref int length,
+        ref byte[] result)
+    {
+        writer.Reset();
+        writer.WriteByte(checked((byte)message.ToId()));
+        writer.WriteULong(senderId);
+        writeBody();
+        length = checked((int)(((long)writer.BitPosition + ByteBits - 1) / ByteBits));
+        result = writer.Buffer;
     }
 
     internal static void SerializeBeginRunBody(
@@ -428,6 +557,39 @@ internal static class LanConnectSerializationPatches
         writer.WriteList(message.modifiers);
         writer.WriteString(message.act1);
     }
+
+    // 镜像原版 ClientLobbyJoinResponseMessage.Serialize：仅 playersInLobby 的列表位宽
+    // 换成 compat 宽度，其余字段（含 ascension 的 5 bit）逐项保持原版写法。
+    internal static void SerializeJoinResponseBody(
+        PacketWriter writer,
+        ClientLobbyJoinResponseMessage message,
+        int lobbyListBitWidth)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        if (message.playersInLobby == null)
+        {
+            throw new InvalidOperationException(
+                "Tried to serialize ClientLobbyJoinResponseMessage with null player list.");
+        }
+
+        writer.WriteList(message.playersInLobby, lobbyListBitWidth);
+        writer.WriteBool(message.dailyTime.HasValue);
+        if (message.dailyTime.HasValue)
+        {
+            writer.Write(message.dailyTime.Value);
+        }
+
+        writer.WriteBool(message.seed != null);
+        if (message.seed != null)
+        {
+            writer.WriteString(message.seed);
+        }
+
+        writer.WriteInt(message.ascension, JoinResponseAscensionBits);
+        writer.WriteList(message.modifiers);
+    }
+
+    private const int JoinResponseAscensionBits = 5;
 
     private static IEnumerable<CodeInstruction> TranspileSlotIdCarrierSerialize(IEnumerable<CodeInstruction> instructions)
         => ReplaceRequiredBitWidth(instructions,
@@ -511,5 +673,7 @@ internal static class LanConnectSerializationPatches
         Type SlotIdCarrierType,
         Type BeginRunMessageType,
         MethodInfo? BeginRunMessageBusSerialize,
+        Type JoinResponseMessageType,
+        MethodInfo? JoinResponseMessageBusSerialize,
         IReadOnlyList<WirePatchTarget> Targets);
 }

@@ -75,17 +75,20 @@ public sealed class LanConnectSerializationPatchesCompatibilityTests
                 && method.GetParameters().Length == 3)
             .MakeGenericMethod(messageType);
 
-    // begin-run 边界 prefix 随桌面泛型计划一并删除：native_bus_v1 下恒不注册该目标。
+    // native_bus_v1 桌面 seam 把 SerializeMessage<T> 闭合实例化替换为全优化 DynamicMethod，
+    // 其内联原始 IL 会绕过 T.Serialize 上的 compat transpiler：begin-run / join-response
+    // 边界 prefix 必须在桌面重新注册（Android gshared 保持跳过）。
     [Fact]
-    public void Begin_run_message_bus_boundary_is_never_patched_under_native_bus()
+    public void Begin_run_message_bus_boundary_is_resolved_on_desktop_under_native_bus()
     {
         string source = File.ReadAllText(Path.Combine(
             FindRepositoryRoot(),
             "sts2-lan-connect",
             "Scripts",
             "LanConnectSerializationPatches.cs"));
-        Assert.DoesNotContain("beginRunMessageBusSerialize = Resolve", source, StringComparison.Ordinal);
-        Assert.Contains("native_bus_v1 恒为 null", source, StringComparison.Ordinal);
+        Assert.Contains("ResolveGenericSerializeMessageMethod(typeof(NetMessageBus), beginRunType)", source, StringComparison.Ordinal);
+        Assert.Contains("ResolveGenericSerializeMessageMethod(typeof(NetMessageBus), joinResponseType)", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("native_bus_v1 恒为 null", source, StringComparison.Ordinal);
     }
 
     [Fact]
