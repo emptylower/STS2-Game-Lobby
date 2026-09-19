@@ -48,11 +48,11 @@ public sealed class LanConnectPackageContentTests
 
         using JsonDocument manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
-        Assert.Equal("0.6.2-alpha.2", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("0.6.2", manifest.RootElement.GetProperty("version").GetString());
         FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
             Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
         Assert.Equal("0.6.2.0", assemblyVersion.FileVersion);
-        Assert.StartsWith("0.6.2-alpha.2", assemblyVersion.ProductVersion, StringComparison.Ordinal);
+        Assert.StartsWith("0.6.2", assemblyVersion.ProductVersion, StringComparison.Ordinal);
 
         foreach (string packagePath in ExpectedFiles)
         {
@@ -102,7 +102,7 @@ public sealed class LanConnectPackageContentTests
             Assert.Contains("0.5.3", text, StringComparison.Ordinal);
             Assert.Contains("续局", text, StringComparison.Ordinal);
         }
-        Assert.Contains("当前客户端：0.6.1；lobby-service：0.6.1", workshop, StringComparison.Ordinal);
+        Assert.Contains("当前客户端：0.6.2；lobby-service：0.6.2", workshop, StringComparison.Ordinal);
         Assert.Contains("STS2LANRESUME:", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("HostChannel", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("Android", releaseNotes, StringComparison.Ordinal);
@@ -336,10 +336,10 @@ public sealed class LanConnectPackageContentTests
             Assert.Contains("1093309523", text, StringComparison.Ordinal);
         }
 
-        // The shipped client is a stable release, not a candidate.
-        Assert.Contains("| 客户端版本 | `0.6.1`（正式版） |", clientReadme, StringComparison.Ordinal);
-        Assert.Contains("| Client version | `0.6.1` (stable) |", clientReadme, StringComparison.Ordinal);
-        Assert.Contains("当前正式版为 `0.6.1`", userGuide, StringComparison.Ordinal);
+        // The client install readme's version table and the user guide's "current stable" line are
+        // living documents that follow the newest release; their 0.6.2 text is asserted by
+        // Client_v062_documents_stable_release. Only the 0.6.1 history section is pinned here.
+        Assert.Contains("## v0.6.1 正式版", userGuide, StringComparison.Ordinal);
         Assert.DoesNotContain("Pre-release", clientReadme, StringComparison.Ordinal);
         Assert.DoesNotContain("Pre-release", userGuide, StringComparison.Ordinal);
 
@@ -348,6 +348,66 @@ public sealed class LanConnectPackageContentTests
         Assert.Contains("sts2_lobby_service.zip", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("Steam 创意工坊", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("## [0.6.1] - ", changelog, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Client_v062_documents_stable_release()
+    {
+        using Fixture fixture = new();
+        string releaseNotes = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "RELEASE_NOTES_V0.6.2_ZH.md"));
+        string changelog = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "CHANGELOG.md"));
+        string readme = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "README.md"));
+        string clientReadme = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "CLIENT_RELEASE_README_ZH.md"));
+        string announcement = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "UPDATE_ANNOUNCEMENT_V0.6.2_ZH.txt"));
+        string workshopUpdate = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "STEAM_WORKSHOP_UPDATE_V0.6.2_ZH.txt"));
+        string workshopDescription = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "STEAM_WORKSHOP_DESCRIPTION_ZH.txt"));
+
+        foreach (string text in new[] { releaseNotes, changelog, readme, clientReadme, announcement, workshopUpdate })
+        {
+            Assert.Contains("0.6.2", text, StringComparison.Ordinal);
+        }
+
+        // The two feedback groups must survive into every packaged player-facing document.
+        foreach (string text in new[] { releaseNotes, readme, clientReadme, announcement, workshopUpdate, workshopDescription })
+        {
+            Assert.Contains("341498145", text, StringComparison.Ordinal);
+            Assert.Contains("1093309523", text, StringComparison.Ordinal);
+        }
+
+        // The shipped client is a stable release, not a candidate.
+        Assert.Contains("| 客户端版本 | `0.6.2`（正式版） |", clientReadme, StringComparison.Ordinal);
+        Assert.Contains("| Client version | `0.6.2` (stable) |", clientReadme, StringComparison.Ordinal);
+        Assert.Contains("当前正式版为 **v0.6.2**", readme, StringComparison.Ordinal);
+        string userGuide = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot,
+            "docs",
+            "STS2_LAN_CONNECT_USER_GUIDE_ZH.md"));
+        Assert.Contains("当前正式版为 `0.6.2`", userGuide, StringComparison.Ordinal);
+        Assert.Contains("## v0.6.2 正式版", userGuide, StringComparison.Ordinal);
+        Assert.DoesNotContain("Pre-release", clientReadme, StringComparison.Ordinal);
+
+        Assert.Contains("正式版", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("按对端寻址", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("服务端版本过旧", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("sts2_lobby_service.zip", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("Steam 创意工坊", releaseNotes, StringComparison.Ordinal);
+        Assert.DoesNotContain("pre-release", announcement, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("## [0.6.2] - ", changelog, StringComparison.Ordinal);
     }
 
     [Fact]

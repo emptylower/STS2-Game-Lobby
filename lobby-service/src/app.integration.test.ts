@@ -410,7 +410,7 @@ const CURRENT_PROBE_CAPABILITIES = {
   modSyncProtocolVersion: 1,
   modSyncEnabled: true,
   modSyncMinimumClientVersion: "0.5.1",
-  serviceVersion: "0.6.2-alpha.2",
+  serviceVersion: "0.6.2",
   wireCacheSignatureV1Enforced: true,
   dualProtocolApiVersion: 1,
   supportedProtocolProfiles: ["compat_4_5_v1", "tail_v1"],

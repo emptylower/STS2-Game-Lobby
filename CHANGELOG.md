@@ -4,6 +4,45 @@
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-19
+
+`0.6.2` 正式版：客户端与 lobby-service 同步定为 `0.6.2`，收敛 `0.6.2-alpha.1`、`0.6.2-alpha.2` 两个测试候选，以及其后的续局恢复修复、公共节点发现修复与大厅主题系统。发布说明见 `docs/RELEASE_NOTES_V0.6.2_ZH.md`。本版通过 GitHub Release（非 pre-release，已开启自动更新的 lobby-service 节点会自动升级到 `0.6.2`）与 Steam 创意工坊「游戏大厅」条目同步分发。相对 `0.6.1` 的核心变化是 `native_bus_v1` 的 `typeId` 改为**按对端寻址**，从架构上消除「两端消息注册表必须完全相同」这条隐含要求，跨端（PC ↔ 安卓）与「一端多装一个第三方 MOD」不再阻断加入；此外重做了选服列表排序、修复了续局恢复与公共节点发现，并新增大厅主题系统。
+
+### Added
+
+- 协议链路新增 `nativeBusTypeId`（0-255，整数）：建房 offer / join 请求 / join 响应（`hostNativeBusTypeId`）/ 控制通道 envelope（`peerNativeBusTypeId`）四段透传，轨道与 `protocolFlowNonce` 完全一致；`peerNativeBusTypeId` / `nativeBusTypeId` 列入控制通道中继保留字段，客户端不可伪造。
+- 客户端 `NativeFlow` 记录每对端的 `PeerNativeBusTypeId`，发送时按对端寻址；取不到有效对端 ID 一律结构化失败 `lan_type_id_mismatch`，绝不静默回退本机 ID。
+- 服务端公开接口新增版本号字段：`/probe` 的 `capabilities.serviceVersion` 与 `/peers/metrics` 的 `serviceVersion`（值为 lobby-service 版本，读不到输出 `unknown`）；未升级的旧服务端靠 `/probe` 能力字段推断版本档（`0.6.x（推断）` / `0.5.x（推断）` / `0.4.x 或更早（推断）`），metrics 报告的合法版本永远优先于推断。
+- 选服行新增「服务端版本过旧」红色徽章与 tooltip 说明：版本档低于 0.6 的服务器明确标注「该服务器的 lobby-service 低于 0.6.0，当前客户端无法在此创建或加入房间。」（不禁止点击。）选服列表另新增结构化日志（`refresh:` / `render:` / `order:` / `closed:`，带窗口与轮次标识）供 E2E 自动核对。
+- **大厅主题系统**：设置齿轮旁新增调色盘按钮，可在「街机复古」（默认，即原有像素风）、「午夜玻璃」（深色圆角毛玻璃面板，带亮边、内折射带与外发光环，夜空背景）与「SaaS 简洁」（浅色扁平，房间标签按语义配色）三套主题间切换，选择持久化为 `LobbyThemeId`。主题覆盖大厅总览、公告轮播、选服窗口、选择对话框、房间管理面板与大厅风格聊天；局内 HUD 有意保持原样。
+- 启动自检得出终局裁决后补打一次 `native_bus: ready local_type_id=… registry_fingerprint=…` 诊断行（同一裁决只打印一次），修复该行此前从不出现的问题。
+
+### Changed
+
+- **发送语义**：`typeId` 是接收方本地消息表的下标而非全局身份——发送端线头字节与帧内 `localTypeId` 改写**对端声明的 id**；外层帧版本 `ver` 由 `1` 升为 `2`（`ver != 2` ⇒ `lan_native_frame_invalid` 结构化拒绝）。接收路径校验不变（线头字节 == 帧内 localTypeId == 本机 id）。
+- **撤除 registry fingerprint 主门禁**：`lan_registry_fingerprint_mismatch` 不再拒绝加入，指纹降级为诊断值；指纹仍必须携带且格式合法（`lan_registry_fingerprint_required` 保留），`/mod-preflight` 不再据此快速失败。tail_v1 创建与加入新增必填 `nativeBusTypeId`，缺失 / 越界复用 `lan_registry_fingerprint_required`（文案区分）。
+- `native_bus_v1` 的 `minimumClientVersion` 升至 `0.6.2-alpha.1`：`0.6.1` 及更早客户端加入新协议房间得到明确的 426 `lan_client_version_too_old` 升级提示。
+- **选服列表排序规则重做**：置顶 → 可达性 → 服务端大版本档（降序，未知最低）→ 真实延迟（升序，精确毫秒，每次探测取两次采样较小值）→ 地址。删除从未在生产写入的 `LastSuccessConnect` 排序条件与延迟容差档。
+- **列表刷新不再跳动**：一轮刷新中每批探测结果只更新行内数据（保持当前顺序、新条目追加末尾），全部任务（含 Cloudflare 发现与全部探测）结束后只做一次最终重排；异常分支同样等待全部任务结束。
+- 移除 tail 握手中遗留的 RitsuLib 安装状态相等校验（`offer.RitsuLibPresent != selection.RitsuLibPresent`），使 `0.6.1` 起宣称的「新协议房间不关心 RitsuLib」策略在冻结选择的校验路径上真正生效。
+- 房间卡片在所有主题下新增悬停反馈。
+
+### Fixed
+
+- 修复 `0.6.1` 跨端（PC ↔ 安卓等）无法互相加入新协议房间（HTTP 409 `lan_registry_fingerprint_mismatch`）：根因是任何一端多装一个注册 `INetMessage` 的第三方 MOD（如 `Map Enhance Mod`）即触发全表指纹不一致，而该类 MOD 不影响 gameplay、对既有三项 MOD 检查完全隐形。按对端寻址后两表无需任何关系。
+- 修复多人存档恢复房间后取消、再次点击「恢复大厅房间」无效并必须重启游戏的问题：载入页面每次关闭时清理本轮发布状态，快速取消重进时旧请求结束后会重新尝试当前这次恢复。
+- 已取消的提示框结果不再写入存档绑定：对话框在其所属载入页面关闭之后才确认时，该结果直接丢弃，不会覆盖新打开的提示，也不会污染下一次恢复。
+- 迟到的建房响应不再挂载已断开的主机：注册完成后若本地连接已断开，立即删除刚注册的房间并以「续局已取消，请重新恢复房间。」结束，不再让旧会话冻结在新会话之上。
+- 修复点击房间卡片后要等到下一次自动刷新才高亮的问题：点击先抢到焦点、在 `gui_input` 之前就改掉了选中 id，导致 `SelectRoom` 跳过重建。
+- 修复公共节点发现列表长期停更：Cloudflare Worker 的聚合器不再把 IP 直连地址选为采样对象（Workers 的 `fetch()` 到裸 IP 源站被 Cloudflare 自身以 1003 拒绝），采样池扩大为全部种子与全部历史条目中的域名节点；IP 直连大厅仍可经域名节点的 `/peers` 转述进入列表。
+
+### Compatibility
+
+- 同一房间所有成员必须统一使用客户端 `0.6.2`；安装或更新后必须完整重启游戏。
+- tail 房间 `minimumClientVersion` 保持 `0.6.2-alpha.1`：`0.6.2-alpha.1` / `0.6.2-alpha.2` 客户端仍可加入 `0.6.2` 新协议房间；`0.6.1` 及更早客户端会被服务端以 426 `lan_client_version_too_old` 拒绝并提示升级，`0.6.1` 帧误达 `0.6.2` 客户端按 `lan_native_frame_invalid` 结构化拒绝。
+- lobby-service `0.6.2` 与 `0.6.1` 不等价（新增 `nativeBusTypeId` 透传与 `serviceVersion` 字段），自建大厅需升级；本 Release 为非 pre-release，已开启自动更新的节点会自动升级。旧客户端忽略新增 `serviceVersion` 字段，行为不变。
+- 兼容模式 `compat_4_5_v1` 房间完全不受影响，历史客户端互通规则不变。
+
 ## [0.6.2-alpha.2] - 2026-09-13
 
 `0.6.2-alpha.2`：选服列表排序重做（版本优先 + 真实延迟）的预发布候选（GitHub-only pre-release，不更新创意工坊；真机 E2E 已通过）。发布说明见 `docs/RELEASE_NOTES_V0.6.2_ALPHA2_ZH.md`。客户端与 lobby-service 同步 `0.6.2-alpha.2`；本版不改 wire 协议，tail 房间 `minimumClientVersion` 保持 `0.6.2-alpha.1`，正式版仍为 `0.6.1`。
