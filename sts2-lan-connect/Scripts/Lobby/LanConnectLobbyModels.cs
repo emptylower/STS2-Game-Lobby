@@ -418,6 +418,19 @@ internal sealed class LobbyJoinRoomResponse
 
         return HostNativeBusTypeId.Value;
     }
+
+    /// <summary>
+    /// 按协议 profile 校验 join 响应的协议字段。protocolFlowNonce 两种 profile 都必填（服务端对所有房间下发）；
+    /// hostNativeBusTypeId 仅 tail_v1 必填——compat_4_5_v1 的服务端合同从不携带该字段，无条件校验会让旧协议房间必败。
+    /// </summary>
+    public void ValidateProtocolFields(LanConnectProtocolProfile profile)
+    {
+        _ = GetProtocolFlowNonceBytes();
+        if (profile == LanConnectProtocolProfile.TailV1)
+        {
+            _ = GetHostNativeBusTypeId();
+        }
+    }
 }
 
 internal sealed class LobbyProtocolOfferDto

@@ -6,6 +6,9 @@ internal static class LanConnectConstants
 
     public const int DefaultMaxPlayers = 8;
 
+    // ENet host 模式下房主自身 NetId 恒为 1；加入方据此为房主名字播种。
+    public const ulong EnetHostNetId = 1;
+
     public const int ProtocolMinPlayers = 2;
 
     public const int ProtocolMaxPlayers = 8;

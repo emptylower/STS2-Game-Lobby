@@ -1246,11 +1246,18 @@ internal sealed partial class LanConnectLobbyRuntime :
                 joinResponse.Room.RoomId,
                 netService.NetId,
                 LanConnectConfig.GetEffectivePlayerDisplayName());
+            SeedJoinedRoomHostPlayerName(joinResponse.Room.RoomId, joinResponse.Room.HostPlayerName);
         });
         netService.Disconnected += session.OnDisconnected;
         if (connectedControlClient == null)
         {
             TaskHelper.RunSafely(ConnectJoinedClientControlAsync(session));
+        }
+        else if (ShouldResendPlayerNameSyncAfterAttach(connectedControlClient))
+        {
+            // tail_v1 预连接控制通道：房主在 attach 之前广播的 snapshot 已被尚未挂 handler 的控制客户端丢弃，
+            // 补发一次名字同步，房主 upsert 后会重播权威 snapshot。
+            TaskHelper.RunSafely(ResendJoinedClientPlayerNameSyncAsync(session));
         }
         _pendingClientReconnect = null;
     }
@@ -1394,6 +1401,52 @@ internal sealed partial class LanConnectLobbyRuntime :
             Log.Warn($"sts2_lan_connect lobby client control channel failed to connect: {ex.Message}");
         }
     }
+
+    internal static bool ShouldResendPlayerNameSyncAfterAttach(LobbyControlClient? connectedControlClient)
+    {
+        // 预连接（tail_v1）路径不再走 ConnectJoinedClientControlAsync，也就不会发出 player_name_sync；
+        // 房主侧只在收到 sync / binding / peer 连接事件时广播 snapshot，attach 后必须补发一次。
+        return connectedControlClient != null;
+    }
+
+    private async Task ResendJoinedClientPlayerNameSyncAsync(JoinedClientSession session)
+    {
+        try
+        {
+            await session.ControlClient.SendAsync(
+                BuildPlayerNameSyncEnvelope(session.RoomId, session.PlayerNetId),
+                CancellationToken.None);
+            GD.Print($"sts2_lan_connect lobby runtime: resent player name sync on pre-connected control channel roomId={session.RoomId}");
+        }
+        catch (Exception ex)
+        {
+            // 名字同步补发失败不阻断加入：权威 snapshot 仍可能在其他事件（peer 连接等）触发时到达。
+            Log.Warn($"sts2_lan_connect lobby client player name sync resend failed roomId={session.RoomId}: {ex.Message}");
+        }
+    }
+
+    // join 响应自带房主名字：attach 时先播种进名字目录，规避预连接控制通道下房主 snapshot 早到被丢弃的竞态；
+    // 随后到达的权威 snapshot（ReplaceSnapshot）会整体覆盖，播种值只作兜底。
+    internal static void SeedJoinedRoomHostPlayerName(string roomId, string? hostPlayerName)
+    {
+        JoinedRoomHostNameSeed? seed = BuildJoinedRoomHostNameSeed(hostPlayerName);
+        if (seed.HasValue)
+        {
+            LanConnectLobbyPlayerNameDirectory.Upsert(roomId, seed.Value.HostNetId, seed.Value.HostPlayerName);
+        }
+    }
+
+    internal static JoinedRoomHostNameSeed? BuildJoinedRoomHostNameSeed(string? hostPlayerName)
+    {
+        if (string.IsNullOrWhiteSpace(hostPlayerName))
+        {
+            return null;
+        }
+
+        return new JoinedRoomHostNameSeed(LanConnectConstants.EnetHostNetId, hostPlayerName);
+    }
+
+    internal readonly record struct JoinedRoomHostNameSeed(ulong HostNetId, string HostPlayerName);
 
     private async Task CloseHostedRoomAsync(
         HostedRoomSession session,

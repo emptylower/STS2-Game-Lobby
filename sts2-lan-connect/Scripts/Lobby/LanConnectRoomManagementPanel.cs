@@ -505,7 +505,7 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
     private static ulong GetHostNetId()
     {
         // The host's own NetId is always 1 in ENet host mode
-        return 1;
+        return LanConnectConstants.EnetHostNetId;
     }
 
     private static NetHostGameService? GetHostNetService(LanConnectLobbyRuntime runtime)

@@ -76,8 +76,7 @@ internal static class LanConnectLobbyJoinFlow
                     + "请切换到 Steam 测试分支（public-beta），或加入“兼容旧版 Mod”房间。");
             }
             LanConnectProtocolSelection selection = selectionDto.ToValidatedValue(localOffer);
-            _ = joinResponse.GetProtocolFlowNonceBytes();
-            _ = joinResponse.GetHostNativeBusTypeId();
+            joinResponse.ValidateProtocolFields(selection.Profile);
             if (string.IsNullOrWhiteSpace(joinResponse.ConnectionPlan.ControlChannelId))
             {
                 throw LanConnectProtocolFailureMapper.FromLocalException(
