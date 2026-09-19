@@ -265,10 +265,10 @@ internal static class LanConnectSerializationPatches
         // playersInLobby（compat 列表位宽）的消息必须由边界 prefix 显式产出字节；
         // Android gshared 下保持 null，具体 T.Serialize 上的 transpiler 仍然生效。
         MethodInfo? beginRunMessageBusSerialize = includeCompatMessageBusBoundary
-            ? ResolveGenericSerializeMessageMethod(typeof(NetMessageBus), beginRunType)
+            ? ResolveCompatBoundarySerializeTarget(typeof(NetMessageBus), beginRunType)
             : null;
         MethodInfo? joinResponseMessageBusSerialize = includeCompatMessageBusBoundary
-            ? ResolveGenericSerializeMessageMethod(typeof(NetMessageBus), joinResponseType)
+            ? ResolveCompatBoundarySerializeTarget(typeof(NetMessageBus), joinResponseType)
             : null;
 
         WirePatchTarget[] targets =
@@ -308,7 +308,7 @@ internal static class LanConnectSerializationPatches
             targets);
     }
 
-    internal static MethodInfo ResolveGenericSerializeMessageMethod(Type messageBusType, Type messageType)
+    internal static MethodInfo ResolveCompatBoundarySerializeTarget(Type messageBusType, Type messageType)
     {
         MethodInfo[] matches = messageBusType
             .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)

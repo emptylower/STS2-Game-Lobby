@@ -86,8 +86,8 @@ public sealed class LanConnectSerializationPatchesCompatibilityTests
             "sts2-lan-connect",
             "Scripts",
             "LanConnectSerializationPatches.cs"));
-        Assert.Contains("ResolveGenericSerializeMessageMethod(typeof(NetMessageBus), beginRunType)", source, StringComparison.Ordinal);
-        Assert.Contains("ResolveGenericSerializeMessageMethod(typeof(NetMessageBus), joinResponseType)", source, StringComparison.Ordinal);
+        Assert.Contains("ResolveCompatBoundarySerializeTarget(typeof(NetMessageBus), beginRunType)", source, StringComparison.Ordinal);
+        Assert.Contains("ResolveCompatBoundarySerializeTarget(typeof(NetMessageBus), joinResponseType)", source, StringComparison.Ordinal);
         Assert.DoesNotContain("native_bus_v1 恒为 null", source, StringComparison.Ordinal);
     }
 
