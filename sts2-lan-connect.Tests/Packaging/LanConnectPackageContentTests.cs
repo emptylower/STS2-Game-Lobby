@@ -102,7 +102,7 @@ public sealed class LanConnectPackageContentTests
             Assert.Contains("0.5.3", text, StringComparison.Ordinal);
             Assert.Contains("续局", text, StringComparison.Ordinal);
         }
-        Assert.Contains("当前客户端：0.6.2；lobby-service：0.6.2", workshop, StringComparison.Ordinal);
+        Assert.Contains("当前客户端：0.6.3；lobby-service：0.6.3", workshop, StringComparison.Ordinal);
         Assert.Contains("STS2LANRESUME:", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("HostChannel", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("Android", releaseNotes, StringComparison.Ordinal);
@@ -426,7 +426,7 @@ public sealed class LanConnectPackageContentTests
         Assert.Contains("## v0.6.3 正式版", userGuide, StringComparison.Ordinal);
         Assert.Contains("## [0.6.3] - ", changelog, StringComparison.Ordinal);
         Assert.Contains("本次存档修复不要求更新服务端", releaseNotes, StringComparison.Ordinal);
-        Assert.Contains("本次不更新 Steam 创意工坊", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("Steam 创意工坊条目「游戏大厅」已于 2026-09-24 同步更新", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("ModMismatch", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("严重丢包", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("整体验收仍有未解决项", releaseNotes, StringComparison.Ordinal);

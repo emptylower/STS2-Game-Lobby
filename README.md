@@ -59,7 +59,7 @@
 - 当前正式版：[`v0.6.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.3)（GitHub Release）
 - 发布说明：[`docs/RELEASE_NOTES_V0.6.3_ZH.md`](./docs/RELEASE_NOTES_V0.6.3_ZH.md)
 - 上一个正式版：[`v0.6.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.2)
-- Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（本次未更新，仍为 `0.6.2`；请从 GitHub 获取 `0.6.3`）
+- Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（已于 2026-09-24 更新至 `0.6.3`）
 
 ### 推荐阅读顺序
 

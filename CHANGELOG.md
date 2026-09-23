@@ -6,7 +6,7 @@
 
 ## [0.6.3] - 2026-09-23
 
-`0.6.3` 正式版，汇总 `0.6.3-alpha.1`～`alpha.3` 的客户端修复。发布说明见 `docs/RELEASE_NOTES_V0.6.3_ZH.md`。本次仅发布 GitHub Release，不更新 Steam 创意工坊（仍为 `0.6.2`）。
+`0.6.3` 正式版，汇总 `0.6.3-alpha.1`～`alpha.3` 的客户端修复。发布说明见 `docs/RELEASE_NOTES_V0.6.3_ZH.md`。通过 GitHub Release（2026-09-23）与 Steam 创意工坊「游戏大厅」（2026-09-24 补推）分发。
 
 ### Fixed
 
