@@ -9,6 +9,9 @@ namespace Sts2LanConnect.Tests.Lobby;
 
 public sealed class LanConnectSaveBindingMutationBoundaryTests
 {
+    private static readonly LanConnectProtocolSelection TestSelection =
+        LanConnectProtocolSelection.CreateLocalCompat(4, "game");
+
     [Fact]
     public void Safe_load_entry_performs_no_persisted_write()
     {
@@ -128,6 +131,7 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
             "大厅续局",
             "secret",
             "custom",
+            TestSelection,
             () => events.Add("after_persist"),
             () =>
             {
@@ -144,6 +148,7 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
         Assert.Equal("save-3", write.SaveKey);
         Assert.Equal(LanConnectHostChannels.Lobby, write.HostChannel);
         Assert.Equal(LanConnectSavedRoomBinding.CurrentSchemaVersion, write.SchemaVersion);
+        Assert.Same(TestSelection, write.FrozenSelection);
         Assert.Equal(
             ["persist", "after_persist", "prepare", "return_to_main_menu"],
             events);
@@ -170,6 +175,7 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
                 "大厅续局",
                 null,
                 "standard",
+                TestSelection,
                 () => events.Add("after_persist"),
                 () =>
                 {
@@ -211,6 +217,7 @@ public sealed class LanConnectSaveBindingMutationBoundaryTests
                 "大厅续局",
                 null,
                 "standard",
+                TestSelection,
                 () => events.Add("after_persist"),
                 () =>
                 {

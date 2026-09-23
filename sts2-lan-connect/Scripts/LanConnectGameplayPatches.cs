@@ -8,6 +8,7 @@ internal static class LanConnectGameplayPatches
 {
     private static readonly Harmony HarmonyInstance = new("sts2_lan_connect.gameplay");
     private static bool _initialized;
+    private static bool _androidOfficialGuardInstallAttempted;
 
     public static void Initialize()
     {
@@ -26,6 +27,33 @@ internal static class LanConnectGameplayPatches
         if (TryApplyGroup("SaveManager", () => LanConnectSaveManagerPatches.Apply(HarmonyInstance))) applied++; else failed++;
         if (TryApplyGroup("JoinScreenAutoJoin", () => LanConnectJoinScreenAutoJoinPatches.Apply(HarmonyInstance))) applied++; else failed++;
         if (TryApplyGroup("PeerVersionInfo", () => LanConnectPeerVersionInfoPatches.Apply(HarmonyInstance))) applied++; else failed++;
+        if (TryApplyGroup("HostProtocolGuard", () => LanConnectLobbyCapacityPatches.ApplyHostProtocolGuards(HarmonyInstance)))
+        {
+            applied++;
+        }
+        else
+        {
+            failed++;
+            LanConnectDegradedMode.Enter(
+                LanConnectDegradedMode.ProtocolPatchConflictCode,
+                "host_protocol_guard_install_failed");
+        }
+        bool officialGuardEntryInstalled = OperatingSystem.IsAndroid()
+            ? TryApplyGroup("OfficialContinueRunDeferredEntry",
+                () => LanConnectOfficialContinueRunPatches.ApplyAndroidDeferredEntry(HarmonyInstance))
+            : TryApplyGroup("OfficialContinueRun",
+                () => LanConnectOfficialContinueRunPatches.Apply(HarmonyInstance));
+        if (officialGuardEntryInstalled)
+        {
+            applied++;
+        }
+        else
+        {
+            failed++;
+            LanConnectDegradedMode.Enter(
+                LanConnectDegradedMode.ProtocolPatchConflictCode,
+                "official_continue_run_guard_install_failed");
+        }
 
         if (LanConnectExternalModDetection.IsRmpModLoaded)
         {
@@ -40,6 +68,23 @@ internal static class LanConnectGameplayPatches
         if (TryApplyGroup("LobbyCapacity", () => LanConnectLobbyCapacityPatches.Apply(HarmonyInstance))) applied++; else failed++;
 
         Log.Info($"sts2_lan_connect gameplay: patch groups applied={applied}, failed={failed}.");
+    }
+
+    internal static void EnsureAndroidOfficialContinueRunGuards()
+    {
+        if (!OperatingSystem.IsAndroid() || _androidOfficialGuardInstallAttempted)
+        {
+            return;
+        }
+
+        _androidOfficialGuardInstallAttempted = true;
+        if (!TryApplyGroup("OfficialContinueRun",
+                () => LanConnectOfficialContinueRunPatches.Apply(HarmonyInstance)))
+        {
+            LanConnectDegradedMode.Enter(
+                LanConnectDegradedMode.ProtocolPatchConflictCode,
+                "official_continue_run_guard_install_failed_after_menu_ready");
+        }
     }
 
     private static bool TryApplyGroup(string groupName, Action apply)

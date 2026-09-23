@@ -5,6 +5,9 @@ namespace Sts2LanConnect.Tests.Lobby;
 
 public sealed class LanConnectCurrentSaveBindingWriterTests
 {
+    private static readonly LanConnectProtocolSelection TestSelection =
+        LanConnectProtocolSelection.CreateLocalCompat(4, "game");
+
     [Fact]
     public void Active_session_with_a_different_save_key_does_not_write()
     {
@@ -80,7 +83,7 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
             "save_event");
 
         Assert.Equal(LanConnectCurrentSaveBindingWriter.PersistResult.Persisted, outcome.Result);
-        Assert.Single(harness.Writes);
+        Assert.Same(TestSelection, Assert.Single(harness.Writes).Request.FrozenSelection);
     }
 
     [Fact]
@@ -122,6 +125,7 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
             LanConnectCurrentSaveBindingWriter.PersistenceRequest Request) write = Assert.Single(harness.Writes);
         Assert.Equal("save-1", write.Save.SaveKey);
         Assert.Equal(LanConnectHostChannels.Lobby, write.Request.HostChannel);
+        Assert.Same(TestSelection, write.Request.FrozenSelection);
     }
 
     [Fact]
@@ -182,6 +186,7 @@ public sealed class LanConnectCurrentSaveBindingWriterTests
             null,
             "standard",
             LanConnectHostChannels.Lobby,
+            TestSelection,
             recordPersistedSaveKey ?? (_ => { }));
 
     private sealed class WriterHarness

@@ -3,8 +3,8 @@
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-![Client](https://img.shields.io/badge/client-v0.6.2-brightgreen)
-![Service](https://img.shields.io/badge/service-v0.6.2-brightgreen)
+![Client](https://img.shields.io/badge/client-v0.6.3-brightgreen)
+![Service](https://img.shields.io/badge/service-v0.6.3-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
 **[中文](#中文) · [English](#english)**
@@ -17,7 +17,7 @@
 
 ## 中文
 
-**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前正式版为 **v0.6.2**，客户端与大厅服务版本号已同步对齐。本页主要服务对象是：
+**STS2 LAN Connect** 是《Slay the Spire 2》的第三方联机大厅方案。当前正式版为 **v0.6.3**，客户端与大厅服务版本号已同步对齐。本页主要服务对象是：
 
 - 想自行部署大厅服务的服主 / 运维
 - 想构建或分发客户端 MOD 的维护者
@@ -41,25 +41,25 @@
 - 客户端通过 Cloudflare discovery worker（`https://sts2-gamelobby-register.xyz`）拿到聚合节点列表
 - 不再有任何"母面板"或中心化审核后台；`SERVER_REGISTRY_*` 一组环境变量自 v0.4.0 起已从 lobby-service 中完全移除
 
-### v0.6.2 正式版
+### v0.6.3 正式版
 
-`v0.6.2` 收敛了 `0.6.2-alpha.1`、`0.6.2-alpha.2` 两个测试候选，以及其后的续局恢复修复、公共节点发现修复与大厅主题系统。完整说明见 [`docs/RELEASE_NOTES_V0.6.2_ZH.md`](./docs/RELEASE_NOTES_V0.6.2_ZH.md)。
+`v0.6.3` 汇总 `0.6.3-alpha.1`～`alpha.3` 的客户端修复。完整说明见 [`docs/RELEASE_NOTES_V0.6.3_ZH.md`](./docs/RELEASE_NOTES_V0.6.3_ZH.md)。
 
-- **`native_bus_v1` 消息 ID 改为按对端寻址**：`typeId` 是接收方本地消息表的下标，发送时改写对端声明的 id，外层帧版本 `ver` 升为 `2`；registry fingerprint 主门禁撤除（降级为诊断值），跨端（PC ↔ 安卓）与「一端多装一个注册 `INetMessage` 的第三方 MOD」不再被 `lan_registry_fingerprint_mismatch` 拒绝。tail 房间 `minimumClientVersion` 为 `0.6.2-alpha.1`，`0.6.1` 及更早客户端会被 426 `lan_client_version_too_old` 拒绝
-- **选服列表排序重做**：置顶 → 可达性 → 服务端大版本档（降序）→ 真实延迟（升序，精确毫秒）→ 地址；服务端新增公开 `serviceVersion` 字段，未升级的节点靠 `/probe` 能力字段推断版本档，低于 0.6 的行标注「服务端版本过旧」；一轮刷新只做一次最终重排，列表不再跳动
-- **续局恢复修复**：取消恢复多人存档房间后再次点击恢复不再无效（不必重启游戏）；已取消的提示框结果不再写入存档绑定；迟到的建房响应会清理刚注册的房间，不再挂载已断开的主机
-- **大厅主题系统**：设置齿轮旁新增调色盘按钮，可在「街机复古」（默认）、「午夜玻璃」、「SaaS 简洁」三套主题间切换并持久化，覆盖大厅总览、公告轮播、选服窗口、房间管理与大厅风格聊天；房间卡片新增悬停反馈，点击后立即高亮
-- **公共节点发现修复**：Cloudflare discovery worker 的聚合器不再把 IP 直连地址选为采样对象（Workers `fetch()` 到裸 IP 源站被 Cloudflare 以 1003 拒绝），修复公共节点列表自 2026-08-30 起停更的问题
-- **升级要求**：同房所有成员必须统一使用客户端 `0.6.2` 并完整重启游戏；lobby-service `0.6.2` 与 `0.6.1` 不等价（新增 `nativeBusTypeId` 透传与 `serviceVersion` 字段），自建大厅必须升级，本 Release 非 pre-release，已开启自动更新的节点会自动升级
+- **续局保持原房间协议**：SL、保存退出后读档及延迟保存使用原房间冻结的协议，新协议继续使用 `tail_v1 / native_bus_v1`。绑定缺失或损坏时停止建房并提示恢复配置，避免新协议存档降级为“兼容旧版 Mod”而遭 RitsuLib 拒绝。
+- **配置备份与恢复**：配置采用同目录临时文件替换，保留有效备份；主配置损坏时尝试恢复，两份均不可用时进入只读保护。
+- **兼容协议加入与开局修复**：旧协议不再错误要求新协议消息 ID；桌面房主显式写出兼容协议的玩家列表位宽，修复客机解码错位、房主黑屏等待。
+- **其他修复**：新协议房主昵称补同步，加入前 MOD 预检弹窗跟随大厅主题并去除重复取消按钮。
+- **验证与已知问题**：Mac Steam + Android AVD、游戏 `0.111.0` 在魔仙堡完成两种协议的首怪、SL 后下一房间和保存退出后读档；新协议带 RitsuLib `0.5.13` 未降级。测试中出现两次严重丢包断线，以及候选连接切换时误报 `ModMismatch`、自动重试成功；这些问题本版未修复，不能视为全程无异常通过。
+- **升级要求**：同房玩家统一更新客户端 `0.6.3` 并完整重启。lobby-service 本版仅版本号同步，已有 `0.6.2` 服务端无需为本次存档修复升级；正式 Release 仍可能被已开启自动更新的节点采纳。
 
 ### 当前版本
 
-- 客户端源码 / 构建版本：`0.6.2`（正式版）
-- 大厅服务源码 / 构建版本：`0.6.2`（正式版，与 `0.6.1` 不等价，自建大厅需升级）
-- 当前正式版：[`v0.6.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.2)（GitHub Release）
-- 发布说明：[`docs/RELEASE_NOTES_V0.6.2_ZH.md`](./docs/RELEASE_NOTES_V0.6.2_ZH.md)
-- 上一个正式版：[`v0.6.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.1)
-- Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（本版同步更新；描述文案见 [`docs/STEAM_WORKSHOP_DESCRIPTION_ZH.txt`](./docs/STEAM_WORKSHOP_DESCRIPTION_ZH.txt)）
+- 客户端源码 / 构建版本：`0.6.3`（正式版）
+- 大厅服务源码 / 构建版本：`0.6.3`（正式版，仅版本号同步）
+- 当前正式版：[`v0.6.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.3)（GitHub Release）
+- 发布说明：[`docs/RELEASE_NOTES_V0.6.3_ZH.md`](./docs/RELEASE_NOTES_V0.6.3_ZH.md)
+- 上一个正式版：[`v0.6.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.2)
+- Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（本次未更新，仍为 `0.6.2`；请从 GitHub 获取 `0.6.3`）
 
 ### 推荐阅读顺序
 
@@ -178,6 +178,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 | 文档 | 说明 |
 |------|------|
 | [`CHANGELOG.md`](./CHANGELOG.md) | 客户端与服务端版本更新日志 |
+| [`docs/RELEASE_NOTES_V0.6.3_ZH.md`](./docs/RELEASE_NOTES_V0.6.3_ZH.md) | v0.6.3 正式版说明：续局协议保护、兼容协议修复、实机验证与已知问题 |
 | [`docs/RELEASE_NOTES_V0.6.2_ZH.md`](./docs/RELEASE_NOTES_V0.6.2_ZH.md) | v0.6.2 正式版说明：native_bus 消息 ID 按对端寻址、选服排序重做、续局恢复修复、大厅主题系统、升级与验收 |
 | [`docs/RELEASE_NOTES_V0.6.1_ZH.md`](./docs/RELEASE_NOTES_V0.6.1_ZH.md) | v0.6.1 正式版说明：新协议房间与 RitsuLib 解耦、加入失败根因修复、存档与续局修复、升级与验收 |
 | [`docs/RELEASE_NOTES_V0.6.0_ZH.md`](./docs/RELEASE_NOTES_V0.6.0_ZH.md) | v0.6.0 正式版说明：双协议房间、加入前线上编码校验、大厅不显示修复、升级与验收 |
@@ -217,7 +218,7 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 ## English
 
-**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current stable release is **v0.6.2**, with client and lobby-service versions kept in sync.
+**STS2 LAN Connect** is a third-party multiplayer lobby stack for *Slay the Spire 2*. The current stable release is **v0.6.3**, with client and lobby-service versions kept in sync.
 
 ### What is in this repository
 
@@ -233,26 +234,25 @@ v0.5.1 客户端大厅支持键盘 / 手柄式焦点导航，房间卡片可聚�
 
 Each `lobby-service` node advertises itself to peers via the built-in peer-announce protocol. Clients aggregate the public node list through a Cloudflare discovery worker (`https://sts2-gamelobby-register.xyz`). There is no master panel and no central review backend; the `SERVER_REGISTRY_*` env vars from v0.3.x have been removed from `lobby-service` and have been inert since v0.4.0.
 
-### v0.6.2 stable release
+### v0.6.3 stable release
 
-`v0.6.2` consolidates the `0.6.2-alpha.1` and `0.6.2-alpha.2` candidates plus the continue-run, peer-discovery and lobby-theme work that followed them. Full notes (Chinese): [`docs/RELEASE_NOTES_V0.6.2_ZH.md`](./docs/RELEASE_NOTES_V0.6.2_ZH.md).
+`v0.6.3` consolidates the client fixes from `0.6.3-alpha.1` through `alpha.3`. Full notes (Chinese): [`docs/RELEASE_NOTES_V0.6.3_ZH.md`](./docs/RELEASE_NOTES_V0.6.3_ZH.md).
 
-- **`native_bus_v1` message ids are now peer-addressed.** A `typeId` indexes the *receiver's* local message table, so the sender now writes the id the peer declared and the outer frame version moves from `1` to `2`. The registry-fingerprint gate is demoted to a diagnostic value, so cross-platform pairs (PC ↔ Android) and peers that differ by one extra `INetMessage`-registering MOD are no longer rejected with `lan_registry_fingerprint_mismatch`. Tail rooms keep `minimumClientVersion` at `0.6.2-alpha.1`; `0.6.1` and older clients get a 426 `lan_client_version_too_old` upgrade prompt.
-- **The server picker ranking was rebuilt**: pinned → reachable → service `major.minor` (descending, unknown last) → exact ping (ascending) → address. Services now publish `serviceVersion`; nodes that have not upgraded are inferred from `/probe` capabilities, and anything below 0.6 is badged as too old. Each refresh re-sorts exactly once, so the list no longer jumps around.
-- **Continue-run restoration fixes**: canceling a multiplayer save restore no longer breaks every later restore attempt (no game restart needed), a prompt confirmed after its load screen closed is discarded instead of written to the save binding, and a late room registration is deleted rather than attached to an already-disconnected host.
-- **Lobby theme system**: a palette button next to the settings gear switches between `街机复古` (arcade retro, the default), `午夜玻璃` (midnight glass) and `SaaS 简洁` (SaaS clean) across the lobby, announcement carousel, server picker, room management and lobby-style chat. Room cards gained hover feedback and now highlight immediately on click.
-- **Public node discovery fix**: the Cloudflare discovery worker's aggregator no longer samples bare-IP peers (Cloudflare itself rejects Worker `fetch()` to an IP origin with error 1003), which had frozen the public node list since 2026-08-30.
-- **Upgrade requirement**: every player in a room must run client `0.6.2` and fully restart the game. lobby-service `0.6.2` is *not* equivalent to `0.6.1` (it adds `nativeBusTypeId` passthrough and the `serviceVersion` fields), so self-hosted lobbies must upgrade; this release is not a pre-release, so nodes with auto-update enabled upgrade themselves.
+- **Preserve the saved room protocol** across SL, save-and-quit/load, and delayed saves. Missing or invalid bindings stop room creation with recovery guidance instead of changing a tail room to compat mode and triggering RitsuLib rejection.
+- **Protect configuration** with temporary-file replacement, a valid backup, automatic backup recovery, and read-only protection when neither copy can be read.
+- **Fix compat joining and desktop-host starts**: compat joins no longer require tail message IDs, and desktop hosts explicitly serialize the correct lobby-list bit width to prevent decoding errors and black-screen waits.
+- **Other fixes**: replay the host name after joining; apply the lobby theme to MOD preflight and remove duplicate cancel buttons.
+- **Validation and known issues**: Mac Steam + Android AVD on game `0.111.0` completed the first monster, SL/next room, and save-and-quit/load on the 魔仙堡 server in both modes. Tail with RitsuLib `0.5.13` stayed on the new protocol. Testing also found two severe packet-loss disconnects and a transient `ModMismatch` during connection-candidate switching that succeeded on automatic retry. These remain unresolved; this was not an error-free acceptance run.
+- **Upgrade**: all room participants should update to client `0.6.3` and fully restart. lobby-service only changes its version number; an existing `0.6.2` service does not need an upgrade for this save fix. Nodes with auto-update enabled may still install this stable Release.
 
 ### Current versions
 
-- Client source/build version: `0.6.2` (stable)
-- Lobby service source/build version: `0.6.2` (stable; not equivalent to `0.6.1` — self-hosted lobbies must upgrade)
-- Current release: [`v0.6.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.2)
-- Release notes: [`docs/RELEASE_NOTES_V0.6.2_ZH.md`](./docs/RELEASE_NOTES_V0.6.2_ZH.md) (Chinese)
-- Previous stable release: [`v0.6.1`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.1)
-- Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) (synced with this release)
-- Every player in a room must run client `0.6.2` and fully restart the game after updating. This release ships `sts2_lobby_service.zip` as a non-prerelease, so nodes with auto-update enabled upgrade themselves.
+- Client source/build version: `0.6.3` (stable)
+- Lobby service source/build version: `0.6.3` (stable; version-number alignment only)
+- Current release: [`v0.6.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.3)
+- Release notes: [`docs/RELEASE_NOTES_V0.6.3_ZH.md`](./docs/RELEASE_NOTES_V0.6.3_ZH.md) (Chinese)
+- Previous stable release: [`v0.6.2`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.2)
+- Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) (unchanged at `0.6.2`; get `0.6.3` from GitHub)
 
 ### Recommended reading order
 

@@ -60,6 +60,18 @@ internal static class LanConnectConfig
     private static readonly object Sync = new();
 
     private static LanConnectConfigData _data = new();
+    private static bool _readOnly;
+
+    internal static bool IsReadOnly
+    {
+        get
+        {
+            lock (Sync)
+            {
+                return _readOnly;
+            }
+        }
+    }
 
     public static string LastEndpoint
     {
@@ -458,21 +470,38 @@ internal static class LanConnectConfig
         }
     }
 
-    public static void UpsertSaveRoomBinding(LanConnectSavedRoomBinding binding)
+    public static bool UpsertSaveRoomBinding(LanConnectSavedRoomBinding binding)
     {
         lock (Sync)
         {
-            _data.SaveRoomBindings.RemoveAll(existing =>
-                string.IsNullOrWhiteSpace(existing.SaveKey)
-                || string.Equals(existing.SaveKey, binding.SaveKey, StringComparison.Ordinal));
-
-            _data.SaveRoomBindings.Insert(0, CloneBindingForPersistence(binding));
-            if (_data.SaveRoomBindings.Count > 16)
+            if (_readOnly)
             {
-                _data.SaveRoomBindings.RemoveRange(16, _data.SaveRoomBindings.Count - 16);
+                return false;
             }
 
-            SaveUnsafe();
+            List<LanConnectSavedRoomBinding> previousBindings = _data.SaveRoomBindings;
+            _data.SaveRoomBindings = new List<LanConnectSavedRoomBinding>(previousBindings);
+            try
+            {
+                _data.SaveRoomBindings.RemoveAll(existing =>
+                    string.IsNullOrWhiteSpace(existing.SaveKey)
+                    || string.Equals(existing.SaveKey, binding.SaveKey, StringComparison.Ordinal));
+
+                _data.SaveRoomBindings.Insert(0, CloneBindingForPersistence(binding));
+                if (_data.SaveRoomBindings.Count > 16)
+                {
+                    _data.SaveRoomBindings.RemoveRange(16, _data.SaveRoomBindings.Count - 16);
+                }
+
+                SaveUnsafe();
+            }
+            catch
+            {
+                _data.SaveRoomBindings = previousBindings;
+                throw;
+            }
+
+            return true;
         }
     }
 
@@ -480,14 +509,31 @@ internal static class LanConnectConfig
     {
         lock (Sync)
         {
-            int removed = _data.SaveRoomBindings.RemoveAll(existing =>
-                string.Equals(existing.SaveKey, saveKey, StringComparison.Ordinal));
-            if (removed <= 0)
+            if (_readOnly)
             {
                 return false;
             }
 
-            SaveUnsafe();
+            List<LanConnectSavedRoomBinding> previousBindings = _data.SaveRoomBindings;
+            _data.SaveRoomBindings = new List<LanConnectSavedRoomBinding>(previousBindings);
+            int removed = _data.SaveRoomBindings.RemoveAll(existing =>
+                string.Equals(existing.SaveKey, saveKey, StringComparison.Ordinal));
+            if (removed <= 0)
+            {
+                _data.SaveRoomBindings = previousBindings;
+                return false;
+            }
+
+            try
+            {
+                SaveUnsafe();
+            }
+            catch
+            {
+                _data.SaveRoomBindings = previousBindings;
+                throw;
+            }
+
             return true;
         }
     }
@@ -507,6 +553,7 @@ internal static class LanConnectConfig
     {
         lock (Sync)
         {
+            _readOnly = false;
             LoadUnsafe(GetConfigPath(), createIfMissing: true);
             EnsureClientInstallationCredentialUnsafe();
         }
@@ -532,12 +579,20 @@ internal static class LanConnectConfig
 
     private static void SaveUnsafe(string path)
     {
-        LanConnectConfigPersistence.Save(path, _data);
+        if (_readOnly)
+        {
+            return;
+        }
+
+        if (LanConnectConfigPersistence.Save(path, _data))
+        {
+            Log.Warn("sts2_lan_connect replaced a damaged config after preserving a corrupt copy.");
+        }
     }
 
     private static void LoadUnsafe(string path, bool createIfMissing)
     {
-        if (!File.Exists(path))
+        if (!File.Exists(path) && !File.Exists(path + ".backup"))
         {
             _data = new LanConnectConfigData();
             NormalizeDefaultsUnsafe();
@@ -550,18 +605,21 @@ internal static class LanConnectConfig
 
         try
         {
-            _data = LanConnectConfigPersistence.Load(path);
+            _data = LanConnectConfigPersistence.Load(path, out bool recoveredFromBackup);
             NormalizeDefaultsUnsafe();
+            if (recoveredFromBackup)
+            {
+                Log.Warn($"sts2_lan_connect recovered config from backup; savedRoomBindings={_data.SaveRoomBindings.Count}.");
+            }
         }
         catch (Exception ex)
         {
-            Log.Warn($"sts2_lan_connect failed to read config: {ex.Message}");
+            const string message = "LAN Connect 配置及备份都无法读取；联机已进入只读保护状态。请保留 config.json 与 config.json.backup，从有效副本恢复后重启游戏。";
             _data = new LanConnectConfigData();
+            _readOnly = true;
             NormalizeDefaultsUnsafe();
-            if (createIfMissing)
-            {
-                SaveUnsafe(path);
-            }
+            LanConnectDegradedMode.Enter(LanConnectDegradedMode.ConfigRecoveryRequiredCode, ex.GetType().Name);
+            Log.Warn($"sts2_lan_connect {message} error={ex.GetType().Name}: {ex.Message}");
         }
     }
 

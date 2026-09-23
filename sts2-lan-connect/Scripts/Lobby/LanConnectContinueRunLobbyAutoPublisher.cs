@@ -133,10 +133,13 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
             // Resolve host channel before lobby-endpoint preflight so pure-LAN saves never
             // depend on lobby URL or show "未绑定大厅服务" when they should not publish.
             LanConnectResolvedRoomBinding earlyBinding = LanConnectMultiplayerSaveRoomBinding.Resolve(context.Run);
-            if (earlyBinding.ProtocolFailure != null)
+            if (earlyBinding.ProtocolFailure != null || earlyBinding.ProtocolSelection == null)
             {
                 ScreenState.MarkSettled(attempt);
-                LanConnectProtocolUiMessages.Present(earlyBinding.ProtocolFailure);
+                LanConnectMultiplayerSaveRoomBinding.PresentContinueRunProtocolFailure(
+                    earlyBinding.ProtocolFailure
+                    ?? LanConnectMultiplayerSaveRoomBinding.MissingProtocolSelectionFailure(
+                        "The saved multiplayer run has no validated protocol selection."));
                 return;
             }
             string? earlyPersistedChannel = earlyBinding.HostChannel;
@@ -223,7 +226,8 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                     binding.Password,
                     binding.GameMode,
                     choice,
-                    "continue_save_channel_prompt"));
+                    "continue_save_channel_prompt",
+                    binding.ProtocolSelection));
             if (ScreenState.IsAttemptStale(attempt))
             {
                 return;
@@ -304,6 +308,16 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
         try
         {
             LanConnectResolvedRoomBinding binding = LanConnectMultiplayerSaveRoomBinding.Resolve(context.Run);
+            if (binding.ProtocolFailure != null || binding.ProtocolSelection == null)
+            {
+                ScreenState.MarkSettled(attempt);
+                LanConnectMultiplayerSaveRoomBinding.PresentContinueRunProtocolFailure(
+                    binding.ProtocolFailure
+                    ?? LanConnectMultiplayerSaveRoomBinding.MissingProtocolSelectionFailure(
+                        "The saved multiplayer run has no validated protocol selection."));
+                return;
+            }
+
             LanConnectSavedRoomBinding? storedBinding = LanConnectConfig.TryGetSaveRoomBinding(binding.SaveKey);
             Dictionary<ulong, string> storedPlayerNames = LanConnectMultiplayerSaveRoomBinding.ParsePlayerNames(storedBinding?.PlayerNames);
             LobbySavedRunInfo savedRunInfo = LanConnectMultiplayerSaveRoomBinding.BuildSavedRunInfo(context.Run, context.NetService.NetId, storedPlayerNames);
@@ -370,7 +384,8 @@ internal static class LanConnectContinueRunLobbyAutoPublisher
                 binding.Password,
                 binding.GameMode,
                 LanConnectHostChannels.Lobby,
-                "continue_save_publish");
+                "continue_save_publish",
+                binding.ProtocolSelection);
             if (!bindingPersisted)
             {
                 GD.Print(

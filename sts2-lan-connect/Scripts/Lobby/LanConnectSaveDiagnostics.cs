@@ -72,9 +72,7 @@ internal static class LanConnectSaveDiagnostics
             string saveKey = LanConnectMultiplayerSaveRoomBinding.BuildSaveKey(run);
             LanConnectSavedRoomBinding? binding = LanConnectConfig.TryGetSaveRoomBinding(saveKey);
             string playerSignature = LanConnectMultiplayerSaveRoomBinding.GetPlayerSignature(run);
-            string bindingSegment = binding == null
-                ? "binding=missing, effectiveHostChannel=lobby"
-                : $"binding=present, bindingHostChannel={LanConnectHostChannels.DescribePersisted(binding.HostChannel)}, effectiveHostChannel={LanConnectHostChannels.Resolve(binding.HostChannel)}";
+            string bindingSegment = DescribeBinding(binding);
             return
                 $"hasRunSave=true, load=ok, profile={profileId}, mpSavePath={multiplayerSavePath}, mpSaveUpdatedAt={multiplayerSaveTimestamp}, saveKey={saveKey}, gameMode={LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(run)}, players={run.Players.Count}, playerSignature={playerSignature}, startTime={run.StartTime}, {bindingSegment}, activeHostedRoom={hasActiveHostedRoom}, activeRoomId={activeRoomId}, lobby={effectiveEndpoint}";
         }
@@ -83,5 +81,29 @@ internal static class LanConnectSaveDiagnostics
             Log.Warn($"sts2_lan_connect save_diag failed: {ex.Message}");
             return $"snapshot_failed={ex.GetType().Name}";
         }
+    }
+
+    internal static string DescribeBinding(LanConnectSavedRoomBinding? binding)
+    {
+        if (binding == null)
+        {
+            return "binding=missing, protocolProfile=<missing>, protocolCarrier=<missing>, protocolFields=missing, effectiveHostChannel=lobby";
+        }
+
+        bool profileKnown = binding.ProtocolProfileV2 is
+            LanConnectProtocolProfileExtensions.CompatCanonical or LanConnectProtocolProfileExtensions.TailCanonical;
+        bool carrierKnown = binding.ProtocolCarrier is
+            "none" or "standalone_tail_v1" or "ritsulib_sidecar_v1" or "native_bus_v1";
+        bool fieldsComplete = binding.SchemaVersion >= LanConnectSavedRoomBinding.CurrentSchemaVersion
+            && profileKnown
+            && carrierKnown
+            && binding.SelectedLanProtocolVersion >= 0
+            && binding.ProtocolMaxPlayers is >= LanConnectConstants.ProtocolMinPlayers and <= LanConnectConstants.ProtocolMaxPlayers
+            && !string.IsNullOrWhiteSpace(binding.MinimumClientVersion)
+            && !string.IsNullOrWhiteSpace(binding.ProtocolGameVersion)
+            && binding.CapabilityDigest?.Length == 64;
+        string profile = profileKnown ? binding.ProtocolProfileV2 : "<missing_or_unknown>";
+        string carrier = carrierKnown ? binding.ProtocolCarrier : "<missing_or_unknown>";
+        return $"binding=present, bindingHostChannel={LanConnectHostChannels.DescribePersisted(binding.HostChannel)}, effectiveHostChannel={LanConnectHostChannels.Resolve(binding.HostChannel)}, protocolProfile={profile}, protocolCarrier={carrier}, protocolVersion={binding.SelectedLanProtocolVersion}, protocolFields={(fieldsComplete ? "complete" : "incomplete")}";
     }
 }

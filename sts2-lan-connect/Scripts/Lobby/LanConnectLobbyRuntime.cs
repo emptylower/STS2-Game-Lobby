@@ -217,7 +217,9 @@ internal sealed partial class LanConnectLobbyRuntime :
     private HostOriginState? _hostOrigin;
     private readonly LanConnectPendingSaveBindingCoordinator _pendingSaveBindingCoordinator = new(
         LoadPendingSaveBindingTarget,
-        PersistPendingSaveBinding);
+        PersistPendingSaveBinding,
+        GetCurrentRunNetService,
+        LanConnectConfig.TryGetSaveRoomBinding);
     private readonly LanConnectCurrentSaveBindingWriter _currentSaveBindingWriter = new(
         LoadCurrentSaveBindingTarget,
         GetCurrentRunNetService,
@@ -880,6 +882,11 @@ internal sealed partial class LanConnectLobbyRuntime :
             return;
         }
 
+        if (!ReferenceEquals(_hostOrigin?.NetService, netService))
+        {
+            _pendingSaveBindingCoordinator.DifferentHostedRoomWillAttach();
+        }
+
         if (!string.Equals(hostChannel.Trim(), LanConnectHostChannels.Lobby, StringComparison.OrdinalIgnoreCase))
         {
             _pendingSaveBindingCoordinator.AttachJoinedClient();
@@ -920,7 +927,6 @@ internal sealed partial class LanConnectLobbyRuntime :
         GD.Print($"sts2_lan_connect lobby runtime: cleared host origin channel={_hostOrigin.HostChannel}");
         _hostOrigin.Detach();
         _hostOrigin = null;
-        _pendingSaveBindingCoordinator.HostedFlowEnded();
     }
 
     private async Task ShutdownAsync(
@@ -1102,13 +1108,14 @@ internal sealed partial class LanConnectLobbyRuntime :
             metadata.RoomName,
             metadata.Password,
             metadata.GameMode);
-        // B4 hardening only: this late-save ordering has not been demonstrated as a field cause.
-        // A freshly created room has no key and therefore cannot create a pending intent.
+        // A keyed intent survives teardown; a keyless first save also requires this exact NetService.
         _pendingSaveBindingCoordinator.AttachHostedRoom(
             metadata.RoomName,
             metadata.Password,
             metadata.GameMode,
-            metadata.SaveKey);
+            metadata.SaveKey,
+            session.ProtocolSelection,
+            session.NetService);
         TaskHelper.RunSafely(ConnectHostedControlAsync(session));
         PersistBindingForCurrentSave("attach");
         _pendingHostRestart = null;
@@ -1473,7 +1480,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             session,
             () =>
             {
-                _pendingSaveBindingCoordinator.HostedFlowEnded();
+                _pendingSaveBindingCoordinator.HostedSessionTornDown();
                 _activeSession = null;
                 _joinedRoomPeerIds = new HashSet<ulong>();
                 LanConnectLobbyPlayerNameDirectory.ClearRoom(session.RoomId);
@@ -2095,6 +2102,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 session.Metadata.RoomName,
                 session.Metadata.Password,
                 session.Metadata.GameMode,
+                session.ProtocolSelection,
                 () => _pendingSaveBindingCoordinator.CompleteActivePersist(pending.SaveKey),
                 async () =>
                 {
@@ -2204,7 +2212,7 @@ internal sealed partial class LanConnectLobbyRuntime :
     private void PersistBindingForCurrentSave(string source)
     {
         HostedRoomSession? session = _activeSession;
-        if (session != null)
+        if (session != null && !session.IsClosing)
         {
             LanConnectCurrentSaveBindingWriter.PersistOutcome outcome = _currentSaveBindingWriter.Persist(
                 new LanConnectCurrentSaveBindingWriter.BindingTarget(
@@ -2215,6 +2223,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                     session.Metadata.Password,
                     session.Metadata.GameMode,
                     LanConnectHostChannels.Lobby,
+                    session.ProtocolSelection,
                     saveKey =>
                     {
                         session.BoundSaveKey = saveKey;
@@ -2238,16 +2247,26 @@ internal sealed partial class LanConnectLobbyRuntime :
                 GD.Print(
                     $"sts2_lan_connect lobby runtime: discard pending lobby binding because saveKey changed source={source}");
             }
-            else if (pendingResult == LanConnectPendingSaveBindingCoordinator.PendingPersistResult.RefusedMissingKey)
+            else if (pendingResult == LanConnectPendingSaveBindingCoordinator.PendingPersistResult.RefusedDifferentNetService)
             {
                 GD.Print(
-                    $"sts2_lan_connect lobby runtime: refuse pending lobby binding without an exact saveKey source={source}");
+                    $"sts2_lan_connect lobby runtime: discard keyless pending binding because host NetService changed source={source}");
+            }
+            else if (pendingResult == LanConnectPendingSaveBindingCoordinator.PendingPersistResult.RefusedExplicitLanBinding)
+            {
+                GD.Print(
+                    $"sts2_lan_connect lobby runtime: refuse pending lobby binding over an explicit LAN origin source={source}");
             }
             else if (pendingResult == LanConnectPendingSaveBindingCoordinator.PendingPersistResult.SkippedByPersistence)
             {
                 GD.Print(
                     $"sts2_lan_connect lobby runtime: pending lobby binding was not persisted source={source}; keeping pending intent");
             }
+            return;
+        }
+
+        if (session != null)
+        {
             return;
         }
 
@@ -2274,6 +2293,7 @@ internal sealed partial class LanConnectLobbyRuntime :
                 origin.Password,
                 origin.GameMode,
                 origin.HostChannel,
+                origin.ProtocolLease?.Selection,
                 saveKey =>
                 {
                     origin.SaveKey = saveKey;
@@ -2365,7 +2385,8 @@ internal sealed partial class LanConnectLobbyRuntime :
             request.Password,
             request.GameMode,
             request.HostChannel,
-            request.Source);
+            request.Source,
+            request.FrozenSelection);
     }
 
     private static LanConnectPendingSaveBindingCoordinator.LoadedSave? LoadPendingSaveBindingTarget()
@@ -2409,7 +2430,8 @@ internal sealed partial class LanConnectLobbyRuntime :
             write.Password,
             write.GameMode,
             write.HostChannel,
-            write.Source);
+            write.Source,
+            write.FrozenSelection);
     }
 
     private static bool PersistPendingSaveBinding(
@@ -2427,7 +2449,8 @@ internal sealed partial class LanConnectLobbyRuntime :
             request.Password,
             request.GameMode,
             request.HostChannel,
-            request.Source);
+            request.Source,
+            request.FrozenSelection);
     }
 
     private async void OnHostedControlEnvelope(HostedRoomSession session, LobbyControlEnvelope envelope)

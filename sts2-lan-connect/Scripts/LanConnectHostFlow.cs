@@ -194,7 +194,7 @@ internal static class LanConnectHostFlow
                     "The service selected a different profile than the create intent.");
             }
 
-            protocolLease = LanConnectSessionProtocolState.Shared.FreezeHost(selection, registration.RoomId);
+            protocolLease = LanConnectSessionProtocolState.Shared.FreezeHost(selection, BuildHostLeaseOwner(netService));
             NetErrorInfo? error = netService.StartENetHost(LanConnectConstants.DefaultPort, maxPlayers);
             if (error.HasValue)
             {
@@ -310,6 +310,22 @@ internal static class LanConnectHostFlow
         LanConnectProtocolSelection? persistedSelection = null,
         bool throwOnCreateGuardRejection = false)
     {
+        LanConnectProtocolFailure? resumeSelectionFailure = ValidateExistingHostPublishSelection(
+            boundSaveKey,
+            persistedSelection,
+            LanConnectSessionProtocolState.Shared.Current);
+        if (resumeSelectionFailure != null)
+        {
+            GD.Print(
+                $"sts2_lan_connect host_flow: publish blocked because continued-run protocol is not frozen source={publishSource}, saveKey={boundSaveKey}, code={resumeSelectionFailure.Code}");
+            if (notifyOnFailure)
+            {
+                LanConnectMultiplayerSaveRoomBinding.PresentContinueRunProtocolFailure(resumeSelectionFailure);
+            }
+
+            return LanConnectHostAttemptResult.Failed(resumeSelectionFailure);
+        }
+
         if (LanConnectDegradedMode.CreateBlockingFailure() is { } degradedFailure)
         {
             GD.Print(
@@ -553,6 +569,34 @@ internal static class LanConnectHostFlow
         ?? (activeSnapshot.Role == LanConnectSessionProtocolRole.Host
             ? activeSnapshot.Selection
             : null);
+
+    internal static LanConnectProtocolFailure? ValidateExistingHostPublishSelection(
+        string? boundSaveKey,
+        LanConnectProtocolSelection? persistedSelection,
+        LanConnectSessionProtocolSnapshot activeSnapshot)
+    {
+        if (boundSaveKey == null)
+        {
+            return null;
+        }
+
+        if (persistedSelection == null)
+        {
+            return LanConnectMultiplayerSaveRoomBinding.MissingProtocolSelectionFailure(
+                "The continued multiplayer run has no saved protocol selection.");
+        }
+
+        if (activeSnapshot.Phase != LanConnectSessionProtocolPhase.Frozen
+            || activeSnapshot.Role != LanConnectSessionProtocolRole.Host
+            || activeSnapshot.Selection != persistedSelection)
+        {
+            return LanConnectProtocolFailureMapper.FromLocal(
+                "protocol_selection_conflict",
+                "The active host protocol does not match the continued run.");
+        }
+
+        return null;
+    }
 
     private static string DescribeProtocolSelection(LanConnectProtocolSelection selection) =>
         $"profile={selection.Profile.ToCanonical()},version={selection.SelectedLanProtocolVersion},carrier={selection.Carrier.ToWireValue()},maxPlayers={selection.MaxPlayers},minimumClientVersion={selection.MinimumClientVersion},gameVersion={selection.GameVersion},wireCache={selection.WireCacheSignature ?? "<none>"},ritsuLibPresent={selection.RitsuLibPresent},digest={selection.CapabilityDigest}";

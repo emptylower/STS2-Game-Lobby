@@ -53,10 +53,12 @@ internal sealed class LanConnectRunBindingCoordinator<TRun>
         string roomName,
         string? password,
         string gameMode,
+        LanConnectProtocolSelection frozenSelection,
         Action afterPersist,
         Func<Task> prepareReturn,
         Func<Task> returnToMainMenu)
     {
+        ArgumentNullException.ThrowIfNull(frozenSelection);
         string loadedSaveKey = _buildSaveKey(run);
         if (string.IsNullOrWhiteSpace(expectedSaveKey))
         {
@@ -77,7 +79,8 @@ internal sealed class LanConnectRunBindingCoordinator<TRun>
             gameMode,
             LanConnectHostChannels.Lobby,
             LanConnectSavedRoomBinding.CurrentSchemaVersion,
-            "host_restart_before_main_menu");
+            "host_restart_before_main_menu",
+            frozenSelection);
         if (!_persistBinding(run, write))
         {
             throw new InvalidOperationException(
@@ -104,5 +107,6 @@ internal sealed class LanConnectRunBindingCoordinator<TRun>
         string GameMode,
         string HostChannel,
         int SchemaVersion,
-        string Source);
+        string Source,
+        LanConnectProtocolSelection FrozenSelection);
 }

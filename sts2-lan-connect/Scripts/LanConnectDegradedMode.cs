@@ -8,6 +8,7 @@ namespace Sts2LanConnect.Scripts;
 internal static class LanConnectDegradedMode
 {
     public const string ProtocolPatchConflictCode = "protocol_patch_conflict";
+    public const string ConfigRecoveryRequiredCode = "config_recovery_required";
 
     private static string? _reasonCode;
     private static string? _exceptionFingerprint;
@@ -27,12 +28,21 @@ internal static class LanConnectDegradedMode
             reasonCode = ProtocolPatchConflictCode;
         }
 
+        // A damaged config must remain protected even if a later startup check also fails.
+        if (_reasonCode == ConfigRecoveryRequiredCode && reasonCode != ConfigRecoveryRequiredCode)
+        {
+            return;
+        }
+
         _reasonCode = reasonCode;
         _exceptionFingerprint = exceptionFingerprint;
         _lobbyEntryNoticePending = true;
+        string description = reasonCode == ConfigRecoveryRequiredCode
+            ? "配置与备份均无法读取，配置写入及联机功能已停用"
+            : "联机协议补丁未能完整安装，联机功能已停用";
         LogErrorSink(
-            "sts2_lan_connect DEGRADED MODE: 联机功能已停用（联机协议补丁未能完整安装），" +
-            $"单机不受影响。reason={_reasonCode} fingerprint={_exceptionFingerprint ?? "none"}");
+            $"sts2_lan_connect DEGRADED MODE: {description}；单机不受影响。" +
+            $"reason={_reasonCode} fingerprint={_exceptionFingerprint ?? "none"}");
     }
 
     // Every host/join funnel must check this before doing any work. The failure code is

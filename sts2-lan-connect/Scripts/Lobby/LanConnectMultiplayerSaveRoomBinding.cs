@@ -156,8 +156,26 @@ internal static class LanConnectMultiplayerSaveRoomBinding
             GameMode = GetLobbyGameMode(run),
             HasStoredBinding = false,
             HostChannel = string.Empty,
-            SchemaVersion = 0
+            SchemaVersion = 0,
+            ProtocolFailure = MissingProtocolSelectionFailure("No saved room binding exists for this multiplayer run.")
         };
+    }
+
+    internal static LanConnectProtocolFailure MissingProtocolSelectionFailure(string detail) =>
+        LanConnectProtocolFailureMapper.FromLocal("saved_protocol_selection_missing", detail);
+
+    internal static void PresentContinueRunProtocolFailure(LanConnectProtocolFailure failure)
+    {
+        if (failure.Code is "saved_protocol_selection_missing"
+            or LanConnectDegradedMode.ConfigRecoveryRequiredCode
+            or LanConnectDegradedMode.ProtocolPatchConflictCode)
+        {
+            LanConnectProtocolUiMessages.Present(failure);
+            return;
+        }
+
+        LanConnectPopupUtil.ShowInfo(
+            $"无法验证当前多人存档的原房间协议（{failure.Code}），已阻止续局建房。请从备份恢复包含此存档 saveRoomBindings 的 config.json 并重启游戏；若无备份，请导出诊断并联系 MOD 作者核实原协议。不要改用旧协议继续保存。");
     }
 
     public static bool PersistHostBinding(
@@ -166,7 +184,8 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         string? password,
         string gameMode,
         string hostChannel,
-        string source)
+        string source,
+        LanConnectProtocolSelection? frozenSelection = null)
     {
         string trimmedRoomName = LanConnectConfig.SanitizeRoomName(roomName);
         if (string.IsNullOrWhiteSpace(trimmedRoomName))
@@ -183,11 +202,17 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         }
 
         string normalizedHostChannel = hostChannel.Trim().ToLowerInvariant();
-        LanConnectProtocolSelection selection = LanConnectSessionProtocolState.Shared.Current.Selection
-            ?? LanConnectProtocolSelection.CreateLocalCompat(
-                LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
-                LanConnectBuildInfo.GetGameVersion(),
-                LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
+        LanConnectSessionProtocolSnapshot snapshot = LanConnectSessionProtocolState.Shared.Current;
+        LanConnectProtocolSelection? selection = ResolvePersistableHostSelection(
+            snapshot,
+            frozenSelection,
+            LanConnectProtocolOffer.CreateCurrent());
+        if (selection == null)
+        {
+            GD.Print(
+                $"sts2_lan_connect save_binding: skip persist without validated frozen host selection. source={source}, saveKey={BuildSaveKey(run)}, phase={snapshot.Phase}, role={snapshot.Role}, explicitSelection={frozenSelection != null}");
+            return false;
+        }
 
         LanConnectSavedRoomBinding binding = new()
         {
@@ -213,22 +238,112 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         binding.RitsuLibPresent = selection.RitsuLibPresent;
         binding.CapabilityDigest = selection.CapabilityDigest;
 
-        LanConnectConfig.UpsertSaveRoomBinding(binding);
+        if (!LanConnectConfig.UpsertSaveRoomBinding(binding))
+        {
+            GD.Print(
+                $"sts2_lan_connect save_binding: persist refused by config store source={source}, saveKey={binding.SaveKey}");
+            return false;
+        }
         GD.Print(
-            $"sts2_lan_connect save_binding: persisted source={source}, saveKey={binding.SaveKey}, roomName='{binding.RoomName}', hostChannel={binding.HostChannel}, passwordSet={!string.IsNullOrWhiteSpace(binding.Password)}, playerCount={binding.PlayerCount}, signature={binding.PlayerSignature}");
+            $"sts2_lan_connect save_binding: persisted source={source}, saveKey={binding.SaveKey}, protocolSource={(frozenSelection == null ? "active_host" : "captured_host")}, profile={binding.ProtocolProfileV2}, carrier={binding.ProtocolCarrier}, roomName='{binding.RoomName}', hostChannel={binding.HostChannel}, passwordSet={!string.IsNullOrWhiteSpace(binding.Password)}, playerCount={binding.PlayerCount}, signature={binding.PlayerSignature}");
         return true;
     }
 
-    private static LanConnectProtocolSelection? TryRestoreProtocolSelection(
-        LanConnectSavedRoomBinding binding,
-        out LanConnectProtocolFailure? failure)
+    internal static LanConnectProtocolSelection? ResolvePersistableHostSelection(
+        LanConnectSessionProtocolSnapshot snapshot,
+        LanConnectProtocolSelection? frozenSelection,
+        LanConnectProtocolOffer offer)
+    {
+        if (snapshot.Phase == LanConnectSessionProtocolPhase.Tentative
+            || snapshot.Role == LanConnectSessionProtocolRole.Client
+            || (snapshot.Selection != null && frozenSelection != null && snapshot.Selection != frozenSelection))
+        {
+            return null;
+        }
+
+        // A delayed save can finish after the host lease is released. In that case the
+        // caller must pass the selection captured from the host session or binding intent.
+        LanConnectProtocolSelection? selection = frozenSelection
+            ?? (snapshot.Phase == LanConnectSessionProtocolPhase.Frozen
+                && snapshot.Role == LanConnectSessionProtocolRole.Host
+                    ? snapshot.Selection
+                    : null);
+        if (selection == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return selection.Validate(offer);
+        }
+        catch (LanConnectProtocolException)
+        {
+            return null;
+        }
+    }
+
+    internal static LanConnectProtocolSelection? TryRestoreProtocolSelection(
+        LanConnectSavedRoomBinding? binding,
+        out LanConnectProtocolFailure? failure,
+        LanConnectProtocolOffer? offer = null,
+        int? legacyMaxPlayers = null,
+        string? legacyGameVersion = null,
+        string? legacyWireCacheSignature = null)
     {
         failure = null;
+        if (binding == null)
+        {
+            failure = MissingProtocolSelectionFailure("No saved room binding exists for this multiplayer run.");
+            return null;
+        }
+
+        if (binding.SchemaVersion is 0 or 1)
+        {
+            // Schema 2 introduced tail_v1 together with protocol persistence. An
+            // unmodified schema 0/1 record therefore identifies an old compat room.
+            if (binding.SelectedLanProtocolVersion != 0
+                || binding.ProtocolMaxPlayers != 0
+                || binding.RitsuLibPresent
+                || !string.IsNullOrEmpty(binding.ProtocolProfileV2)
+                || !string.IsNullOrEmpty(binding.ProtocolCarrier)
+                || !string.IsNullOrEmpty(binding.MinimumClientVersion)
+                || !string.IsNullOrEmpty(binding.ProtocolGameVersion)
+                || !string.IsNullOrEmpty(binding.WireCacheSignatureV1)
+                || !string.IsNullOrEmpty(binding.CapabilityDigest))
+            {
+                failure = MissingProtocolSelectionFailure("Legacy binding contains inconsistent protocol fields.");
+                return null;
+            }
+
+            try
+            {
+                int maxPlayers = Math.Clamp(
+                    Math.Max(binding.PlayerCount, legacyMaxPlayers ?? LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers()),
+                    LanConnectConstants.ProtocolMinPlayers,
+                    LanConnectConstants.ProtocolMaxPlayers);
+                LanConnectProtocolSelection compat = LanConnectProtocolSelection.CreateLocalCompat(
+                    maxPlayers,
+                    legacyGameVersion ?? LanConnectBuildInfo.GetGameVersion(),
+                    legacyWireCacheSignature ?? LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
+                return compat.Validate(offer ?? LanConnectProtocolOffer.CreateCurrent());
+            }
+            catch (LanConnectProtocolException exception)
+            {
+                failure = exception.Failure;
+                return null;
+            }
+        }
+
         if (binding.SchemaVersion < 2
             || string.IsNullOrWhiteSpace(binding.ProtocolProfileV2)
             || string.IsNullOrWhiteSpace(binding.ProtocolCarrier)
+            || string.IsNullOrWhiteSpace(binding.MinimumClientVersion)
+            || string.IsNullOrWhiteSpace(binding.ProtocolGameVersion)
+            || binding.ProtocolMaxPlayers == 0
             || string.IsNullOrWhiteSpace(binding.CapabilityDigest))
         {
+            failure = MissingProtocolSelectionFailure("Saved room protocol fields are missing or incomplete.");
             return null;
         }
 
@@ -247,13 +362,10 @@ internal static class LanConnectMultiplayerSaveRoomBinding
                 binding.WireCacheSignatureV1,
                 binding.RitsuLibPresent,
                 binding.CapabilityDigest);
-            LanConnectProtocolOffer offer = LanConnectProtocolOffer.CreateCurrent();
-            return selection.Validate(offer);
+            return selection.Validate(offer ?? LanConnectProtocolOffer.CreateCurrent());
         }
         catch (LanConnectProtocolException exception)
         {
-            GD.Print(
-                $"sts2_lan_connect save_binding: stored protocol selection rejected code={exception.Failure.Code}");
             failure = exception.Failure;
             return null;
         }
@@ -323,6 +435,14 @@ internal static class LanConnectMultiplayerSaveRoomBinding
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(descriptor));
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
+
+    internal static bool IsUnboundNativeSteamRun(SerializableRun run) =>
+        IsUnboundNativeSteamRun(
+            run.PlatformType == PlatformType.Steam,
+            LanConnectConfig.TryGetSaveRoomBinding(BuildSaveKey(run)) != null);
+
+    internal static bool IsUnboundNativeSteamRun(bool isSteamPlatform, bool hasStoredBinding) =>
+        isSteamPlatform && !hasStoredBinding;
 
     public static string GetPlayerSignature(SerializableRun run)
     {

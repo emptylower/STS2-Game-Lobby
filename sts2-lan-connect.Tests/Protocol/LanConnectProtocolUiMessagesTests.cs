@@ -19,6 +19,8 @@ public sealed class LanConnectProtocolUiMessagesTests
     [InlineData("lan_registry_fingerprint_required")]
     [InlineData("lan_registry_fingerprint_mismatch")]
     [InlineData("lan_client_version_too_old")]
+    [InlineData("saved_protocol_selection_missing")]
+    [InlineData("config_recovery_required")]
     public void Known_protocol_failures_have_stable_user_messages(string code)
     {
         string message = LanConnectProtocolUiMessages.Describe(new LanConnectProtocolFailure(
@@ -56,7 +58,7 @@ public sealed class LanConnectProtocolUiMessagesTests
     public void Ritsu_and_legacy_carrier_messages_match_the_new_protocol_wording()
     {
         Assert.Equal(
-            "“兼容旧版 Mod”房间不能启用 RitsuLib。请关闭 RitsuLib 后重试，或改用新协议房间。",
+            "“兼容旧版 Mod”房间不能启用 RitsuLib。新建房间请选“新协议”；如果是在恢复多人存档时看到此提示，请先核对原房间协议，不要关闭 RitsuLib 后按旧协议继续保存。",
             LanConnectProtocolUiMessages.Describe(new LanConnectProtocolFailure("ritsulib_not_allowed_in_compat_mode")));
         Assert.Equal(
             "该房间是旧版本创建的，要求所有玩家启用 RitsuLib；新协议房间不再有此限制。",

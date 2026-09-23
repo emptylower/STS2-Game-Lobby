@@ -7,18 +7,30 @@ internal sealed class LanConnectPendingSaveBindingCoordinator
     private readonly LanConnectPendingSaveBindingIntentState _state = new();
     private readonly Func<LoadedSave?> _loadCurrentSave;
     private readonly Func<LoadedSave, PersistenceRequest, bool> _persist;
+    private readonly Func<object?>? _getCurrentNetService;
+    private readonly Func<string, LanConnectSavedRoomBinding?>? _readBinding;
 
     public LanConnectPendingSaveBindingCoordinator(
         Func<LoadedSave?> loadCurrentSave,
-        Func<LoadedSave, PersistenceRequest, bool> persist)
+        Func<LoadedSave, PersistenceRequest, bool> persist,
+        Func<object?>? getCurrentNetService = null,
+        Func<string, LanConnectSavedRoomBinding?>? readBinding = null)
     {
         _loadCurrentSave = loadCurrentSave;
         _persist = persist;
+        _getCurrentNetService = getCurrentNetService;
+        _readBinding = readBinding;
     }
 
-    public bool AttachHostedRoom(string roomName, string? password, string gameMode, string? saveKey)
+    public bool AttachHostedRoom(
+        string roomName,
+        string? password,
+        string gameMode,
+        string? saveKey,
+        LanConnectProtocolSelection frozenSelection,
+        object? netService = null)
     {
-        return _state.Capture(roomName, password, gameMode, saveKey) != null;
+        return _state.Capture(roomName, password, gameMode, saveKey, frozenSelection, netService) != null;
     }
 
     public void DifferentHostedRoomWillAttach() => _state.Discard();
@@ -35,8 +47,8 @@ internal sealed class LanConnectPendingSaveBindingCoordinator
     public bool CompleteActivePersist(string saveKey)
     {
         if (!_state.TryGet(out LanConnectPendingSaveBindingIntentState.BindingIntent intent)
-            || string.IsNullOrWhiteSpace(intent.SaveKey)
-            || !string.Equals(intent.SaveKey, saveKey, StringComparison.Ordinal))
+            || (!string.IsNullOrWhiteSpace(intent.SaveKey)
+                && !string.Equals(intent.SaveKey, saveKey, StringComparison.Ordinal)))
         {
             return false;
         }
@@ -51,22 +63,38 @@ internal sealed class LanConnectPendingSaveBindingCoordinator
             return PendingPersistResult.NoIntent;
         }
 
-        if (string.IsNullOrWhiteSpace(intent.SaveKey))
-        {
-            _state.Discard();
-            return PendingPersistResult.RefusedMissingKey;
-        }
-
         LoadedSave? loadedSave = _loadCurrentSave();
         if (loadedSave == null)
         {
             return PendingPersistResult.SaveUnavailable;
         }
 
-        if (!string.Equals(intent.SaveKey, loadedSave.SaveKey, StringComparison.Ordinal))
+        if (!string.IsNullOrWhiteSpace(intent.SaveKey)
+            && !string.Equals(intent.SaveKey, loadedSave.SaveKey, StringComparison.Ordinal))
         {
             _state.Discard();
             return PendingPersistResult.RefusedDifferentSave;
+        }
+
+        if (string.IsNullOrWhiteSpace(intent.SaveKey))
+        {
+            if (intent.NetService == null
+                || _getCurrentNetService == null
+                || !ReferenceEquals(_getCurrentNetService(), intent.NetService))
+            {
+                _state.Discard();
+                return PendingPersistResult.RefusedDifferentNetService;
+            }
+
+            LanConnectSavedRoomBinding? existing = _readBinding?.Invoke(loadedSave.SaveKey);
+            if (existing != null
+                && LanConnectContinueRunPublishDecision.Decide(
+                    existing.HostChannel,
+                    existing.SchemaVersion) == LanConnectContinueRunPublishDecisionKind.SkipLanOrigin)
+            {
+                _state.Discard();
+                return PendingPersistResult.RefusedExplicitLanBinding;
+            }
         }
 
         bool persisted = _persist(
@@ -77,7 +105,8 @@ internal sealed class LanConnectPendingSaveBindingCoordinator
                 intent.GameMode,
                 LanConnectHostChannels.Lobby,
                 LanConnectSavedRoomBinding.CurrentSchemaVersion,
-                $"{source}:pending_lobby_intent"));
+                $"{source}:pending_lobby_intent",
+                intent.FrozenSelection));
         if (!persisted)
         {
             return PendingPersistResult.SkippedByPersistence;
@@ -95,7 +124,8 @@ internal sealed class LanConnectPendingSaveBindingCoordinator
         string GameMode,
         string HostChannel,
         int SchemaVersion,
-        string Source);
+        string Source,
+        LanConnectProtocolSelection FrozenSelection);
 
     internal enum PendingPersistResult
     {
@@ -103,7 +133,8 @@ internal sealed class LanConnectPendingSaveBindingCoordinator
         SaveUnavailable,
         SkippedByPersistence,
         Persisted,
-        RefusedMissingKey,
-        RefusedDifferentSave
+        RefusedDifferentSave,
+        RefusedDifferentNetService,
+        RefusedExplicitLanBinding
     }
 }

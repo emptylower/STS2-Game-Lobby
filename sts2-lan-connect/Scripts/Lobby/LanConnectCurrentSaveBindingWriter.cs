@@ -65,7 +65,8 @@ internal sealed class LanConnectCurrentSaveBindingWriter
                 target.Password,
                 target.GameMode,
                 target.HostChannel,
-                source));
+                source,
+                target.FrozenSelection));
         if (persisted)
         {
             target.RecordPersistedSaveKey(loaded.SaveKey);
@@ -92,6 +93,7 @@ internal sealed class LanConnectCurrentSaveBindingWriter
         string? Password,
         string GameMode,
         string HostChannel,
+        LanConnectProtocolSelection? FrozenSelection,
         Action<string> RecordPersistedSaveKey);
 
     internal sealed record PersistenceRequest(
@@ -99,7 +101,8 @@ internal sealed class LanConnectCurrentSaveBindingWriter
         string? Password,
         string GameMode,
         string HostChannel,
-        string Source);
+        string Source,
+        LanConnectProtocolSelection? FrozenSelection);
 
     internal sealed record PersistOutcome(
         PersistResult Result,

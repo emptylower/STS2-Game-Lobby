@@ -10,7 +10,19 @@
 
 # STS2 LAN Connect 使用说明
 
-当前正式版为 `0.6.2`，客户端与 lobby-service 版本号已同步对齐。可从 GitHub Release 或 Steam 创意工坊（条目「游戏大厅」）获取。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+当前正式版为 `0.6.3`，客户端与 lobby-service 版本号已同步对齐。本版从 GitHub Release 获取；Steam 创意工坊（条目「游戏大厅」）本次未更新，仍为 `0.6.2`。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+
+## v0.6.3 正式版
+
+`0.6.3` 汇总 `0.6.3-alpha.1`～`alpha.3` 的修复。完整说明见 `docs/RELEASE_NOTES_V0.6.3_ZH.md`。
+
+- **续局保留协议**：新协议存档在 SL、保存退出后读档及延迟保存时继续使用原房间协议；缺失或损坏的绑定会在建房前明确拒绝，避免静默变成旧协议后遭 RitsuLib 拒绝。确实来自早期 schema 0/1 的旧协议记录仍可恢复。
+- **配置保护**：保存配置时保留有效备份；主配置损坏时尝试恢复备份；两份都无法读取时进入只读保护，不用空配置覆盖续局信息。
+- **兼容房间修复**：修复加入兼容房间被错误拒绝，以及桌面房主开局后客机解码错误、房主黑屏等待。另修复房主昵称偶尔显示为“Test Host”、MOD 预检主题和重复取消按钮。
+- **升级范围**：同房玩家统一更新客户端 `0.6.3`。本版 lobby-service 仅版本号同步，已有 `0.6.2` 服务端无需为存档修复升级；已开启自动更新的节点仍可能采纳本次正式 Release。
+- **实测与已知问题**：Mac Steam + Android AVD、游戏 `0.111.0` 在魔仙堡完成兼容协议及新协议（RitsuLib `0.5.13`）的首怪、SL 后下一房间及保存退出后读档，协议未降级。期间出现两次严重丢包断线，以及候选切换时误报 `ModMismatch` 后自动重试成功；这些问题尚未修复，本次仅核心回归功能通过。
+
+更新前备份游戏存档和 `user://sts2_lan_connect/`。原协议无法确认时，请恢复有效配置备份或导出诊断；不要关闭 RitsuLib、改选旧协议或反复保存来绕过保护。已被 `0.6.2` 覆盖且无备份的原协议记录无法自动还原。
 
 ## v0.6.2 正式版
 
@@ -234,6 +246,7 @@
 ## 多人续局
 
 - 房主重新进入已存在的多人续局存档时，续局会自动重新发布到大厅，沿用原有房间信息，无需重新手动建房
+- 如果提示“无法确认这个多人存档原先使用的联机协议”，本次恢复会停止以保护存档。请先备份游戏存档和 `user://sts2_lan_connect/`，再检查同目录的 `config.json.backup`；不要改选“兼容旧版 Mod”、关闭 RitsuLib 或继续保存来绕过提示。没有可用备份时，导出诊断报告联系开发者。
 - 纯 LAN 存档不会自动发布到公共大厅；房主在多人菜单载入该存档后，可在续局等待页点击 `续局身份码`
 - 房主应按角色/玩家名把对应的单条 `STS2LANRESUME:` 身份码发给每位队友。队友在手动 LAN/IP 加入页填写地址，并把该码粘贴到 `旧存档续局身份码` 输入框；不要互换身份码
 - 新游戏或同一台设备后续普通直连无需填写续局码：客户端会复用安装级 LAN 身份，网络超时只会用同一个身份再试一次
@@ -333,13 +346,13 @@
 
 ### 安卓端启动就弹"致命错误"
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本文档对应 `0.6.2`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本文档对应 `0.6.3`）
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保 `sts2_lan_connect.dll`、`sts2_lan_connect.pck` 和 `sts2_lan_connect.json` 同步更新
 - 如仍崩溃，将最新 `godot.log` 和本地调试报告一并发给开发者
 
 ### 安卓端进了主菜单，但打开多人页面 / 游戏大厅异常
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本文档对应 `0.6.2`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本文档对应 `0.6.3`）
 - 确认安装的是当前发布的客户端包，而非更早的旧包
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保三个文件来自同一批 release
 - 如问题仍存在，将最新 `godot.log` 和本地调试报告一并发给开发者
@@ -357,7 +370,7 @@
 - **联机大厅 8 群：341498145**
 - **测试群（要求会导出 log）：1093309523**
 
-反馈时请附上双方完整的 `godot.log` 与客户端内的本地调试报告（设置页可导出），并注明客户端版本 `0.6.2`；Android 请按上方「Android 取证」提供 launcher 日志与 `adb logcat`。
+反馈时请附上双方完整的 `godot.log` 与客户端内的本地调试报告（设置页可导出），并注明客户端版本 `0.6.3`；Android 请按上方「Android 取证」提供 launcher 日志与 `adb logcat`。
 
 ---
 
@@ -365,7 +378,19 @@
 
 # STS2 LAN Connect User Guide
 
-The current stable release is `0.6.2`, with the client and lobby-service versions aligned. It ships through GitHub Releases and the Steam Workshop item (游戏大厅). Every player must use the same client and game version and fully restart after updating.
+The current stable release is `0.6.3`, with client and lobby-service versions aligned. Get this release from GitHub; the Steam Workshop item (游戏大厅) is unchanged at `0.6.2`. Every player must use the same client and game version and fully restart after updating.
+
+## v0.6.3 Stable Release
+
+`0.6.3` consolidates the fixes from `0.6.3-alpha.1` through `alpha.3`. Full notes (Chinese): `docs/RELEASE_NOTES_V0.6.3_ZH.md`.
+
+- **Preserve the saved protocol** across SL, save-and-quit/load, and delayed saves. Missing or invalid bindings stop room creation instead of silently changing tail saves into compat rooms and triggering RitsuLib rejection. Genuine legacy schema 0/1 compat records can still resume.
+- **Protect configuration** with a valid backup, recovery when the primary copy is damaged, and read-only protection when both copies are unreadable.
+- **Fix compat joining and desktop-host starts**, plus intermittent “Test Host” names, MOD preflight themes, and duplicate cancel buttons.
+- **Upgrade scope**: update all room participants to client `0.6.3`. lobby-service only changes its version number; existing `0.6.2` services do not need an upgrade for this save fix. Nodes with auto-update enabled may still install the stable Release.
+- **Validation and known issues**: Mac Steam + Android AVD on game `0.111.0` completed the first monster, SL/next room, and save-and-quit/load in compat and tail (RitsuLib `0.5.13`) on the 魔仙堡 server without protocol downgrade. Two severe packet-loss disconnects and a transient `ModMismatch` during candidate switching, followed by a successful automatic retry, remain unresolved. The core regression passed; the overall run was not error-free.
+
+Back up saves and `user://sts2_lan_connect/` before updating. When the original protocol cannot be confirmed, restore a valid configuration backup or export diagnostics. Do not disable RitsuLib or switch to compat mode to bypass protection. An original binding already overwritten by `0.6.2` cannot be automatically recovered without a backup.
 
 ## v0.6.2 Stable Release
 
@@ -588,6 +613,7 @@ If the clipboard already contains a valid invite code, clicking `Game Lobby` ski
 ## Save-Run Multiplayer
 
 - When a host re-enters an existing multiplayer save, the run is automatically re-published to the lobby using the original room info — no need to create a new room manually
+- If the original room protocol cannot be identified, recovery stops to protect the save. Back up the game save and `user://sts2_lan_connect/` before checking `config.json.backup`; do not switch to Compat, disable RitsuLib, or save again to bypass the warning. Export diagnostics if no usable backup exists.
 - Pure-LAN saves are not published to the public lobby. After the host loads that save from the multiplayer menu, the waiting screen provides `Resume Identity Codes`
 - The host should send each teammate exactly one `STS2LANRESUME:` line matching that player's character/name. The teammate enters the host address on manual LAN/IP Join and pastes that line into the old-save resume-code field
 - New runs and later ordinary joins on the same installation do not need a resume code: the client reuses one installation-level LAN identity and retries a transport timeout once with that same identity

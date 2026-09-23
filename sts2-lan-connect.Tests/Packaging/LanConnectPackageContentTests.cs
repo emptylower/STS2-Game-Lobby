@@ -48,11 +48,11 @@ public sealed class LanConnectPackageContentTests
 
         using JsonDocument manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
-        Assert.Equal("0.6.3-alpha.2", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("0.6.3", manifest.RootElement.GetProperty("version").GetString());
         FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
             Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
         Assert.Equal("0.6.3.0", assemblyVersion.FileVersion);
-        Assert.StartsWith("0.6.3-alpha.2", assemblyVersion.ProductVersion, StringComparison.Ordinal);
+        Assert.Equal("0.6.3", assemblyVersion.ProductVersion?.Split('+')[0]);
 
         foreach (string packagePath in ExpectedFiles)
         {
@@ -337,8 +337,8 @@ public sealed class LanConnectPackageContentTests
         }
 
         // The client install readme's version table and the user guide's "current stable" line are
-        // living documents that follow the newest release; their 0.6.2 text is asserted by
-        // Client_v062_documents_stable_release. Only the 0.6.1 history section is pinned here.
+        // living documents that follow the newest release; their current version text is asserted by
+        // Client_v063_documents_stable_release. Only the 0.6.1 history section is pinned here.
         Assert.Contains("## v0.6.1 正式版", userGuide, StringComparison.Ordinal);
         Assert.DoesNotContain("Pre-release", clientReadme, StringComparison.Ordinal);
         Assert.DoesNotContain("Pre-release", userGuide, StringComparison.Ordinal);
@@ -389,15 +389,11 @@ public sealed class LanConnectPackageContentTests
             Assert.Contains("1093309523", text, StringComparison.Ordinal);
         }
 
-        // The shipped client is a stable release, not a candidate.
-        Assert.Contains("| 客户端版本 | `0.6.2`（正式版） |", clientReadme, StringComparison.Ordinal);
-        Assert.Contains("| Client version | `0.6.2` (stable) |", clientReadme, StringComparison.Ordinal);
-        Assert.Contains("当前正式版为 **v0.6.2**", readme, StringComparison.Ordinal);
+        // Current-version declarations are checked by Client_v063_documents_stable_release.
         string userGuide = File.ReadAllText(Path.Combine(
             fixture.RepositoryRoot,
             "docs",
             "STS2_LAN_CONNECT_USER_GUIDE_ZH.md"));
-        Assert.Contains("当前正式版为 `0.6.2`", userGuide, StringComparison.Ordinal);
         Assert.Contains("## v0.6.2 正式版", userGuide, StringComparison.Ordinal);
         Assert.DoesNotContain("Pre-release", clientReadme, StringComparison.Ordinal);
 
@@ -408,6 +404,32 @@ public sealed class LanConnectPackageContentTests
         Assert.Contains("Steam 创意工坊", releaseNotes, StringComparison.Ordinal);
         Assert.DoesNotContain("pre-release", announcement, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("## [0.6.2] - ", changelog, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Client_v063_documents_stable_release()
+    {
+        using Fixture fixture = new();
+        string releaseNotes = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot, "docs", "RELEASE_NOTES_V0.6.3_ZH.md"));
+        string readme = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "README.md"));
+        string clientReadme = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot, "docs", "CLIENT_RELEASE_README_ZH.md"));
+        string userGuide = File.ReadAllText(Path.Combine(
+            fixture.RepositoryRoot, "docs", "STS2_LAN_CONNECT_USER_GUIDE_ZH.md"));
+        string changelog = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "CHANGELOG.md"));
+
+        Assert.Contains("| 客户端版本 | `0.6.3`（正式版） |", clientReadme, StringComparison.Ordinal);
+        Assert.Contains("| Client version | `0.6.3` (stable) |", clientReadme, StringComparison.Ordinal);
+        Assert.Contains("当前正式版为 **v0.6.3**", readme, StringComparison.Ordinal);
+        Assert.Contains("当前正式版为 `0.6.3`", userGuide, StringComparison.Ordinal);
+        Assert.Contains("## v0.6.3 正式版", userGuide, StringComparison.Ordinal);
+        Assert.Contains("## [0.6.3] - ", changelog, StringComparison.Ordinal);
+        Assert.Contains("本次存档修复不要求更新服务端", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("本次不更新 Steam 创意工坊", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("ModMismatch", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("严重丢包", releaseNotes, StringComparison.Ordinal);
+        Assert.Contains("整体验收仍有未解决项", releaseNotes, StringComparison.Ordinal);
     }
 
     [Fact]

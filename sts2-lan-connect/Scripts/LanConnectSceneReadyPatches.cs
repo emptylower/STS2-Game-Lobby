@@ -120,6 +120,7 @@ internal static class LanConnectSceneReadyPatches
             return;
         }
 
+        LanConnectGameplayPatches.EnsureAndroidOfficialContinueRunGuards();
         MultiplayerSubmenuPatches.ScheduleEnsureLobbyEntry(submenu, "main_menu_stack_get_submenu_type");
         LanConnectLobbyRuntime.Instance?.OnMultiplayerSubmenuReady(submenu);
     }

@@ -6,15 +6,22 @@ internal sealed class LanConnectPendingSaveBindingIntentState
 {
     private BindingIntent? _current;
 
-    public BindingIntent? Capture(string roomName, string? password, string gameMode, string? saveKey)
+    public BindingIntent? Capture(
+        string roomName,
+        string? password,
+        string gameMode,
+        string? saveKey,
+        LanConnectProtocolSelection frozenSelection,
+        object? netService = null)
     {
-        if (string.IsNullOrWhiteSpace(saveKey))
+        ArgumentNullException.ThrowIfNull(frozenSelection);
+        if (string.IsNullOrWhiteSpace(saveKey) && netService == null)
         {
             _current = null;
             return null;
         }
 
-        BindingIntent intent = new(roomName, password, gameMode, saveKey);
+        BindingIntent intent = new(roomName, password, gameMode, saveKey, frozenSelection, netService);
         _current = intent;
         return intent;
     }
@@ -39,9 +46,8 @@ internal sealed class LanConnectPendingSaveBindingIntentState
 
     public void PreserveAcrossHostedSessionTeardown()
     {
-        // B4 hardening only: retain a keyed continue-run intent if lobby-session teardown
-        // narrowly wins the race with the save notification. The wider hosted-flow
-        // lifetime is bounded separately by Discard().
+        // A keyed save notification can arrive after the room session has closed.
+        // The exact key and frozen selection remain valid until a different flow starts.
     }
 
     public void Discard()
@@ -49,5 +55,11 @@ internal sealed class LanConnectPendingSaveBindingIntentState
         _current = null;
     }
 
-    internal sealed record BindingIntent(string RoomName, string? Password, string GameMode, string SaveKey);
+    internal sealed record BindingIntent(
+        string RoomName,
+        string? Password,
+        string GameMode,
+        string? SaveKey,
+        LanConnectProtocolSelection FrozenSelection,
+        object? NetService);
 }

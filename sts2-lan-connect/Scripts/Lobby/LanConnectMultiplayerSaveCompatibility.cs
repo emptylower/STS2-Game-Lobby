@@ -72,6 +72,13 @@ internal static class LanConnectMultiplayerSaveCompatibility
 
     public static bool ShouldInterceptOfficialLoadButtons()
     {
+        // If a required host guard could not be installed, hide the vanilla load
+        // action even on platforms that normally use it for LAN saves.
+        if (LanConnectDegradedMode.IsActive)
+        {
+            return true;
+        }
+
         if (PlatformUtil.PrimaryPlatform == PlatformType.None)
         {
             return false;
@@ -143,6 +150,12 @@ internal static class LanConnectMultiplayerSaveCompatibility
 
     public static Task StartLoadedRunAsLanHostAsync(Control loadingOverlay, NSubmenuStack stack)
     {
+        if (LanConnectDegradedMode.CreateBlockingFailure() is { } degradedFailure)
+        {
+            LanConnectProtocolUiMessages.Present(degradedFailure);
+            return Task.CompletedTask;
+        }
+
         NetHostGameService? netService = null;
         LanConnectSessionProtocolLease? protocolLease = null;
         ExecuteSafeLoad(
@@ -150,18 +163,17 @@ internal static class LanConnectMultiplayerSaveCompatibility
             isLoading => loadingOverlay.Visible = isLoading,
             run =>
             {
-                netService = LanConnectNetGameServiceFactory.CreateHost();
                 LanConnectResolvedRoomBinding binding = LanConnectMultiplayerSaveRoomBinding.Resolve(run);
-                if (binding.ProtocolFailure != null)
+                if (binding.ProtocolFailure != null || binding.ProtocolSelection == null)
                 {
-                    LanConnectProtocolUiMessages.Present(binding.ProtocolFailure);
+                    LanConnectMultiplayerSaveRoomBinding.PresentContinueRunProtocolFailure(
+                        binding.ProtocolFailure
+                        ?? LanConnectMultiplayerSaveRoomBinding.MissingProtocolSelectionFailure(
+                            "The saved multiplayer run has no validated protocol selection."));
                     return false;
                 }
-                LanConnectProtocolSelection selection = binding.ProtocolSelection
-                    ?? LanConnectProtocolSelection.CreateLocalCompat(
-                        LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
-                        LanConnectBuildInfo.GetGameVersion(),
-                        LanConnectWireCacheDiagnostics.GetCurrentResult().Snapshot?.Signature);
+                LanConnectProtocolSelection selection = binding.ProtocolSelection;
+                netService = LanConnectNetGameServiceFactory.CreateHost();
                 int maxPlayers = selection.MaxPlayers;
                 protocolLease = LanConnectSessionProtocolState.Shared.FreezeHost(
                     selection,
@@ -251,6 +263,12 @@ internal static class LanConnectMultiplayerSaveCompatibility
 
     public static bool TryStartLoadedRunAsLanHostFromSubmenu(NMultiplayerSubmenu submenu)
     {
+        if (LanConnectDegradedMode.CreateBlockingFailure() is { } degradedFailure)
+        {
+            LanConnectProtocolUiMessages.Present(degradedFailure);
+            return true;
+        }
+
         if (!TryResolveMultiplayerSubmenuContext(submenu, out Control? loadingOverlay, out NSubmenuStack? stack)
             || loadingOverlay == null
             || stack == null)

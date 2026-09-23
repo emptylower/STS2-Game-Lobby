@@ -12,7 +12,12 @@ internal static class LanConnectProtocolUiMessages
                     ? "客户端版本过旧，请更新后重试。"
                     : $"客户端版本过旧，请更新到 {failure.RequiredClientVersion} 或更高版本。",
             "protocol_profile_unsupported" => "当前客户端不支持该房间的联机协议。",
-            "ritsulib_not_allowed_in_compat_mode" => "“兼容旧版 Mod”房间不能启用 RitsuLib。请关闭 RitsuLib 后重试，或改用新协议房间。",
+            "config_recovery_required" =>
+                "LAN Connect 配置及备份都无法读取，已停用联机并停止写入配置，以保护多人续局。请先备份游戏存档与 user://sts2_lan_connect/，手动恢复 config.json 或 config.json.backup，随后重启游戏；大厅内仍可导出诊断报告。",
+            "saved_protocol_selection_missing" =>
+                "无法确认这个多人存档原先使用的联机协议，已停止恢复房间以保护存档。请从备份恢复对应的 LAN Connect 配置；如无备份，请导出诊断报告联系开发者。不要改用“兼容旧版 Mod”继续保存。",
+            "ritsulib_not_allowed_in_compat_mode" =>
+                "“兼容旧版 Mod”房间不能启用 RitsuLib。新建房间请选“新协议”；如果是在恢复多人存档时看到此提示，请先核对原房间协议，不要关闭 RitsuLib 后按旧协议继续保存。",
             "ritsulib_presence_mismatch" => failure.RequiredRitsuLibPresent == true
                 ? "该房间是旧版本创建的，要求所有玩家启用 RitsuLib；新协议房间不再有此限制。"
                 : "该房间是旧版本创建的，要求所有玩家关闭 RitsuLib；新协议房间不再有此限制。",
