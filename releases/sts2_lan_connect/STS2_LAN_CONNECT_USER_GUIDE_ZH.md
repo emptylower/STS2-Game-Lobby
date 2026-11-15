@@ -10,7 +10,7 @@
 
 # STS2 LAN Connect 使用说明
 
-当前正式版为 `0.6.4`，lobby-service 保持 `0.6.3`。本版从[仓库客户端安装包](https://github.com/emptylower/STS2-Game-Lobby/blob/main/releases/sts2_lan_connect-release.zip)获取；GitHub Release 与 Steam 创意工坊仍为 `0.6.3`，本次未推送。建议同房玩家统一客户端 `0.6.4`，游戏版本必须相同，安装或更新后完全退出并重启游戏。
+当前正式版为 `0.6.4`，lobby-service 保持 `0.6.3`。本版从 [GitHub 正式 Release v0.6.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4) 或[客户端安装包](https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.6.4/sts2_lan_connect-release.zip)获取；Release 仅附客户端包，Steam 创意工坊仍为 `0.6.3`，本次未推送。建议同房玩家统一客户端 `0.6.4`，游戏版本必须相同，安装或更新后完全退出并重启游戏。
 
 ## v0.6.4 正式版
 
@@ -391,7 +391,7 @@
 
 # STS2 LAN Connect User Guide
 
-The current stable client is `0.6.4`; lobby-service remains at `0.6.3`. Get this version from the [repository client package](https://github.com/emptylower/STS2-Game-Lobby/blob/main/releases/sts2_lan_connect-release.zip). The GitHub Release and Steam Workshop item still carry `0.6.3` and are not updated in this publication. Use the same client and game versions throughout a room, then fully exit and restart after updating.
+The current stable client is `0.6.4`; lobby-service remains at `0.6.3`. Get this version from the [stable GitHub Release v0.6.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4) or the [client package download](https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.6.4/sts2_lan_connect-release.zip). The Release contains only the client package; the Steam Workshop item still carries `0.6.3` and is not updated here. Use the same client and game versions throughout a room, then fully exit and restart after updating.
 
 ## v0.6.4 Stable Release
 

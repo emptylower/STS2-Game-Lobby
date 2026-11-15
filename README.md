@@ -56,9 +56,9 @@
 
 - 客户端源码 / 构建版本：`0.6.4`
 - 大厅服务源码 / 构建版本：`0.6.3`（本次未更新）
-- 客户端安装包：[`sts2_lan_connect-release.zip`](./releases/sts2_lan_connect-release.zip)
+- 客户端安装包：[`sts2_lan_connect-release.zip`](https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.6.4/sts2_lan_connect-release.zip)
 - 发布说明：[`docs/RELEASE_NOTES_V0.6.4_ZH.md`](./docs/RELEASE_NOTES_V0.6.4_ZH.md)
-- 最近一次 GitHub Release：[`v0.6.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.3)；本次 `0.6.4` 更新源码及仓库安装包，未创建 GitHub Release。
+- 当前 GitHub 正式 Release：[`v0.6.4`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4)（非预发布，仅附客户端安装包；服务端保持 `0.6.3`）。
 - Steam 创意工坊：[`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)（仍为 `0.6.3`，本次未推送）
 
 ### 推荐阅读顺序
@@ -250,9 +250,9 @@ Each `lobby-service` node advertises itself to peers via the built-in peer-annou
 
 - Client source/build version: `0.6.4`
 - Lobby-service source/build version: `0.6.3` (unchanged)
-- Client package: [`sts2_lan_connect-release.zip`](./releases/sts2_lan_connect-release.zip)
+- Client package: [`sts2_lan_connect-release.zip`](https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.6.4/sts2_lan_connect-release.zip)
 - Release notes: [`docs/RELEASE_NOTES_V0.6.4_ZH.md`](./docs/RELEASE_NOTES_V0.6.4_ZH.md) (Chinese)
-- Latest GitHub Release: [`v0.6.3`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.3); this update publishes `0.6.4` source and the repository package, without creating a GitHub Release.
+- Current stable GitHub Release: [`v0.6.4`](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4) (not a pre-release; client package only, with lobby-service staying at `0.6.3`).
 - Steam Workshop: [`游戏大厅`](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) (still `0.6.3`; not updated in this publication)
 
 ### Recommended reading order

@@ -2,8 +2,8 @@
 
 - 日期：2026-11-15
 - 客户端版本：`0.6.4`；lobby-service 保持 `0.6.3`。
-- 分发：更新远程仓库源码、版本标签与 `releases/` 客户端安装包。本次未创建 GitHub Release，也未推送 Steam 创意工坊；这两个渠道最近一次发布仍为 `0.6.3`。
-- 下载：[客户端安装包](https://github.com/emptylower/STS2-Game-Lobby/blob/main/releases/sts2_lan_connect-release.zip)。
+- 分发：[GitHub 正式 Release v0.6.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4)（非预发布），同时更新仓库源码与 `releases/` 客户端包。Release 仅附客户端安装包，lobby-service 版本及发布包保持 `0.6.3`；Steam 创意工坊本次未推送，仍为 `0.6.3`。
+- 下载：[客户端安装包](https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.6.4/sts2_lan_connect-release.zip)。
 
 ## 游戏 0.113.0 兼容
 
@@ -71,6 +71,7 @@
 ## 安装包校验
 
 - 安装包：`releases/sts2_lan_connect-release.zip`
-- ZIP SHA-256：`11138b6d90205c36241b8e576ff6463b7be325c2d7dc083249d14ed8effb2c55`
+- ZIP SHA-256：`2dae241e1f55de69e0badb99ffe5472deb1378223b6d10180c21614f63211e30`
 - DLL SHA-256：`e9644876ff9f563e7784ae21c10f2b67c6eebe2fab53c8106d0d6ae1d3814ae9`
 - ZIP 内、交付暂存目录与标准构建产物的 DLL 完全一致。安装包已镜像至仓库 `releases/` 及本地交付目录 `交付/v0.6.4/`。
+- GitHub Release 包相对先前渠道说明更新前的仓库包，仅变更包内 `README.md` 与使用指南中的分发说明；DLL、PCK、安装脚本与法律文件字节保持不变。上述 ZIP 哈希以本次 Release 包为准。

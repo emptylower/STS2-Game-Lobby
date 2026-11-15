@@ -9,8 +9,8 @@
 
 **更新方法**：建议同房玩家统一使用 v0.6.4，替换完整 MOD 后完全退出并重启游戏。房间内游戏版本仍须一致，本次兼容更新不支持不同游戏版本互联。大厅服务端无需为本次客户端修复升级。
 
-下载：[v0.6.4 客户端安装包](https://github.com/emptylower/STS2-Game-Lobby/blob/main/releases/sts2_lan_connect-release.zip)
+下载：[v0.6.4 客户端安装包](https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.6.4/sts2_lan_connect-release.zip)
 
 [完整更新说明](https://github.com/emptylower/STS2-Game-Lobby/blob/main/docs/RELEASE_NOTES_V0.6.4_ZH.md)
 
-本次先更新仓库源码与安装包，GitHub Release 和 Steam 创意工坊仍为 v0.6.3，尚未同步。
+本版已发布至 [GitHub 正式 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4)，仅包含客户端安装包。Steam 创意工坊仍为 v0.6.3，尚未同步。

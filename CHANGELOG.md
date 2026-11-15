@@ -24,7 +24,7 @@
 - 建议同房玩家统一更新客户端 `0.6.4` 并完全重启，游戏版本必须一致；本次不提供跨游戏版本联机。
 - 线上协议版本与 `minimumClientVersion` 不变；lobby-service `0.6.2` 及以上可继续使用。
 - 旧版真实程序集检查覆盖 `0.111.0`；本机未验证真实 `0.107`。手机与中文显示通过用户复测确认，不能扩展为全部 Android 设备或所有联机场景验收。
-- 本次更新远程源码及仓库 `releases/` 客户端包；GitHub Release 与 Steam 创意工坊尚保持 `0.6.3`。
+- 发布 [GitHub 正式 Release v0.6.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4)（非预发布），仅附客户端包，并更新远程源码与仓库 `releases/`；lobby-service 保持 `0.6.3`。Steam 创意工坊本次未推送，仍为 `0.6.3`。
 - 此前记录的严重丢包断线、候选切换误报 `ModMismatch` 等网络问题仍未在本次修复。
 
 ## [0.6.3] - 2026-09-23
