@@ -2,7 +2,7 @@
 
 - 日期：2026-11-15
 - 客户端版本：`0.6.4`；lobby-service 保持 `0.6.3`。
-- 分发：[GitHub 正式 Release v0.6.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4)（非预发布），同时更新仓库源码与 `releases/` 客户端包。Release 仅附客户端安装包，lobby-service 版本及发布包保持 `0.6.3`；Steam 创意工坊本次未推送，仍为 `0.6.3`。
+- 分发：[GitHub 正式 Release v0.6.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4)（非预发布），同时更新仓库源码与 `releases/` 客户端包。Release 仅附客户端安装包，lobby-service 版本及发布包保持 `0.6.3`；[Steam 创意工坊「游戏大厅」](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)在 GitHub 发布后，于同日补推 `0.6.4` 客户端内容与简介。
 - 下载：[客户端安装包](https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.6.4/sts2_lan_connect-release.zip)。
 
 ## 游戏 0.113.0 兼容
@@ -67,6 +67,12 @@
 - [0.113 第一轮兼容与字体验证](testing/STS2_LAN_CONNECT_GAME_0.113_COMPAT_ZH.md)
 - [第二轮消息布局与模式验证](testing/STS2_LAN_CONNECT_GAME_0.113_COMPAT_ROUND2_ZH.md)
 - [第三轮手机预览诊断与用户复测结果](testing/STS2_LAN_CONNECT_CARD_PREVIEW_DIAGNOSTICS_ZH.md)
+
+## 后续渠道同步（2026-11-15）
+
+GitHub 正式 Release 先行发布后，Steam 创意工坊于同日 09:43（Asia/Shanghai）完成 `0.6.4` 内容、更新公告与简介提交，并通过公开接口核对线上内容标识及简介。工坊上传沿用已验证的客户端程序内容，lobby-service 保持 `0.6.3`。
+
+本次只更新源文档的当前渠道状态，未重新生成 ZIP、未替换已发布的 GitHub 附件。包内 `README.md` 与使用指南保留 GitHub 发包时的渠道快照，当时工坊尚为 `0.6.3`；这不代表包内程序版本。DLL、PCK 及下列既有校验值保持不变。
 
 ## 安装包校验
 

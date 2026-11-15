@@ -22,7 +22,9 @@
 
 `0.6.4` 适配游戏 `0.113.0` 的加入流程、消息布局和 API 变化，支持已解锁的极速／恐惧模式建房及对应准备页，补齐独立界面中文字体，并修复手机端聊天卡牌引用的点按预览。中文显示与手机预览已由用户复测确认正常。完整说明见 `docs/RELEASE_NOTES_V0.6.4_ZH.md`。
 
-从 [GitHub 正式 Release v0.6.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4) 或直接下载[客户端安装包](https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.6.4/sts2_lan_connect-release.zip)获取本版。该 Release 仅附客户端包；Steam 创意工坊「游戏大厅」仍为 `0.6.3`，本次未推送。建议同房所有玩家统一使用客户端 `0.6.4` 和相同游戏版本，替换完整 MOD 后完全退出并重新启动游戏。lobby-service 保持 `0.6.3`；已有 `0.6.2` 及以上服务端无需为本次客户端修复升级。线上协议版本与 `minimumClientVersion` 不变。
+从 [GitHub 正式 Release v0.6.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4) 或直接下载[客户端安装包](https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.6.4/sts2_lan_connect-release.zip)获取本版。该 Release 仅附客户端包；Steam 创意工坊[「游戏大厅」](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)也已于 2026-11-15 同步 `0.6.4` 内容与简介。建议同房所有玩家统一使用客户端 `0.6.4` 和相同游戏版本，替换完整 MOD 后完全退出并重新启动游戏。lobby-service 保持 `0.6.3`；已有 `0.6.2` 及以上服务端无需为本次客户端修复升级。线上协议版本与 `minimumClientVersion` 不变。
+
+若已发布 GitHub 包内的旧说明仍写工坊 `0.6.3`，这是 GitHub 发包时的渠道快照，客户端程序版本仍为 `0.6.4`。本源文档已补充后续工坊发布状态；既有 ZIP 附件未替换。
 
 极速／恐惧模式沿用游戏原生解锁条件，本 MOD 不强制解锁、不修改进度。旧版运行时兼容继续保留，真实旧版程序集检查覆盖 `0.111.0`，本机未验证真实 `0.107`；兼容旧版不代表不同游戏版本可以同房。
 
@@ -231,7 +233,9 @@ v0.6 不再支持 `0.2.x` 客户端。自建大厅至少需要 lobby-service `0.
 
 `0.6.4` adapts join flows, message layouts, and APIs to game `0.113.0`; supports native-unlocked Blitz/Dread rooms and their ready screens; restores Chinese fonts in independent interfaces; and fixes tapping shared card references on mobile. The user confirmed Chinese text and mobile previews passed retesting. Full notes (Chinese): `docs/RELEASE_NOTES_V0.6.4_ZH.md`.
 
-Get this version from the [stable GitHub Release v0.6.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4) or the [client package download](https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.6.4/sts2_lan_connect-release.zip). This Release includes only the client package; the Steam Workshop item remains at `0.6.3` and is not updated here. Use client `0.6.4` and the same game version throughout a room, replace the complete MOD, then fully exit and restart the game. lobby-service stays at `0.6.3`; existing `0.6.2` or newer services require no update for these client fixes. Wire protocol versions and `minimumClientVersion` are unchanged.
+Get this version from the [stable GitHub Release v0.6.4](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4) or the [client package download](https://github.com/emptylower/STS2-Game-Lobby/releases/download/v0.6.4/sts2_lan_connect-release.zip). This Release includes only the client package; the [Steam Workshop item](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330) also received `0.6.4` content and its updated description on 2026-11-15. Use client `0.6.4` and the same game version throughout a room, replace the complete MOD, then fully exit and restart the game. lobby-service stays at `0.6.3`; existing `0.6.2` or newer services require no update for these client fixes. Wire protocol versions and `minimumClientVersion` are unchanged.
+
+If an existing GitHub package still says Workshop `0.6.3`, that text reflects the channel status when GitHub was published; the client program is `0.6.4`. This source guide records the later Workshop publication, and the existing ZIP attachment is unchanged.
 
 Blitz and Dread follow native unlock requirements; this MOD does not force unlocks or change progress. Older runtime compatibility remains, with real old-assembly checks covering `0.111.0`; real `0.107` was not checked locally. This does not allow different game versions to play together.
 

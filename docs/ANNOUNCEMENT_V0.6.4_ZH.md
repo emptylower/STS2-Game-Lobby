@@ -13,4 +13,4 @@
 
 [完整更新说明](https://github.com/emptylower/STS2-Game-Lobby/blob/main/docs/RELEASE_NOTES_V0.6.4_ZH.md)
 
-本版已发布至 [GitHub 正式 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4)，仅包含客户端安装包。Steam 创意工坊仍为 v0.6.3，尚未同步。
+本版已发布至 [GitHub 正式 Release](https://github.com/emptylower/STS2-Game-Lobby/releases/tag/v0.6.4)，仅包含客户端安装包。[Steam 创意工坊「游戏大厅」](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)也已于 2026-11-15 同步 v0.6.4 内容与简介。
