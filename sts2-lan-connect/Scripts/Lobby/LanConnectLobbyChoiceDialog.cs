@@ -55,6 +55,7 @@ internal partial class LanConnectLobbyChoiceDialog : Control
 
     public override void _Ready()
     {
+        LanConnectLobbyFonts.Apply(this);
         MouseFilter = MouseFilterEnum.Stop;
         FocusMode = FocusModeEnum.All;
         SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);

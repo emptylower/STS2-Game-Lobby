@@ -315,7 +315,7 @@ internal static class LanConnectMultiplayerSaveCompatibility
         GD.Print($"sts2_lan_connect save_compat: abandon backup created path={backupPath}");
         try
         {
-            SaveManager.Instance.UpdateProgressWithRunData(run, victory: false);
+            UpdateProgressWithAbandonedRun(SaveManager.Instance, run);
             RunHistoryUtilities.CreateRunHistoryEntry(run, victory: false, isAbandoned: true, run.PlatformType);
             if (run.DailyTime.HasValue)
             {
@@ -345,6 +345,22 @@ internal static class LanConnectMultiplayerSaveCompatibility
             $"sts2_lan_connect save_compat: abandon completed removedBinding={removedBinding}, saveKey={saveKey}, backupPath={backupPath}");
         submenu.Call(NMultiplayerSubmenu.MethodName.UpdateButtons);
         LanConnectPopupUtil.ShowInfo($"多人存档已放弃。删除前备份保存在：\n{backupPath}");
+    }
+
+    internal static void UpdateProgressWithAbandonedRun(object saveManager, object run)
+    {
+        // 0.113 changed the return type from void to PostRunProgressUpdateResult.
+        // Resolve the unchanged arguments at runtime so either ABI can record a loss.
+        MethodInfo method = saveManager.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .SingleOrDefault(candidate =>
+            {
+                ParameterInfo[] parameters = candidate.GetParameters();
+                return candidate.Name == "UpdateProgressWithRunData"
+                    && parameters.Length == 2
+                    && parameters[0].ParameterType.IsInstanceOfType(run)
+                    && parameters[1].ParameterType == typeof(bool);
+            }) ?? throw new MissingMethodException(saveManager.GetType().FullName, "UpdateProgressWithRunData");
+        _ = method.Invoke(saveManager, [run, false]);
     }
 
     private static async Task<bool> ConfirmPermanentAbandonAsync(NMultiplayerSubmenu submenu)
@@ -384,16 +400,17 @@ internal static class LanConnectMultiplayerSaveCompatibility
 
     private static void PushLoadedRunScreen(NSubmenuStack stack, NetHostGameService netService, SerializableRun run)
     {
-        if (run.Modifiers.Count > 0)
+        string mode = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameMode(run);
+        if (mode == "daily")
         {
-            if (run.DailyTime.HasValue)
-            {
-                NDailyRunLoadScreen submenu = stack.GetSubmenuType<NDailyRunLoadScreen>();
-                submenu.InitializeAsHost(netService, run);
-                stack.Push(submenu);
-                return;
-            }
+            NDailyRunLoadScreen submenu = stack.GetSubmenuType<NDailyRunLoadScreen>();
+            submenu.InitializeAsHost(netService, run);
+            stack.Push(submenu);
+            return;
+        }
 
+        if (mode == "custom")
+        {
             NCustomRunLoadScreen submenuCustom = stack.GetSubmenuType<NCustomRunLoadScreen>();
             submenuCustom.InitializeAsHost(netService, run);
             stack.Push(submenuCustom);

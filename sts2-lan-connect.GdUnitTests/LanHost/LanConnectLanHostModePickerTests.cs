@@ -53,6 +53,40 @@ public sealed class LanConnectLanHostModePickerTests
     }
 
     [TestCase]
+    public async Task Additional_supported_modes_follow_unlock_state_and_dispatch_the_selected_mode()
+    {
+        LanConnectLanHostModeAvailability availability = new(
+            Standard: true, Daily: true, Custom: true, SupportsBlitz: true, SupportsDread: true);
+        List<LanConnectLanHostMode> selected = [];
+        using PickerFixture fixture = await PickerFixture.Create(
+            availability: () => availability,
+            onSelected: mode =>
+            {
+                selected.Add(mode);
+                return Task.CompletedTask;
+            });
+        fixture.Picker.Open();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Picker.ChoiceLabelsForTests).ContainsExactly(
+            "标准模式", "多人每日挑战", "自定义模式", "极速模式", "恐惧模式");
+        AssertThat(fixture.Picker.ChoiceDisabledStatesForTests)
+            .IsEqual(new[] { false, false, false, true, true });
+        fixture.Picker.ActivateChoiceForTests(3);
+        fixture.Picker.ActivateChoiceForTests(4);
+        AssertThat(selected.Count).IsEqual(0);
+
+        availability = availability with { Blitz = true };
+        fixture.Picker.Open();
+        await fixture.Runner.AwaitIdleFrame();
+        fixture.Picker.ActivateChoiceForTests(3);
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(selected).ContainsExactly(LanConnectLanHostMode.Blitz);
+        AssertThat(fixture.Picker.Visible).IsFalse();
+    }
+
+    [TestCase]
     public async Task Custom_selection_starts_custom_mode_once_and_closes_picker()
     {
         List<LanConnectLanHostMode> selected = [];

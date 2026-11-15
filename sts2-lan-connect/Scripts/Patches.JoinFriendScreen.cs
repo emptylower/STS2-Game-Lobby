@@ -102,6 +102,7 @@ internal static class JoinFriendScreenPatches
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             SizeFlagsVertical = Control.SizeFlags.ShrinkBegin
         };
+        LanConnectLobbyFonts.Apply(container, parent.GetThemeFont("font", "Label"));
 
         Label title = new()
         {

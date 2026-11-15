@@ -474,6 +474,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private void BuildUi()
     {
         _root = new MarginContainer { Name = "RoomChatOverlayRoot" };
+        LanConnectLobbyFonts.Apply(_root);
         _root.SetAnchorsPreset(Control.LayoutPreset.TopRight);
         _root.MouseEntered += () => SetPanelHovered(true);
         _root.MouseExited += () => SetPanelHovered(false);

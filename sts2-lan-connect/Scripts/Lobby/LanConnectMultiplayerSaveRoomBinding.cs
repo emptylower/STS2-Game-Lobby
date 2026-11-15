@@ -373,13 +373,7 @@ internal static class LanConnectMultiplayerSaveRoomBinding
 
     public static string GetLobbyGameMode(GameMode gameMode)
     {
-        return gameMode switch
-        {
-            GameMode.Standard => "standard",
-            GameMode.Custom => "custom",
-            GameMode.Daily => "daily",
-            _ => LanConnectConstants.DefaultGameMode
-        };
+        return LanConnectGameModeCompatibility.GetLobbyMode(gameMode);
     }
 
     public static string GetLobbyGameModeLabel(GameMode gameMode)
@@ -389,23 +383,12 @@ internal static class LanConnectMultiplayerSaveRoomBinding
 
     public static string GetLobbyGameModeLabel(string? gameMode)
     {
-        return gameMode?.Trim().ToLowerInvariant() switch
-        {
-            "daily" => "多人每日挑战",
-            "custom" => "自定义模式",
-            "standard" or "" or null => "标准模式",
-            _ => gameMode.Trim()
-        };
+        return LanConnectGameModeCompatibility.GetModeLabel(gameMode);
     }
 
     public static string GetLobbyGameMode(SerializableRun run)
     {
-        if (run.Modifiers.Count == 0)
-        {
-            return "standard";
-        }
-
-        return run.DailyTime.HasValue ? "daily" : "custom";
+        return LanConnectGameModeCompatibility.GetSavedRunMode(run);
     }
 
     public static LobbySavedRunInfo BuildSavedRunInfo(SerializableRun run, ulong hostNetId, Dictionary<ulong, string>? storedPlayerNames = null)

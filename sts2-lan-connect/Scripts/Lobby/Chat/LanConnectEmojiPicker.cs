@@ -277,6 +277,7 @@ internal sealed partial class LanConnectEmojiPicker : PopupPanel
 
     public override void _Ready()
     {
+        LanConnectLobbyFonts.Apply(this);
         Name = PickerName;
         Unresizable = true;
         if (UsesLobbyStyle)

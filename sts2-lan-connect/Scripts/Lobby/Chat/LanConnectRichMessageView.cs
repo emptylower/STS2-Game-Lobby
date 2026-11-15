@@ -26,6 +26,9 @@ internal sealed partial class LanConnectRichMessageView : MarginContainer
     private readonly MegaRichTextLabel _label;
     private readonly string _copyText;
     private readonly IReadOnlyList<LanConnectRichMessageSpan> _spans;
+    private readonly LanConnectReferenceTapGesture _tapGesture = new();
+    private readonly LanConnectReferenceTouchMouseDeduplicator _touchMouseDeduplicator = new();
+    private LanConnectRichMessageReference? _touchReference;
     private bool _rendered;
 
     internal LanConnectRichMessageView(
@@ -53,7 +56,7 @@ internal sealed partial class LanConnectRichMessageView : MarginContainer
             FocusMode = FocusModeEnum.All,
             CustomMinimumSize = new Vector2(0f, 22f)
         };
-        _label.AddThemeFontOverride("normal_font", font ?? ThemeDB.FallbackFont);
+        _label.AddThemeFontOverride("normal_font", LanConnectLobbyFonts.WithChineseFallback(font ?? ThemeDB.FallbackFont));
         _label.AddThemeFontSizeOverride("normal_font_size", fontSize);
         AddChild(_label);
 
@@ -76,6 +79,7 @@ internal sealed partial class LanConnectRichMessageView : MarginContainer
             }
         }
 
+        _label.SetMeta("lan_connect_reference_view_id", LanConnectReferenceDiagnostics.Identity(this));
         _label.AccessibilityName = accessible.ToString();
         SetMeta("lan_connect_copy_text", _copyText);
         SetMeta("lan_connect_reference_keys", string.Join(',', referenceKeys));
@@ -127,11 +131,17 @@ internal sealed partial class LanConnectRichMessageView : MarginContainer
                 _label.Pop();
             }
         }
+        LanConnectReferenceDiagnostics.Shared.Write("render", "view_ready",
+            ("view_id", LanConnectReferenceDiagnostics.Identity(this)), ("spans", _spans.Count),
+            ("references", _references.Count), ("in_tree", IsInsideTree()), ("visible", IsVisibleInTree()),
+            ("bounds", _label.GetGlobalRect()));
     }
 
     private void OnMetaHoverStarted(Variant meta)
     {
-        if (TryGetReference(meta, out LanConnectRichMessageReference reference))
+        TraceInput("meta_hover_started");
+        if (!_tapGesture.IgnoreHover(Time.GetTicksMsec()) &&
+            TryGetReference(meta, out LanConnectRichMessageReference reference))
         {
             ReferenceHoverStarted?.Invoke(_label, reference);
         }
@@ -139,6 +149,7 @@ internal sealed partial class LanConnectRichMessageView : MarginContainer
 
     private void OnMetaHoverEnded(Variant meta)
     {
+        TraceInput("meta_hover_ended");
         if (TryGetReference(meta, out _))
         {
             ReferenceHoverEnded?.Invoke();
@@ -147,17 +158,82 @@ internal sealed partial class LanConnectRichMessageView : MarginContainer
 
     private void OnMetaClicked(Variant meta)
     {
+        TraceInput("meta_clicked");
         if (TryGetReference(meta, out LanConnectRichMessageReference reference))
         {
-            ReferencePressed?.Invoke(_label, reference);
+            if (_tapGesture.TouchInProgress)
+            {
+                _touchReference = reference;
+                TraceInput("meta_waits_for_touch_release");
+            }
+            else if (_tapGesture.TryActivateReference(Time.GetTicksMsec()))
+            {
+                RaiseReferencePressed("meta", reference);
+            }
+            else
+            {
+                TraceInput("meta_suppressed");
+            }
+        }
+        else
+        {
+            TraceInput("meta_without_reference");
         }
     }
 
     private void OnGuiInput(InputEvent input)
     {
+        ulong now = Time.GetTicksMsec();
+        if (input is InputEventScreenTouch touch)
+        {
+            LanConnectReferenceDiagnostics.Shared.Write("input", touch.Pressed ? "touch_press" : "touch_release",
+                ("view_id", LanConnectReferenceDiagnostics.Identity(this)), ("references", _references.Count),
+                ("device", touch.Device), ("index", touch.Index), ("position", touch.Position),
+                ("cancelled", touch.Canceled), ("in_tree", IsInsideTree()),
+                ("visible", IsVisibleInTree()), ("bounds", _label.GetGlobalRect()));
+            _touchMouseDeduplicator.ObserveTouch(touch.Position, now);
+            if (touch.Pressed)
+            {
+                _touchReference = null;
+                _tapGesture.Press(touch.Index, touch.Position, now);
+                ReferenceHoverEnded?.Invoke();
+            }
+            else
+            {
+                bool tapped = _tapGesture.Release(touch.Index, touch.Position, now, touch.Canceled);
+                LanConnectRichMessageReference? reference = _references.Count == 1
+                    ? _references.Values.Single()
+                    : _touchReference;
+                _touchReference = null;
+                if (tapped && reference != null && _tapGesture.TryActivateReference(now))
+                {
+                    RaiseReferencePressed("touch_release", reference);
+                    GetViewport().SetInputAsHandled();
+                }
+            }
+            // Leave presses/drags available to the enclosing chat scroll container.
+            return;
+        }
+        if (input is InputEventScreenDrag drag)
+        {
+            TraceInput("touch_drag");
+            _tapGesture.Drag(drag.Index, drag.Position, now);
+            return;
+        }
+        if (input is InputEventMouseButton { ButtonIndex: MouseButton.Left } pointer)
+        {
+            LanConnectReferenceDiagnostics.Shared.Write("input", pointer.Pressed ? "mouse_press" : "mouse_release",
+                ("view_id", LanConnectReferenceDiagnostics.Identity(this)), ("references", _references.Count),
+                ("device", pointer.Device), ("position", pointer.Position),
+                ("in_tree", IsInsideTree()), ("visible", IsVisibleInTree()), ("bounds", _label.GetGlobalRect()));
+        }
+        if (input is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } mouse &&
+            !_touchMouseDeduplicator.IsSyntheticMouse(mouse.Position, now))
+        {
+            _tapGesture.UseMouse();
+        }
         bool openSingleReference = input switch
         {
-            InputEventScreenTouch { Pressed: true } => true,
             InputEventKey
             {
                 Pressed: true,
@@ -173,7 +249,7 @@ internal sealed partial class LanConnectRichMessageView : MarginContainer
         };
         if (openSingleReference && _references.Count == 1)
         {
-            ReferencePressed?.Invoke(_label, _references.Values.Single());
+            RaiseReferencePressed(input.GetType().Name, _references.Values.Single());
             GetViewport().SetInputAsHandled();
             return;
         }
@@ -188,6 +264,19 @@ internal sealed partial class LanConnectRichMessageView : MarginContainer
 
         DisplayServer.ClipboardSet(_copyText);
         GetViewport().SetInputAsHandled();
+    }
+
+    private void TraceInput(string reason) => LanConnectReferenceDiagnostics.Shared.Write("input", reason,
+        ("view_id", LanConnectReferenceDiagnostics.Identity(this)), ("references", _references.Count),
+        ("in_tree", IsInsideTree()), ("visible", IsVisibleInTree()), ("bounds", _label.GetGlobalRect()));
+
+    private void RaiseReferencePressed(string source, LanConnectRichMessageReference reference)
+    {
+        LanConnectReferenceDiagnostics.Shared.Write("activate", "view_reference_pressed",
+            ("view_id", LanConnectReferenceDiagnostics.Identity(this)), ("source", source),
+            ("reference_id", reference.Item == null ? 0 : LanConnectReferenceDiagnostics.Identity(reference.Item)),
+            ("model_id", (reference.Segment as LanConnectItemRefSegment)?.ModelId));
+        ReferencePressed?.Invoke(_label, reference);
     }
 
     private bool TryGetReference(Variant meta, out LanConnectRichMessageReference reference)

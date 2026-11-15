@@ -10,7 +10,20 @@
 
 # STS2 LAN Connect 使用说明
 
-当前正式版为 `0.6.3`，客户端与 lobby-service 版本号已同步对齐。本版可从 GitHub Release 或 Steam 创意工坊（条目「游戏大厅」，2026-09-24 更新至 `0.6.3`）获取。同房玩家必须统一客户端与游戏版本，安装或更新后必须完整重启游戏。
+当前正式版为 `0.6.4`，lobby-service 保持 `0.6.3`。本版从[仓库客户端安装包](https://github.com/emptylower/STS2-Game-Lobby/blob/main/releases/sts2_lan_connect-release.zip)获取；GitHub Release 与 Steam 创意工坊仍为 `0.6.3`，本次未推送。建议同房玩家统一客户端 `0.6.4`，游戏版本必须相同，安装或更新后完全退出并重启游戏。
+
+## v0.6.4 正式版
+
+本版适配游戏 `0.113.0`，并继续保留旧版运行时兼容。完整说明见 `docs/RELEASE_NOTES_V0.6.4_ZH.md`。
+
+- **加入兼容**：修复 0.113 加入房间、桌面房主加入响应、新协议拒绝／中止及放弃本局等接口变化造成的问题；加入极速／恐惧房间时进入对应准备页。
+- **模式选择**：大厅和 LAN 建房支持游戏已解锁的极速／恐惧模式，房间列表显示对应模式；不强制解锁、不修改进度。
+- **中文字体**：大厅、服务器选择、房间聊天和独立对话框补齐中文显示。
+- **手机卡牌预览**：点按聊天中的卡牌名称可打开固定预览；触摸与模拟鼠标事件去重，悬停结束不再关闭固定预览，创建失败时显示可关闭提示。用户已复测确认正常。
+- **升级范围**：只更新客户端；lobby-service 保持 `0.6.3`，已有 `0.6.2` 及以上服务端可继续使用。线上协议版本与 `minimumClientVersion` 不变。
+- **验证边界**：本机真实旧版程序集检查覆盖 `0.111.0`，不宣称完成真实 `0.107` 验证；中文与手机预览由用户复测确认。此前的严重丢包断线和候选切换误报 `ModMismatch` 未在本次修复。
+
+兼容旧版不代表允许不同游戏版本同房。替换时请更新完整 MOD，游戏运行中替换文件不会热更新。
 
 ## v0.6.3 正式版
 
@@ -346,13 +359,13 @@
 
 ### 安卓端启动就弹"致命错误"
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本文档对应 `0.6.3`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 中的版本号为当前发布版本（本文档对应 `0.6.4`）
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保 `sts2_lan_connect.dll`、`sts2_lan_connect.pck` 和 `sts2_lan_connect.json` 同步更新
 - 如仍崩溃，将最新 `godot.log` 和本地调试报告一并发给开发者
 
 ### 安卓端进了主菜单，但打开多人页面 / 游戏大厅异常
 
-- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本文档对应 `0.6.3`）
+- 确认 `mods/sts2_lan_connect/sts2_lan_connect.json` 版本号为当前发布版本（本文档对应 `0.6.4`）
 - 确认安装的是当前发布的客户端包，而非更早的旧包
 - 如果是覆盖安装旧包，建议先完整卸载再重新安装，确保三个文件来自同一批 release
 - 如问题仍存在，将最新 `godot.log` 和本地调试报告一并发给开发者
@@ -370,7 +383,7 @@
 - **联机大厅 8 群：341498145**
 - **测试群（要求会导出 log）：1093309523**
 
-反馈时请附上双方完整的 `godot.log` 与客户端内的本地调试报告（设置页可导出），并注明客户端版本 `0.6.3`；Android 请按上方「Android 取证」提供 launcher 日志与 `adb logcat`。
+反馈时请附上双方完整的 `godot.log` 与客户端内的本地调试报告（设置页可导出），并注明客户端版本 `0.6.4`；Android 请按上方「Android 取证」提供 launcher 日志与 `adb logcat`。
 
 ---
 
@@ -378,7 +391,20 @@
 
 # STS2 LAN Connect User Guide
 
-The current stable release is `0.6.3`, with client and lobby-service versions aligned. Get this release from GitHub; the Steam Workshop item (游戏大厅) is unchanged at `0.6.2`. Every player must use the same client and game version and fully restart after updating.
+The current stable client is `0.6.4`; lobby-service remains at `0.6.3`. Get this version from the [repository client package](https://github.com/emptylower/STS2-Game-Lobby/blob/main/releases/sts2_lan_connect-release.zip). The GitHub Release and Steam Workshop item still carry `0.6.3` and are not updated in this publication. Use the same client and game versions throughout a room, then fully exit and restart after updating.
+
+## v0.6.4 Stable Release
+
+This version supports game `0.113.0` while retaining compatibility with older runtime layouts. Full notes (Chinese): `docs/RELEASE_NOTES_V0.6.4_ZH.md`.
+
+- **Joining**: adapt 0.113 join flows, desktop-host response layouts, tail rejection/abort paths, and abandon-run APIs; open matching ready screens for Blitz/Dread rooms.
+- **Mode selection**: lobby and LAN creation support natively unlocked Blitz/Dread modes, with room-list labels. No forced unlocks or progress changes.
+- **Chinese fonts**: restore glyphs in the lobby, server picker, room chat, and independent dialogs.
+- **Mobile card previews**: tapping shared card names opens a pinned preview; touch/synthetic-mouse activation is deduplicated, hover exit retains pinned previews, and creation failures show a closable message. The user confirmed the mobile retest passed.
+- **Upgrade scope**: client only. lobby-service remains `0.6.3`; existing `0.6.2` or newer services remain usable. Wire protocol versions and `minimumClientVersion` are unchanged.
+- **Validation limits**: real old-assembly checks cover `0.111.0`, not real `0.107`. Chinese text and mobile previews were confirmed by user retesting. Previously recorded packet-loss disconnects and candidate-switching `ModMismatch` remain unresolved.
+
+Older-runtime compatibility does not permit different game versions in one room. Replace the complete MOD and fully restart; changing files while the game runs does not reload code.
 
 ## v0.6.3 Stable Release
 

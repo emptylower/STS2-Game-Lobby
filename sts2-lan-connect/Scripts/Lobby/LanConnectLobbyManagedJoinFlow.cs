@@ -11,7 +11,6 @@ using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Connection;
-using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby;
 using MegaCrit.Sts2.Core.Multiplayer.Serialization;
 using MegaCrit.Sts2.Core.Saves;
@@ -62,7 +61,7 @@ internal sealed class LanConnectLobbyManagedJoinFlow
 
     public CancellationTokenSource CancelToken { get; } = new();
 
-    public async Task<JoinResult> BeginAsync(object initializer, SceneTree sceneTree)
+    public async Task<LanConnectManagedJoinResult> BeginAsync(object initializer, SceneTree sceneTree)
     {
         MegaCrit.Sts2.Core.Logging.Logger.logLevelTypeMap[LogType.Network] = LogLevel.Debug;
         MegaCrit.Sts2.Core.Logging.Logger.logLevelTypeMap[LogType.Actions] = LogLevel.VeryDebug;
@@ -115,30 +114,33 @@ internal sealed class LanConnectLobbyManagedJoinFlow
             string peerMetadata = hostInfo.HasVersionMetadata
                 ? $"Version={hostInfo.Version} Hash={hostInfo.IdDatabaseHash}"
                 : "VersionMetadata=unavailable";
-            _logger.Info($"Got initial game info message. {peerMetadata} Mode={initialMessage.gameMode} State={sessionState}");
+            _logger.Info($"Got initial game info message. {peerMetadata} State={sessionState}");
 
-            return sessionState switch
+            // Since 0.113 the initial message contains no game mode. Read it
+            // from the successful join response, falling back to the old layout.
+            switch (sessionState)
             {
-                RunSessionState.InLobby => new JoinResult
+                case RunSessionState.InLobby:
                 {
-                    gameMode = initialMessage.gameMode,
-                    sessionState = sessionState,
-                    joinResponse = await AttemptJoin(NetService)
-                },
-                RunSessionState.InLoadedLobby => new JoinResult
+                    ClientLobbyJoinResponseMessage response = await AttemptJoin(NetService);
+                    var mode = LanConnectLobbyHandshakeCompatibility.ReadRunMode(initialMessage, response);
+                    return new(sessionState, mode.GameMode, mode.IsCustom, JoinResponse: response);
+                }
+                case RunSessionState.InLoadedLobby:
                 {
-                    gameMode = initialMessage.gameMode,
-                    sessionState = sessionState,
-                    loadJoinResponse = await AttemptLoadJoin(NetService)
-                },
-                RunSessionState.Running => new JoinResult
+                    ClientLoadJoinResponseMessage response = await AttemptLoadJoin(NetService);
+                    var mode = LanConnectLobbyHandshakeCompatibility.ReadRunMode(initialMessage, response);
+                    return new(sessionState, mode.GameMode, mode.IsCustom, LoadJoinResponse: response);
+                }
+                case RunSessionState.Running:
                 {
-                    gameMode = initialMessage.gameMode,
-                    sessionState = sessionState,
-                    rejoinResponse = await AttemptRejoin(NetService)
-                },
-                _ => throw new InvalidOperationException($"Received invalid state {sessionState} from connection."),
-            };
+                    ClientRejoinResponseMessage response = await AttemptRejoin(NetService);
+                    var mode = LanConnectLobbyHandshakeCompatibility.ReadRunMode(initialMessage, response);
+                    return new(sessionState, mode.GameMode, mode.IsCustom, RejoinResponse: response);
+                }
+                default:
+                    throw new InvalidOperationException($"Received invalid state {sessionState} from connection.");
+            }
         }
         catch (Exception)
         {
@@ -459,9 +461,9 @@ internal sealed class LanConnectLobbyManagedJoinFlow
         UnlockState unlockState = SaveManager.Instance.GenerateUnlockStateFromProgress();
         ClientLobbyJoinRequestMessage message = new()
         {
-            maxAscensionUnlocked = SaveManager.Instance.Progress.MaxMultiplayerAscension,
             unlockState = unlockState.ToSerializable()
         };
+        message = LanConnectLobbyHandshakeCompatibility.AttachAscensionLimits(message, SaveManager.Instance.Progress);
         message = LanConnectLobbyHandshakeCompatibility.AttachLocalVersionInfo(message);
         gameService.SendMessage(message);
         ClientLobbyJoinResponseMessage response = await _joinCompletion.Task;

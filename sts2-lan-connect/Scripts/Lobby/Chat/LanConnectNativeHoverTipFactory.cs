@@ -81,17 +81,25 @@ internal sealed class LanConnectNativeHoverTipFactory : ILanConnectReferencePrev
                     // Reapply the resolved local model after that lifecycle step.
                     _port.ConfigureCard(requestedPreview, card);
                 }
-                catch
+                catch (Exception exception)
                 {
-                    // The initial configuration already validated the scene and model.
-                    // A disappearing preview should not escape the UI callback.
+                    LanConnectReferenceDiagnostics.Shared.Failure("visual", "native_card_ready_exception", exception,
+                        ("source", "native_hover_tip"));
+                    // AddChild runs Ready synchronously. Let the controller replace a
+                    // broken native placeholder with the closable failure surface.
+                    if (GodotObject.IsInstanceValid(requestedPreview))
+                    {
+                        requestedPreview.SetMeta("lan_connect_preview_unavailable", true);
+                    }
                 }
             };
             ConfigureVisual(native, nativePreview: true);
             return native;
         }
-        catch
+        catch (Exception exception)
         {
+            LanConnectReferenceDiagnostics.Shared.Failure("visual", "native_card_fallback", exception,
+                ("source", "native_hover_tip"));
             ReleaseTemporary(native);
             Control fallback = _cardFallback.Create(card);
             ConfigureVisual(fallback, nativePreview: false);
@@ -123,8 +131,10 @@ internal sealed class LanConnectNativeHoverTipFactory : ILanConnectReferencePrev
             native.ResetSize();
             return native;
         }
-        catch
+        catch (Exception exception)
         {
+            LanConnectReferenceDiagnostics.Shared.Failure("visual", "native_hover_tip_fallback", exception,
+                ("item_type", preview.ItemType));
             ReleaseTemporary(native);
             return BuildCompleteFallback(preview);
         }
@@ -168,7 +178,7 @@ internal sealed class LanConnectNativeHoverTipFactory : ILanConnectReferencePrev
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        title.AddThemeFontOverride("font", ThemeDB.FallbackFont);
+        title.AddThemeFontOverride("font", LanConnectLobbyFonts.WithChineseFallback(ThemeDB.FallbackFont));
         header.AddChild(title);
         body.AddChild(header);
         MegaRichTextLabel description = new()
@@ -182,7 +192,7 @@ internal sealed class LanConnectNativeHoverTipFactory : ILanConnectReferencePrev
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        description.AddThemeFontOverride("normal_font", ThemeDB.FallbackFont);
+        description.AddThemeFontOverride("normal_font", LanConnectLobbyFonts.WithChineseFallback(ThemeDB.FallbackFont));
         body.AddChild(description);
         panel.AddChild(body);
         ConfigureVisual(panel, nativePreview: false);

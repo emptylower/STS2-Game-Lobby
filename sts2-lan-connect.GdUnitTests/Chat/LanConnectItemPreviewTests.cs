@@ -196,20 +196,45 @@ public sealed partial class LanConnectItemPreviewTests
     }
 
     [TestCase]
-    public async Task Card_visual_exception_closes_preview_and_leaves_no_orphan_content()
+    public async Task Card_visual_exception_shows_closable_friendly_failure_without_fake_card()
     {
         FakeCardVisualFactory factory = new() { Throw = true };
-        using PreviewFixture fixture = await PreviewFixture.Create(factory);
+        FakePreviewHotkeyScope hotkeyScope = new();
+        using PreviewFixture fixture = await PreviewFixture.Create(factory,
+            new LanConnectItemPreviewNodePort(), hotkeyScope);
 
         fixture.Preview.ShowResolved(
             ResolvedCard(upgradeLevel: 1),
             new Rect2(Vector2.Zero, new Vector2(20, 20)),
-            new Rect2(Vector2.Zero, new Vector2(800, 600)));
+            new Rect2(Vector2.Zero, new Vector2(800, 600)),
+            pinned: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        LanConnectItemPreviewTestState state = fixture.Preview.TestState;
+        AssertThat(state.Visible).IsTrue();
+        AssertThat(state.Unavailable).IsTrue();
+        AssertThat(state.Pinned).IsTrue();
+        AssertThat(state.CardVisualCount).IsEqual(0);
+        AssertThat(state.HasLocalVisual).IsFalse();
+        AssertThat(state.ContentNodeCount).IsEqual(1);
+        AssertThat(string.IsNullOrWhiteSpace(state.Description)).IsFalse();
+        AssertThat(state.Description.Contains("visual failed", StringComparison.Ordinal)).IsFalse();
+        AssertThat(hotkeyScope.AcquireCalls).IsEqual(1);
+        AssertThat(hotkeyScope.ReleaseCalls).IsEqual(0);
+        Label message = fixture.Preview.FindChild("ChatReferencePreviewUnavailable", recursive: true, owned: false) as Label
+                        ?? throw new InvalidOperationException("Failure message missing.");
+        AssertThat(message.Text).IsEqual(state.Description);
+        Button close = fixture.Preview.FindChild(LanConnectReferencePreviewController.CloseButtonName,
+            recursive: true, owned: false) as Button ?? throw new InvalidOperationException("Close button missing.");
+        AssertThat(close.IsVisibleInTree()).IsTrue();
+        close.EmitSignal(Button.SignalName.Pressed);
         await fixture.Runner.AwaitIdleFrame();
 
         AssertThat(fixture.Preview.TestState.Visible).IsFalse();
+        AssertThat(fixture.Preview.TestState.Unavailable).IsFalse();
         AssertThat(fixture.Preview.TestState.ContentNodeCount).IsEqual(0);
         AssertThat(fixture.Preview.TestState.BlocksAltCapture).IsFalse();
+        AssertThat(hotkeyScope.ReleaseCalls).IsEqual(1);
     }
 
     [TestCase("holder_null")]
@@ -254,8 +279,8 @@ public sealed partial class LanConnectItemPreviewTests
         fixture.ShowCard();
         await fixture.Runner.AwaitIdleFrame();
 
-        AssertThat(nodePort.AttachCalls).IsEqual(1);
-        AssertThat(nodePort.ReleaseCalls).IsEqual(1);
+        AssertThat(nodePort.AttachCalls).IsEqual(2);
+        AssertThat(nodePort.ReleaseCalls).IsEqual(2);
         AssertThat(factory.LastVisual != null).IsTrue();
         AssertThat(GodotObject.IsInstanceValid(factory.LastVisual)).IsFalse();
         AssertThat(fixture.Preview.TestState.Visible).IsFalse();
@@ -288,8 +313,8 @@ public sealed partial class LanConnectItemPreviewTests
             new Rect2(Vector2.Zero, new Vector2(800, 600)));
         await fixture.Runner.AwaitIdleFrame();
 
-        AssertThat(nodePort.AttachCalls).IsEqual(1);
-        AssertThat(nodePort.ReleaseCalls).IsEqual(1);
+        AssertThat(nodePort.AttachCalls).IsEqual(2);
+        AssertThat(nodePort.ReleaseCalls).IsEqual(2);
         AssertThat(nodePort.LastChild != null).IsTrue();
         AssertThat(GodotObject.IsInstanceValid(nodePort.LastChild)).IsFalse();
         AssertThat(fixture.Preview.TestState.Visible).IsFalse();
@@ -542,6 +567,51 @@ public sealed partial class LanConnectItemPreviewTests
         AssertThat(fixture.Preview.TestState.ContentNodeCount).IsEqual(0);
         AssertThat(LanConnectGodotItemLinkCapturePorts.HasVisibleItemPreview(
             fixture.Preview.GetTree())).IsFalse();
+    }
+
+    [TestCase]
+    public async Task Touch_then_emulated_mouse_and_hover_end_keep_preview_pinned_but_real_outside_mouse_closes()
+    {
+        using PreviewFixture fixture = await PreviewFixture.Create(new FakeCardVisualFactory());
+        Vector2 messagePosition = new(100, 100);
+        fixture.Preview._Input(new InputEventScreenTouch
+        {
+            Index = 0, Position = messagePosition, Pressed = true
+        });
+        fixture.Preview._Input(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left, Position = messagePosition, Pressed = true
+        });
+        fixture.Preview._Input(new InputEventScreenTouch
+        {
+            Index = 0, Position = messagePosition, Pressed = false
+        });
+        fixture.Preview.ShowResolved(
+            ResolvedHoverTip("potion", "Pinned potion", "Description", null),
+            new Rect2(messagePosition, new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)),
+            pinned: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        fixture.Preview._Input(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left, Position = messagePosition, Pressed = true
+        });
+        fixture.Preview.ShowResolved(
+            ResolvedHoverTip("relic", "Trailing hover", "Description", null),
+            new Rect2(messagePosition, new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)));
+        fixture.Preview.Invalidate(LanConnectItemPreviewInvalidation.PointerExited);
+
+        AssertThat(fixture.Preview.TestState.Visible).IsTrue();
+        AssertThat(fixture.Preview.TestState.Pinned).IsTrue();
+        AssertThat(fixture.Preview.TestState.Title).IsEqual("Pinned potion");
+
+        fixture.Preview._Input(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left, Position = Vector2.Zero, Pressed = true
+        });
+        AssertThat(fixture.Preview.TestState.Visible).IsFalse();
     }
 
     [TestCase]

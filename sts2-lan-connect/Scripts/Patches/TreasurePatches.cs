@@ -146,6 +146,55 @@ internal static class TreasurePatches
             && Nullable.GetUnderlyingType(parameters[0].ParameterType) == typeof(int);
     }
 
+    internal static object CreateRelicPickingResult(
+        Type resultType, object resultKind, object player, object relic, int relicIndex)
+    {
+        // 0.113 added a required relicIndex field. Avoid binding the distributed DLL
+        // to that field (or satisfying its compile-time requirement on older games).
+        object result = Activator.CreateInstance(resultType)
+            ?? throw new InvalidOperationException($"Could not create {resultType.FullName}.");
+        SetRequiredField("type", resultKind);
+        SetRequiredField("player", player);
+        SetRequiredField("relic", relic);
+        AccessTools.Field(resultType, "relicIndex")?.SetValue(result, relicIndex);
+        return result;
+
+        void SetRequiredField(string name, object value)
+        {
+            FieldInfo field = AccessTools.Field(resultType, name)
+                ?? throw new MissingFieldException(resultType.FullName, name);
+            field.SetValue(result, value);
+        }
+    }
+
+    internal static object GenerateRelicFight(
+        Type resultType, object players, object relic, int relicIndex, object generateMove)
+    {
+        // Prefer the indexed 0.113 overload; older games have the original three arguments.
+        foreach (object[] arguments in new[]
+                 {
+                     new object[] { players, relic, relicIndex, generateMove },
+                     new object[] { players, relic, generateMove },
+                 })
+        {
+            MethodInfo? method = resultType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .Where(candidate => candidate.Name == "GenerateRelicFight")
+                .SingleOrDefault(candidate =>
+                {
+                    ParameterInfo[] parameters = candidate.GetParameters();
+                    return parameters.Length == arguments.Length
+                        && parameters.Select((parameter, index) => parameter.ParameterType.IsInstanceOfType(arguments[index])).All(matches => matches);
+                });
+            if (method != null)
+            {
+                return method.Invoke(null, arguments)
+                    ?? throw new InvalidOperationException($"{resultType.FullName}.GenerateRelicFight returned null.");
+            }
+        }
+
+        throw new MissingMethodException(resultType.FullName, "GenerateRelicFight");
+    }
+
     // ReSharper disable UnusedMember.Local UnusedParameter.Local
 
     private static void InitializeRelicsPrefix(NTreasureRoomRelicCollection __instance)
@@ -578,7 +627,7 @@ internal static class TreasurePatches
         }
 
         List<RelicPickingResult> results = new();
-        List<RelicModel> unclaimedRelics = new();
+        List<(RelicModel relic, int index)> unclaimedRelics = new();
         RelicPickingFightMove[] fightMoves = Enum.GetValues<RelicPickingFightMove>();
         Rng? rng = GetSyncRng(sync);
 
@@ -587,21 +636,19 @@ internal static class TreasurePatches
             List<Player> voters = playersByRelicIndex[i];
             if (voters.Count == 0)
             {
-                unclaimedRelics.Add(relics[i]);
+                unclaimedRelics.Add((relics[i], i));
             }
             else if (voters.Count == 1)
             {
-                results.Add(new RelicPickingResult
-                {
-                    type = RelicPickingResultType.OnlyOnePlayerVoted,
-                    player = voters[0],
-                    relic = relics[i]
-                });
+                results.Add((RelicPickingResult)CreateRelicPickingResult(
+                    typeof(RelicPickingResult), RelicPickingResultType.OnlyOnePlayerVoted,
+                    voters[0], relics[i], i));
             }
             else
             {
-                results.Add(RelicPickingResult.GenerateRelicFight(voters, relics[i],
-                    () => rng != null ? rng.NextItem(fightMoves) : fightMoves[0]));
+                results.Add((RelicPickingResult)GenerateRelicFight(
+                    typeof(RelicPickingResult), voters, relics[i], i,
+                    (Func<RelicPickingFightMove>)(() => rng != null ? rng.NextItem(fightMoves) : fightMoves[0])));
             }
         }
 
@@ -625,12 +672,9 @@ internal static class TreasurePatches
 
         for (int i = 0; i < Math.Min(unclaimedRelics.Count, playersWithoutRelic.Count); i++)
         {
-            results.Add(new RelicPickingResult
-            {
-                type = RelicPickingResultType.ConsolationPrize,
-                player = playersWithoutRelic[i],
-                relic = unclaimedRelics[i]
-            });
+            results.Add((RelicPickingResult)CreateRelicPickingResult(
+                typeof(RelicPickingResult), RelicPickingResultType.ConsolationPrize,
+                playersWithoutRelic[i], unclaimedRelics[i].relic, unclaimedRelics[i].index));
         }
 
         if (results.Count > 0)

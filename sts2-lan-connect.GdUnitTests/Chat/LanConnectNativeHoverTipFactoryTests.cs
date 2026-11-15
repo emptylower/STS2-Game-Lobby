@@ -29,6 +29,41 @@ public sealed class LanConnectNativeHoverTipFactoryTests
     }
 
     [TestCase]
+    public async Task Native_card_ready_failure_releases_placeholder_and_shows_closable_failure()
+    {
+        FakeNativePort port = new() { ThrowOnReadyConfiguration = true };
+        LanConnectNativeHoverTipFactory factory = new(port, new FakeCardFallback());
+        LanConnectItemPreview preview = new(factory);
+        Control host = new() { Name = "NativeCardReadyFailureHost" };
+        host.AddChild(preview);
+        using ISceneRunner runner = ISceneRunner.Load(host, autoFree: true);
+        await runner.AwaitIdleFrame();
+
+        preview.ShowResolved(new LanConnectResolvedItem(
+                LanConnectResolvedItemStatus.Resolved, "card", "chat.card", "Defend", "Defend",
+                new LanConnectCardPreviewData(new object(), 0)),
+            new Rect2(new Vector2(20, 20), new Vector2(20, 20)),
+            new Rect2(Vector2.Zero, new Vector2(800, 600)), pinned: true);
+        await runner.AwaitIdleFrame();
+
+        AssertThat(port.CardConfigurationCalls).IsEqual(2);
+        AssertThat(port.LastInstantiated != null).IsTrue();
+        AssertThat(GodotObject.IsInstanceValid(port.LastInstantiated)).IsFalse();
+        AssertThat(preview.TestState.Visible).IsTrue();
+        AssertThat(preview.TestState.Unavailable).IsTrue();
+        AssertThat(preview.TestState.CardVisualCount).IsEqual(0);
+        AssertThat(preview.TestState.HasLocalVisual).IsFalse();
+        AssertThat(preview.TestState.ContentNodeCount).IsEqual(1);
+        AssertThat(preview.TestState.Description.Contains("ready configuration failed", StringComparison.Ordinal)).IsFalse();
+        Button close = preview.FindChild(LanConnectReferencePreviewController.CloseButtonName,
+            recursive: true, owned: false) as Button ?? throw new InvalidOperationException("Close button missing.");
+        AssertThat(close.IsVisibleInTree()).IsTrue();
+        close.EmitSignal(Button.SignalName.Pressed);
+        AssertThat(preview.TestState.Visible).IsFalse();
+        AssertThat(preview.TestState.Unavailable).IsFalse();
+    }
+
+    [TestCase]
     public void Native_hover_tip_keeps_complete_rich_description_and_debuff_style()
     {
         FakeNativePort port = new();
@@ -86,6 +121,8 @@ public sealed class LanConnectNativeHoverTipFactoryTests
         internal object? LastConfiguredCard { get; private set; }
         internal bool LastConfigurationWasInsideTree { get; private set; }
         internal bool ReturnNullScene { get; init; }
+        internal bool ThrowOnReadyConfiguration { get; init; }
+        internal Control? LastInstantiated { get; private set; }
         internal ImageTexture Icon { get; } = CreateIcon();
 
         public Control? Instantiate(string scenePath)
@@ -109,6 +146,7 @@ public sealed class LanConnectNativeHoverTipFactoryTests
             root.AddChild(description);
             root.AddChild(new TextureRect { Name = "Icon", UniqueNameInOwner = true });
             root.AddChild(new ColorRect { Name = "Bg", UniqueNameInOwner = true });
+            LastInstantiated = root;
             return root;
         }
 
@@ -121,6 +159,10 @@ public sealed class LanConnectNativeHoverTipFactoryTests
         public void ConfigureCard(Control preview, object card)
         {
             CardConfigurationCalls++;
+            if (ThrowOnReadyConfiguration && preview.IsInsideTree())
+            {
+                throw new InvalidOperationException("ready configuration failed");
+            }
             LastConfiguredCard = card;
             LastConfigurationWasInsideTree = preview.IsInsideTree();
         }

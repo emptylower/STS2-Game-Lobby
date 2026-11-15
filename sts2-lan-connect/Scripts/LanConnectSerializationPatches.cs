@@ -69,6 +69,21 @@ internal static class LanConnectSerializationPatches
     private static readonly FieldInfo? NetMessageBusWriter =
         AccessTools.Field(typeof(NetMessageBus), "_writer");
 
+    // 0.113 added these fields to the response body. Resolve them without emitting
+    // field references that would fail to JIT on older games.
+    private static readonly FieldInfo? JoinResponseGameMode =
+        typeof(ClientLobbyJoinResponseMessage).GetField("gameMode");
+    private static readonly FieldInfo? JoinResponseIsCustom =
+        typeof(ClientLobbyJoinResponseMessage).GetField("isCustom");
+    private static readonly MethodInfo? WriteJoinResponseGameMode = JoinResponseGameMode == null
+        ? null
+        : typeof(PacketWriter).GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Single(method => method.Name == "WriteEnum"
+                && method.IsGenericMethodDefinition
+                && method.GetGenericArguments().Length == 1
+                && method.GetParameters().Length == 1)
+            .MakeGenericMethod(JoinResponseGameMode.FieldType);
+
     public static void Apply()
     {
         if (_applied)
@@ -583,6 +598,20 @@ internal static class LanConnectSerializationPatches
         if (message.seed != null)
         {
             writer.WriteString(message.seed);
+        }
+
+        // The optional mode fields precede ascension in the native 0.113 schema.
+        // Both absent means the legacy schema; a partial shape must not emit corrupt bytes.
+        if (JoinResponseGameMode != null || JoinResponseIsCustom != null)
+        {
+            if (JoinResponseGameMode == null || JoinResponseIsCustom?.FieldType != typeof(bool))
+            {
+                throw new MissingFieldException(typeof(ClientLobbyJoinResponseMessage).FullName, "gameMode/isCustom");
+            }
+
+            object boxedMessage = message;
+            WriteJoinResponseGameMode!.Invoke(writer, [JoinResponseGameMode.GetValue(boxedMessage)]);
+            writer.WriteBool((bool)JoinResponseIsCustom.GetValue(boxedMessage)!);
         }
 
         writer.WriteInt(message.ascension, JoinResponseAscensionBits);

@@ -14,17 +14,19 @@
 
 | 项目 | 内容 |
 |------|------|
-| 客户端版本 | `0.6.3`（正式版） |
-| lobby-service 版本 | `0.6.3`（正式版；相对 `0.6.2` 仅版本号同步） |
+| 客户端版本 | `0.6.4`（正式版） |
+| lobby-service 版本 | `0.6.3`（本次未更新） |
 | 默认大厅 | `sts2-test.43.133.192.249.nip.io`（可在 picker 内切换） |
 | 去中心化发现 | `https://sts2-gamelobby-register.xyz`（CF Worker，apex 域名） |
 | 连接策略 | `strict + relay-only` |
 
-`0.6.3` 汇总 `0.6.3-alpha.1`～`alpha.3` 的客户端修复：兼容协议房间可正常加入，桌面房主开局不再因位宽错位而黑屏；SL 与保存退出后读档会保留原房间协议。绑定缺失或损坏时停止建房并提示恢复配置，避免新协议存档静默降级为旧协议。配置增加有效备份及损坏恢复保护。另包含房主昵称同步和 MOD 预检弹窗修复。完整说明见 `docs/RELEASE_NOTES_V0.6.3_ZH.md`。
+`0.6.4` 适配游戏 `0.113.0` 的加入流程、消息布局和 API 变化，支持已解锁的极速／恐惧模式建房及对应准备页，补齐独立界面中文字体，并修复手机端聊天卡牌引用的点按预览。中文显示与手机预览已由用户复测确认正常。完整说明见 `docs/RELEASE_NOTES_V0.6.4_ZH.md`。
 
-本版通过 GitHub Release 与 Steam 创意工坊条目「游戏大厅」分发（工坊于 2026-09-24 更新至 `0.6.3`）。安装前备份游戏存档与 `user://sts2_lan_connect/`，同房所有玩家统一使用客户端 `0.6.3` 并完整重启游戏。已有 `0.6.2` 服务端无需为本次存档修复升级；本版 lobby-service 只同步版本号，但正式 Release 仍可能被开启自动更新的节点采纳。
+从[仓库客户端安装包](https://github.com/emptylower/STS2-Game-Lobby/blob/main/releases/sts2_lan_connect-release.zip)获取本版。最近一次 GitHub Release 和 Steam 创意工坊「游戏大厅」仍为 `0.6.3`，本次未向这两个渠道发布。建议同房所有玩家统一使用客户端 `0.6.4` 和相同游戏版本，替换完整 MOD 后完全退出并重新启动游戏。lobby-service 保持 `0.6.3`；已有 `0.6.2` 及以上服务端无需为本次客户端修复升级。线上协议版本与 `minimumClientVersion` 不变。
 
-**实机验证与已知问题**：Mac Steam + Android AVD、游戏 `0.111.0` 在魔仙堡完成两种协议的首怪、SL 后下一房间及保存退出后读档，新协议带 RitsuLib `0.5.13` 未降级。期间发生两次严重丢包断线，以及候选连接切换时误报 `ModMismatch` 后自动重试成功；问题尚未修复，核心回归通过不代表全程无异常。无法确认原协议时不要关闭 RitsuLib 或改选兼容协议强行续局；请保留存档、配置备份和诊断报告。
+极速／恐惧模式沿用游戏原生解锁条件，本 MOD 不强制解锁、不修改进度。旧版运行时兼容继续保留，真实旧版程序集检查覆盖 `0.111.0`，本机未验证真实 `0.107`；兼容旧版不代表不同游戏版本可以同房。
+
+**已知问题**：此前记录的严重丢包断线、候选切换时短暂误报 `ModMismatch` 等网络问题未在本次修复。安装前保留游戏存档与 `user://sts2_lan_connect/` 的备份。无法确认续局原协议时，请恢复有效配置或导出诊断，避免改协议强行续局。
 
 **新协议房间不再要求 RitsuLib 状态一致**：0.6 新协议 `tail_v1` 的载体从依赖 RitsuLib 公开 typed-sidecar API 的方案，换成 `native_bus_v1`（游戏官方 MOD 消息注册通道），与是否安装 RitsuLib 完全无关。队友一个装了 RitsuLib、一个没装，现在可以正常同房；旧版本"有 RitsuLib 只能连有 RitsuLib"的限制不再存在。兼容模式 `compat_4_5_v1` 不受影响，继续固定 `4/5-bit` 并禁止 RitsuLib。
 
@@ -32,16 +34,17 @@
 
 本版保留 `0.6.1` 对新协议房间房主存档报错的修复：该错误会导致房间绑定丢失、续局时被误判为兼容房而遭 RitsuLib 拒绝，以及 QuickSL 等第三方存档类 MOD 的多人同步重载被打断而断线。存档持久化失败现在只记录告警，不会再影响原版存档流程。
 
-同一房间内所有玩家必须统一使用客户端 `0.6.3`；仍运行 `0.6.1` 或更早版本的大厅，需要先具备 `0.6.2` 引入的 `nativeBusTypeId` 透传与 `serviceVersion` 能力。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。历史 `0.3.x`-`0.5.x` 客户端与 `0.6.3` 的真实互通不在发布门禁范围内。
+建议同一房间内所有玩家统一使用客户端 `0.6.4`；仍运行 `0.6.1` 或更早版本的大厅，需要先具备 `0.6.2` 引入的 `nativeBusTypeId` 透传与 `serviceVersion` 能力。自动获取仅使用 Steam Workshop，不会从房主、服务端或任意 URL 下载 DLL、PCK、ZIP。历史 `0.3.x`-`0.5.x` 客户端与 `0.6.4` 的真实互通不在发布门禁范围内。
 
 本正式版是在既有功能之上叠加的，先前版本的能力全部保留：`0.6.1` 的 `native_bus_v1` 载体与 RitsuLib 解耦、`0.6.0` 的双协议房间与加入前线上编码校验、`0.5.5` 的游戏 ABI 向下兼容、`0.5.4` 的 AI 审核交互，以及 `0.5.3` 的 LAN/大厅续局通道拆分、续局身份码、存档保护和聊天 HUD。
 
-### v0.6.3 安装后自查
+### v0.6.4 安装后自查
 
+- 确认清单版本为 `0.6.4`；在 0.113 中加入房间、打开服务器选择和房间聊天，中文应正常显示；手机点按新分享消息中的卡牌名称应能打开预览。已原生解锁极速／恐惧时，可在建房中选择并进入对应准备页。
 - 启动日志应正常出现新协议初始化的 `plan_success profile=native_bus_v1` 与 `native_bus` 就绪诊断行；第三方 MOD 提前初始化消息注册表时自检应挂起并延后补跑，不应把会话打入联机降级模式。
 - 一方装 RitsuLib、一方不装时，双方都能创建 / 加入同一个新协议房间。
 - 新协议房间开局后存档，日志不应再出现 `Unknown protocol carrier enum value 3` 或 `Failed to save run`；有有效绑定时，房主保存并退出后从「读档多人游戏」应恢复原协议的大厅房间；原协议无法确认时应提示恢复配置并停止建房。
-- SL 或第三方快速存读档后，确认房间仍使用原协议；本轮实测覆盖房间管理的“重开一局”，未逐一验证第三方快速存档 MOD。
+- SL 或第三方快速存读档后，确认房间仍使用原协议；`0.6.3` 历史实测覆盖房间管理的“重开一局”，本次未逐一重测第三方快速存档 MOD。
 - 主菜单应能看到「联机大厅」入口，任意 MOD 加载顺序下都应出现。
 - 房主端原生多人等待页和局内玩家列表应显示客机设置的昵称，不应显示数字平台 ID。
 - 点击「放弃多人存档」后，「备份并永久放弃」和「保留存档」两个按钮都应完整可见。
@@ -193,7 +196,7 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 ## 自建大厅服说明
 
-v0.6 不再支持 `0.2.x` 客户端。自建大厅至少需要 lobby-service `0.6.2`（与 `0.6.1` 不等价）；`0.6.3` 服务端仅同步版本号，同房客户端统一升级到 `0.6.3`；`0.3-0.5` 客户端只能加入兼容房，不能加入 `tail_v1` 房间。
+v0.6 不再支持 `0.2.x` 客户端。自建大厅至少需要 lobby-service `0.6.2`（与 `0.6.1` 不等价）；本次服务端保持 `0.6.3`，同房客户端建议统一升级到 `0.6.4`；`0.3-0.5` 客户端只能加入兼容房，不能加入 `tail_v1` 房间。
 
 ---
 
@@ -204,7 +207,7 @@ v0.6 不再支持 `0.2.x` 客户端。自建大厅至少需要 lobby-service `0.
 - **联机大厅 8 群：341498145**
 - **测试群（要求会导出 log）：1093309523**
 
-反馈时请附上双方完整的 `godot.log`（Android 见上方「Android 启动取证」）和客户端内的本地调试报告，并注明客户端版本 `0.6.3`。
+反馈时请附上双方完整的 `godot.log`（Android 见上方「Android 启动取证」）和客户端内的本地调试报告，并注明客户端版本 `0.6.4`。
 
 ---
 
@@ -220,17 +223,19 @@ v0.6 不再支持 `0.2.x` 客户端。自建大厅至少需要 lobby-service `0.
 
 | Field | Value |
 |-------|-------|
-| Client version | `0.6.3` (stable) |
-| Lobby-service version | `0.6.3` (stable; version-number alignment only since `0.6.2`) |
+| Client version | `0.6.4` (stable) |
+| Lobby-service version | `0.6.3` (unchanged in this update) |
 | Default lobby | `sts2-test.43.133.192.249.nip.io` |
 | Decentralized discovery | `https://sts2-gamelobby-register.xyz` CF Worker plus bundled seed peers |
 | Connection policy | `strict + relay-only` |
 
-`0.6.3` consolidates the client fixes from `0.6.3-alpha.1` through `alpha.3`: compat joining and desktop-host starts, preservation of the saved room protocol across SL and save-and-quit/load, configuration backup/recovery, host-name synchronization, and MOD preflight UI fixes. Missing or invalid protocol bindings now stop room creation with recovery guidance. Full notes (Chinese): `docs/RELEASE_NOTES_V0.6.3_ZH.md`.
+`0.6.4` adapts join flows, message layouts, and APIs to game `0.113.0`; supports native-unlocked Blitz/Dread rooms and their ready screens; restores Chinese fonts in independent interfaces; and fixes tapping shared card references on mobile. The user confirmed Chinese text and mobile previews passed retesting. Full notes (Chinese): `docs/RELEASE_NOTES_V0.6.4_ZH.md`.
 
-This release is distributed through GitHub only. The Steam Workshop item (游戏大厅) remains at `0.6.2`. Back up your saves and `user://sts2_lan_connect/`, update all room participants to client `0.6.3`, and fully restart the game. Existing `0.6.2` services do not need an upgrade for the save fix. lobby-service only changes its version number, although nodes with auto-update enabled may install this stable Release.
+Get this version from the [repository client package](https://github.com/emptylower/STS2-Game-Lobby/blob/main/releases/sts2_lan_connect-release.zip). The latest GitHub Release and Steam Workshop item remain at `0.6.3`; neither channel is updated in this publication. Use client `0.6.4` and the same game version throughout a room, replace the complete MOD, then fully exit and restart the game. lobby-service stays at `0.6.3`; existing `0.6.2` or newer services require no update for these client fixes. Wire protocol versions and `minimumClientVersion` are unchanged.
 
-**Validation and known issues:** Mac Steam + Android AVD on game `0.111.0` completed the first monster, SL/next room, and save-and-quit/load in both modes on the 魔仙堡 server; tail with RitsuLib `0.5.13` retained its protocol. Two severe packet-loss disconnects and a transient `ModMismatch` during connection-candidate switching (automatic retry succeeded) remain unresolved. The core regression passed; the overall run was not error-free. If the saved protocol cannot be confirmed, keep the save/config backups and diagnostics rather than changing protocol or disabling RitsuLib to force a resume.
+Blitz and Dread follow native unlock requirements; this MOD does not force unlocks or change progress. Older runtime compatibility remains, with real old-assembly checks covering `0.111.0`; real `0.107` was not checked locally. This does not allow different game versions to play together.
+
+**Known issues:** previously reported severe packet-loss disconnects and transient candidate-switching `ModMismatch` are not fixed here. Keep backups of saves and `user://sts2_lan_connect/`. If the saved protocol cannot be confirmed, restore a valid configuration or export diagnostics before resuming.
 
 **Tail rooms no longer require matching RitsuLib presence.** The `tail_v1` carrier moves from relying on RitsuLib's public typed-sidecar API to `native_bus_v1` (the game's own official mod-message channel), so joining no longer depends on whether RitsuLib is installed. A player with RitsuLib and one without can now share the same new-protocol room; the old "Ritsu can only join Ritsu" restriction is gone. Compat rooms (`compat_4_5_v1`) are unaffected and still forbid RitsuLib.
 
@@ -238,14 +243,15 @@ This release retains the `0.6.1` fix for the root cause behind `0.6.0`'s "cannot
 
 It retains the `0.6.1` fix for every host-side save in a new-protocol room throwing an error, which broke the room binding, broke continue-run restoration (misdetected as a compat room and rejected by the RitsuLib gate), and disconnected clients mid-reload for save-hooking MODs like QuickSL. Save persistence failures are now logged, not surfaced as a game-breaking error.
 
-Every participant must use client `0.6.3`; services still on `0.6.1` or earlier need the `nativeBusTypeId` passthrough and `serviceVersion` capabilities introduced in `0.6.2`. This release builds on top of `0.6.0`'s feature set — dual-protocol rooms, pre-join wire-encoding checks, the lobby-visibility fix, and continue-run/restart handling all remain.
+All room participants should use client `0.6.4`; services still on `0.6.1` or earlier need the `nativeBusTypeId` passthrough and `serviceVersion` capabilities introduced in `0.6.2`. This release builds on top of `0.6.0`'s feature set — dual-protocol rooms, pre-join wire-encoding checks, the lobby-visibility fix, and continue-run/restart handling all remain.
 
-### v0.6.3 Post-Install Checks
+### v0.6.4 Post-Install Checks
 
+- Confirm manifest version `0.6.4`, join a room on game 0.113, and check Chinese text in the server picker and room chat. Tap a newly shared card on mobile to open its preview. When natively unlocked, Blitz/Dread should be selectable while creating a room and open the matching ready screen.
 - Startup should report `plan_success profile=native_bus_v1` and the `native_bus` readiness diagnostic line; a third-party MOD pre-initializing the message registry should defer the self-check instead of entering degraded mode.
 - A player with RitsuLib and one without should both be able to create/join the same new-protocol room.
 - Saving in a new-protocol room should not log `Unknown protocol carrier enum value 3` or `Failed to save run`; after save-and-quit, a valid binding should restore the original room protocol. An unconfirmed protocol should stop hosting with recovery guidance.
-- Confirm that SL retains the original protocol. This run tested the room-management restart action; third-party quick-save MODs were not individually retested.
+- Confirm that SL retains the original protocol. The historical `0.6.3` run tested room-management restart; third-party quick-save MODs were not individually retested for this update.
 - The Game Lobby entry must appear on the main menu under any mod load order.
 - The host's native multiplayer load screen and in-run roster must show the guest's configured player name instead of a numeric platform ID.
 - Both the destructive abandon-save action and the keep-save action must remain fully visible in the confirmation dialog.
@@ -384,7 +390,7 @@ powershell -ExecutionPolicy Bypass -File .\install-sts2-lan-connect-windows.ps1 
 
 ## Self-Hosted Lobby Notes
 
-v0.6 no longer supports `0.2.x` clients. Self-hosted lobbies need at least lobby-service `0.6.2` (not equivalent to `0.6.1`); service `0.6.3` only aligns the version number. Every peer in a room must use client `0.6.3`. Clients `0.3-0.5` can only join compat rooms and cannot join `tail_v1` rooms.
+v0.6 no longer supports `0.2.x` clients. Self-hosted lobbies need at least lobby-service `0.6.2` (not equivalent to `0.6.1`); service stays at `0.6.3` in this update. All peers should use client `0.6.4`. Clients `0.3-0.5` can only join compat rooms and cannot join `tail_v1` rooms.
 
 
 ---
@@ -396,4 +402,4 @@ Chinese-language QQ groups for bug reports and testing:
 - **Game Lobby group 8: 341498145**
 - **Testing group (log export required): 1093309523**
 
-When reporting an issue, attach the complete `godot.log` from both peers (Android: see the evidence steps above) plus the in-client local debug report, and state the client version `0.6.3`.
+When reporting an issue, attach the complete `godot.log` from both peers (Android: see the evidence steps above) plus the in-client local debug report, and state the client version `0.6.4`.

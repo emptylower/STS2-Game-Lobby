@@ -1420,7 +1420,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                 {
                     throw new InvalidOperationException("Tail rejection call context was corrupted.");
                 }
-                host.DisconnectClient(senderPeerId, NetError.ModMismatch);
+                LanConnectNetHostCompatibility.DisconnectClient(host, senderPeerId, NetError.ModMismatch);
             }
         }
         else
@@ -1640,7 +1640,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             IEnumerable<ulong> peers = binding.BoundPeerIds;
             if (binding.Service is NetHostGameService host)
             {
-                peers = peers.Concat(host.ConnectedPeers.Select(static peer => peer.peerId));
+                peers = peers.Concat(LanConnectNetHostCompatibility.GetConnectedPeerIds(host));
             }
             peerIds = peers.Distinct().ToArray();
             binding.ClearNative();
@@ -1655,7 +1655,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             {
                 try
                 {
-                    netHost.DisconnectClient(peerId, NetError.ModMismatch);
+                    LanConnectNetHostCompatibility.DisconnectClient(netHost, peerId, NetError.ModMismatch);
                 }
                 catch (Exception disconnectException)
                 {

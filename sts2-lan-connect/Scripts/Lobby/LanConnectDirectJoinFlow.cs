@@ -7,14 +7,13 @@ using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Connection;
-using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 
 namespace Sts2LanConnect.Scripts;
 
 internal readonly record struct LanConnectDirectJoinSuccess(
-    JoinResult JoinResult,
+    LanConnectManagedJoinResult JoinResult,
     NetClientGameService NetService);
 
 internal static class LanConnectDirectJoinFlow
@@ -69,7 +68,7 @@ internal static class LanConnectDirectJoinFlow
                     try
                     {
                         ENetClientConnectionInitializer initializer = new(stableNetId, ip, port);
-                        JoinResult joinResult = await currentFlow.BeginAsync(initializer, sceneTree);
+                        LanConnectManagedJoinResult joinResult = await currentFlow.BeginAsync(initializer, sceneTree);
                         NetClientGameService netService = currentFlow.NetService
                             ?? throw new InvalidOperationException("Direct join completed without an active net service.");
                         Log.Info(

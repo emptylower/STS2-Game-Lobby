@@ -27,7 +27,8 @@ internal readonly record struct LanConnectItemPreviewTestState(
     Rect2 Bounds,
     bool BlocksAltCapture,
     bool Pinned = false,
-    bool UsesNativeScene = false);
+    bool UsesNativeScene = false,
+    bool Unavailable = false);
 
 internal interface ILanConnectCardPreviewVisualFactory
 {
@@ -206,6 +207,7 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
     private readonly ILanConnectReferencePreviewVisualFactory _visualFactory;
     private readonly ILanConnectItemPreviewNodePort _nodePort;
     private readonly ILanConnectPreviewHotkeyScope _hotkeyScope;
+    private readonly LanConnectReferenceTouchMouseDeduplicator _touchMouseDeduplicator = new();
     private MarginContainer? _surface;
     private ScrollContainer? _scroll;
     private VBoxContainer? _content;
@@ -224,6 +226,8 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
     private string _closeAccessibilityLabel = "Close reference preview";
     private Rect2 _viewport;
     private Rect2 _bounds;
+    private int _referenceId;
+    private bool _unavailable;
 
     internal LanConnectReferencePreviewController()
         : this(
@@ -291,12 +295,13 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
                 _title,
                 _description,
                 _hasLocalVisual,
-                _visual?.GetMeta("lan_connect_card_preview").AsBool() == true ? 1 : 0,
+                _visual?.GetMeta("lan_connect_card_preview", false).AsBool() == true ? 1 : 0,
                 _content?.GetChildren().Count(child => !child.IsQueuedForDeletion()) ?? 0,
                 _bounds,
                 blocksCapture,
                 _pinned,
-                _visual?.GetMeta("lan_connect_native_preview").AsBool() == true);
+                _visual?.GetMeta("lan_connect_native_preview", false).AsBool() == true,
+                _unavailable);
         }
     }
 
@@ -325,6 +330,8 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
 
     public override void _ExitTree()
     {
+        LanConnectReferenceDiagnostics.Shared.Write("preview", "exit_tree", ("reference_id", _referenceId),
+            ("visible", Visible), ("pinned", _pinned));
         _consumeCloseShortcutRelease = false;
         ReleaseHotkeyScope();
         ClearContent();
@@ -333,6 +340,25 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
 
     public override void _Input(InputEvent inputEvent)
     {
+        if (Visible && TryGetPressedPosition(inputEvent, out Vector2 pressedPosition))
+        {
+            LanConnectReferenceDiagnostics.Shared.Write("preview", "pointer_press",
+                ("reference_id", _referenceId), ("input", inputEvent.GetType().Name),
+                ("device", inputEvent.Device), ("position", pressedPosition), ("bounds", _bounds));
+        }
+        if (inputEvent is InputEventScreenTouch touch)
+        {
+            // Observe even while hidden: the GUI opens the preview after this input pass.
+            _touchMouseDeduplicator.ObserveTouch(touch.Position, Time.GetTicksMsec());
+        }
+        if (inputEvent is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } mouse &&
+            _touchMouseDeduplicator.IsSyntheticMouse(mouse.Position, Time.GetTicksMsec()))
+        {
+            LanConnectReferenceDiagnostics.Shared.Write("preview", "synthetic_mouse_ignored",
+                ("reference_id", _referenceId), ("visible", Visible), ("position", mouse.Position));
+            // Do not consume it globally; the touch has already had its normal GUI path.
+            return;
+        }
         if (_consumeCloseShortcutRelease && IsCloseShortcutReleased(inputEvent))
         {
             _consumeCloseShortcutRelease = false;
@@ -348,7 +374,7 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
         bool shortcutReleased = IsCloseShortcutReleased(inputEvent);
         if (shortcutPressed || shortcutReleased)
         {
-            ClosePreview(keepHotkeyScopeUntilShortcutRelease: true);
+            ClosePreview(keepHotkeyScopeUntilShortcutRelease: true, reason: "close_shortcut");
             _consumeCloseShortcutRelease = shortcutPressed;
             GetViewport().SetInputAsHandled();
             if (shortcutReleased)
@@ -362,7 +388,7 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
         {
             return;
         }
-        ClosePreview();
+        ClosePreview(keepHotkeyScopeUntilShortcutRelease: false, reason: "outside_press");
     }
 
     internal void ShowResolved(
@@ -372,15 +398,29 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
         bool pinned = false)
     {
         ArgumentNullException.ThrowIfNull(item);
+        if (Visible && _pinned && !pinned)
+        {
+            LanConnectReferenceDiagnostics.Shared.Write("preview", "hover_ignored_while_pinned", ("reference_id", _referenceId));
+            return;
+        }
+        _referenceId = LanConnectReferenceDiagnostics.Identity(item);
+        LanConnectReferenceDiagnostics.Shared.Write("preview", "request", ("reference_id", _referenceId),
+            ("item_type", item.ItemType), ("status", item.Status), ("preview_type", item.Preview?.GetType().Name),
+            ("in_tree", IsInsideTree()), ("visible", Visible), ("pinned", pinned),
+            ("bounds", anchor), ("viewport", viewport));
         if (!IsInsideTree() ||
             item.Status != LanConnectResolvedItemStatus.Resolved ||
             item.Preview is not (LanConnectCardPreviewData or LanConnectHoverTipPreviewData))
         {
-            ClosePreview();
+            LanConnectReferenceDiagnostics.Shared.Write("preview", "gate_rejected", ("reference_id", _referenceId),
+                ("in_tree", IsInsideTree()), ("status", item.Status), ("preview_type", item.Preview?.GetType().Name));
+            ClosePreview(keepHotkeyScopeUntilShortcutRelease: false, reason: "gate_rejected");
             return;
         }
         try
         {
+            LanConnectReferenceDiagnostics.Shared.Write("visual", "create_begin", ("reference_id", _referenceId),
+                ("item_type", item.ItemType), ("preview_type", item.Preview.GetType().Name));
             Control visual = item.Preview switch
             {
                 LanConnectCardPreviewData card => _visualFactory.Create(card.Card),
@@ -398,9 +438,11 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
                 viewport,
                 pinned);
         }
-        catch
+        catch (Exception exception)
         {
-            ClosePreview();
+            LanConnectReferenceDiagnostics.Shared.Failure("preview", "visual_exception", exception,
+                ("reference_id", _referenceId), ("item_type", item.ItemType));
+            ShowUnavailable(item.ItemType, item.LocalizedTitle, anchor, viewport, pinned);
         }
     }
 
@@ -411,9 +453,18 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
         bool pinned = false)
     {
         ArgumentNullException.ThrowIfNull(combat);
+        if (Visible && _pinned && !pinned)
+        {
+            return;
+        }
+        _referenceId = LanConnectReferenceDiagnostics.Identity(combat);
+        LanConnectReferenceDiagnostics.Shared.Write("preview", "combat_request", ("reference_id", _referenceId),
+            ("status", combat.Status), ("in_tree", IsInsideTree()), ("visible", Visible), ("pinned", pinned));
         if (combat.Status != LanConnectResolvedCombatReferenceStatus.Resolved)
         {
-            ClosePreview();
+            LanConnectReferenceDiagnostics.Shared.Write("preview", "combat_gate_rejected", ("reference_id", _referenceId),
+                ("status", combat.Status));
+            ClosePreview(keepHotkeyScopeUntilShortcutRelease: false, reason: "combat_gate_rejected");
             return;
         }
         LanConnectHoverTipPreviewData preview = combat.Preview ?? new LanConnectHoverTipPreviewData(
@@ -434,20 +485,62 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
                 viewport,
                 pinned);
         }
-        catch
+        catch (Exception exception)
         {
-            ClosePreview();
+            LanConnectReferenceDiagnostics.Shared.Failure("preview", "combat_visual_exception", exception,
+                ("reference_id", _referenceId));
+            ShowUnavailable("power", combat.Label, anchor, viewport, pinned);
+        }
+    }
+
+    private void ShowUnavailable(string itemType, string? title, Rect2 anchor, Rect2 viewport, bool pinned)
+    {
+        if (!IsInsideTree() || _content == null || !GodotObject.IsInstanceValid(_content))
+        {
+            LanConnectReferenceDiagnostics.Shared.Write("preview", "failure_surface_unavailable", ("reference_id", _referenceId));
+            ClosePreview(keepHotkeyScopeUntilShortcutRelease: false, reason: "failure_surface_unavailable");
+            return;
+        }
+        string locale = TranslationServer.GetLocale();
+        bool chinese = locale.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+        string message = chinese
+            ? "预览暂时无法显示，请关闭后重试。"
+            : "Preview is unavailable. Close it and try again.";
+        Label label = new()
+        {
+            Name = "ChatReferencePreviewUnavailable",
+            Text = message,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+        label.AddThemeFontOverride("font", LanConnectLobbyFonts.WithChineseFallback(ThemeDB.FallbackFont));
+        try
+        {
+            ShowVisual(label, itemType, title ?? string.Empty, message, hasLocalVisual: false,
+                card: false, anchor, viewport, pinned);
+            _unavailable = true;
+            LanConnectReferenceDiagnostics.Shared.Write("preview", "failure_surface_shown", ("reference_id", _referenceId),
+                ("visible", Visible), ("bounds", _bounds), ("pinned", pinned));
+        }
+        catch (Exception exception)
+        {
+            LanConnectReferenceDiagnostics.Shared.Failure("preview", "failure_surface_exception", exception,
+                ("reference_id", _referenceId));
+            ClosePreview(keepHotkeyScopeUntilShortcutRelease: false, reason: "failure_surface_exception");
         }
     }
 
     internal void ClosePreview() => ClosePreview(keepHotkeyScopeUntilShortcutRelease: false);
 
-    private void ClosePreview(bool keepHotkeyScopeUntilShortcutRelease)
+    private void ClosePreview(bool keepHotkeyScopeUntilShortcutRelease, string reason = "requested")
     {
         if (_closing)
         {
             return;
         }
+        LanConnectReferenceDiagnostics.Shared.Write("preview", "close", ("reference_id", _referenceId),
+            ("source", reason), ("visible", Visible), ("pinned", _pinned));
         _closing = true;
         try
         {
@@ -471,9 +564,11 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
     {
         if (reason == LanConnectItemPreviewInvalidation.PointerExited && _pinned)
         {
+            LanConnectReferenceDiagnostics.Shared.Write("preview", "pointer_exit_ignored_while_pinned",
+                ("reference_id", _referenceId));
             return;
         }
-        ClosePreview();
+        ClosePreview(keepHotkeyScopeUntilShortcutRelease: false, reason: reason.ToString());
     }
 
     private void ShowVisual(
@@ -497,6 +592,11 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
         try
         {
             _nodePort.Attach(_content, visual);
+            if (visual.HasMeta("lan_connect_preview_unavailable") &&
+                visual.GetMeta("lan_connect_preview_unavailable").AsBool())
+            {
+                throw new InvalidOperationException("The local preview could not be initialized.");
+            }
         }
         catch
         {
@@ -511,6 +611,7 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
             throw;
         }
         _visual = visual;
+        _unavailable = false;
         _itemType = itemType;
         _title = title;
         _description = description;
@@ -544,6 +645,11 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
                 Math.Max(48, bounds.Size.Y - SurfaceMargin * 2 - (pinned ? 34 : 0)));
         }
         Visible = true;
+        LanConnectReferenceDiagnostics.Shared.Write("preview", "shown", ("reference_id", _referenceId),
+            ("item_type", itemType), ("visible", Visible), ("in_tree", IsInsideTree()),
+            ("visible_in_tree", IsVisibleInTree()), ("bounds", _bounds), ("actual_bounds", GetGlobalRect()),
+            ("viewport", viewport), ("pinned", pinned),
+            ("preview_type", visual.GetType().Name));
         QueueRedraw();
     }
 
@@ -664,6 +770,7 @@ internal partial class LanConnectReferencePreviewController : PanelContainer
         _title = string.Empty;
         _description = string.Empty;
         _hasLocalVisual = false;
+        _unavailable = false;
         _pinned = false;
         AccessibilityName = string.Empty;
         _viewport = default;

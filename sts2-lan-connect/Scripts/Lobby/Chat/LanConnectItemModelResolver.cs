@@ -111,13 +111,15 @@ internal sealed class LanConnectItemModelResolver
 
     private readonly ILanConnectModelDbPort _port;
     private readonly LanConnectChatLocalizer _localizer;
+    private readonly LanConnectReferenceDiagnostics? _diagnostics;
     private readonly Dictionary<CacheKey, LinkedListNode<CacheEntry>> _cache = [];
     private readonly LinkedList<CacheEntry> _lru = [];
     private string? _locale;
     private string? _modFingerprint;
 
     internal LanConnectItemModelResolver()
-        : this(new LanConnectProductionModelDbPort())
+        : this(new LanConnectProductionModelDbPort(), LanConnectChatUiComposition.Localizer,
+            LanConnectReferenceDiagnostics.Shared)
     {
     }
 
@@ -128,10 +130,12 @@ internal sealed class LanConnectItemModelResolver
 
     internal LanConnectItemModelResolver(
         ILanConnectModelDbPort port,
-        LanConnectChatLocalizer localizer)
+        LanConnectChatLocalizer localizer,
+        LanConnectReferenceDiagnostics? diagnostics = null)
     {
         _port = port ?? throw new ArgumentNullException(nameof(port));
         _localizer = localizer ?? throw new ArgumentNullException(nameof(localizer));
+        _diagnostics = diagnostics;
     }
 
     internal int CacheCountForTests => _cache.Count;
@@ -170,6 +174,9 @@ internal sealed class LanConnectItemModelResolver
             requestedUpgrade);
         if (TryGetCached(requestedKey, out LanConnectResolvedItem? cached))
         {
+            _diagnostics?.Write("resolve", "cache_hit", ("model_id", run.ModelId),
+                ("item_type", itemType), ("status", cached.Status),
+                ("reference_id", LanConnectReferenceDiagnostics.Identity(cached)));
             return cached;
         }
         if (itemType == "card" &&
@@ -180,10 +187,16 @@ internal sealed class LanConnectItemModelResolver
 
         try
         {
-            return ResolveUncached(run.ModelId, itemType, requestedUpgrade, requestedKey);
+            LanConnectResolvedItem result = ResolveUncached(run.ModelId, itemType, requestedUpgrade, requestedKey);
+            _diagnostics?.Write("resolve", "complete", ("model_id", run.ModelId),
+                ("item_type", itemType), ("upgrade", requestedUpgrade), ("status", result.Status),
+                ("reference_id", LanConnectReferenceDiagnostics.Identity(result)));
+            return result;
         }
-        catch
+        catch (Exception exception)
         {
+            _diagnostics?.Failure("resolve", "exception", exception, ("model_id", run.ModelId),
+                ("item_type", itemType), ("upgrade", requestedUpgrade));
             LanConnectResolvedItem unknown = Unknown(itemType);
             AddOrReplace(requestedKey, unknown, supportedCardUpgradeLevel: null);
             return unknown;
@@ -224,6 +237,7 @@ internal sealed class LanConnectItemModelResolver
         }
         if (!found)
         {
+            _diagnostics?.Write("resolve", "model_missing", ("model_id", modelId), ("item_type", itemType));
             LanConnectResolvedItem missing = Unknown(itemType);
             AddOrReplace(requestedKey, missing, supportedCardUpgradeLevel: null);
             return missing;

@@ -374,6 +374,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
 
     public override void _Ready()
     {
+        LanConnectLobbyFonts.Apply(this);
         BuildControls();
         SetProcess(true);
         if (_state != null)
@@ -1014,6 +1015,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             OkButtonText = Localize("chat.action.resend"),
             CancelButtonText = Localize("chat.action.cancel")
         };
+        LanConnectLobbyFonts.Apply(_unknownConfirmation);
         _unknownConfirmation.Connect(
             ConfirmationDialog.SignalName.Confirmed,
             Callable.From(() =>
@@ -1029,6 +1031,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             DialogText = Localize("chat.review.blocked"),
             OkButtonText = Localize("chat.emoji.check")
         };
+        LanConnectLobbyFonts.Apply(_blockedNotice);
         AddChild(_blockedNotice);
 
         _emojiPicker = new LanConnectEmojiPicker
@@ -1447,6 +1450,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         row.TooltipText = message.SentAt.ToLocalTime().ToString("HH:mm");
 
         IReadOnlyList<LanConnectChatSegment> segments = ResolveMessageSegments(message);
+        TraceReferenceSegments(message.Content != null, segments);
         LanConnectItemRefSegment? soleItemReference = SingleItemReferenceOrNull(segments);
         string? verbPhrase = soleItemReference == null
             ? null
@@ -1584,8 +1588,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             {
                 spans.Add(BuildMessageSpan(segment));
             }
-            catch
+            catch (Exception exception)
             {
+                LanConnectReferenceDiagnostics.Shared.Failure("render", "segment_exception", exception,
+                    ("content_kind", segment.GetType().Name));
                 spans.Add(BuildMessageSpanFallback(segment));
             }
         }
@@ -1619,6 +1625,7 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             segments = [new LanConnectTextSegment(message.Text)];
         }
 
+        TraceReferenceSegments(message.Content != null, segments);
         List<LanConnectRichMessageSpan> spans = new(segments.Count);
         for (int index = 0; index < segments.Count; index++)
         {
@@ -1627,8 +1634,10 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             {
                 spans.Add(BuildMessageSpan(segment));
             }
-            catch
+            catch (Exception exception)
             {
+                LanConnectReferenceDiagnostics.Shared.Failure("render", "segment_exception", exception,
+                    ("content_kind", segment.GetType().Name));
                 spans.Add(BuildMessageSpanFallback(segment));
             }
         }
@@ -1639,6 +1648,13 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
             _itemPreview?.Invalidate(LanConnectItemPreviewInvalidation.PointerExited);
         view.ReferencePressed += OnMessageReferencePressed;
         return view;
+    }
+
+    private static void TraceReferenceSegments(bool structured, IReadOnlyList<LanConnectChatSegment> segments)
+    {
+        LanConnectReferenceDiagnostics.Shared.Write("render", structured ? "structured_content" : "text_only",
+            ("content_kind", structured ? "structured" : "text"), ("segments", segments.Count),
+            ("item_refs", segments.Count(segment => segment is LanConnectItemRefSegment)));
     }
 
     private LanConnectRichMessageSpan BuildMessageSpanFallback(LanConnectChatSegment segment) => segment switch
@@ -1718,14 +1734,22 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         {
             resolved = _resolveItem(new LanConnectItemRun(item.ItemType, item.ModelId, item.UpgradeLevel));
         }
-        catch
+        catch (Exception exception)
         {
+            LanConnectReferenceDiagnostics.Shared.Failure("render", "resolver_exception", exception,
+                ("model_id", item.ModelId), ("item_type", item.ItemType), ("upgrade", item.UpgradeLevel));
             resolved = UnknownResolvedItem(item.ItemType);
         }
+        LanConnectReferenceDiagnostics.Shared.Write("render", "item_result", ("model_id", item.ModelId),
+            ("item_type", item.ItemType), ("upgrade", item.UpgradeLevel), ("status", resolved.Status),
+            ("preview_type", resolved.Preview?.GetType().Name),
+            ("reference_id", LanConnectReferenceDiagnostics.Identity(resolved)));
         if (resolved.Status != LanConnectResolvedItemStatus.Resolved ||
             string.IsNullOrWhiteSpace(resolved.LocalizedTitle) ||
             resolved.Preview == null)
         {
+            LanConnectReferenceDiagnostics.Shared.Write("render", "item_degraded_to_text",
+                ("model_id", item.ModelId), ("item_type", item.ItemType), ("status", resolved.Status));
             string fallback = UnknownItemLabel(resolved);
             return PlainSpan(fallback, ItemCopyPlaceholder(item.ItemType));
         }
@@ -1822,8 +1846,15 @@ internal sealed partial class LanConnectBasicChatPanel : VBoxContainer
         Control owner,
         LanConnectRichMessageReference reference)
     {
+        LanConnectReferenceDiagnostics.Shared.Write("activate", "reference_pressed",
+            ("view_id", owner.HasMeta("lan_connect_reference_view_id")
+                ? owner.GetMeta("lan_connect_reference_view_id").AsInt32() : 0),
+            ("reference_id", reference.Item == null ? 0 : LanConnectReferenceDiagnostics.Identity(reference.Item)),
+            ("model_id", (reference.Segment as LanConnectItemRefSegment)?.ModelId),
+            ("item_type", reference.Item?.ItemType), ("status", reference.Item?.Status));
         if (_itemPreview == null || !GodotObject.IsInstanceValid(_itemPreview))
         {
+            LanConnectReferenceDiagnostics.Shared.Write("activate", "controller_unavailable");
             return;
         }
         if (reference.Item is { } item)

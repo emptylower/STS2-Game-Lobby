@@ -6,13 +6,19 @@ internal enum LanConnectLanHostMode
 {
     Standard,
     Daily,
-    Custom
+    Custom,
+    Blitz,
+    Dread
 }
 
 internal readonly record struct LanConnectLanHostModeAvailability(
     bool Standard,
     bool Daily,
-    bool Custom);
+    bool Custom,
+    bool Blitz = false,
+    bool Dread = false,
+    bool SupportsBlitz = false,
+    bool SupportsDread = false);
 
 internal readonly record struct LanConnectLanHostModeOption(
     int Id,
@@ -28,12 +34,29 @@ internal static class LanConnectLanHostModeSelection
         new(2, "自定义模式", LanConnectLanHostMode.Custom)
     ];
 
+    public static IReadOnlyList<LanConnectLanHostModeOption> GetOptions(
+        LanConnectLanHostModeAvailability availability)
+    {
+        List<LanConnectLanHostModeOption> options = new(Options);
+        if (availability.SupportsBlitz)
+        {
+            options.Add(new(3, "极速模式", LanConnectLanHostMode.Blitz));
+        }
+
+        if (availability.SupportsDread)
+        {
+            options.Add(new(4, "恐惧模式", LanConnectLanHostMode.Dread));
+        }
+
+        return options;
+    }
+
     public static bool TryResolve(
         long id,
         LanConnectLanHostModeAvailability availability,
         out LanConnectLanHostMode mode)
     {
-        foreach (LanConnectLanHostModeOption option in Options)
+        foreach (LanConnectLanHostModeOption option in GetOptions(availability))
         {
             if (option.Id != id || !IsAvailable(option.Mode, availability))
             {
@@ -48,13 +71,15 @@ internal static class LanConnectLanHostModeSelection
         return false;
     }
 
-    private static bool IsAvailable(
+    internal static bool IsAvailable(
         LanConnectLanHostMode mode,
         LanConnectLanHostModeAvailability availability) => mode switch
     {
         LanConnectLanHostMode.Standard => availability.Standard,
         LanConnectLanHostMode.Daily => availability.Daily,
         LanConnectLanHostMode.Custom => availability.Custom,
+        LanConnectLanHostMode.Blitz => availability.SupportsBlitz && availability.Blitz,
+        LanConnectLanHostMode.Dread => availability.SupportsDread && availability.Dread,
         _ => false
     };
 }

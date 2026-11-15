@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Godot;
@@ -9,15 +10,10 @@ using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Connection;
-using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Transport.ENet;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
-using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
-using MegaCrit.Sts2.Core.Nodes.Screens.CustomRun;
-using MegaCrit.Sts2.Core.Nodes.Screens.DailyRun;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Platform;
-using MegaCrit.Sts2.Core.Runs;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -139,7 +135,7 @@ internal static class LanConnectLobbyJoinFlow
                     // native_bus_v1：客户端 flow 以工单 nonce 在首次发送时即时绑定，无需专用初始化器。
                     object initializer = new ENetClientConnectionInitializer(netId, candidate.Host, candidate.Port);
                     Log.Info($"sts2_lan_connect attempting lobby join via {candidate.Host}:{candidate.Port} ({candidate.Label}) using netId={netId}.");
-                    JoinResult joinResult = await joinFlow.BeginAsync(initializer, stack.GetTree());
+                    LanConnectManagedJoinResult joinResult = await joinFlow.BeginAsync(initializer, stack.GetTree());
                     _ = TaskHelper.RunSafely(ReportConnectionEventSafeAsync(
                         joinResponse.Room.RoomId,
                         joinResponse.TicketId,
@@ -179,7 +175,7 @@ internal static class LanConnectLobbyJoinFlow
                         joinResponse.TicketId,
                         ex.Failure.Code,
                         candidate,
-                        ex.Failure.Detail));
+                        ex.Failure.Detail ?? ex.Failure.Code));
                     return new LobbyJoinAttemptResult(LobbyJoinAttemptKind.Failed, null, ex.Failure);
                 }
                 catch (ClientConnectionFailedException ex)
@@ -436,65 +432,51 @@ internal static class LanConnectLobbyJoinFlow
         }
     }
 
-    internal static void PushJoinedScreen(NSubmenuStack stack, NetClientGameService netService, JoinResult joinResult)
+    internal static void PushJoinedScreen(
+        NSubmenuStack stack,
+        NetClientGameService netService,
+        LanConnectManagedJoinResult joinResult)
     {
-        if (joinResult.sessionState == RunSessionState.InLobby)
+        bool loaded = joinResult.SessionState == RunSessionState.InLoadedLobby;
+        if (!loaded && joinResult.SessionState != RunSessionState.InLobby)
         {
-            switch (joinResult.gameMode)
-            {
-                case GameMode.Standard:
-                {
-                    NCharacterSelectScreen submenu = stack.GetSubmenuType<NCharacterSelectScreen>();
-                    submenu.InitializeMultiplayerAsClient(netService, joinResult.joinResponse!.Value);
-                    stack.Push(submenu);
-                    return;
-                }
-                case GameMode.Daily:
-                {
-                    NDailyRunScreen submenu = stack.GetSubmenuType<NDailyRunScreen>();
-                    submenu.InitializeMultiplayerAsClient(netService, joinResult.joinResponse!.Value);
-                    stack.Push(submenu);
-                    return;
-                }
-                case GameMode.Custom:
-                {
-                    NCustomRunScreen submenu = stack.GetSubmenuType<NCustomRunScreen>();
-                    submenu.InitializeMultiplayerAsClient(netService, joinResult.joinResponse!.Value);
-                    stack.Push(submenu);
-                    return;
-                }
-            }
+            throw new InvalidOperationException($"Cannot open a lobby for state {joinResult.SessionState}.");
         }
 
-        if (joinResult.sessionState == RunSessionState.InLoadedLobby)
+        string screenTypeName = GetJoinedScreenTypeName(joinResult.GameMode, joinResult.IsCustom, loaded);
+        Type screenType = typeof(NetClientGameService).Assembly.GetType(screenTypeName, throwOnError: true)!;
+        NSubmenu submenu = stack.GetSubmenuType(screenType);
+        object response = loaded
+            ? joinResult.LoadJoinResponse!.Value
+            : joinResult.JoinResponse!.Value;
+        string methodName = loaded ? "InitializeAsClient" : "InitializeMultiplayerAsClient";
+        MethodInfo initializer = screenType.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Single(method => method.Name == methodName
+                && method.GetParameters() is { Length: 2 } parameters
+                && parameters[0].ParameterType.IsInstanceOfType(netService)
+                && parameters[1].ParameterType.IsInstanceOfType(response));
+        initializer.Invoke(submenu, [netService, response]);
+        stack.Push(submenu);
+    }
+
+    internal static string GetJoinedScreenTypeName(string gameMode, bool isCustom, bool loaded)
+    {
+        const string screens = "MegaCrit.Sts2.Core.Nodes.Screens.";
+        if (isCustom || string.Equals(gameMode, "Custom", StringComparison.Ordinal))
         {
-            switch (joinResult.gameMode)
-            {
-                case GameMode.Standard:
-                {
-                    NMultiplayerLoadGameScreen submenu = stack.GetSubmenuType<NMultiplayerLoadGameScreen>();
-                    submenu.InitializeAsClient(netService, joinResult.loadJoinResponse!.Value);
-                    stack.Push(submenu);
-                    return;
-                }
-                case GameMode.Daily:
-                {
-                    NDailyRunLoadScreen submenu = stack.GetSubmenuType<NDailyRunLoadScreen>();
-                    submenu.InitializeAsClient(netService, joinResult.loadJoinResponse!.Value);
-                    stack.Push(submenu);
-                    return;
-                }
-                case GameMode.Custom:
-                {
-                    NCustomRunLoadScreen submenu = stack.GetSubmenuType<NCustomRunLoadScreen>();
-                    submenu.InitializeAsClient(netService, joinResult.loadJoinResponse!.Value);
-                    stack.Push(submenu);
-                    return;
-                }
-            }
+            return screens + (loaded ? "CustomRun.NCustomRunLoadScreen" : "CustomRun.NCustomRunScreen");
         }
 
-        throw new ArgumentOutOfRangeException(nameof(joinResult.gameMode), joinResult.gameMode, "Unhandled multiplayer game mode.");
+        return (gameMode, loaded) switch
+        {
+            ("Standard", false) => screens + "CharacterSelect.NCharacterSelectScreen",
+            ("Daily", false) => screens + "DailyRun.NDailyRunScreen",
+            ("Blitz", false) => screens + "Blitz.NBlitzScreen",
+            ("Dread", false) => screens + "Dread.NDreadScreen",
+            ("Standard" or "Blitz" or "Dread", true) => screens + "CharacterSelect.NMultiplayerLoadGameScreen",
+            ("Daily", true) => screens + "DailyRun.NDailyRunLoadScreen",
+            _ => throw new ArgumentOutOfRangeException(nameof(gameMode), gameMode, "Unhandled multiplayer game mode.")
+        };
     }
 
     private sealed record JoinAttemptCandidate(string Label, string Host, ushort Port, bool IsRelay)

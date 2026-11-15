@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Entities.Multiplayer;
@@ -637,6 +638,14 @@ internal static class LanConnectHostFlow
 
     private static void PushHostScreen(GameMode gameMode, NSubmenuStack stack, NetHostGameService netService, int maxPlayers)
     {
+        if (LanConnectGameModeCompatibility.IsCustom(gameMode))
+        {
+            NCustomRunScreen custom = stack.GetSubmenuType<NCustomRunScreen>();
+            custom.InitializeMultiplayerAsHost(netService, maxPlayers);
+            stack.Push(custom);
+            return;
+        }
+
         switch (gameMode)
         {
             case GameMode.Standard:
@@ -656,8 +665,16 @@ internal static class LanConnectHostFlow
             }
             default:
             {
-                NCustomRunScreen submenu = stack.GetSubmenuType<NCustomRunScreen>();
-                submenu.InitializeMultiplayerAsHost(netService, maxPlayers);
+                string modeName = gameMode.ToString();
+                string typeName = LanConnectGameModeCompatibility.GetAdditionalHostScreenTypeName(modeName);
+                Type screenType = typeof(GameMode).Assembly.GetType(typeName, throwOnError: true)!;
+                NSubmenu submenu = stack.GetSubmenuType(screenType);
+                MethodInfo initializer = screenType.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                    .Single(method => method.Name == "InitializeMultiplayerAsHost"
+                        && method.GetParameters() is { Length: 2 } parameters
+                        && parameters[0].ParameterType.IsInstanceOfType(netService)
+                        && parameters[1].ParameterType == typeof(int));
+                initializer.Invoke(submenu, [netService, maxPlayers]);
                 stack.Push(submenu);
                 break;
             }

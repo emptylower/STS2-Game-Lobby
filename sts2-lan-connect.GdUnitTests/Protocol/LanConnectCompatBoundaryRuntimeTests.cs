@@ -105,6 +105,16 @@ public sealed class LanConnectCompatBoundaryRuntimeTests
             seed = null,
             modifiers = []
         };
+        object boxedMessage = message;
+        FieldInfo? modeField = typeof(ClientLobbyJoinResponseMessage).GetField("gameMode");
+        FieldInfo? customField = typeof(ClientLobbyJoinResponseMessage).GetField("isCustom");
+        if (modeField != null)
+        {
+            modeField.SetValue(boxedMessage, Enum.Parse(modeField.FieldType, "Blitz"));
+            customField!.SetValue(boxedMessage, true);
+            message = (ClientLobbyJoinResponseMessage)boxedMessage;
+        }
+
         byte[] buffer = SerializeMessage(scope.Pair.HostBus, scope.Pair.HostId, message, out int length);
         byte[] generated = buffer.AsSpan(0, length).ToArray();
 
@@ -116,14 +126,24 @@ public sealed class LanConnectCompatBoundaryRuntimeTests
         reader.Reset(generated);
         AssertThat(reader.ReadByte()).IsEqual(checked((byte)message.ToId()));
         AssertThat(reader.ReadULong()).IsEqual(scope.Pair.HostId);
-        List<StartRunLobbyPlayer> players = reader.ReadList<StartRunLobbyPlayer>(
-            LanConnectConstants.ExtendedLobbyListBits);
-        AssertThat(players.Count).IsEqual(4);
-        AssertThat(players.Select(static player => player.slotId).ToArray()).IsEqual(new[] { 4, 5, 6, 7 });
-        AssertThat(reader.ReadBool()).IsFalse();
-        AssertThat(reader.ReadBool()).IsFalse();
-        AssertThat(reader.ReadInt(5)).IsEqual(8);
-        AssertThat(reader.ReadList<SerializableModifier>().Count).IsEqual(0);
+        // Let the actual game reader own the body layout. A hand-written old-layout
+        // reader would agree with an equally stale writer and miss newly added fields.
+        object decoded = new ClientLobbyJoinResponseMessage();
+        typeof(ClientLobbyJoinResponseMessage).GetMethod("Deserialize")!.Invoke(decoded, [reader]);
+        ClientLobbyJoinResponseMessage response = (ClientLobbyJoinResponseMessage)decoded;
+        AssertThat(response.playersInLobby!.Count).IsEqual(4);
+        AssertThat(response.playersInLobby.Select(static player => player.slotId).ToArray()).IsEqual(new[] { 4, 5, 6, 7 });
+        AssertThat(response.playersInLobby.Select(static player => player.id).ToArray()).IsEqual(new ulong[] { 104, 105, 106, 107 });
+        AssertThat(response.dailyTime.HasValue).IsFalse();
+        AssertThat(response.seed).IsNull();
+        AssertThat(response.ascension).IsEqual(8);
+        AssertThat(response.modifiers.Count).IsEqual(0);
+        if (modeField != null)
+        {
+            AssertThat(modeField.GetValue(decoded)).IsEqual(modeField.GetValue(boxedMessage));
+            AssertThat(customField!.GetValue(decoded)).IsEqual(true);
+        }
+
         AssertThat(reader.BitPosition).IsLessEqual(length * 8);
 
         PacketReader vanillaReader = new();
@@ -232,15 +252,23 @@ public sealed class LanConnectCompatBoundaryRuntimeTests
     private static List<StartRunLobbyPlayer> StartRunPlayers(IEnumerable<int> realSlots)
     {
         CharacterModel character = ModelDb.Character<Ironclad>();
-        return realSlots.Select(slot => new StartRunLobbyPlayer
+        return realSlots.Select(slot =>
         {
-            id = 100UL + (ulong)slot,
-            slotId = slot,
-            character = character,
-            unlockState = new SerializableUnlockState(),
-            maxMultiplayerAscensionUnlocked = 20,
-            isModded = false,
-            isReady = true
+            object player = new StartRunLobbyPlayer
+            {
+                id = 100UL + (ulong)slot,
+                slotId = slot,
+                character = character,
+                unlockState = new SerializableUnlockState(),
+                isModded = false,
+                isReady = true
+            };
+            foreach (string name in new[] { "maxMultiplayerAscensionUnlocked", "maxStandardAscension", "maxBlitzAscension" })
+            {
+                typeof(StartRunLobbyPlayer).GetField(name)?.SetValue(player, 20);
+            }
+
+            return (StartRunLobbyPlayer)player;
         }).ToList();
     }
 

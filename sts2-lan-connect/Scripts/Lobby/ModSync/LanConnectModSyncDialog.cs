@@ -199,6 +199,7 @@ internal sealed partial class LanConnectModSyncDialog : Control
 
     public override void _Ready()
     {
+        LanConnectLobbyFonts.Apply(this);
         Name = "LanConnectModSyncDialog";
         MouseFilter = MouseFilterEnum.Stop;
         FocusMode = FocusModeEnum.All;
@@ -555,6 +556,7 @@ internal sealed partial class LanConnectModSyncDialog : Control
             Unresizable = false,
             MinSize = new Vector2I(520, 320)
         };
+        LanConnectLobbyFonts.Apply(confirmation);
         TaskCompletionSource<bool> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         confirmation.Confirmed += () => completion.TrySetResult(true);
         confirmation.Canceled += () => completion.TrySetResult(false);

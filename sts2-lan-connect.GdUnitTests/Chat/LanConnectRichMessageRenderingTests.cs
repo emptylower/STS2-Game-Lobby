@@ -350,6 +350,72 @@ public sealed class LanConnectRichMessageRenderingTests
         AssertThat(row.FindChildren("*", "HFlowContainer", true, false).Count).IsEqual(0);
     }
 
+    [TestCase]
+    public async Task Touch_release_uses_exact_meta_in_a_multi_reference_message_and_activates_once()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.AppendConfirmedContentForTests("touch-multi", "Silent", Content(), 1, false);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+            LanConnectChatUiComposition.Icons, ResolveItem))!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+
+        RichTextLabel inline = RichMessageText(FindNode<Control>(panel, "ChatMessageRow0"));
+        inline.EmitSignal(Control.SignalName.GuiInput, new InputEventScreenTouch
+        {
+            Index = 0, Position = new Vector2(20, 10), Pressed = true
+        });
+        inline.EmitSignal(RichTextLabel.SignalName.MetaClicked, "ref-7");
+        AssertThat(panel.PreviewVisible).IsFalse();
+        inline.EmitSignal(Control.SignalName.GuiInput, new InputEventScreenTouch
+        {
+            Index = 0, Position = new Vector2(20, 10), Pressed = false
+        });
+        await runner.AwaitIdleFrame();
+
+        AssertThat(panel.ItemPreviewForTests.TestState.Pinned).IsTrue();
+        AssertThat(panel.ItemPreviewForTests.TestState.Title).IsEqual("Localized Potion");
+        inline.EmitSignal(RichTextLabel.SignalName.MetaClicked, "ref-3");
+        inline.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-3");
+        inline.EmitSignal(RichTextLabel.SignalName.MetaHoverEnded, "ref-3");
+        await runner.AwaitIdleFrame();
+        AssertThat(panel.ItemPreviewForTests.TestState.Title).IsEqual("Localized Potion");
+        AssertThat(panel.ItemPreviewForTests.TestState.Pinned).IsTrue();
+    }
+
+    [TestCase]
+    public async Task Dragging_a_single_reference_message_does_not_open_a_preview()
+    {
+        LanConnectChatChannelState state = EnabledState();
+        state.AppendConfirmedContentForTests("touch-scroll", "Silent", new LanConnectChatContent(1,
+            [new LanConnectItemRefSegment("potion", "MegaCrit.FirePotion")]), 1, false);
+        LanConnectBasicChatPanel panel = AutoFree(new LanConnectBasicChatPanel(
+            LanConnectChatUiComposition.Icons, ResolveItem))!;
+        using ISceneRunner runner = ISceneRunner.Load(panel, autoFree: true);
+        panel.BindStructured(state, (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        await runner.AwaitIdleFrame();
+        RichTextLabel inline = RichMessageText(FindNode<Control>(panel, "ChatMessageRow0"));
+
+        inline.EmitSignal(Control.SignalName.GuiInput, new InputEventScreenTouch
+        {
+            Index = 0, Position = Vector2.Zero, Pressed = true
+        });
+        inline.EmitSignal(Control.SignalName.GuiInput, new InputEventScreenDrag
+        {
+            Index = 0, Position = new Vector2(0, 80)
+        });
+        inline.EmitSignal(Control.SignalName.GuiInput, new InputEventScreenTouch
+        {
+            Index = 0, Position = new Vector2(0, 80), Pressed = false
+        });
+        inline.EmitSignal(RichTextLabel.SignalName.MetaClicked, "ref-2");
+        inline.EmitSignal(RichTextLabel.SignalName.MetaHoverStarted, "ref-2");
+        await runner.AwaitIdleFrame();
+
+        AssertThat(panel.PreviewVisible).IsFalse();
+    }
+
     private static LanConnectChatContent Content() => new(1,
     [
         new LanConnectTextSegment("before "),

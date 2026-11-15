@@ -48,11 +48,11 @@ public sealed class LanConnectPackageContentTests
 
         using JsonDocument manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
-        Assert.Equal("0.6.3", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("0.6.4", manifest.RootElement.GetProperty("version").GetString());
         FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
             Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
-        Assert.Equal("0.6.3.0", assemblyVersion.FileVersion);
-        Assert.Equal("0.6.3", assemblyVersion.ProductVersion?.Split('+')[0]);
+        Assert.Equal("0.6.4.0", assemblyVersion.FileVersion);
+        Assert.Equal("0.6.4", assemblyVersion.ProductVersion?.Split('+')[0]);
 
         foreach (string packagePath in ExpectedFiles)
         {
@@ -102,7 +102,7 @@ public sealed class LanConnectPackageContentTests
             Assert.Contains("0.5.3", text, StringComparison.Ordinal);
             Assert.Contains("续局", text, StringComparison.Ordinal);
         }
-        Assert.Contains("当前客户端：0.6.3；lobby-service：0.6.3", workshop, StringComparison.Ordinal);
+        Assert.Contains("当前客户端：0.6.4；lobby-service：0.6.3", workshop, StringComparison.Ordinal);
         Assert.Contains("STS2LANRESUME:", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("HostChannel", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("Android", releaseNotes, StringComparison.Ordinal);
@@ -389,7 +389,7 @@ public sealed class LanConnectPackageContentTests
             Assert.Contains("1093309523", text, StringComparison.Ordinal);
         }
 
-        // Current-version declarations are checked by Client_v063_documents_stable_release.
+        // Current-version declarations are checked by Client_v064_documents_current_release_and_preserves_v063_history.
         string userGuide = File.ReadAllText(Path.Combine(
             fixture.RepositoryRoot,
             "docs",
@@ -407,7 +407,7 @@ public sealed class LanConnectPackageContentTests
     }
 
     [Fact]
-    public void Client_v063_documents_stable_release()
+    public void Client_v064_documents_current_release_and_preserves_v063_history()
     {
         using Fixture fixture = new();
         string releaseNotes = File.ReadAllText(Path.Combine(
@@ -419,12 +419,12 @@ public sealed class LanConnectPackageContentTests
             fixture.RepositoryRoot, "docs", "STS2_LAN_CONNECT_USER_GUIDE_ZH.md"));
         string changelog = File.ReadAllText(Path.Combine(fixture.RepositoryRoot, "CHANGELOG.md"));
 
-        Assert.Contains("| 客户端版本 | `0.6.3`（正式版） |", clientReadme, StringComparison.Ordinal);
-        Assert.Contains("| Client version | `0.6.3` (stable) |", clientReadme, StringComparison.Ordinal);
-        Assert.Contains("当前正式版为 **v0.6.3**", readme, StringComparison.Ordinal);
-        Assert.Contains("当前正式版为 `0.6.3`", userGuide, StringComparison.Ordinal);
-        Assert.Contains("## v0.6.3 正式版", userGuide, StringComparison.Ordinal);
-        Assert.Contains("## [0.6.3] - ", changelog, StringComparison.Ordinal);
+        Assert.Contains("| 客户端版本 | `0.6.4`（正式版） |", clientReadme, StringComparison.Ordinal);
+        Assert.Contains("| Client version | `0.6.4` (stable) |", clientReadme, StringComparison.Ordinal);
+        Assert.Contains("当前客户端版本为 **v0.6.4**", readme, StringComparison.Ordinal);
+        Assert.Contains("当前正式版为 `0.6.4`", userGuide, StringComparison.Ordinal);
+        Assert.Contains("## v0.6.4 正式版", userGuide, StringComparison.Ordinal);
+        Assert.Contains("## [0.6.4] - ", changelog, StringComparison.Ordinal);
         Assert.Contains("本次存档修复不要求更新服务端", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("Steam 创意工坊条目「游戏大厅」已于 2026-09-24 同步更新", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("ModMismatch", releaseNotes, StringComparison.Ordinal);

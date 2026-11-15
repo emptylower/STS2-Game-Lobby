@@ -107,6 +107,7 @@ public partial class LanConnectServerSelectionDialog : Control
 
     private void BuildUi()
     {
+        LanConnectLobbyFonts.Apply(this);
         // Dimming backdrop — clicking outside the panel cancels.
         var backdrop = new ColorRect
         {

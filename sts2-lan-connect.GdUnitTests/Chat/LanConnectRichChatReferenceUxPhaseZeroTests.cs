@@ -135,6 +135,15 @@ public sealed class LanConnectRichChatReferenceUxPhaseZeroTests
         });
         await runner.AwaitIdleFrame();
 
+        AssertThat(panel.PreviewVisible).IsFalse();
+        touchTarget.EmitSignal(Control.SignalName.GuiInput, new InputEventScreenTouch
+        {
+            Index = 0,
+            Position = touchTarget.Size / 2f,
+            Pressed = false
+        });
+        await runner.AwaitIdleFrame();
+
         AssertThat(panel.PreviewVisible).IsTrue();
         touchTarget.EmitSignal(Control.SignalName.MouseExited);
         await runner.AwaitIdleFrame();

@@ -93,6 +93,7 @@ internal sealed partial class LanConnectRoomManagementPanel : CanvasLayer
     {
         // Full-screen dark veil
         Control shell = new();
+        LanConnectLobbyFonts.Apply(shell);
         shell.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         AddChild(shell);
 

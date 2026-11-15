@@ -26,6 +26,7 @@ internal static class LanConnectContinueRunHostChannelPrompt
             Unresizable = false,
             MinSize = new Vector2I(560, 300)
         };
+        LanConnectLobbyFonts.Apply(confirmation);
         TaskCompletionSource<string?> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         Action ownerExiting = () => completion.TrySetResult(null);
         confirmation.Confirmed += () => completion.TrySetResult(LanConnectHostChannels.Lobby);

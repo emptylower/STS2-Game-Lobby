@@ -75,6 +75,55 @@ internal static class LanConnectLobbyHandshakeCompatibility
         return (T)boxedMessage;
     }
 
+    internal static (string GameMode, bool IsCustom) ReadRunMode(object initialMessage, object response)
+    {
+        object source = ReadMember(response, "serializableRun") ?? response;
+        object mode = ReadMember(source, "gameMode", "GameMode")
+            ?? ReadMember(initialMessage, "gameMode")
+            ?? throw new MissingFieldException(source.GetType().FullName, "gameMode/GameMode");
+        string modeName = mode.ToString()
+            ?? throw new InvalidOperationException("The host supplied no game mode.");
+        bool isCustom = ReadMember(source, "isCustom", "IsCustomGame") is true
+            || string.Equals(modeName, "Custom", StringComparison.Ordinal);
+        return (modeName, isCustom);
+    }
+
+    internal static T AttachAscensionLimits<T>(T message, object progress)
+        where T : struct
+    {
+        object boxedMessage = message;
+        Type messageType = typeof(T);
+        FieldInfo field = messageType.GetField("maxStandardAscension", InstanceFields)
+            ?? messageType.GetField("maxAscensionUnlocked", InstanceFields)
+            ?? throw new MissingFieldException(messageType.FullName, "maxStandardAscension/maxAscensionUnlocked");
+        field.SetValue(boxedMessage, ReadMember(progress, "MaxMultiplayerAscension")
+            ?? throw new MissingMemberException(progress.GetType().FullName, "MaxMultiplayerAscension"));
+        FieldInfo? blitzField = messageType.GetField("maxBlitzAscension", InstanceFields);
+        if (blitzField != null)
+        {
+            blitzField.SetValue(boxedMessage, ReadMember(progress, "MaxBlitzAscension")
+                ?? throw new MissingMemberException(progress.GetType().FullName, "MaxBlitzAscension"));
+        }
+
+        return (T)boxedMessage;
+    }
+
+    private static object? ReadMember(object source, params string[] names)
+    {
+        Type type = source.GetType();
+        foreach (string name in names)
+        {
+            object? value = type.GetField(name, InstanceFields)?.GetValue(source)
+                ?? type.GetProperty(name, InstanceFields)?.GetValue(source);
+            if (value != null)
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
     internal static TExtraInfo PopulateFailureExtraInfo<TExtraInfo>(
         TExtraInfo extraInfo,
         PeerVersionSnapshot remoteInfo,

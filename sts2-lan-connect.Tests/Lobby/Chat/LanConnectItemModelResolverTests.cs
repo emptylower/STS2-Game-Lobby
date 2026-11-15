@@ -124,6 +124,29 @@ public sealed class LanConnectItemModelResolverTests
     }
 
     [Fact]
+    public void Injected_diagnostics_distinguish_local_failure_from_cached_unknown_without_native_logging()
+    {
+        List<string> lines = [];
+        FakeModelDbPort port = new() { ThrowAt = FailurePoint.CardCopy };
+        port.Add("card", "CARD.DEFEND_IRONCLAD", "Defend", maxUpgrade: 1);
+        LanConnectItemModelResolver resolver = new(port, LanConnectChatUiComposition.Localizer,
+            new LanConnectReferenceDiagnostics(lines.Add));
+        LanConnectItemRun run = new("card", "CARD.DEFEND_IRONCLAD", 1);
+
+        LanConnectResolvedItem first = resolver.Resolve(run, "en", "mods-a");
+        LanConnectResolvedItem cached = resolver.Resolve(run, "en", "mods-a");
+
+        Assert.Same(first, cached);
+        Assert.Equal(LanConnectResolvedItemStatus.Unknown, first.Status);
+        Assert.Contains(lines, line => line.Contains("\"reason\":\"exception\"", StringComparison.Ordinal) &&
+                                      line.Contains("System.InvalidOperationException", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.Contains("\"reason\":\"cache_hit\"", StringComparison.Ordinal) &&
+                                      line.Contains("\"status\":\"Unknown\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line.Contains("local model failure", StringComparison.Ordinal));
+        Assert.Equal(1, port.CardCopyCalls);
+    }
+
+    [Fact]
     public void Wrong_generic_model_type_is_unknown_and_does_not_escape()
     {
         FakeModelDbPort port = new();
