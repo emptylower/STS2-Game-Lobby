@@ -48,6 +48,118 @@ public sealed class LanConnectCreateProtocolDialogTests
     }
 
     [TestCase]
+    public async Task Host_mod_checklist_overlays_the_create_form_and_dismisses_independently()
+    {
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(960, 540),
+            LanConnectServerChatPresentation.Ready);
+
+        fixture.Overlay.OpenCreateDialogForTests();
+        await fixture.Runner.AwaitIdleFrame();
+        LineEdit roomName = (LineEdit)fixture.Overlay.FindChild("CreateRoomNameInput", owned: false);
+        roomName.Text = "Room name draft";
+
+        List<LobbyModDescriptor> mods = Enumerable.Range(1, 12).Select(index => new LobbyModDescriptor
+        {
+            Id = $"gameplay-mod-{index}",
+            Version = "2.3.4",
+            Role = LanConnectModRoles.Gameplay
+        }).ToList();
+        mods.Add(new LobbyModDescriptor
+        {
+            Id = "required-library",
+            Version = "1.2.3",
+            Role = LanConnectModRoles.Dependency
+        });
+        fixture.Overlay.ShowCreateGameplayModsDialog(mods);
+        await fixture.Runner.AwaitIdleFrame();
+
+        LanConnectModSyncDialog preview = (LanConnectModSyncDialog)fixture.Overlay.FindChild(
+            "LanConnectModSyncDialog", owned: false);
+        AssertThat(fixture.Overlay.CreateDialogVisibleForTests).IsTrue();
+        AssertThat(preview.IsVisibleInTree()).IsTrue();
+        AssertThat(fixture.Overlay.CreateDialogCardRectForTests.Encloses(preview.TestState.PanelRect)).IsTrue();
+        AssertThat(preview.TestState.RowCount).IsEqual(13);
+        Label dependency = (Label)preview.FindChild("ModSyncRow_required-library", owned: false)
+            .FindChild("ModSyncRowDetail", owned: false);
+        AssertThat(dependency.Text).Contains("版本 1.2.3").Contains("依赖");
+
+        ScrollContainer list = (ScrollContainer)preview.FindChild("ModSyncRowsScroll", owned: false);
+        AssertThat(list.GetVScrollBar().Visible).IsTrue();
+        AssertThat(list.FindChildren("*", "CheckBox", owned: false).Count).IsEqual(0);
+        Control actions = (Control)preview.FindChild("ModSyncActions", owned: false);
+        AssertThat(actions.IsVisibleInTree()).IsFalse();
+
+        Button close = (Button)preview.FindChild("HostModPreviewCloseButton", owned: false);
+        AssertThat(close.IsVisibleInTree()).IsTrue();
+        AssertThat(close.HasFocus()).IsTrue();
+        close.EmitSignal(Button.SignalName.Pressed);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.FindChild("LanConnectModSyncDialog", owned: false) == null).IsTrue();
+        AssertThat(fixture.Overlay.CreateDialogVisibleForTests).IsTrue();
+        AssertThat(roomName.HasFocus()).IsTrue();
+        AssertThat(roomName.Text).IsEqual("Room name draft");
+
+        IReadOnlyList<LobbyModDescriptor> cosmeticOnly = LanConnectModInventoryBuilder.Build([
+            new LanConnectRuntimeMod("cosmetic-only", "1.0.0", AffectsGameplay: false, IsLoaded: true,
+                Source: LanConnectModSources.ModsDirectory, WorkshopFileId: null, Dependencies: [])
+        ]);
+        fixture.Overlay.ShowCreateGameplayModsDialog(cosmeticOnly);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.FindChild("LanConnectModSyncDialog", owned: false) == null).IsTrue();
+        AssertThat(fixture.Overlay.CreateDialogVisibleForTests).IsTrue();
+        AssertThat(roomName.HasFocus()).IsTrue();
+
+        fixture.Overlay.ShowCreateGameplayModsDialog(mods);
+        await fixture.Runner.AwaitIdleFrame();
+        fixture.Overlay._Input(new InputEventKey { Keycode = Key.Escape, Pressed = true });
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.FindChild("LanConnectModSyncDialog", owned: false) == null).IsTrue();
+        AssertThat(fixture.Overlay.CreateDialogVisibleForTests).IsTrue();
+    }
+
+    [TestCase(LanConnectLobbyThemes.ArcadeRetroId)]
+    [TestCase(LanConnectLobbyThemes.MidnightGlassId)]
+    [TestCase(LanConnectLobbyThemes.SaasCleanId)]
+    public async Task Host_mod_checklist_uses_the_active_lobby_theme(string themeId)
+    {
+        LanConnectLobbyTheme theme = LanConnectLobbyThemes.All.Single(candidate => candidate.Id == themeId);
+        LanConnectLobbyTheme previousTheme = LanConnectLobbyThemes.Current;
+        LanConnectLobbyThemes.SetForTests(theme);
+        try
+        {
+            using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+                new Vector2I(960, 540),
+                LanConnectServerChatPresentation.Ready);
+            fixture.Overlay.OpenCreateDialogForTests();
+            fixture.Overlay.ShowCreateGameplayModsDialog([
+                new LobbyModDescriptor { Id = "example", Version = "1.0", Role = LanConnectModRoles.Gameplay }
+            ]);
+            await fixture.Runner.AwaitIdleFrame();
+
+            Node preview = fixture.Overlay.FindChild("LanConnectModSyncDialog", owned: false);
+            Label title = (Label)preview.FindChild("ModSyncTitle", owned: false);
+            Label detail = (Label)preview.FindChild("ModSyncRowDetail", owned: false);
+            PanelContainer row = (PanelContainer)preview.FindChild("ModSyncRow_example", owned: false);
+            StyleBoxFlat rowStyle = (StyleBoxFlat)row.GetThemeStylebox("panel");
+            ScrollContainer scroll = (ScrollContainer)preview.FindChild("ModSyncRowsScroll", owned: false);
+            StyleBoxFlat thumb = (StyleBoxFlat)scroll.GetVScrollBar().GetThemeStylebox("grabber");
+            PanelContainer panel = (PanelContainer)preview.FindChild("ModSyncPanel", owned: false);
+
+            AssertThat(title.GetThemeColor("font_color")).IsEqual(theme.Palette.Accent);
+            AssertThat(detail.GetThemeColor("font_color")).IsEqual(theme.Palette.TextMuted);
+            AssertThat(rowStyle.BgColor).IsEqual(theme.Palette.Card);
+            AssertThat(rowStyle.BorderColor).IsEqual(theme.Palette.Border);
+            AssertThat(thumb.BgColor).IsEqual(theme.Palette.Accent);
+            AssertThat(panel.Material is ShaderMaterial).IsEqual(theme.Shape.Glass);
+        }
+        finally
+        {
+            LanConnectLobbyThemes.SetForTests(previousTheme);
+        }
+    }
+
+    [TestCase]
     public async Task Locked_create_modes_show_a_prompt_and_keep_the_last_valid_selection()
     {
         using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(

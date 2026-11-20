@@ -16,21 +16,23 @@ internal sealed partial class LanConnectModSyncRow : PanelContainer
     private static Color TextMutedColor => LanConnectModSyncPalette.TextMuted;
 
     private readonly LanConnectModSyncRowState _state;
+    private readonly bool _hostPreview;
     private CheckBox? _selector;
 
-    internal LanConnectModSyncRow(LanConnectModSyncRowState state)
+    internal LanConnectModSyncRow(LanConnectModSyncRowState state, bool hostPreview = false)
     {
         _state = state ?? throw new ArgumentNullException(nameof(state));
+        _hostPreview = hostPreview;
         Name = "ModSyncRow_" + SanitizeName(state.Descriptor.Id);
         CustomMinimumSize = new Vector2(0f, state.Job == null ? 68f : 88f);
         SizeFlagsHorizontal = SizeFlags.ExpandFill;
         ClipContents = false;
         MouseFilter = MouseFilterEnum.Stop;
-        AddThemeStyleboxOverride("panel", PixelStyle(
-            state.Selectable ? CardColor : SurfaceMutedColor,
-            BorderColor,
-            borderWidth: 2,
-            padding: 10));
+        LanConnectLobbyPalette lobbyPalette = LanConnectLobbyThemes.Current.Palette;
+        StyleBoxFlat style = hostPreview
+            ? LanConnectLobbyOverlay.CreatePixelStyle(lobbyPalette.Card, lobbyPalette.Border, borderWidth: 2, padding: 10, shadowSize: 0)
+            : PixelStyle(state.Selectable ? CardColor : SurfaceMutedColor, BorderColor, borderWidth: 2, padding: 10);
+        AddThemeStyleboxOverride("panel", style);
     }
 
     internal event Action<LanConnectModSyncRow, bool>? SelectionChanged;
@@ -79,10 +81,11 @@ internal sealed partial class LanConnectModSyncRow : PanelContainer
             : _state.Metadata?.Title is { Length: > 0 } metadataTitle
                 ? metadataTitle
                 : _state.Descriptor.Id;
+        LanConnectLobbyPalette lobbyPalette = LanConnectLobbyThemes.Current.Palette;
         Label title = LabelFor(
-            LimitVisibleText(visibleTitle, 36),
+            _hostPreview ? visibleTitle : LimitVisibleText(visibleTitle, 36),
             17,
-            TextStrongColor);
+            _hostPreview ? lobbyPalette.TextStrong : TextStrongColor);
         title.Name = "ModSyncRowTitle";
         title.AccessibilityName = $"MOD {_state.Descriptor.Id}";
         text.AddChild(title);
@@ -90,7 +93,10 @@ internal sealed partial class LanConnectModSyncRow : PanelContainer
         string source = _state.Descriptor.Source == LanConnectModSources.SteamWorkshop
             ? $"Steam Workshop {_state.Descriptor.WorkshopFileId}"
             : "本地 MOD";
-        string detailText = $"{_state.Descriptor.Id}  ·  {source}  ·  房主版本 {_state.Descriptor.Version}";
+        string role = _state.Descriptor.Role == LanConnectModRoles.Dependency ? "依赖" : "玩法模组";
+        string detailText = _hostPreview
+            ? $"版本 {_state.Descriptor.Version}  ·  {role}  ·  {source}"
+            : $"{_state.Descriptor.Id}  ·  {source}  ·  房主版本 {_state.Descriptor.Version}";
         LanConnectWorkshopMetadata? metadata = _state.Metadata ?? _state.Job?.Metadata;
         if (metadata != null)
         {
@@ -100,7 +106,15 @@ internal sealed partial class LanConnectModSyncRow : PanelContainer
         {
             detailText += $"  ·  {DescribeJob(_state.Job)}";
         }
-        Label detail = LabelFor(LimitVisibleText(detailText, 52), 13, TextMutedColor);
+        Label detail = LabelFor(
+            _hostPreview ? detailText : LimitVisibleText(detailText, 52),
+            13,
+            _hostPreview ? lobbyPalette.TextMuted : TextMutedColor);
+        if (_hostPreview)
+        {
+            title.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+            detail.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        }
         detail.Name = "ModSyncRowDetail";
         detail.AccessibilityName = detailText;
         detail.TooltipText = detailText;
