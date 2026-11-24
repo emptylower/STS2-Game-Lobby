@@ -463,7 +463,7 @@ public sealed class LanConnectCompatBoundaryRuntimeTests
             SentToClients.Add(new CapturedPacket(peerId, bytes.AsSpan(0, length).ToArray()));
 
         public override void SendMessageToAll(byte[] bytes, int length, NetTransferMode mode, int channel = 0) { }
-        public override void DisconnectClient(ulong peerId, NetError reason, bool now = false) { }
+        public override void DisconnectClient(ulong peerId, NetError reason, bool now = false, string? debugReason = null) { }
         public override void StopHost(NetError reason, bool now = false) { }
         public override string? GetRawLobbyIdentifier() => null;
     }

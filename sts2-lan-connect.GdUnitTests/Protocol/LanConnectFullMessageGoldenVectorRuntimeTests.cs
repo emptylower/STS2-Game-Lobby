@@ -332,21 +332,12 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         yield return Host(
             "tail-full-initial-game-info-v1",
             LanConnectSidecarMessageKind.InitialGameInfo,
-            () => new InitialGameInfoMessage
-            {
-                sessionState = RunSessionState.InLobby,
-                gameMode = GameMode.Standard,
-                connectionFailureReason = null
-            },
+            () => CreateInitialGameInfoMessage(RunSessionState.InLobby, GameMode.Standard, null),
             new Expected("selection") { SessionState = "InLobby", GameMode = "Standard" });
         yield return Client(
             "tail-full-lobby-join-request-v1",
             LanConnectSidecarMessageKind.LobbyJoinRequest,
-            () => new ClientLobbyJoinRequestMessage
-            {
-                maxAscensionUnlocked = 12,
-                unlockState = new SerializableUnlockState()
-            },
+            () => CreateLobbyJoinRequestMessage(12),
             new Expected("peerOffer")
             {
                 MaxAscensionUnlocked = 12,
@@ -462,12 +453,10 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             yield return Host(
                 name,
                 LanConnectSidecarMessageKind.ConnectionFailed,
-                () => new InitialGameInfoMessage
-                {
-                    sessionState = RunSessionState.InLobby,
-                    gameMode = GameMode.Standard,
-                    connectionFailureReason = ConnectionFailureReason.ModMismatch
-                },
+                () => CreateInitialGameInfoMessage(
+                    RunSessionState.InLobby,
+                    GameMode.Standard,
+                    ConnectionFailureReason.ModMismatch),
                 new Expected("rejection")
                 {
                     RejectionStage = stage,
@@ -502,11 +491,14 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
         {
             case InitialGameInfoMessage initial:
                 AssertThat(initial.sessionState.ToString()).IsEqual(spec.Expected.SessionState);
-                AssertThat(initial.gameMode.ToString()).IsEqual(spec.Expected.GameMode);
+                if (TryReadFieldString(initial, "gameMode", out string? decodedGameMode))
+                {
+                    AssertThat(decodedGameMode).IsEqual(spec.Expected.GameMode);
+                }
                 AssertThat(initial.connectionFailureReason?.ToString()).IsEqual(spec.Expected.ConnectionFailureReason);
                 break;
             case ClientLobbyJoinRequestMessage request:
-                AssertThat(request.maxAscensionUnlocked).IsEqual(spec.Expected.MaxAscensionUnlocked!.Value);
+                AssertThat(ReadJoinRequestAscension(request)).IsEqual(spec.Expected.MaxAscensionUnlocked!.Value);
                 break;
             case ClientLobbyJoinResponseMessage response:
                 AssertThat(response.ascension).IsEqual(spec.Expected.Ascension!.Value);
@@ -630,18 +622,73 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
     private static string Sha256(byte[] bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
+    private static InitialGameInfoMessage CreateInitialGameInfoMessage(
+        RunSessionState sessionState,
+        GameMode gameMode,
+        ConnectionFailureReason? connectionFailureReason)
+    {
+        object boxed = new InitialGameInfoMessage
+        {
+            sessionState = sessionState,
+            connectionFailureReason = connectionFailureReason
+        };
+        typeof(InitialGameInfoMessage).GetField("gameMode")?.SetValue(boxed, gameMode);
+        return (InitialGameInfoMessage)boxed;
+    }
+
+    private static ClientLobbyJoinRequestMessage CreateLobbyJoinRequestMessage(int maxAscension)
+    {
+        object boxed = new ClientLobbyJoinRequestMessage
+        {
+            unlockState = new SerializableUnlockState()
+        };
+        FieldInfo? field = typeof(ClientLobbyJoinRequestMessage).GetField("maxStandardAscension")
+            ?? typeof(ClientLobbyJoinRequestMessage).GetField("maxAscensionUnlocked");
+        field?.SetValue(boxed, maxAscension);
+        return (ClientLobbyJoinRequestMessage)boxed;
+    }
+
+    private static bool TryReadFieldString<T>(T instance, string fieldName, out string? value)
+        where T : struct
+    {
+        FieldInfo? field = typeof(T).GetField(fieldName);
+        if (field == null)
+        {
+            value = null;
+            return false;
+        }
+        value = field.GetValue(instance)?.ToString();
+        return true;
+    }
+
+    private static int ReadJoinRequestAscension(ClientLobbyJoinRequestMessage request)
+    {
+        FieldInfo field = typeof(ClientLobbyJoinRequestMessage).GetField("maxStandardAscension")
+            ?? typeof(ClientLobbyJoinRequestMessage).GetField("maxAscensionUnlocked")
+            ?? throw new MissingFieldException(
+                typeof(ClientLobbyJoinRequestMessage).FullName,
+                "maxStandardAscension/maxAscensionUnlocked");
+        return (int)field.GetValue(request)!;
+    }
+
     private static List<StartRunLobbyPlayer> StartRunPlayers(IEnumerable<int> realSlots)
     {
         CharacterModel character = ModelDb.Character<Ironclad>();
-        return realSlots.Select(slot => new StartRunLobbyPlayer
+        return realSlots.Select(slot =>
         {
-            id = 100UL + (ulong)slot,
-            slotId = slot,
-            character = character,
-            unlockState = new SerializableUnlockState(),
-            maxMultiplayerAscensionUnlocked = 20,
-            isModded = false,
-            isReady = true
+            object boxed = new StartRunLobbyPlayer
+            {
+                id = 100UL + (ulong)slot,
+                slotId = slot,
+                character = character,
+                unlockState = new SerializableUnlockState(),
+                isModded = false,
+                isReady = true
+            };
+            FieldInfo? ascensionField = typeof(StartRunLobbyPlayer).GetField("maxStandardAscension")
+                ?? typeof(StartRunLobbyPlayer).GetField("maxMultiplayerAscensionUnlocked");
+            ascensionField?.SetValue(boxed, 20);
+            return (StartRunLobbyPlayer)boxed;
         }).ToList();
     }
 
@@ -830,7 +877,7 @@ public sealed class LanConnectFullMessageGoldenVectorRuntimeTests
             int channel = 0) =>
             SentToClients.Add(new CapturedPacket(peerId, bytes.AsSpan(0, length).ToArray()));
         public override void SendMessageToAll(byte[] bytes, int length, NetTransferMode mode, int channel = 0) { }
-        public override void DisconnectClient(ulong peerId, NetError reason, bool now = false) { }
+        public override void DisconnectClient(ulong peerId, NetError reason, bool now = false, string? debugReason = null) { }
         public override void StopHost(NetError reason, bool now = false) { }
         public override string? GetRawLobbyIdentifier() => null;
     }
