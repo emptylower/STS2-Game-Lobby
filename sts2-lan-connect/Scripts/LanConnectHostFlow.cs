@@ -643,6 +643,7 @@ internal static class LanConnectHostFlow
             NCustomRunScreen custom = stack.GetSubmenuType<NCustomRunScreen>();
             custom.InitializeMultiplayerAsHost(netService, maxPlayers);
             stack.Push(custom);
+            LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(custom, "push_host_screen");
             return;
         }
 
