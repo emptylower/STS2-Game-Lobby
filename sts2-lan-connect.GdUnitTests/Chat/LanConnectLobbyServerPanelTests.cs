@@ -364,6 +364,46 @@ public sealed class LanConnectLobbyServerPanelTests
     }
 
     [TestCase]
+    public async Task Picker_name_correction_survives_lobby_persistence_without_applying_address_draft()
+    {
+        string originalName = LanConnectConfig.PlayerDisplayName;
+        string originalServerOverride = LanConnectConfig.LobbyServerBaseUrlOverride;
+        try
+        {
+            Action? cancelPicker = null;
+            string? nameOnOpen = null;
+            using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+                new Vector2I(1920, 1080),
+                LanConnectServerChatPresentation.Ready,
+                launchServerPicker: (_, onCancelled, _) =>
+                {
+                    nameOnOpen = LanConnectConfig.PlayerDisplayName;
+                    cancelPicker = onCancelled;
+                });
+            LineEdit name = fixture.Overlay.FindChildren("*", "LineEdit", recursive: true, owned: false)
+                .OfType<LineEdit>()
+                .Single(input => input.PlaceholderText == "留空时自动使用当前系统用户名");
+            name.Text = "Draft";
+            fixture.Overlay.SetServerOverrideDraftForTests("https://draft.example");
+
+            fixture.Overlay.OpenServerPickerForTests();
+            AssertThat(nameOnOpen).IsEqual("Draft");
+            LanConnectConfig.PlayerDisplayName = "Corrected";
+            cancelPicker!();
+            fixture.Overlay.PersistSettingsForTests();
+
+            AssertThat(name.Text).IsEqual("Corrected");
+            AssertThat(LanConnectConfig.PlayerDisplayName).IsEqual("Corrected");
+            AssertThat(fixture.Overlay.ServerOverrideApplyEnabledForTests).IsTrue();
+            AssertThat(LanConnectConfig.LobbyServerBaseUrlOverride).IsEqual(originalServerOverride);
+        }
+        finally
+        {
+            LanConnectConfig.PlayerDisplayName = originalName;
+        }
+    }
+
+    [TestCase]
     public async Task Failed_picker_switch_settles_without_picked_or_cancelled_callbacks()
     {
         Action? settlePicker = null;

@@ -41,6 +41,8 @@ public partial class LanConnectServerSelectionDialog : Control
     private VBoxContainer? _list;
     private ScrollContainer? _listScroll;
     private LineEdit? _manualInput;
+    private LineEdit? _displayNameInput;
+    private Label? _playerNameErrorLabel;
     private Label? _statusLabel;
     private CancellationTokenSource? _refreshCts;
     private int _refreshGeneration;
@@ -90,7 +92,7 @@ public partial class LanConnectServerSelectionDialog : Control
 
     public override void _Input(InputEvent @event)
     {
-        if (@event is InputEventKey { Pressed: true, Keycode: Key.Escape })
+        if (Visible && @event is InputEventKey { Pressed: true, Keycode: Key.Escape })
         {
             AcceptEvent();
             Cancel();
@@ -99,6 +101,7 @@ public partial class LanConnectServerSelectionDialog : Control
 
     private void Cancel()
     {
+        PersistPlayerDisplayName();
         CancelRefresh();
         ResetServerListTouchTracking();
         Cancelled?.Invoke();
@@ -181,6 +184,37 @@ public partial class LanConnectServerSelectionDialog : Control
 
         var divider = new HSeparator();
         inner.AddChild(divider);
+
+        var playerNameRow = new HBoxContainer();
+        playerNameRow.AddThemeConstantOverride("separation", 8);
+        inner.AddChild(playerNameRow);
+
+        var playerNameLabel = new Label { Text = "玩家名", SizeFlagsVertical = SizeFlags.ShrinkCenter };
+        playerNameLabel.AddThemeColorOverride("font_color", TextStrongColor);
+        playerNameRow.AddChild(playerNameLabel);
+
+        _displayNameInput = new LineEdit
+        {
+            Name = "PlayerDisplayNameInput",
+            Text = LanConnectConfig.PlayerDisplayName,
+            PlaceholderText = "留空时自动使用当前系统用户名",
+            MaxLength = LanConnectConfig.MaxPlayerDisplayNameLength,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(0f, 38f),
+        };
+        ApplyLineEditStyle(_displayNameInput);
+        _displayNameInput.FocusExited += PersistPlayerDisplayName;
+        playerNameRow.AddChild(_displayNameInput);
+
+        _playerNameErrorLabel = new Label
+        {
+            Name = "PlayerNameErrorLabel",
+            Visible = false,
+            Text = LanConnectModerationUiMessages.PlayerNameBlocked + "请在上方修改玩家名，然后重新选择服务器或点击连接。",
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+        };
+        _playerNameErrorLabel.AddThemeColorOverride("font_color", DangerColor);
+        inner.AddChild(_playerNameErrorLabel);
 
         // Status pill
         _statusLabel = new Label { Text = "刷新中..." };
@@ -784,11 +818,41 @@ public partial class LanConnectServerSelectionDialog : Control
         }
     }
 
+    private void PersistPlayerDisplayName()
+    {
+        if (_displayNameInput == null)
+        {
+            return;
+        }
+
+        string playerDisplayName = LanConnectConfig.SanitizePlayerDisplayName(_displayNameInput.Text);
+        _displayNameInput.Text = playerDisplayName;
+        LanConnectConfig.PlayerDisplayName = playerDisplayName;
+    }
+
+    internal void ShowPlayerNameBlocked()
+    {
+        if (_playerNameErrorLabel != null)
+        {
+            _playerNameErrorLabel.Visible = true;
+        }
+        Show();
+        Callable.From(() =>
+        {
+            if (IsInsideTree() && Visible)
+            {
+                _displayNameInput?.GrabFocus();
+                _displayNameInput?.SelectAll();
+            }
+        }).CallDeferred();
+    }
+
     private void ChooseServer(string address)
     {
         ResetServerListTouchTracking();
+        PersistPlayerDisplayName();
+        Hide();
         ServerChosen?.Invoke(address);
-        QueueFree();
     }
 
     // ── Style helpers, driven by the active lobby theme's Shape ──

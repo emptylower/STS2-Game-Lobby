@@ -5435,6 +5435,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
+        PersistSettings();
         _serverPickerOpen = true;
         UpdateServerPickerBusyState();
         try
@@ -5483,6 +5484,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
+        if (_displayNameInput != null)
+        {
+            _displayNameInput.Text = LanConnectConfig.PlayerDisplayName;
+        }
         _serverPickerOpen = false;
         UpdateServerPickerBusyState();
     }

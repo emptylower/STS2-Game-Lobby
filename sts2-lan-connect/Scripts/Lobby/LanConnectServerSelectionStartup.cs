@@ -39,7 +39,8 @@ internal static class LanConnectServerSelectionStartup
     /// <param name="onCancelled">Optional callback fired AFTER the global
     ///   Cancelled event when the picker is dismissed without a selection.</param>
     /// <param name="onSettled">Optional callback fired exactly once after the
-    ///   selection attempt succeeds, fails, is superseded, or is cancelled.</param>
+    ///   selection attempt succeeds, fails, is superseded, or is cancelled.
+    ///   A blocked player name keeps the picker open for correction before settling.</param>
     public static void Show(
         SceneTree tree,
         Func<string, Task>? onPicked = null,
@@ -60,8 +61,7 @@ internal static class LanConnectServerSelectionStartup
             var dlg = new LanConnectServerSelectionDialog();
             dlg.ServerChosen += addr =>
             {
-                int generation = Interlocked.Increment(ref _switchGeneration);
-                TaskHelper.RunSafely(HandleServerPickedAsync(addr, onPicked, SettleOnce, generation));
+                TaskHelper.RunSafely(HandleServerPickedAsync(dlg, addr, onPicked, SettleOnce));
             };
             dlg.Cancelled += () =>
             {
@@ -91,17 +91,28 @@ internal static class LanConnectServerSelectionStartup
         }
     }
 
-    private static async Task HandleServerPickedAsync(
+    internal static async Task HandleServerPickedAsync(
+        LanConnectServerSelectionDialog dialog,
         string address,
         Func<string, Task>? onPicked,
         Action onSettled,
-        int generation)
+        Func<string, Task>? switchServerForTests = null,
+        Action<string>? showFailureForTests = null)
     {
+        int generation = Interlocked.Increment(ref _switchGeneration);
+        bool awaitingPlayerName = false;
         try
         {
-            LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance ??
-                throw new InvalidOperationException("Lobby runtime is unavailable.");
-            await runtime.SwitchLobbyServerAsync(address);
+            if (switchServerForTests != null)
+            {
+                await switchServerForTests(address);
+            }
+            else
+            {
+                LanConnectLobbyRuntime runtime = LanConnectLobbyRuntime.Instance ??
+                    throw new InvalidOperationException("Lobby runtime is unavailable.");
+                await runtime.SwitchLobbyServerAsync(address);
+            }
             if (generation != Volatile.Read(ref _switchGeneration))
             {
                 return;
@@ -112,6 +123,15 @@ internal static class LanConnectServerSelectionStartup
                 await onPicked(address);
             }
         }
+        catch (LobbyServiceException ex) when (LanConnectModerationUiMessages.IsContentBlocked(ex))
+        {
+            if (generation == Volatile.Read(ref _switchGeneration) &&
+                GodotObject.IsInstanceValid(dialog) && dialog.IsInsideTree() && !dialog.IsQueuedForDeletion())
+            {
+                awaitingPlayerName = true;
+                dialog.ShowPlayerNameBlocked();
+            }
+        }
         catch (Exception ex)
         {
             if (generation != Volatile.Read(ref _switchGeneration))
@@ -119,11 +139,26 @@ internal static class LanConnectServerSelectionStartup
                 return;
             }
             Log.Warn($"sts2_lan_connect server switch failed: {ex.Message}");
-            LanConnectPopupUtil.ShowInfo($"切换大厅服务器失败：{ex.Message}");
+            string message = $"切换大厅服务器失败：{ex.Message}";
+            if (showFailureForTests != null)
+            {
+                showFailureForTests(message);
+            }
+            else
+            {
+                LanConnectPopupUtil.ShowInfo(message);
+            }
         }
         finally
         {
-            onSettled();
+            if (!awaitingPlayerName)
+            {
+                if (GodotObject.IsInstanceValid(dialog))
+                {
+                    dialog.QueueFree();
+                }
+                onSettled();
+            }
         }
     }
 }
