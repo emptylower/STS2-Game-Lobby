@@ -63,6 +63,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private Control? _toggleServerDot;
     private Label? _fadeHint;
     private Button? _toggleButton;
+    private Control? _dragZone;
     private VBoxContainer? _panelFadeContainer;
     private PanelContainer? _panelFrame;
     private Button? _roomTab;
@@ -82,10 +83,10 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private bool _dragPointerDown;
     private bool _dragTriggered;
     private bool _dragging;
+    private bool _dragStartedOnToggle;
     private bool _suppressNextToggle;
     private bool _dragUsesTouch;
     private int _dragTouchIndex = -1;
-    private int _pendingTouchBeginIndex = -1;
     private double _dragHeldSeconds;
     private Vector2 _dragPointerStart;
     private Vector2 _dragRootStart;
@@ -96,6 +97,9 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
     private Func<bool> _reducedMotionProvider = ReadReducedMotionPreference;
     private Tween? _fadeTween;
     private bool _panelHovered;
+    private bool _rootHovered;
+    private bool _frameHovered;
+    private bool _toggleHovered;
     private bool _passivelySurfaced;
     private long _fadeActivityToken;
 
@@ -300,6 +304,11 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
         if (!_dragPointerDown)
         {
+            if (inputEvent is InputEventScreenTouch { Pressed: true } screenTouch &&
+                TryMatchTouchDragHandle(screenTouch.Position, out bool startedOnToggle))
+            {
+                BeginDrag(screenTouch.Position, usesTouch: true, screenTouch.Index, startedOnToggle);
+            }
             return;
         }
 
@@ -307,10 +316,6 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         {
             case InputEventScreenDrag screenDrag when _dragUsesTouch && screenDrag.Index == _dragTouchIndex:
                 UpdateDragPointer(screenDrag.Position, true);
-                break;
-            case InputEventScreenTouch touch when _pendingTouchBeginIndex == touch.Index && touch.Pressed:
-                _pendingTouchBeginIndex = -1;
-                BeginDrag(touch.Position, usesTouch: true, touch.Index);
                 break;
             case InputEventScreenTouch touch when _dragUsesTouch && touch.Index == _dragTouchIndex:
                 if (touch.Pressed)
@@ -473,20 +478,30 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
 
     private void BuildUi()
     {
-        _root = new MarginContainer { Name = "RoomChatOverlayRoot" };
+        _root = new MarginContainer
+        {
+            Name = "RoomChatOverlayRoot",
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
         LanConnectLobbyFonts.Apply(_root);
         _root.SetAnchorsPreset(Control.LayoutPreset.TopRight);
-        _root.MouseEntered += () => SetPanelHovered(true);
-        _root.MouseExited += () => SetPanelHovered(false);
+        _root.MouseEntered += () => SetHoverPart(ref _rootHovered, true);
+        _root.MouseExited += () => SetHoverPart(ref _rootHovered, false);
         AddChild(_root);
         ApplyOverlayPosition(LanConnectConfig.RoomChatOverlayOffset ?? GetDefaultOverlayOffset());
 
-        VBoxContainer stack = new();
-        stack.MouseFilter = Control.MouseFilterEnum.Stop;
+        VBoxContainer stack = new()
+        {
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
         stack.AddThemeConstantOverride("separation", 10);
         _root.AddChild(stack);
 
-        HBoxContainer topRow = new() { Alignment = BoxContainer.AlignmentMode.End };
+        HBoxContainer topRow = new()
+        {
+            Alignment = BoxContainer.AlignmentMode.End,
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
         stack.AddChild(topRow);
 
         _fadeHint = CreateLabel(string.Empty, 13, TextMutedColor);
@@ -502,12 +517,14 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         Control toggleWrap = new()
         {
             CustomMinimumSize = new Vector2(ToggleBubbleDiameter, ToggleBubbleDiameter),
-            MouseFilter = Control.MouseFilterEnum.Pass
+            MouseFilter = Control.MouseFilterEnum.Ignore
         };
         topRow.AddChild(toggleWrap);
 
         _toggleButton = CreateToggleBubbleButton(TogglePanel);
-        _toggleButton.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnDragHandleGuiInput));
+        _toggleButton.MouseEntered += () => SetHoverPart(ref _toggleHovered, true);
+        _toggleButton.MouseExited += () => SetHoverPart(ref _toggleHovered, false);
+        _toggleButton.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnToggleDragHandleGuiInput));
         toggleWrap.AddChild(_toggleButton);
 
         _toggleBadge = CreateUnreadBadge("ChatToggleUnreadBadge", out _toggleBadgeLabel);
@@ -530,11 +547,18 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         // title/tab rows, so both fade together as one unit. The toggle bubble and the fade
         // hint stay outside this container: the bubble is the only way to reopen the overlay
         // on touch platforms, and the hint has its own independent alpha handling.
-        _panelFadeContainer = new VBoxContainer { Name = "RoomChatPanelFadeContainer" };
+        _panelFadeContainer = new VBoxContainer
+        {
+            Name = "RoomChatPanelFadeContainer",
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
         stack.AddChild(_panelFadeContainer);
 
         _panelFrame = CreatePanel(PanelColor, Colors.Transparent, 4, 14, borderWidth: 0);
         _panelFrame.Name = "RoomChatPanelFrame";
+        _panelFrame.MouseFilter = Control.MouseFilterEnum.Stop;
+        _panelFrame.MouseEntered += () => SetHoverPart(ref _frameHovered, true);
+        _panelFrame.MouseExited += () => SetHoverPart(ref _frameHovered, false);
         // Width is pinned; height is deliberately left at 0 (= "no override, use the
         // content's natural minimum") so the frame hugs whatever the messages plate and
         // input plate actually need instead of forcing a fixed tall box (see the messages
@@ -579,7 +603,8 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             MouseDefaultCursorShape = Control.CursorShape.Drag,
             TooltipText = "长按可拖动聊天区"
         };
-        dragZone.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnDragHandleGuiInput));
+        dragZone.Connect(Control.SignalName.GuiInput, Callable.From<InputEvent>(OnStripDragHandleGuiInput));
+        _dragZone = dragZone;
         strip.AddChild(dragZone);
 
         _pinButton = CreateStripButton("ChatPinButton", "固定", TogglePinned);
@@ -625,6 +650,9 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
                 _panelFrame.Visible = false;
             }
             CancelDrag();
+            _rootHovered = false;
+            _frameHovered = false;
+            _toggleHovered = false;
             _panelHovered = false;
             _passivelySurfaced = false;
             RefreshBadges(chat);
@@ -648,6 +676,14 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         if (_panelFrame != null)
         {
             _panelFrame.Visible = chat.RoomOverlayOpen;
+            if (!chat.RoomOverlayOpen && _frameHovered)
+            {
+                SetHoverPart(ref _frameHovered, false);
+            }
+        }
+        if (chat.RoomOverlayOpen && _root != null && !_dragging)
+        {
+            ApplyOverlayPosition(ClampOverlayOffset(new Vector2(_root.OffsetRight, _root.OffsetTop), includeOpenPanelHeight: true));
         }
         if (!chat.RoomOverlayOpen)
         {
@@ -1073,6 +1109,16 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         UpdateRoomOverlayFade(ResolveChat());
     }
 
+    private void SetHoverPart(ref bool part, bool hovered)
+    {
+        if (part == hovered)
+        {
+            return;
+        }
+        part = hovered;
+        SetPanelHovered(_rootHovered || _frameHovered || _toggleHovered);
+    }
+
     private void SetPanelHovered(bool hovered)
     {
         if (_panelHovered == hovered)
@@ -1264,22 +1310,21 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         bool modalVisible = blockingModalVisible || _chatPanel?.PopupVisible == true;
         LanConnectChatInputAction action;
 
-        if (key is Key.Enter or Key.KpEnter or Key.F8)
-        {
-            SignalFadeActivity();
-        }
-
         if (key is Key.Enter or Key.KpEnter)
         {
+            bool draftHasFocus = _chatPanel?.DraftHasFocus == true;
             Control? focusOwner = GetViewport().GuiGetFocusOwner();
-            if (_chatPanel?.DraftHasFocus != true && LanConnectAccessibilityKeyboard.IsTextInput(focusOwner))
+            bool externalControlFocused = !draftHasFocus && IsExternalFocusedControl(focusOwner);
+            if (!draftHasFocus && (externalControlFocused || LanConnectAccessibilityKeyboard.IsTextInput(focusOwner)))
             {
                 return;
             }
+            SignalFadeActivity();
             action = LanConnectChatInputRouter.RouteEnter(
-                _chatPanel?.DraftHasFocus == true,
+                draftHasFocus,
                 shiftPressed,
-                modalVisible);
+                modalVisible,
+                externalControlFocused);
         }
         else if (key == Key.Escape)
         {
@@ -1296,6 +1341,7 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
         else if (key == Key.F8)
         {
+            SignalFadeActivity();
             LanConnectAccessibilityHotkeyRoute hotkeyRoute = LanConnectAccessibilityHotkeyRouter.Route(
                 LanConnectAccessibilityHotkey.F8Chat,
                 new LanConnectAccessibilityHotkeyContext(
@@ -1414,14 +1460,69 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         tab.AddThemeColorOverride("font_color", selected ? TextStrongColor : TextMutedColor);
     }
 
-    private void OnDragHandleGuiInput(InputEvent inputEvent)
+    private bool IsExternalFocusedControl(Control? focusOwner)
+    {
+        if (focusOwner == null ||
+            !GodotObject.IsInstanceValid(focusOwner) ||
+            !focusOwner.IsInsideTree() ||
+            !focusOwner.IsVisibleInTree() ||
+            focusOwner.FocusMode == Control.FocusModeEnum.None)
+        {
+            return false;
+        }
+
+        if (_root != null &&
+            GodotObject.IsInstanceValid(_root) &&
+            (ReferenceEquals(focusOwner, _root) || _root.IsAncestorOf(focusOwner)))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private void OnToggleDragHandleGuiInput(InputEvent inputEvent) =>
+        OnDragHandleGuiInput(inputEvent, startedOnToggle: true);
+
+    private void OnStripDragHandleGuiInput(InputEvent inputEvent) =>
+        OnDragHandleGuiInput(inputEvent, startedOnToggle: false);
+
+    private bool TryMatchTouchDragHandle(Vector2 viewportPosition, out bool startedOnToggle)
+    {
+        if (_toggleButton != null &&
+            GodotObject.IsInstanceValid(_toggleButton) &&
+            _toggleButton.IsVisibleInTree() &&
+            _toggleButton.GetGlobalRect().HasPoint(viewportPosition))
+        {
+            startedOnToggle = true;
+            return true;
+        }
+
+        if (_dragZone != null &&
+            GodotObject.IsInstanceValid(_dragZone) &&
+            _dragZone.IsVisibleInTree() &&
+            _dragZone.GetGlobalRect().HasPoint(viewportPosition))
+        {
+            startedOnToggle = false;
+            return true;
+        }
+
+        startedOnToggle = false;
+        return false;
+    }
+
+    private void OnDragHandleGuiInput(InputEvent inputEvent, bool startedOnToggle)
     {
         switch (inputEvent)
         {
             case InputEventMouseButton mouseButton when mouseButton.ButtonIndex == MouseButton.Left:
+                if (_dragPointerDown && _dragUsesTouch)
+                {
+                    return;
+                }
                 if (mouseButton.Pressed)
                 {
-                    BeginDrag(GetViewportPointerPosition(mouseButton.Position), usesTouch: false, touchIndex: -1);
+                    BeginDrag(GetViewportPointerPosition(mouseButton.Position), usesTouch: false, touchIndex: -1, startedOnToggle);
                 }
                 else
                 {
@@ -1431,9 +1532,12 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
             case InputEventScreenTouch touch:
                 if (touch.Pressed)
                 {
-                    _pendingTouchBeginIndex = touch.Index;
+                    if (!_dragPointerDown)
+                    {
+                        BeginDrag(touch.Position, usesTouch: true, touch.Index, startedOnToggle);
+                    }
                 }
-                else
+                else if (_dragUsesTouch && touch.Index == _dragTouchIndex)
                 {
                     EndDrag();
                 }
@@ -1441,16 +1545,18 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         }
     }
 
-    private void BeginDrag(Vector2 pointerPosition, bool usesTouch, int touchIndex)
+    private void BeginDrag(Vector2 pointerPosition, bool usesTouch, int touchIndex, bool startedOnToggle)
     {
         if (_root == null)
         {
             return;
         }
         SignalFadeActivity();
+        _suppressNextToggle = false;
         _dragPointerDown = true;
         _dragTriggered = false;
         _dragging = false;
+        _dragStartedOnToggle = startedOnToggle;
         _dragUsesTouch = usesTouch;
         _dragTouchIndex = touchIndex;
         _dragHeldSeconds = 0;
@@ -1496,7 +1602,10 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         if (_dragging && _root != null)
         {
             LanConnectConfig.RoomChatOverlayOffset = new Vector2(_root.OffsetRight, _root.OffsetTop);
-            _suppressNextToggle = true;
+            if (_dragStartedOnToggle)
+            {
+                _suppressNextToggle = true;
+            }
         }
         CancelDrag();
     }
@@ -1506,9 +1615,9 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         _dragPointerDown = false;
         _dragTriggered = false;
         _dragging = false;
+        _dragStartedOnToggle = false;
         _dragUsesTouch = false;
         _dragTouchIndex = -1;
-        _pendingTouchBeginIndex = -1;
         _dragHeldSeconds = 0;
     }
 
@@ -1558,13 +1667,16 @@ internal sealed partial class LanConnectRoomChatOverlay : CanvasLayer
         ApplyOverlayPosition(ClampOverlayOffset(currentOffset));
     }
 
-    private Vector2 ClampOverlayOffset(Vector2 offset)
+    private Vector2 ClampOverlayOffset(Vector2 offset, bool? includeOpenPanelHeight = null)
     {
         Vector2 viewportSize = GetViewport()?.GetVisibleRect().Size ?? new Vector2(1920f, 1080f);
         float minRight = -viewportSize.X + _currentPanelWidth + 18f;
         float maxRight = -18f;
         float minTop = 18f;
-        float stackHeight = 44f + 10f + _currentPanelHeight;
+        bool reservePanelHeight = includeOpenPanelHeight ?? (ResolveChat()?.RoomOverlayOpen == true);
+        float stackHeight = reservePanelHeight
+            ? ToggleBubbleDiameter + 10f + _currentPanelHeight
+            : ToggleBubbleDiameter;
         float maxTop = MathF.Max(minTop, viewportSize.Y - stackHeight - 18f);
         return new Vector2(
             Mathf.Clamp(offset.X, minRight, maxRight),

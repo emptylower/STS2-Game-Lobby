@@ -30,13 +30,15 @@ internal static class LanConnectChatInputRouter
     internal static LanConnectChatInputAction RouteEnter(
         bool inputFocused,
         bool shiftPressed,
-        bool blockingModalVisible) =>
-        (inputFocused, shiftPressed, blockingModalVisible) switch
+        bool blockingModalVisible,
+        bool externalControlFocused = false) =>
+        (inputFocused, shiftPressed, blockingModalVisible, externalControlFocused) switch
         {
-            (_, _, true) => LanConnectChatInputAction.None,
-            (true, true, false) => LanConnectChatInputAction.InsertNewline,
-            (true, false, false) => LanConnectChatInputAction.Send,
-            (false, _, false) => LanConnectChatInputAction.OpenAndFocus
+            (_, _, true, _) => LanConnectChatInputAction.None,
+            (true, true, false, _) => LanConnectChatInputAction.InsertNewline,
+            (true, false, false, _) => LanConnectChatInputAction.Send,
+            (false, _, false, true) => LanConnectChatInputAction.None,
+            (false, _, false, false) => LanConnectChatInputAction.OpenAndFocus
         };
 
     internal static LanConnectChatInputAction RouteEscape(

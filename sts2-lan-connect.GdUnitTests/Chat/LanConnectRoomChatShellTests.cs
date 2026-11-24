@@ -360,6 +360,137 @@ public sealed class LanConnectRoomChatShellTests
         AssertThat(normal.ContentMarginBottom).IsEqual(0f);
     }
 
+    [TestCase]
+    public async Task Collapsed_overlay_layout_containers_do_not_occlude_underlying_game_gear_button()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        fixture.Overlay.ConfigurePointerModeForTests(LanConnectPointerMode.Touch);
+        await fixture.Overlay.CloseForTests();
+        await AwaitStableLayout(fixture.Runner);
+
+        Control root = FindNode<Control>(fixture.Overlay, "RoomChatOverlayRoot");
+        Control hint = FindNode<Control>(fixture.Overlay, "RoomChatFadeHint");
+        AssertThat(root.MouseFilter).IsEqual(Control.MouseFilterEnum.Ignore);
+        foreach (Node child in root.GetChildren())
+        {
+            if (child is Control childControl)
+            {
+                AssertThat(childControl.MouseFilter).IsEqual(Control.MouseFilterEnum.Ignore);
+            }
+        }
+
+        // Place an underlying game button directly behind the hint / topRow area to verify clicks
+        // pass cleanly through the collapsed chat overlay chrome.
+        Rect2 hintRect = hint.GetGlobalRect();
+        Button underlyingGear = new()
+        {
+            Name = "UnderlyingTopBarGear",
+            Position = hintRect.Position,
+            Size = new Vector2(MathF.Max(hintRect.Size.X, 48f), MathF.Max(hintRect.Size.Y, 48f))
+        };
+        int gearClicks = 0;
+        underlyingGear.Pressed += () => gearClicks++;
+        fixture.Overlay.GetViewport().AddChild(underlyingGear);
+        await fixture.Runner.AwaitIdleFrame();
+
+        Vector2 clickPos = underlyingGear.GetGlobalRect().GetCenter();
+        Viewport viewport = fixture.Overlay.GetViewport();
+        viewport.PushInput(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Pressed = true,
+            Position = clickPos
+        }, inLocalCoords: true);
+        viewport.PushInput(new InputEventMouseButton
+        {
+            ButtonIndex = MouseButton.Left,
+            Pressed = false,
+            Position = clickPos
+        }, inLocalCoords: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(gearClicks).IsEqual(1);
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsFalse();
+    }
+
+    [TestCase]
+    public async Task Touch_long_press_on_toggle_bubble_moves_overlay_without_opening_and_strip_drag_does_not_eat_next_tap()
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        fixture.Overlay.ConfigurePointerModeForTests(LanConnectPointerMode.Touch);
+        await fixture.Overlay.CloseForTests();
+        await AwaitStableLayout(fixture.Runner);
+
+        Viewport viewport = fixture.Overlay.GetViewport();
+        Rect2 before = fixture.Overlay.TestState.ToggleRect;
+        Vector2 startPos = before.GetCenter();
+
+        viewport.PushInput(new InputEventScreenTouch
+        {
+            Index = 0,
+            Pressed = true,
+            Position = startPos
+        }, inLocalCoords: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        // Advance past DragHoldSeconds (0.28s).
+        await fixture.Runner.SimulateFrames(20, 20);
+
+        Vector2 draggedPos = startPos + new Vector2(-60f, 80f);
+        viewport.PushInput(new InputEventScreenDrag
+        {
+            Index = 0,
+            Position = draggedPos,
+            Relative = new Vector2(-60f, 80f)
+        }, inLocalCoords: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        viewport.PushInput(new InputEventScreenTouch
+        {
+            Index = 0,
+            Pressed = false,
+            Position = draggedPos
+        }, inLocalCoords: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        Rect2 after = fixture.Overlay.TestState.ToggleRect;
+        AssertThat(after.Position).IsNotEqual(before.Position);
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsFalse();
+
+        // A drag started on the strip dragZone must not suppress the next toggle tap.
+        await fixture.Overlay.OpenForTests();
+        await AwaitStableLayout(fixture.Runner);
+        Control dragZone = FindNode<Control>(fixture.Overlay, "RoomChatStripDragZone");
+        Vector2 stripStart = dragZone.GetGlobalRect().GetCenter();
+        viewport.PushInput(new InputEventScreenTouch
+        {
+            Index = 1,
+            Pressed = true,
+            Position = stripStart
+        }, inLocalCoords: true);
+        await fixture.Runner.AwaitIdleFrame();
+        await fixture.Runner.SimulateFrames(20, 20);
+        viewport.PushInput(new InputEventScreenDrag
+        {
+            Index = 1,
+            Position = stripStart + new Vector2(-20f, 15f),
+            Relative = new Vector2(-20f, 15f)
+        }, inLocalCoords: true);
+        await fixture.Runner.AwaitIdleFrame();
+        viewport.PushInput(new InputEventScreenTouch
+        {
+            Index = 1,
+            Pressed = false,
+            Position = stripStart + new Vector2(-20f, 15f)
+        }, inLocalCoords: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        Button toggle = FindNode<Button>(fixture.Overlay, "RoomChatToggleButton");
+        toggle.EmitSignal(Button.SignalName.Pressed);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsFalse();
+    }
+
     private static readonly string[] StripButtonNames =
     {
         "RoomChatTab", "ServerChatTab", "ChatPinButton", "ChatCloseButton"

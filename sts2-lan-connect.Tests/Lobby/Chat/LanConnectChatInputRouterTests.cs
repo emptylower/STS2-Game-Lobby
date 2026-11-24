@@ -6,17 +6,23 @@ namespace Sts2LanConnect.Tests.Lobby.Chat;
 public sealed class LanConnectChatInputRouterTests
 {
     [Theory]
-    [InlineData(true, false, false, (int)LanConnectChatInputAction.Send)]
-    [InlineData(true, true, false, (int)LanConnectChatInputAction.InsertNewline)]
-    [InlineData(false, false, false, (int)LanConnectChatInputAction.OpenAndFocus)]
-    [InlineData(false, false, true, (int)LanConnectChatInputAction.None)]
-    public void Enter_routes_by_focus_shift_and_modal(
+    [InlineData(true, false, false, false, (int)LanConnectChatInputAction.Send)]
+    [InlineData(true, true, false, false, (int)LanConnectChatInputAction.InsertNewline)]
+    [InlineData(true, false, false, true, (int)LanConnectChatInputAction.Send)]
+    [InlineData(false, false, false, false, (int)LanConnectChatInputAction.OpenAndFocus)]
+    [InlineData(false, false, false, true, (int)LanConnectChatInputAction.None)]
+    [InlineData(false, true, false, true, (int)LanConnectChatInputAction.None)]
+    [InlineData(false, false, true, false, (int)LanConnectChatInputAction.None)]
+    public void Enter_routes_by_focus_shift_modal_and_external_focus(
         bool inputFocused,
         bool shift,
         bool modal,
+        bool externalFocused,
         int expected)
     {
-        Assert.Equal((LanConnectChatInputAction)expected, LanConnectChatInputRouter.RouteEnter(inputFocused, shift, modal));
+        Assert.Equal(
+            (LanConnectChatInputAction)expected,
+            LanConnectChatInputRouter.RouteEnter(inputFocused, shift, modal, externalFocused));
     }
 
     [Theory]

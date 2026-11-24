@@ -317,6 +317,53 @@ public sealed partial class LanConnectRoomChatFocusTests
         AssertThat(fixture.Overlay.TestState.Draft).IsEqual(string.Empty);
     }
 
+    [TestCase(Key.Enter)]
+    [TestCase(Key.KpEnter)]
+    public async Task Enter_does_not_open_chat_when_external_game_button_has_focus_and_f8_still_works(Key key)
+    {
+        using RoomChatFixture fixture = await RoomChatFixture.OpenWithServerSupport();
+        fixture.Overlay.ConfigurePointerModeForTests(LanConnectPointerMode.Mouse);
+        await fixture.Overlay.CloseForTests();
+
+        Button gameButton = new()
+        {
+            Name = "GameReadyButton",
+            Text = "Ready",
+            FocusMode = Control.FocusModeEnum.All
+        };
+        int pressedCount = 0;
+        gameButton.Pressed += () => pressedCount++;
+        fixture.Overlay.GetViewport().AddChild(gameButton);
+        await fixture.Runner.AwaitIdleFrame();
+        gameButton.GrabFocus();
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Overlay.GetViewport().GuiGetFocusOwner()).IsEqual(gameButton);
+
+        PushKey(fixture.Overlay.GetViewport(), key);
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsFalse();
+        AssertThat(fixture.Overlay.GetViewport().GuiGetFocusOwner()).IsEqual(gameButton);
+
+        // F8 must remain available even while a game button holds focus.
+        PushKey(fixture.Overlay.GetViewport(), Key.F8);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
+
+        await fixture.Overlay.CloseForTests();
+        gameButton.ReleaseFocus();
+        await fixture.Runner.AwaitIdleFrame();
+
+        // Once focus leaves the game button, Enter reopens and focuses chat again.
+        PushKey(fixture.Overlay.GetViewport(), key);
+        await fixture.Runner.AwaitIdleFrame();
+        AssertThat(fixture.Overlay.TestState.PanelOpen).IsTrue();
+        AssertThat(fixture.Overlay.TestState.FocusOwnerName)
+            .IsEqual(LanConnectConstants.ChatDraftInputName);
+        AssertThat(pressedCount).IsGreaterEqual(0);
+    }
+
     private static async Task AssertFocusSequence(RoomChatFixture fixture, IReadOnlyList<string> expected)
     {
         AssertThat(fixture.Overlay.TestState.FocusOwnerName).IsEqual(expected[0]);
