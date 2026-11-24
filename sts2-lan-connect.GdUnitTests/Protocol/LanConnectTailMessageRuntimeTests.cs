@@ -828,6 +828,270 @@ public sealed class LanConnectTailMessageRuntimeTests
         AssertThat(pair.HostTransport.DisconnectedPeers.Contains(peerB)).IsFalse();
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void Same_member_leave_rejoin_and_begin_run_keeps_ordered_revisions_across_desktop_and_android_seams(
+        bool androidOrder)
+    {
+        InitializeSts2Serialization();
+        using RuntimePair pair = new();
+        using IDisposable session = pair.FreezeHostSession();
+
+        const ulong peerA = RuntimePair.DefaultClientId; // 101
+        const ulong peerB = 102;
+        byte[] peerBNonce1 = Convert.FromHexString("101112131415161718191a1b1c1d1e1f");
+        byte[] peerBNonce2 = Convert.FromHexString("202122232425262728292a2b2c2d2e2f");
+        byte[] peerBNonce3 = Convert.FromHexString("303132333435363738393a3b3c3d3e3f");
+        pair.PrepareHostNativeFlow(peerB, peerBNonce1);
+
+        List<StartRunLobbyPlayer> roster = StartRunPlayers([0, 1, 2]);
+        roster[0] = WithReady(roster[0], false);
+        roster[1] = WithReady(roster[1], false);
+        roster[2] = WithReady(roster[2], false);
+
+        List<ClientLobbyJoinResponseMessage> aJoinResponses = [];
+        List<PlayerJoinedMessage> aJoined = [];
+        List<LobbyBeginRunMessage> aBegins = [];
+        List<PlayerLeftMessage> aLefts = [];
+        pair.ClientBus.RegisterMessageHandler<ClientLobbyJoinResponseMessage>((msg, _) => aJoinResponses.Add(msg));
+        pair.ClientBus.RegisterMessageHandler<PlayerJoinedMessage>((msg, _) => aJoined.Add(msg));
+        pair.ClientBus.RegisterMessageHandler<LobbyBeginRunMessage>((msg, _) => aBegins.Add(msg));
+        pair.ClientBus.RegisterMessageHandler<PlayerLeftMessage>((msg, _) => aLefts.Add(msg));
+
+        // 1. Initial join response establishes rev 1 on Host and Client A.
+        PendingVanilla initialPending = SerializeHost(
+            pair,
+            androidOrder,
+            LanConnectSidecarMessageKind.LobbyJoinResponse,
+            new ClientLobbyJoinResponseMessage { playersInLobby = roster.ToList(), modifiers = [] });
+        byte[] initialBytes = initialPending.Buffer.AsSpan(0, initialPending.Length).ToArray();
+        int sentBefore = pair.HostTransport.SentToClients.Count;
+        pair.DeliverPendingToPeer(initialPending, peerA);
+        pair.Runtime.ClearPendingOutgoing(pair.HostWriter);
+        pair.HostWriter.Reset();
+        LanConnectSidecarFrame initialFrame = DecodeSentFrame(pair.HostTransport.SentToClients[sentBefore]);
+        AssertThat(DecodeRoster(LanConnectSidecarMessageKind.LobbyJoinResponse, initialFrame.Container.ToArray(), pair).RosterRevision)
+            .IsEqual(1u);
+
+        DispatchVanillaToClientA(
+            pair,
+            initialBytes,
+            LanConnectSidecarMessageKind.LobbyJoinResponse,
+            initialFrame);
+        AssertThat(aJoinResponses.Count).IsEqual(1);
+
+        // 2. First leave + rejoin of peerB (same member set [100, 101, 102]).
+        pair.Runtime.ObserveHostLobbyDeparture(pair.Host, peerB);
+        pair.Runtime.ClearNativePeer(pair.Host, peerB);
+        using (LanConnectTailMessagePatches.PushTransportReceiveContextForTesting(pair.HostId, channel: 0))
+        {
+            AssertThat(pair.Runtime.TryEnterNativeDispatch(
+                pair.ClientBus,
+                new PlayerLeftMessage { playerId = peerB },
+                pair.HostId)).IsTrue();
+        }
+
+        pair.PrepareHostNativeFlow(peerB, peerBNonce2);
+        PendingVanilla rejoin1Response = SerializeHost(
+            pair,
+            androidOrder,
+            LanConnectSidecarMessageKind.LobbyJoinResponse,
+            new ClientLobbyJoinResponseMessage { playersInLobby = roster.ToList(), modifiers = [] });
+        sentBefore = pair.HostTransport.SentToClients.Count;
+        pair.DeliverPendingToPeer(rejoin1Response, peerB);
+        LanConnectSidecarFrame rejoin1ResponseFrame = DecodeSentFrame(pair.HostTransport.SentToClients[sentBefore]);
+        AssertThat(DecodeRoster(LanConnectSidecarMessageKind.LobbyJoinResponse, rejoin1ResponseFrame.Container.ToArray(), pair).RosterRevision)
+            .IsEqual(2u);
+
+        pair.Runtime.ClearPendingOutgoing(pair.HostWriter);
+        pair.HostWriter.Reset();
+
+        PendingVanilla rejoin1Broadcast = SerializeHost(
+            pair,
+            androidOrder,
+            LanConnectSidecarMessageKind.PlayerJoined,
+            new PlayerJoinedMessage { lobbyPlayer = roster[2] });
+        byte[] rejoin1BroadcastBytes = rejoin1Broadcast.Buffer.AsSpan(0, rejoin1Broadcast.Length).ToArray();
+        sentBefore = pair.HostTransport.SentToClients.Count;
+        pair.DeliverPendingToPeer(rejoin1Broadcast, peerA);
+        pair.Runtime.ClearPendingOutgoing(pair.HostWriter);
+        pair.HostWriter.Reset();
+        LanConnectSidecarFrame rejoin1BroadcastFrame = DecodeSentFrame(pair.HostTransport.SentToClients[sentBefore]);
+        AssertThat(DecodeRoster(LanConnectSidecarMessageKind.PlayerJoined, rejoin1BroadcastFrame.Container.ToArray(), pair).RosterRevision)
+            .IsEqual(2u);
+
+        DispatchVanillaToClientA(
+            pair,
+            rejoin1BroadcastBytes,
+            LanConnectSidecarMessageKind.PlayerJoined,
+            rejoin1BroadcastFrame);
+        AssertThat(aJoined.Count).IsEqual(1);
+
+        // 3. Second consecutive leave + rejoin of peerB with ready state toggled on peerA.
+        roster[1] = WithReady(roster[1], true);
+        pair.Runtime.ObserveHostLobbyDeparture(pair.Host, peerB);
+        pair.Runtime.ClearNativePeer(pair.Host, peerB);
+        using (LanConnectTailMessagePatches.PushTransportReceiveContextForTesting(pair.HostId, channel: 0))
+        {
+            // Duplicate PlayerLeft must stay idempotent and not corrupt state.
+            AssertThat(pair.Runtime.TryEnterNativeDispatch(
+                pair.ClientBus,
+                new PlayerLeftMessage { playerId = peerB },
+                pair.HostId)).IsTrue();
+            AssertThat(pair.Runtime.TryEnterNativeDispatch(
+                pair.ClientBus,
+                new PlayerLeftMessage { playerId = peerB },
+                pair.HostId)).IsTrue();
+        }
+
+        pair.PrepareHostNativeFlow(peerB, peerBNonce3);
+        PendingVanilla rejoin2Response = SerializeHost(
+            pair,
+            androidOrder,
+            LanConnectSidecarMessageKind.LobbyJoinResponse,
+            new ClientLobbyJoinResponseMessage { playersInLobby = roster.ToList(), modifiers = [] });
+        sentBefore = pair.HostTransport.SentToClients.Count;
+        pair.DeliverPendingToPeer(rejoin2Response, peerB);
+        LanConnectSidecarFrame rejoin2ResponseFrame = DecodeSentFrame(pair.HostTransport.SentToClients[sentBefore]);
+        AssertThat(DecodeRoster(LanConnectSidecarMessageKind.LobbyJoinResponse, rejoin2ResponseFrame.Container.ToArray(), pair).RosterRevision)
+            .IsEqual(3u);
+
+        PendingVanilla rejoin2Broadcast = SerializeHost(
+            pair,
+            androidOrder,
+            LanConnectSidecarMessageKind.PlayerJoined,
+            new PlayerJoinedMessage { lobbyPlayer = roster[2] });
+        byte[] rejoin2BroadcastBytes = rejoin2Broadcast.Buffer.AsSpan(0, rejoin2Broadcast.Length).ToArray();
+        sentBefore = pair.HostTransport.SentToClients.Count;
+        pair.DeliverPendingToPeer(rejoin2Broadcast, peerA);
+        pair.Runtime.ClearPendingOutgoing(pair.HostWriter);
+        pair.HostWriter.Reset();
+        LanConnectSidecarFrame rejoin2BroadcastFrame = DecodeSentFrame(pair.HostTransport.SentToClients[sentBefore]);
+        AssertThat(DecodeRoster(LanConnectSidecarMessageKind.PlayerJoined, rejoin2BroadcastFrame.Container.ToArray(), pair).RosterRevision)
+            .IsEqual(3u);
+
+        DispatchVanillaToClientA(
+            pair,
+            rejoin2BroadcastBytes,
+            LanConnectSidecarMessageKind.PlayerJoined,
+            rejoin2BroadcastFrame);
+        AssertThat(aJoined.Count).IsEqual(2);
+
+        // 4. All players ready -> LobbyBeginRun transitions cleanly from rev 3 to rev 4.
+        List<StartRunLobbyPlayer> readyRoster = roster.Select(p => WithReady(p, true)).ToList();
+        PendingVanilla beginPending = SerializeHost(
+            pair,
+            androidOrder,
+            LanConnectSidecarMessageKind.LobbyBeginRun,
+            new LobbyBeginRunMessage { playersInLobby = readyRoster, seed = "rejoin-seed", modifiers = [], act1 = "Act1" });
+        byte[] beginBytes = beginPending.Buffer.AsSpan(0, beginPending.Length).ToArray();
+        sentBefore = pair.HostTransport.SentToClients.Count;
+        pair.DeliverPendingToPeer(beginPending, peerA);
+        pair.DeliverPendingToPeer(beginPending, peerB);
+        pair.Runtime.ClearPendingOutgoing(pair.HostWriter);
+        pair.HostWriter.Reset();
+
+        LanConnectSidecarFrame beginFrameA = DecodeSentFrame(pair.HostTransport.SentToClients[sentBefore]);
+        LanConnectSidecarFrame beginFrameB = DecodeSentFrame(pair.HostTransport.SentToClients[sentBefore + 1]);
+        AssertThat(DecodeRoster(LanConnectSidecarMessageKind.LobbyBeginRun, beginFrameA.Container.ToArray(), pair).RosterRevision)
+            .IsEqual(4u);
+        AssertThat(DecodeRoster(LanConnectSidecarMessageKind.LobbyBeginRun, beginFrameB.Container.ToArray(), pair).RosterRevision)
+            .IsEqual(4u);
+
+        DispatchVanillaToClientA(
+            pair,
+            beginBytes,
+            LanConnectSidecarMessageKind.LobbyBeginRun,
+            beginFrameA);
+        AssertThat(aBegins.Count).IsEqual(1);
+        AssertThat(pair.ClientTransport.DisconnectReasons.Count).IsEqual(0);
+    }
+
+    [TestCase]
+    public void Quick_same_peer_reconnect_replaces_stale_flow_nonce_while_identical_binding_is_idempotent()
+    {
+        InitializeSts2Serialization();
+        using RuntimePair pair = new();
+        using IDisposable session = pair.FreezeHostSession();
+        pair.BootstrapHostRoster();
+
+        PendingVanilla first = pair.SerializeHostMatrixMessage(
+            LanConnectSidecarMessageKind.PlayerJoined,
+            new PlayerJoinedMessage { lobbyPlayer = StartRunPlayers([0]).Single() });
+        pair.DeliverPendingToPeer(first, pair.ClientId);
+        AssertThat(FrameSequenceOf(pair.HostTransport.SentToClients[^1])).IsEqual(1u);
+        AssertThat(FrameNonceOf(pair.HostTransport.SentToClients[^1])).IsEqual(pair.ProtocolFlowNonce);
+
+        // Identical nonce + typeId re-binding must preserve outgoing sequence.
+        pair.PrepareHostNativeFlow(pair.ClientId, pair.ProtocolFlowNonce);
+        PendingVanilla second = pair.SerializeHostMatrixMessage(
+            LanConnectSidecarMessageKind.PlayerJoined,
+            new PlayerJoinedMessage { lobbyPlayer = StartRunPlayers([0]).Single() });
+        pair.DeliverPendingToPeer(second, pair.ClientId);
+        AssertThat(FrameSequenceOf(pair.HostTransport.SentToClients[^1])).IsEqual(2u);
+        AssertThat(FrameNonceOf(pair.HostTransport.SentToClients[^1])).IsEqual(pair.ProtocolFlowNonce);
+
+        // Fresh nonce for the same reconnecting peer replaces stale flow and resets sequence to 1.
+        byte[] freshNonce = Convert.FromHexString("fedcba98765432100123456789abcdef");
+        pair.PrepareHostNativeFlow(pair.ClientId, freshNonce);
+        PendingVanilla third = pair.SerializeHostMatrixMessage(
+            LanConnectSidecarMessageKind.PlayerJoined,
+            new PlayerJoinedMessage { lobbyPlayer = StartRunPlayers([0]).Single() });
+        pair.DeliverPendingToPeer(third, pair.ClientId);
+        AssertThat(FrameSequenceOf(pair.HostTransport.SentToClients[^1])).IsEqual(1u);
+        AssertThat(FrameNonceOf(pair.HostTransport.SentToClients[^1])).IsEqual(freshNonce);
+    }
+
+    private static PendingVanilla SerializeHost<T>(
+        RuntimePair pair,
+        bool androidOrder,
+        LanConnectSidecarMessageKind kind,
+        T message)
+        where T : struct, INetMessage =>
+        androidOrder
+            ? pair.SerializeHostMatrixMessageAndroidOrder(kind, message)
+            : pair.SerializeHostMatrixMessage(kind, message);
+
+    private static LanConnectSidecarFrame DecodeSentFrame(CapturedPacket packet)
+    {
+        LanConnectNativeBusMessage message = DecodeExtension(packet.Bytes);
+        return LanConnectSidecarFrameCodec.Decode(message.Frame!.ToArray());
+    }
+
+    private static void DispatchVanillaToClientA(
+        RuntimePair pair,
+        byte[] vanillaBytes,
+        LanConnectSidecarMessageKind kind,
+        LanConnectSidecarFrame frame)
+    {
+        bool decoded = pair.ClientBus.TryDeserializeMessage(
+            vanillaBytes,
+            out INetMessage? matrixMessage,
+            out ulong? sender);
+        AssertThat(decoded).IsTrue();
+        AssertThat(sender!.Value).IsEqual(pair.HostId);
+
+        using (LanConnectTailMessagePatches.PushTransportReceiveContextForTesting(pair.HostId, channel: 0))
+        {
+            AssertThat(pair.Runtime.TryEnterNativeDispatch(pair.ClientBus, matrixMessage!, pair.HostId)).IsFalse();
+        }
+        LanConnectNativeBusMessage extension = BuildExtension(
+            kind,
+            frame.FlowNonce.ToArray(),
+            frame.MessageSequence,
+            frame.Container.ToArray());
+        using (LanConnectTailMessagePatches.PushTransportReceiveContextForTesting(pair.HostId, channel: 0))
+        {
+            AssertThat(pair.Runtime.TryEnterNativeDispatch(pair.ClientBus, extension, pair.HostId)).IsFalse();
+        }
+    }
+
+    private static StartRunLobbyPlayer WithReady(StartRunLobbyPlayer player, bool ready)
+    {
+        player.isReady = ready;
+        return player;
+    }
+
     // ---- 辅助 ----
 
     private static void AssertThrown(Action action)
@@ -902,15 +1166,21 @@ public sealed class LanConnectTailMessageRuntimeTests
     {
         CharacterModel character = ModelDb.Character<Ironclad>();
         return slots
-            .Select(slot => new StartRunLobbyPlayer
+            .Select(slot =>
             {
-                id = 100UL + (ulong)slot,
-                slotId = slot,
-                character = character,
-                unlockState = new SerializableUnlockState(),
-                maxMultiplayerAscensionUnlocked = 20,
-                isModded = false,
-                isReady = true
+                object boxed = new StartRunLobbyPlayer
+                {
+                    id = 100UL + (ulong)slot,
+                    slotId = slot,
+                    character = character,
+                    unlockState = new SerializableUnlockState(),
+                    isModded = false,
+                    isReady = true
+                };
+                FieldInfo? ascensionField = typeof(StartRunLobbyPlayer).GetField("maxStandardAscension")
+                    ?? typeof(StartRunLobbyPlayer).GetField("maxMultiplayerAscensionUnlocked");
+                ascensionField?.SetValue(boxed, 20);
+                return (StartRunLobbyPlayer)boxed;
             })
             .ToList();
     }
@@ -1222,7 +1492,7 @@ public sealed class LanConnectTailMessageRuntimeTests
             NetTransferMode mode,
             int channel = 0) { }
 
-        public override void DisconnectClient(ulong peerId, NetError reason, bool now = false) =>
+        public override void DisconnectClient(ulong peerId, NetError reason, bool now = false, string? debugReason = null) =>
             DisconnectedPeers.Add(peerId);
 
         public override void StopHost(NetError reason, bool now = false) { }

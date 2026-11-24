@@ -60,7 +60,10 @@ internal interface ILanConnectTailMessageRuntime
         LanConnectProtocolSelection selection);
 }
 
-internal sealed record LanConnectPreparedTailMessage(object Message, byte[] Container);
+internal sealed record LanConnectPreparedTailMessage(
+    object Message,
+    byte[] Container,
+    uint? RosterRevision = null);
 
 internal sealed record LanConnectNativePreparedMessage(
     NetMessageBus MessageBus,
@@ -218,7 +221,15 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             _bindings.TryGetValue(GetMessageBus(service), out binding);
         }
 
-        binding?.RecordHostLobbyDeparture(peerNetId);
+        if (binding == null)
+        {
+            return;
+        }
+
+        bool recorded = binding.RecordHostLobbyDeparture(peerNetId);
+        Log.Info(
+            $"sts2_lan_connect tail: host observed lobby departure peer={peerNetId}, recorded={recorded}, " +
+            $"startLobbyActive={binding.IsStartLobbyActive}, currentRev={FormatRevision(binding.CurrentRosterRevision)}.");
     }
 
     /// <summary>屏障超时巡检（由大厅 runtime tick 调用；入口路径亦会自巡检）。</summary>
@@ -347,8 +358,11 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                     prepared.Prepared.Container.ToArray(),
                     buffer,
                     length,
-                    ComputeHeaderFingerprint(buffer, length)));
-            Log.Info($"sts2_lan_connect tail: pending extension registered for {prepared.MessageKind} (vanilla bytes={length}).");
+                    ComputeHeaderFingerprint(buffer, length),
+                    prepared.Prepared.RosterRevision));
+            Log.Info(
+                $"sts2_lan_connect tail: pending extension registered for {prepared.MessageKind} " +
+                $"(rev={FormatRevision(prepared.Prepared.RosterRevision)}, vanilla bytes={length}).");
         }
         catch (Exception exception)
         {
@@ -368,7 +382,19 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         }
 
         pending.Remove(writer);
-        Log.Info($"sts2_lan_connect tail: pending extension for {context.MessageKind} cleared by writer reset before transport.");
+        if (context.ProcessedPeerIds.Count == 0)
+        {
+            Log.Warn(
+                $"sts2_lan_connect tail: pending extension for {context.MessageKind} " +
+                $"(rev={FormatRevision(context.RosterRevision)}) cleared by writer reset before any transport (processedPeers=0).");
+        }
+        else
+        {
+            Log.Info(
+                $"sts2_lan_connect tail: pending extension for {context.MessageKind} " +
+                $"(rev={FormatRevision(context.RosterRevision)}) cleared by writer reset after transport " +
+                $"(processedPeers={context.ProcessedPeerIds.Count}).");
+        }
     }
 
     /// <summary>
@@ -385,8 +411,19 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         }
 
         pending.Remove(writer);
-        Log.Info(
-            $"sts2_lan_connect tail: pending extension for {stale.MessageKind} superseded by the next serialization on the same writer.");
+        if (stale.ProcessedPeerIds.Count == 0)
+        {
+            Log.Warn(
+                $"sts2_lan_connect tail: pending extension for {stale.MessageKind} " +
+                $"(rev={FormatRevision(stale.RosterRevision)}) superseded before any transport (processedPeers=0).");
+        }
+        else
+        {
+            Log.Info(
+                $"sts2_lan_connect tail: pending extension for {stale.MessageKind} " +
+                $"(rev={FormatRevision(stale.RosterRevision)}) superseded by the next serialization on the same writer " +
+                $"(processedPeers={stale.ProcessedPeerIds.Count}).");
+        }
     }
 
     public LanConnectNativeSendContext? BeginNativeTransport(
@@ -756,7 +793,10 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
 
         try
         {
-            binding.RecordClientLobbyDeparture(context.SenderPeerId, message.playerId);
+            bool recorded = binding.RecordClientLobbyDeparture(context.SenderPeerId, message.playerId);
+            Log.Info(
+                $"sts2_lan_connect tail: client observed lobby departure peer={message.playerId}, recorded={recorded}, " +
+                $"startLobbyActive={binding.IsStartLobbyActive}, currentRev={FormatRevision(binding.CurrentRosterRevision)}.");
         }
         catch (InvalidDataException exception)
         {
@@ -1072,7 +1112,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         message.playersInLobby = projection;
         return new LanConnectPreparedTailMessage(
             message,
-            LanConnectTailMessagePatches.EncodeSessionMessage(kind, selection, snapshot));
+            LanConnectTailMessagePatches.EncodeSessionMessage(kind, selection, snapshot),
+            snapshot.RosterRevision);
     }
 
     private static LanConnectPreparedTailMessage PrepareBeginRun(
@@ -1091,7 +1132,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             LanConnectTailMessagePatches.EncodeSessionMessage(
                 LanConnectSidecarMessageKind.LobbyBeginRun,
                 selection,
-                snapshot));
+                snapshot),
+            snapshot.RosterRevision);
     }
 
     private static LanConnectPreparedTailMessage PreparePlayerJoined(
@@ -1113,7 +1155,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             LanConnectTailMessagePatches.EncodeSessionMessage(
                 LanConnectSidecarMessageKind.PlayerJoined,
                 selection,
-                snapshot));
+                snapshot),
+            snapshot.RosterRevision);
     }
 
     internal static LanConnectPreparedTailMessage PrepareLoadJoin(
@@ -1147,7 +1190,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             LanConnectTailMessagePatches.EncodeSessionMessage(
                 LanConnectSidecarMessageKind.LoadJoinResponse,
                 selection,
-                snapshot));
+                snapshot),
+            snapshot.RosterRevision);
     }
 
     private static LanConnectPreparedTailMessage PrepareRejoin(
@@ -1165,7 +1209,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             LanConnectTailMessagePatches.EncodeSessionMessage(
                 LanConnectSidecarMessageKind.RejoinResponse,
                 selection,
-                snapshot));
+                snapshot),
+            snapshot.RosterRevision);
     }
 
     private static LanConnectPreparedTailMessage PrepareRejection(
@@ -1991,6 +2036,17 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             }
         }
 
+        internal uint? CurrentRosterRevision
+        {
+            get
+            {
+                lock (Sync)
+                {
+                    return _roster?.Current?.RosterRevision;
+                }
+            }
+        }
+
         internal LanConnectRosterAuthorityState RequireRoster()
         {
             lock (Sync)
@@ -2335,14 +2391,39 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             int peerNativeBusTypeId)
         {
             NativeFlowKey key = new(senderPeerId, recipientPeerId);
-            if (_nativeFlows.ContainsKey(key))
+            if (_nativeFlows.TryGetValue(key, out NativeFlow? existing))
             {
+                if (existing.FlowNonce.SequenceEqual(protocolFlowNonce)
+                    && existing.PeerNativeBusTypeId == peerNativeBusTypeId)
+                {
+                    return;
+                }
+
+                // A reconnecting peer received a fresh ticket before the prior ENet peer teardown
+                // finished. Replace the stale flow and discard stale barrier holds for that peer.
+                ulong remotePeerId = senderPeerId == Service.NetId ? recipientPeerId : senderPeerId;
+                _nativeFlows[key] = new NativeFlow(protocolFlowNonce, peerNativeBusTypeId);
+                _pendingOutgoingNatives.Remove(remotePeerId);
+                foreach (BarrierKey holdKey in _barrierHolds.Keys
+                             .Where(hold => hold.SenderPeerId == remotePeerId)
+                             .ToArray())
+                {
+                    HeldMessage? held = _barrierHolds.GetValueOrDefault(holdKey);
+                    _barrierHolds.Remove(holdKey);
+                    if (held != null)
+                    {
+                        _transportContexts.Remove(held.Message);
+                    }
+                }
                 return;
             }
 
             _nativeFlows.Add(key, new NativeFlow(protocolFlowNonce, peerNativeBusTypeId));
         }
     }
+
+    private static string FormatRevision(uint? revision) =>
+        revision.HasValue ? revision.Value.ToString() : "none";
 
     internal readonly record struct NativeFlowKey(ulong SenderPeerId, ulong RecipientPeerId);
 
@@ -2428,7 +2509,8 @@ internal sealed class LanConnectNativePendingOutgoing
         byte[] container,
         byte[] buffer,
         int length,
-        byte[] headerFingerprint)
+        byte[] headerFingerprint,
+        uint? rosterRevision = null)
     {
         Owner = owner;
         Binding = binding;
@@ -2439,6 +2521,7 @@ internal sealed class LanConnectNativePendingOutgoing
         Buffer = buffer;
         Length = length;
         HeaderFingerprint = headerFingerprint;
+        RosterRevision = rosterRevision;
     }
 
     internal LanConnectTailMessageRuntime Owner { get; }
@@ -2450,5 +2533,6 @@ internal sealed class LanConnectNativePendingOutgoing
     internal byte[] Buffer { get; }
     internal int Length { get; }
     internal byte[] HeaderFingerprint { get; }
+    internal uint? RosterRevision { get; }
     internal HashSet<ulong> ProcessedPeerIds { get; } = [];
 }
