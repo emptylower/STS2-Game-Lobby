@@ -34,6 +34,7 @@ internal sealed partial class LanConnectModSyncDialog : Control
     private PanelContainer? _panel;
     private ScrollContainer? _scroll;
     private VBoxContainer? _rows;
+    private PanelContainer? _safetyPanel;
     private GridContainer? _actions;
     private Label? _title;
     private Label? _message;
@@ -42,6 +43,8 @@ internal sealed partial class LanConnectModSyncDialog : Control
     private Button? _relaxedButton;
     private readonly List<LanConnectModSyncRow> _rowControls = [];
     private bool _busy;
+
+    internal Button? HostPreviewCloseButton { get; init; }
 
     internal event Action<LanConnectModSyncAction>? ActionRequested;
 
@@ -234,6 +237,10 @@ internal sealed partial class LanConnectModSyncDialog : Control
         _title.AccessibilityName = state.Title;
         _message.Text = state.Message;
         _message.AccessibilityName = state.Message;
+        bool hostPreview = state.Kind == LanConnectModSyncViewKind.HostPreview;
+        _message.AutowrapMode = hostPreview ? TextServer.AutowrapMode.WordSmart : TextServer.AutowrapMode.Off;
+        _safetyPanel!.Visible = !hostPreview;
+        _actions!.Visible = !hostPreview;
         foreach (Node child in _rows.GetChildren())
         {
             _rows.RemoveChild(child);
@@ -242,12 +249,13 @@ internal sealed partial class LanConnectModSyncDialog : Control
         _rowControls.Clear();
         foreach (LanConnectModSyncRowState rowState in state.Rows)
         {
-            LanConnectModSyncRow row = new(rowState);
+            LanConnectModSyncRow row = new(rowState, hostPreview);
             row.SelectionChanged += OnSelectionChanged;
             _rowControls.Add(row);
             _rows.AddChild(row);
         }
         _scroll!.Visible = state.Rows.Count > 0;
+        _scroll.AccessibilityName = hostPreview ? "联机模组清单" : "MOD 差异列表";
         ConfigureActions();
         UpdateResponsiveLayout();
         Callable.From(FocusSafestAction).CallDeferred();
@@ -274,27 +282,36 @@ internal sealed partial class LanConnectModSyncDialog : Control
 
     private void BuildChrome()
     {
+        bool hostPreview = _state.Kind == LanConnectModSyncViewKind.HostPreview;
+        LanConnectLobbyPalette lobbyPalette = LanConnectLobbyThemes.Current.Palette;
+        Color veilColor = hostPreview
+            ? new Color(lobbyPalette.ModalVeil, lobbyPalette.ModalVeil.A * 0.5f)
+            : LanConnectModSyncPalette.Veil;
+        Color accent = hostPreview ? lobbyPalette.Accent : AccentColor;
+        Color border = hostPreview ? lobbyPalette.Border : BorderColor;
         ColorRect veil = new()
         {
             Name = "ModSyncVeil",
-            Color = LanConnectModSyncPalette.Veil,
+            Color = veilColor,
             MouseFilter = MouseFilterEnum.Stop
         };
         veil.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
         AddChild(veil);
 
-        _panel = new PanelContainer
+        // Use an opaque tint so the form behind the checklist cannot show through its text.
+        _panel = hostPreview ? LanConnectLobbyOverlay.CreateDialogCard(opaqueGlass: true) : new PanelContainer();
+        _panel.Name = "ModSyncPanel";
+        _panel.ClipContents = false;
+        _panel.MouseFilter = MouseFilterEnum.Stop;
+        if (!hostPreview)
         {
-            Name = "ModSyncPanel",
-            ClipContents = false,
-            MouseFilter = MouseFilterEnum.Stop
-        };
-        _panel.AddThemeStyleboxOverride("panel", LanConnectModSyncRow.PixelStyle(
-            CardColor,
-            BorderColor,
-            borderWidth: 3,
-            padding: 20,
-            shadowSize: 5));
+            _panel.AddThemeStyleboxOverride("panel", LanConnectModSyncRow.PixelStyle(
+                CardColor,
+                BorderColor,
+                borderWidth: 3,
+                padding: 20,
+                shadowSize: 5));
+        }
         AddChild(_panel);
 
         VBoxContainer body = new()
@@ -315,7 +332,7 @@ internal sealed partial class LanConnectModSyncDialog : Control
         TextureRect icon = new()
         {
             Name = "ModSyncShieldIcon",
-            Texture = LanConnectChatUiComposition.Icons.Get("shield", 28, AccentColor),
+            Texture = LanConnectChatUiComposition.Icons.Get("shield", 28, accent),
             CustomMinimumSize = new Vector2(34f, 34f),
             ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
             StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
@@ -327,17 +344,22 @@ internal sealed partial class LanConnectModSyncDialog : Control
         VBoxContainer heading = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
         heading.AddThemeConstantOverride("separation", 4);
         header.AddChild(heading);
-        _title = CreateLabel("", 25, TextStrongColor, maxLines: 2);
+        _title = CreateLabel("", hostPreview ? 18 : 25, hostPreview ? accent : TextStrongColor, maxLines: 2);
         _title.Name = "ModSyncTitle";
         heading.AddChild(_title);
-        _message = CreateLabel("", 15, TextMutedColor, maxLines: 3);
+        _message = CreateLabel("", 15, hostPreview ? lobbyPalette.TextMuted : TextMutedColor, maxLines: 3);
         _message.Name = "ModSyncMessage";
         heading.AddChild(_message);
+        if (HostPreviewCloseButton != null)
+        {
+            _title.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+            header.AddChild(HostPreviewCloseButton);
+        }
 
         HSeparator separator = new();
         separator.AddThemeStyleboxOverride("separator", LanConnectModSyncRow.PixelStyle(
-            BorderColor,
-            BorderColor,
+            border,
+            border,
             borderWidth: 0,
             padding: 0));
         separator.CustomMinimumSize = new Vector2(0f, 2f);
@@ -355,6 +377,10 @@ internal sealed partial class LanConnectModSyncDialog : Control
             ClipContents = true,
             AccessibilityName = "MOD 差异列表"
         };
+        if (hostPreview)
+        {
+            LanConnectLobbyOverlay.ApplyLobbyListScrollbarStyle(_scroll);
+        }
         body.AddChild(_scroll);
         _rows = new VBoxContainer
         {
@@ -364,13 +390,13 @@ internal sealed partial class LanConnectModSyncDialog : Control
         _rows.AddThemeConstantOverride("separation", 8);
         _scroll.AddChild(_rows);
 
-        PanelContainer safety = new();
-        safety.AddThemeStyleboxOverride("panel", LanConnectModSyncRow.PixelStyle(
+        _safetyPanel = new PanelContainer();
+        _safetyPanel.AddThemeStyleboxOverride("panel", LanConnectModSyncRow.PixelStyle(
             SurfaceMutedColor,
             BorderColor,
             borderWidth: 1,
             padding: 8));
-        body.AddChild(safety);
+        body.AddChild(_safetyPanel);
         Label safetyText = CreateLabel(
             "只会使用 Steam Workshop。\n只在确认后禁用所选 gameplay MOD；任何改动都需要重启。",
             13,
@@ -378,7 +404,7 @@ internal sealed partial class LanConnectModSyncDialog : Control
             maxLines: 2);
         safetyText.Name = "ModSyncSafetyBoundary";
         safetyText.AccessibilityName = safetyText.Text;
-        safety.AddChild(safetyText);
+        _safetyPanel.AddChild(safetyText);
 
         _actions = new GridContainer
         {
@@ -478,9 +504,10 @@ internal sealed partial class LanConnectModSyncDialog : Control
 
     private void FocusSafestAction()
     {
-        if (_cancelButton?.IsVisibleInTree() == true)
+        Button? close = HostPreviewCloseButton ?? _cancelButton;
+        if (close?.IsVisibleInTree() == true)
         {
-            _cancelButton.GrabFocus();
+            close.GrabFocus();
         }
     }
 
@@ -496,8 +523,10 @@ internal sealed partial class LanConnectModSyncDialog : Control
             viewport = GetViewportRect().Size;
         }
         float margin = Math.Clamp(Math.Min(viewport.X, viewport.Y) * 0.035f, 14f, 40f);
-        float panelWidth = Math.Min(980f, Math.Max(1f, viewport.X - margin * 2f));
-        float panelHeight = Math.Min(900f, Math.Max(1f, viewport.Y - margin * 2f));
+        bool hostPreview = _state.Kind == LanConnectModSyncViewKind.HostPreview;
+        float panelWidth = Math.Min(hostPreview ? 640f : 980f, Math.Max(1f, viewport.X - margin * 2f));
+        float maxHeight = hostPreview ? (_state.Rows.Count == 0 ? 160f : 440f) : 900f;
+        float panelHeight = Math.Min(maxHeight, Math.Max(1f, viewport.Y - margin * 2f));
         _panel.Position = new Vector2(
             MathF.Round((viewport.X - panelWidth) * 0.5f),
             MathF.Round((viewport.Y - panelHeight) * 0.5f));

@@ -190,6 +190,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private PanelContainer? _createDialogCard;
     private VBoxContainer? _createDialogBody;
     private Label? _createDialogErrorLabel;
+    private LanConnectModSyncDialog? _createGameplayModsDialog;
     private LineEdit? _roomNameInput;
     private OptionButton? _roomTypeOption;
     private int _selectedCreateGameModeId;
@@ -562,6 +563,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     internal int SelectedCreateGameModeIdForTests => _selectedCreateGameModeId;
 
+    internal bool CreateDialogVisibleForTests => _createDialogContainer?.IsVisibleInTree() == true;
+
     internal Rect2 CreateDialogCardRectForTests => RectForTests(_createDialogCard);
 
     internal Rect2 CreateDialogBodyRectForTests => RectForTests(_createDialogBody);
@@ -855,9 +858,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return false;
         }
 
-        if (FindChildren("LanConnectModSyncDialog", "Control", recursive: true, owned: false)
-            .OfType<Control>()
-            .Any(dialog => dialog.IsVisibleInTree()))
+        if (_createGameplayModsDialog == null &&
+            FindChildren("LanConnectModSyncDialog", "Control", recursive: true, owned: false)
+                .OfType<Control>()
+                .Any(dialog => dialog.IsVisibleInTree()))
         {
             return false;
         }
@@ -875,7 +879,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (keyEvent.Keycode == Key.F7)
         {
-            return HandleInviteHotkey();
+            return _createGameplayModsDialog != null || HandleInviteHotkey();
         }
 
         if (TryMoveFocusFromKeyboard(keyEvent))
@@ -913,6 +917,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private bool CloseTopmostDialogFromKeyboard()
     {
+        if (_createGameplayModsDialog?.Visible == true)
+        {
+            CloseCreateGameplayModsDialog(focusRoomName: true);
+            return true;
+        }
+
         if (_themeMenuContainer?.Visible == true)
         {
             CloseThemeMenu();
@@ -1061,6 +1071,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         ResetRoomListTouchTracking();
         SetUnderlyingMenuVisible(true);
 
+        CloseCreateGameplayModsDialog();
         if (_createDialogContainer != null)
         {
             _createDialogContainer.Visible = false;
@@ -1616,6 +1627,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private Control? GetTopmostVisibleDialog()
     {
+        if (_createGameplayModsDialog?.Visible == true) return _createGameplayModsDialog;
         if (_progressDialogContainer?.Visible == true) return _progressDialogContainer;
         if (_inviteConfirmDialogContainer?.Visible == true) return _inviteConfirmDialogContainer;
         if (_resumeSlotDialogContainer?.Visible == true) return _resumeSlotDialogContainer;
@@ -2442,7 +2454,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         };
         body.AddChild(sep);
 
-        _createButton = CreateActionButton("CREATE", "先在本地起 ENet Host，再把房间发布到大厅。", () => TaskHelper.RunSafely(BeginCreateRoomFlowAsync()), primary: true, iconKind: GlyphIconKind.Plus);
+        _createButton = CreateActionButton(
+            "CREATE",
+            "设置并发布房间。有影响联机的模组时会显示清单。",
+            () => TaskHelper.RunSafely(BeginCreateRoomFlowAsync()),
+            primary: true,
+            iconKind: GlyphIconKind.Plus);
+        _createButton.Name = "CreateRoomButton";
         body.AddChild(_createButton);
 
         _joinButton = CreateActionButton("JOIN", "加入当前选中的房间，密码房会先弹出输入框。", JoinSelectedRoom, iconKind: GlyphIconKind.JoinArrow);
@@ -2500,6 +2518,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         body.AddChild(CreateSectionLabel("创建房间"));
 
         body.AddChild(BuildLabeledInputRow("房间名", GetSuggestedRoomName(), out _roomNameInput, "房间列表里展示的名称", showLengthCounter: true, maxLength: LanConnectConfig.MaxRoomNameLength));
+        _roomNameInput.Name = "CreateRoomNameInput";
         Control roomTypeRow = BuildLabeledOptionRow(
             "房间类型",
             out _roomTypeOption,
@@ -2545,6 +2564,68 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         buttons.AddChild(submit);
         RefreshProtocolProfileOptionAvailability();
         return shell;
+    }
+
+    internal void ShowCreateGameplayModsDialog(IReadOnlyList<LobbyModDescriptor>? mods)
+    {
+        if (mods is { Count: 0 } ||
+            _createDialogContainer?.IsVisibleInTree() != true ||
+            _createGameplayModsDialog != null)
+        {
+            return;
+        }
+
+        Button close = CreateDestructiveToolbarIconButton(
+            "关闭联机模组清单",
+            () => CloseCreateGameplayModsDialog(focusRoomName: true),
+            GlyphIconKind.XClose);
+        close.Name = "HostModPreviewCloseButton";
+        close.AccessibilityName = close.TooltipText;
+        close.SizeFlagsVertical = SizeFlags.ShrinkBegin;
+
+        LanConnectModSyncDialog dialog = new() { HostPreviewCloseButton = close };
+        dialog.ApplyState(LanConnectModSyncViewState.HostPreview(mods));
+        dialog.ActionRequested += action =>
+        {
+            if (action == LanConnectModSyncAction.Cancel && _createGameplayModsDialog == dialog)
+            {
+                CloseCreateGameplayModsDialog(focusRoomName: true);
+            }
+        };
+        _createGameplayModsDialog = dialog;
+        AddChild(dialog);
+        close.GrabFocus();
+    }
+
+    private void CloseCreateGameplayModsDialog(bool focusRoomName = false)
+    {
+        if (_createGameplayModsDialog == null)
+        {
+            return;
+        }
+
+        LanConnectModSyncDialog dialog = _createGameplayModsDialog;
+        _createGameplayModsDialog = null;
+        dialog.Hide();
+        dialog.QueueFree();
+        if (focusRoomName && _createDialogContainer?.IsVisibleInTree() == true)
+        {
+            _roomNameInput?.GrabFocus();
+        }
+    }
+
+    private static IReadOnlyList<LobbyModDescriptor>? ReadCreateGameplayMods()
+    {
+        try
+        {
+            // The create-room request publishes this same inventory for join preflight.
+            return LanConnectBuildInfo.GetModInventory();
+        }
+        catch (Exception ex)
+        {
+            GD.PushWarning($"sts2_lan_connect create_room_mod_preview: {ex.Message}");
+            return null;
+        }
     }
 
     private Control BuildCreateGuardDialog()
@@ -3107,6 +3188,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         QueueFree();
     }
 
+    internal static PanelContainer CreateDialogCard(bool opaqueGlass = false)
+    {
+        PixelBorderPanel card = CreatePixelBorderPanel(padding: 22);
+        card.GlassOpaque = opaqueGlass;
+        return card;
+    }
+
     private Control CreateDialogShell(out VBoxContainer body, bool spacious = false)
     {
         Control shell = new()
@@ -3125,7 +3213,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         veil.SetAnchorsPreset(LayoutPreset.FullRect);
         shell.AddChild(veil);
 
-        PanelContainer card = CreatePixelBorderPanel(background: CardColor, padding: 22);
+        PanelContainer card = CreateDialogCard();
         body = new VBoxContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill
@@ -3170,6 +3258,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             }
 
             shell.Resized += UpdateLayout;
+            dialogBody.MinimumSizeChanged += UpdateLayout;
             Callable.From(UpdateLayout).CallDeferred();
         }
         else
@@ -3701,10 +3790,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         }
     }
 
-    private void ConfigureRoomListScroll(ScrollContainer scroll)
+    internal static void ApplyLobbyListScrollbarStyle(ScrollContainer scroll)
     {
-        scroll.FollowFocus = false;
-        scroll.MouseFilter = MouseFilterEnum.Stop;
         VScrollBar scrollbar = scroll.GetVScrollBar();
         scrollbar.CustomMinimumSize = new Vector2(20f, 0f);
         scrollbar.AddThemeStyleboxOverride("scroll", CreatePixelStyle(SurfaceMutedColor, BorderColor, borderWidth: 1, padding: 4, shadowSize: 0));
@@ -4423,7 +4510,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
-        if (_actionInFlight)
+        if (_actionInFlight || _createGameplayModsDialog != null)
         {
             return;
         }
@@ -5006,7 +5093,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void OpenCreateDialogInternal()
     {
-        if (_createDialogContainer == null || _roomNameInput == null || _roomPasswordInput == null || _roomTypeOption == null)
+        if (!Visible || _createDialogContainer == null || _roomNameInput == null || _roomPasswordInput == null || _roomTypeOption == null)
         {
             return;
         }
@@ -5045,6 +5132,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         RememberDialogReturnFocus();
         _createDialogContainer.Visible = true;
         _roomNameInput.GrabFocus();
+        ShowCreateGameplayModsDialog(ReadCreateGameplayMods());
     }
 
     private void HandleCreateRoomGuardDecision(LobbyHealthResponse health)
@@ -5256,6 +5344,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void CloseCreateDialog()
     {
+        CloseCreateGameplayModsDialog();
         if (_createDialogContainer != null)
         {
             _createDialogContainer.Visible = false;
@@ -6579,7 +6668,8 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private bool IsAnyDialogVisible()
     {
-        return _createDialogContainer?.Visible == true
+        return _createGameplayModsDialog?.Visible == true
+            || _createDialogContainer?.Visible == true
             || _createGuardDialogContainer?.Visible == true
             || _joinPasswordDialogContainer?.Visible == true
             || _resumeSlotDialogContainer?.Visible == true
@@ -7701,7 +7791,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     }
 
     /// <summary>Main pixel-border container (3px border, 4px hard offset shadow).</summary>
-    private static PanelContainer CreatePixelBorderPanel(Color? background = null, int padding = 18)
+    private static PixelBorderPanel CreatePixelBorderPanel(Color? background = null, int padding = 18)
     {
         return new PixelBorderPanel
         {
@@ -7752,7 +7842,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             : 0;
     }
 
-    private static StyleBoxFlat CreatePixelStyle(Color background, Color border, int borderWidth = 3, int padding = 18, int shadowSize = 4)
+    internal static StyleBoxFlat CreatePixelStyle(Color background, Color border, int borderWidth = 3, int padding = 18, int shadowSize = 4)
     {
         int radius = Shape.CornerRadius;
         int width = ThemedBorderWidth(borderWidth);

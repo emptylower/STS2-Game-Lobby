@@ -10,7 +10,8 @@ internal enum LanConnectModSyncViewKind
     ExtraGameplaySelection,
     Progress,
     RestartRequired,
-    UnsupportedPlatform
+    UnsupportedPlatform,
+    HostPreview
 }
 
 internal enum LanConnectModSyncAction
@@ -40,6 +41,21 @@ internal sealed record LanConnectModSyncViewState
     public LanConnectModSyncAction PrimaryAction { get; init; }
     public IReadOnlyList<LanConnectModSyncAction> SecondaryActions { get; init; } = [];
     public bool CanContinueRelaxed { get; init; }
+
+    public static LanConnectModSyncViewState HostPreview(IReadOnlyList<LobbyModDescriptor>? mods)
+    {
+        int count = mods?.Count ?? 0;
+        return new LanConnectModSyncViewState
+        {
+            Kind = LanConnectModSyncViewKind.HostPreview,
+            Title = count > 0 ? $"联机模组（{count} 个）" : "联机模组",
+            Message = mods == null
+                ? "暂时无法读取联机模组清单。"
+                : "加入者需要加载相同版本的模组及依赖。",
+            Rows = mods?.Select(mod => new LanConnectModSyncRowState(
+                mod, Selectable: false, Selected: false)).ToArray() ?? []
+        };
+    }
 
     public static LanConnectModSyncViewState Checking(string locale = "zh-CN") =>
         Create(LanConnectModSyncViewKind.Checking, LanConnectModSyncAction.Cancel, locale);
