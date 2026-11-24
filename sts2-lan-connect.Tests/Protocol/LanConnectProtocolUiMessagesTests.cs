@@ -151,12 +151,38 @@ public sealed class LanConnectProtocolUiMessagesTests
     }
 
     [Fact]
-    public void Create_dialog_defaults_to_the_first_protocol_supported_by_the_local_runtime()
+    public void Create_dialog_defaults_to_tail_falls_back_to_compat_and_explains_when_neither_is_available()
     {
-        LanConnectProtocolOffer noRitsu = new(1, 1, "0.6.1-alpha.1", false, false);
-        LanConnectProtocolOffer ritsuUnavailable = new(1, 1, "0.6.1-alpha.1", true, false);
+        LanConnectProtocolOffer tailCapableNoRitsu = new(1, 1, "0.6.5", false, false);
+        LanConnectProtocolOffer tailCapableWithRitsu = new(1, 1, "0.6.5", true, false);
+        LanConnectProtocolOffer legacyGameNoRitsu = new(0, 0, "0.6.5", false, false);
+        LanConnectProtocolOffer legacyGameWithRitsu = new(0, 0, "0.6.5", true, false);
 
-        Assert.Equal(300, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(noRitsu, true));
-        Assert.Equal(301, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(ritsuUnavailable, true));
+        // Both available: defaults to new protocol (301), compat (300) remains selectable.
+        Assert.Equal(301, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(tailCapableNoRitsu, true));
+        Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(300, tailCapableNoRitsu, true));
+
+        // Only Tail available (RitsuLib installed): defaults to 301.
+        Assert.Equal(301, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(tailCapableWithRitsu, true));
+
+        // Only Compat available (old game or RMP conflict): falls back to 300.
+        Assert.Equal(300, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(legacyGameNoRitsu, true));
+        Assert.Equal(300, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(tailCapableNoRitsu, false));
+
+        // Neither available (RitsuLib + old game): null default with concrete reasons for both.
+        LanConnectCreateProtocolAvailability legacyConflict =
+            LanConnectLobbyOverlay.ResolveCreateProtocolAvailabilityForTests(legacyGameWithRitsu, true);
+        Assert.Null(legacyConflict.DefaultProtocolId);
+        Assert.False(legacyConflict.HasAnyAvailable);
+        Assert.Contains("0.111+", legacyConflict.NeitherAvailableReason ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("RitsuLib", legacyConflict.NeitherAvailableReason ?? string.Empty, StringComparison.Ordinal);
+
+        // Neither available (RitsuLib + RMP conflict): null default with concrete reasons for both.
+        LanConnectCreateProtocolAvailability rmpConflict =
+            LanConnectLobbyOverlay.ResolveCreateProtocolAvailabilityForTests(tailCapableWithRitsu, false);
+        Assert.Null(rmpConflict.DefaultProtocolId);
+        Assert.False(rmpConflict.HasAnyAvailable);
+        Assert.Contains("RMP", rmpConflict.NeitherAvailableReason ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("RitsuLib", rmpConflict.NeitherAvailableReason ?? string.Empty, StringComparison.Ordinal);
     }
 }

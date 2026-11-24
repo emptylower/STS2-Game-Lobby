@@ -196,7 +196,10 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private Button? _protocolCompatButton;
     private Button? _protocolTailButton;
     private Label? _protocolProfileHintLabel;
-    private int _selectedCreateProtocolId = CreateProtocolCompatId;
+    private Button? _createDialogSubmitButton;
+    private int? _selectedCreateProtocolId = CreateProtocolTailId;
+    private LanConnectProtocolOffer? _testCreateProtocolOfferOverride;
+    private bool? _testStandaloneTailRuntimeAvailableOverride;
     private LineEdit? _roomPasswordInput;
     private SpinBox? _maxPlayersSpinBox;
     private Label? _maxPlayersHintLabel;
@@ -542,9 +545,20 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     internal bool AnyDialogVisibleForTests => IsAnyDialogVisible();
 
-    internal int SelectedCreateProtocolIdForTests => GetSelectedCreateProtocolId();
+    internal int? SelectedCreateProtocolIdForTests => _selectedCreateProtocolId;
 
     internal string CreateProtocolDescriptionForTests => GetSelectedCreateProtocolDescription();
+
+    internal bool CreateDialogSubmitEnabledForTests => _createDialogSubmitButton?.Disabled == false;
+
+    internal void SetCreateProtocolOfferOverrideForTests(
+        LanConnectProtocolOffer? offer,
+        bool? standaloneTailRuntimeAvailable = null)
+    {
+        _testCreateProtocolOfferOverride = offer;
+        _testStandaloneTailRuntimeAvailableOverride = standaloneTailRuntimeAvailable;
+        RefreshProtocolProfileOptionAvailability();
+    }
 
     internal int SelectedCreateGameModeIdForTests => _selectedCreateGameModeId;
 
@@ -644,13 +658,13 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             .ToArray();
 
     internal IReadOnlyList<string> CreateProtocolOptionLabelsForTests()
-        => ["兼容旧版 Mod", "新协议"];
+        => ["新协议", "兼容旧版 Mod"];
 
     internal IReadOnlyList<bool> CreateProtocolOptionDisabledStatesForTests()
-        => [_protocolCompatButton?.Disabled ?? true, _protocolTailButton?.Disabled ?? true];
+        => [_protocolTailButton?.Disabled ?? true, _protocolCompatButton?.Disabled ?? true];
 
     internal IReadOnlyList<Rect2> CreateProtocolChoiceRectsForTests() =>
-        new[] { _protocolCompatButton, _protocolTailButton }
+        new[] { _protocolTailButton, _protocolCompatButton }
             .Where(static button => button != null)
             .Select(static button => button!.GetGlobalRect())
             .ToArray();
@@ -2527,7 +2541,9 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         Button submit = CreateActionButton("发布房间", "创建新的大厅房间，并直接进入现有联机流程。", () => TaskHelper.RunSafely(CreateRoomAsync()), primary: true);
         submit.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        _createDialogSubmitButton = submit;
         buttons.AddChild(submit);
+        RefreshProtocolProfileOptionAvailability();
         return shell;
     }
 
@@ -3277,17 +3293,17 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         choices.AddThemeConstantOverride("separation", 10);
         row.AddChild(choices);
 
-        _protocolCompatButton = CreateProtocolChoiceButton(
-            "兼容旧版 Mod",
-            "沿用旧版联机协议，可与 0.3–0.5 旧版客户端同房；不支持 RitsuLib",
-            CreateProtocolCompatId);
-        choices.AddChild(_protocolCompatButton);
-
         _protocolTailButton = CreateProtocolChoiceButton(
             "新协议",
             "通过官方 Mod 消息注册通道传输，需 0.6.2 及以上客户端；与双方是否安装 RitsuLib、Mod 列表是否相同均无关",
             CreateProtocolTailId);
         choices.AddChild(_protocolTailButton);
+
+        _protocolCompatButton = CreateProtocolChoiceButton(
+            "兼容旧版 Mod",
+            "沿用旧版联机协议，可与 0.3–0.5 旧版客户端同房；不支持 RitsuLib",
+            CreateProtocolCompatId);
+        choices.AddChild(_protocolCompatButton);
 
         _protocolProfileHintLabel = CreateBodyLabel(string.Empty);
         _protocolProfileHintLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
@@ -4472,13 +4488,29 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             selectedMaxPlayers ?? LanConnectMultiplayerCompatibility.GetEffectiveMaxPlayers(),
             LanConnectConstants.ProtocolMinPlayers,
             LanConnectConstants.ProtocolMaxPlayers);
+        LanConnectProtocolOffer currentOffer = ResolveCurrentCreateProtocolOffer();
+        LanConnectCreateProtocolAvailability protocolAvailability = ResolveCreateProtocolAvailability(
+            currentOffer,
+            ResolveStandaloneTailRuntimeAvailable());
+        if (!protocolAvailability.HasAnyAvailable)
+        {
+            RefreshProtocolProfileOptionAvailability();
+            ShowCreateDialogError(protocolAvailability.NeitherAvailableReason
+                ?? "当前无法创建房间：两种联机协议均不可用。");
+            return;
+        }
+
+        int selectedProtocolId = _selectedCreateProtocolId is int chosen &&
+            protocolAvailability.IsSelectable(chosen)
+            ? chosen
+            : protocolAvailability.DefaultProtocolId!.Value;
         LanConnectCreateRoomIntent intent;
         try
         {
             intent = BuildCreateRoomIntent(
-                    GetSelectedCreateProtocolId(),
+                    selectedProtocolId,
                     maxPlayers,
-                    LanConnectProtocolOffer.CreateCurrent())
+                    currentOffer)
                 .Validate();
         }
         catch (LanConnectProtocolException ex)
@@ -6642,53 +6674,71 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
     private void RefreshProtocolProfileOptionAvailability()
     {
-        if (_protocolCompatButton == null || _protocolTailButton == null)
+        LanConnectCreateProtocolAvailability availability = ResolveCurrentCreateProtocolAvailability();
+        if (_protocolCompatButton != null)
         {
-            UpdateProtocolProfileHint();
-            return;
+            _protocolCompatButton.Disabled = !availability.CompatAvailable;
         }
 
-        LanConnectProtocolOffer offer = LanConnectProtocolOffer.CreateCurrent();
-        bool standaloneTailRuntimeAvailable = IsStandaloneTailRuntimeAvailable();
-        _protocolCompatButton.Disabled = !IsCreateProtocolSelectable(
-            CreateProtocolCompatId,
-            offer,
-            standaloneTailRuntimeAvailable);
-        _protocolTailButton.Disabled = !IsCreateProtocolSelectable(
-            CreateProtocolTailId,
-            offer,
-            standaloneTailRuntimeAvailable);
-
-        int selected = GetSelectedCreateProtocolId();
-        if (!IsCreateProtocolSelectable(selected, offer, standaloneTailRuntimeAvailable))
+        if (_protocolTailButton != null)
         {
-            _selectedCreateProtocolId = GetDefaultCreateProtocolId(offer, standaloneTailRuntimeAvailable);
+            _protocolTailButton.Disabled = !availability.TailAvailable;
+        }
+
+        if (!availability.IsSelectable(_selectedCreateProtocolId))
+        {
+            _selectedCreateProtocolId = availability.DefaultProtocolId;
+        }
+
+        if (_createDialogSubmitButton != null)
+        {
+            _createDialogSubmitButton.Disabled = !availability.HasAnyAvailable;
         }
 
         UpdateProtocolChoiceStyles();
-        UpdateProtocolProfileHint();
+        UpdateProtocolProfileHint(availability);
     }
 
-    private void UpdateProtocolProfileHint()
+    private void UpdateProtocolProfileHint(LanConnectCreateProtocolAvailability? availability = null)
     {
         if (_protocolProfileHintLabel == null)
         {
             return;
         }
 
-        SetLabelText(_protocolProfileHintLabel, GetSelectedCreateProtocolDescription());
+        LanConnectCreateProtocolAvailability resolved = availability ?? ResolveCurrentCreateProtocolAvailability();
+        _protocolProfileHintLabel.AddThemeColorOverride(
+            "font_color",
+            resolved.HasAnyAvailable ? TextMutedColor : DangerColor);
+        SetLabelText(_protocolProfileHintLabel, GetSelectedCreateProtocolDescription(resolved));
     }
 
-    private string GetSelectedCreateProtocolDescription() =>
-        GetProtocolProfileDescription(
-            ProtocolProfileFromCreateId(GetSelectedCreateProtocolId()),
-            LanConnectTailRuntimeSupport.IsAvailable);
-
-    private int GetSelectedCreateProtocolId()
+    private string GetSelectedCreateProtocolDescription(LanConnectCreateProtocolAvailability? availability = null)
     {
-        return _selectedCreateProtocolId == CreateProtocolTailId
-            ? CreateProtocolTailId
-            : CreateProtocolCompatId;
+        LanConnectCreateProtocolAvailability resolved = availability ?? ResolveCurrentCreateProtocolAvailability();
+        if (!resolved.HasAnyAvailable)
+        {
+            return resolved.NeitherAvailableReason ?? "当前无法创建房间：两种联机协议均不可用。";
+        }
+
+        int effectiveProtocolId = _selectedCreateProtocolId is int chosen && resolved.IsSelectable(chosen)
+            ? chosen
+            : resolved.DefaultProtocolId!.Value;
+        string baseDescription = GetProtocolProfileDescription(
+            ProtocolProfileFromCreateId(effectiveProtocolId),
+            resolved.TailAvailable);
+
+        if (effectiveProtocolId == CreateProtocolCompatId && !resolved.TailAvailable && !string.IsNullOrWhiteSpace(resolved.TailUnavailableReason))
+        {
+            return $"{baseDescription}（新协议不可用：{resolved.TailUnavailableReason}）";
+        }
+
+        if (effectiveProtocolId == CreateProtocolTailId && !resolved.CompatAvailable && !string.IsNullOrWhiteSpace(resolved.CompatUnavailableReason))
+        {
+            return $"{baseDescription}（兼容旧版 Mod 不可用：{resolved.CompatUnavailableReason}）";
+        }
+
+        return baseDescription;
     }
 
     private void SelectCreateProtocol(int protocolId)
@@ -6747,55 +6797,42 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private static bool IsCreateProtocolSelectable(
         int protocolId,
         LanConnectProtocolOffer offer,
-        bool standaloneTailRuntimeAvailable)
-    {
-        if (protocolId == CreateProtocolCompatId)
-        {
-            return !offer.RitsuLibPresent;
-        }
-
-        if (protocolId != CreateProtocolTailId)
-        {
-            return false;
-        }
-
-        if (!offer.Supports(LanConnectConstants.TailLanProtocolVersion))
-        {
-            return false;
-        }
-
-        _ = offer.RitsuLibPresent;
-        return standaloneTailRuntimeAvailable;
-    }
+        bool standaloneTailRuntimeAvailable) =>
+        ResolveCreateProtocolAvailability(offer, standaloneTailRuntimeAvailable).IsSelectable(protocolId);
 
     private void SelectDefaultCreateProtocol()
     {
-        LanConnectProtocolOffer offer = LanConnectProtocolOffer.CreateCurrent();
-        _selectedCreateProtocolId = GetDefaultCreateProtocolId(
-            offer,
-            IsStandaloneTailRuntimeAvailable());
+        LanConnectCreateProtocolAvailability availability = ResolveCurrentCreateProtocolAvailability();
+        _selectedCreateProtocolId = availability.DefaultProtocolId;
         UpdateProtocolChoiceStyles();
-        UpdateProtocolProfileHint();
+        UpdateProtocolProfileHint(availability);
     }
 
-    internal static int GetDefaultCreateProtocolIdForTests(
+    internal static LanConnectCreateProtocolAvailability ResolveCreateProtocolAvailabilityForTests(
         LanConnectProtocolOffer offer,
         bool standaloneTailRuntimeAvailable) =>
-        GetDefaultCreateProtocolId(offer, standaloneTailRuntimeAvailable);
+        ResolveCreateProtocolAvailability(offer, standaloneTailRuntimeAvailable);
 
-    private static int GetDefaultCreateProtocolId(
+    internal static int? GetDefaultCreateProtocolIdForTests(
         LanConnectProtocolOffer offer,
-        bool standaloneTailRuntimeAvailable)
-    {
-        if (IsCreateProtocolSelectable(CreateProtocolCompatId, offer, standaloneTailRuntimeAvailable))
-        {
-            return CreateProtocolCompatId;
-        }
+        bool standaloneTailRuntimeAvailable) =>
+        ResolveCreateProtocolAvailability(offer, standaloneTailRuntimeAvailable).DefaultProtocolId;
 
-        return IsCreateProtocolSelectable(CreateProtocolTailId, offer, standaloneTailRuntimeAvailable)
-            ? CreateProtocolTailId
-            : CreateProtocolCompatId;
-    }
+    private LanConnectProtocolOffer ResolveCurrentCreateProtocolOffer() =>
+        _testCreateProtocolOfferOverride ?? LanConnectProtocolOffer.CreateCurrent();
+
+    private bool ResolveStandaloneTailRuntimeAvailable() =>
+        _testStandaloneTailRuntimeAvailableOverride ?? IsStandaloneTailRuntimeAvailable();
+
+    private LanConnectCreateProtocolAvailability ResolveCurrentCreateProtocolAvailability() =>
+        ResolveCreateProtocolAvailability(
+            ResolveCurrentCreateProtocolOffer(),
+            ResolveStandaloneTailRuntimeAvailable());
+
+    private static LanConnectCreateProtocolAvailability ResolveCreateProtocolAvailability(
+        LanConnectProtocolOffer offer,
+        bool standaloneTailRuntimeAvailable) =>
+        LanConnectCreateProtocolAvailability.Resolve(offer, standaloneTailRuntimeAvailable);
 
     private static bool IsStandaloneTailRuntimeAvailable() =>
         !LanConnectExternalModDetection.IsRmpModLoaded;

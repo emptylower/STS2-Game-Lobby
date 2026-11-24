@@ -85,7 +85,7 @@ public sealed class LanConnectCreateProtocolDialogTests
     }
 
     [TestCase]
-    public async Task Create_dialog_defaults_to_compat_without_Ritsu_and_exposes_tail_warning()
+    public async Task Create_dialog_defaults_to_tail_when_available_and_allows_manual_switch_to_compat()
     {
         using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
             new Vector2I(1280, 720),
@@ -94,22 +94,47 @@ public sealed class LanConnectCreateProtocolDialogTests
         fixture.Overlay.OpenCreateDialogForTests();
         await fixture.Runner.AwaitIdleFrame();
 
-        AssertThat(fixture.Overlay.SelectedCreateProtocolIdForTests).IsEqual(300);
+        AssertThat(fixture.Overlay.SelectedCreateProtocolIdForTests).IsEqual(301);
+        AssertThat(fixture.Overlay.CreateDialogSubmitEnabledForTests).IsTrue();
         AssertThat(fixture.Overlay.CreateProtocolOptionLabelsForTests())
-            .Contains("兼容旧版 Mod")
-            .Contains("新协议");
+            .Contains("新协议")
+            .Contains("兼容旧版 Mod");
         AssertThat(fixture.Overlay.CreateProtocolOptionDisabledStatesForTests())
             .IsEqual(new[] { false, false });
         AssertThat(fixture.Overlay.CreateProtocolChoiceRectsForTests()
             .All(static rect => rect.Size.Y >= 76f)).IsTrue();
         AssertThat(fixture.Overlay.CreateProtocolDescriptionForTests)
-            .IsEqual("沿用旧版联机协议，可与 0.3–0.5 旧版客户端同房；不支持 RitsuLib");
+            .IsEqual("通过官方 Mod 消息注册通道传输，需 0.6.2 及以上客户端；与双方是否安装 RitsuLib、Mod 列表是否相同均无关");
 
-        fixture.Overlay.PressCreateProtocolForTests(301);
+        fixture.Overlay.PressCreateProtocolForTests(300);
         await fixture.Runner.AwaitIdleFrame();
 
+        AssertThat(fixture.Overlay.SelectedCreateProtocolIdForTests).IsEqual(300);
         AssertThat(fixture.Overlay.CreateProtocolDescriptionForTests)
-            .IsEqual("通过官方 Mod 消息注册通道传输，需 0.6.2 及以上客户端；与双方是否安装 RitsuLib、Mod 列表是否相同均无关");
+            .IsEqual("沿用旧版联机协议，可与 0.3–0.5 旧版客户端同房；不支持 RitsuLib");
+    }
+
+    [TestCase]
+    public async Task Create_dialog_disables_submit_and_explains_when_neither_protocol_is_available()
+    {
+        using LobbyOverlayFixture fixture = await LobbyOverlayFixture.Create(
+            new Vector2I(1280, 720),
+            LanConnectServerChatPresentation.Ready);
+
+        fixture.Overlay.OpenCreateDialogForTests();
+        fixture.Overlay.SetCreateProtocolOfferOverrideForTests(
+            new LanConnectProtocolOffer(0, 0, "0.6.5", true, false),
+            standaloneTailRuntimeAvailable: true);
+        await fixture.Runner.AwaitIdleFrame();
+
+        AssertThat(fixture.Overlay.SelectedCreateProtocolIdForTests).IsNull();
+        AssertThat(fixture.Overlay.CreateDialogSubmitEnabledForTests).IsFalse();
+        AssertThat(fixture.Overlay.CreateProtocolOptionDisabledStatesForTests())
+            .IsEqual(new[] { true, true });
+        AssertThat(fixture.Overlay.CreateProtocolDescriptionForTests)
+            .Contains("两种联机协议均不可用")
+            .Contains("0.111+")
+            .Contains("RitsuLib");
     }
 
     [TestCase]

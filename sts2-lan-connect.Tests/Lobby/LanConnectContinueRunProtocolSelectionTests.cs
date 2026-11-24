@@ -24,6 +24,36 @@ public sealed class LanConnectContinueRunProtocolSelectionTests
     }
 
     [Fact]
+    public void Persisted_compat_selection_stays_compat_even_when_new_rooms_default_to_tail()
+    {
+        LanConnectProtocolOffer tailCapableOffer = new(1, 1, "0.6.5", false, false);
+        Assert.Equal(
+            LanConnectCreateProtocolAvailability.TailProtocolId,
+            LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(tailCapableOffer, true));
+
+        LanConnectProtocolSelection persistedCompat = LanConnectProtocolSelection.CreateLocalCompat(
+            4,
+            "v0.113.1",
+            "wcv1:saved-compat");
+
+        LanConnectCreateRoomIntent intent = LanConnectHostFlow.ResolveExistingHostPublishIntent(
+            tailCapableOffer,
+            persistedCompat,
+            fallbackMaxPlayers: 8);
+
+        Assert.Equal(LanConnectProtocolProfile.Compat4x5V1, intent.Profile);
+        Assert.Equal(4, intent.MaxPlayers);
+        Assert.Same(tailCapableOffer, intent.Offer);
+
+        LanConnectProtocolSelection guarded = LanConnectLobbyCapacityPatches.ResolveHostGuardSelection(
+            new LanConnectResolvedRoomBinding { ProtocolSelection = persistedCompat },
+            requestedMaxPlayers: 8,
+            gameVersion: "v0.113.1",
+            wireCacheSignature: "wcv1:current");
+        Assert.Same(persistedCompat, guarded);
+    }
+
+    [Fact]
     public void Persisted_tail_selection_wins_over_temporary_compat_host_guard()
     {
         LanConnectProtocolSelection temporaryCompat = LanConnectProtocolSelection.CreateLocalCompat(

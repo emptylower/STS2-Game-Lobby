@@ -64,19 +64,23 @@ public sealed class LanConnectTailRuntimeSupportTests : IDisposable
     }
 
     [Fact]
-    public void Tail_create_option_is_unselectable_with_zeroed_offer_and_selectable_with_tail_offer()
+    public void Tail_create_option_is_unselectable_with_zeroed_offer_and_defaults_to_tail_when_available()
     {
         LanConnectProtocolOffer zeroed = new(0, 0, "0.6.0", false, false);
         LanConnectProtocolOffer tailOffer = new(1, 1, "0.6.0", false, false);
+        LanConnectProtocolOffer zeroedWithRitsu = new(0, 0, "0.6.0", true, false);
 
         Assert.False(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, zeroed, true));
         Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(300, zeroed, true));
         Assert.Equal(300, LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(zeroed, true));
 
         Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(301, tailOffer, true));
+        Assert.True(LanConnectLobbyOverlay.IsCreateProtocolSelectableForTests(300, tailOffer, true));
         Assert.Equal(
-            300,
+            301,
             LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(tailOffer, true));
+
+        Assert.Null(LanConnectLobbyOverlay.GetDefaultCreateProtocolIdForTests(zeroedWithRitsu, true));
     }
 
     [Fact]
