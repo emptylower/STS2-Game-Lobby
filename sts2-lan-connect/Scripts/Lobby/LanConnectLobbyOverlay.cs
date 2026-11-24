@@ -132,6 +132,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     private VBoxContainer? _settingsSection;
     private Label? _networkSummaryLabel;
     private LineEdit? _displayNameInput;
+    private readonly Dictionary<LineEdit, Action> _lengthCounterUpdaters = new();
     private VBoxContainer? _networkSettingsContainer;
     private Button? _toggleNetworkSettingsButton;
     private Button? _toggleSensitiveNetworkButton;
@@ -563,12 +564,12 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
-        _roomNameInput.Text = GetSuggestedRoomName();
+        SetTrackedLineEditText(_roomNameInput, GetSuggestedRoomName());
         ResetCreateGameModeSelection();
         RefreshCreateGameModeAvailability();
         SelectDefaultCreateProtocol();
         RefreshProtocolProfileOptionAvailability();
-        _roomPasswordInput.Text = string.Empty;
+        SetTrackedLineEditText(_roomPasswordInput, string.Empty);
         if (_maxPlayersSpinBox != null)
         {
             _maxPlayersSpinBox.Value = LanConnectConstants.ProtocolMaxPlayers;
@@ -3219,6 +3220,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
                 SetLabelText(counterLabel, $"{lengthTrackedInput.Text.Length}/{maxLengthValue}");
             }
 
+            _lengthCounterUpdaters[lengthTrackedInput] = UpdateCounter;
             lengthTrackedInput.Connect(LineEdit.SignalName.TextChanged, Callable.From<string>(_ => UpdateCounter()));
             UpdateCounter();
         }
@@ -4414,7 +4416,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         string roomName = _roomNameInput.Text.Trim();
         if (_roomNameInput.Text != roomName)
         {
-            _roomNameInput.Text = roomName;
+            SetTrackedLineEditText(_roomNameInput, roomName);
         }
         GameMode gameMode = GetSelectedCreateGameMode();
         if (!IsCreateGameModeAvailable(gameMode, GetCreateGameModeAvailability()))
@@ -4429,7 +4431,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         string? password = string.IsNullOrWhiteSpace(_roomPasswordInput?.Text) ? null : LanConnectConfig.SanitizeRoomPassword(_roomPasswordInput.Text);
         if (_roomPasswordInput != null && (_roomPasswordInput.Text?.Trim() ?? string.Empty) != (password ?? string.Empty))
         {
-            _roomPasswordInput.Text = password ?? string.Empty;
+            SetTrackedLineEditText(_roomPasswordInput, password ?? string.Empty);
         }
         string gameModeLabel = LanConnectMultiplayerSaveRoomBinding.GetLobbyGameModeLabel(gameMode);
         GD.Print(
@@ -4878,7 +4880,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         string password = LanConnectConfig.SanitizeRoomPassword(_joinPasswordInput.Text);
         if (_joinPasswordInput.Text != password)
         {
-            _joinPasswordInput.Text = password;
+            SetTrackedLineEditText(_joinPasswordInput, password);
         }
         if (string.IsNullOrWhiteSpace(password))
         {
@@ -4911,7 +4913,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
         SetLabelText(_joinPasswordDialogTitle, $"输入 {FormatRoomName(room.RoomName, 24)} 的房间密码");
         if (_joinPasswordInput != null)
         {
-            _joinPasswordInput.Text = string.Empty;
+            SetTrackedLineEditText(_joinPasswordInput, string.Empty);
             _joinPasswordInput.GrabFocus();
         }
         ShowJoinPasswordError(string.Empty, visible: false);
@@ -4988,14 +4990,16 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             return;
         }
 
-        _roomNameInput.Text = string.IsNullOrWhiteSpace(LanConnectConfig.LastRoomName)
-            ? GetSuggestedRoomName()
-            : LanConnectConfig.LastRoomName;
+        SetTrackedLineEditText(
+            _roomNameInput,
+            string.IsNullOrWhiteSpace(LanConnectConfig.LastRoomName)
+                ? GetSuggestedRoomName()
+                : LanConnectConfig.LastRoomName);
         ResetCreateGameModeSelection();
         RefreshCreateGameModeAvailability();
         SelectDefaultCreateProtocol();
         RefreshProtocolProfileOptionAvailability();
-        _roomPasswordInput.Text = string.Empty;
+        SetTrackedLineEditText(_roomPasswordInput, string.Empty);
         if (_maxPlayersSpinBox != null)
         {
             int effectiveMax = Math.Clamp(
@@ -5486,10 +5490,24 @@ internal sealed partial class LanConnectLobbyOverlay : Control
 
         if (_displayNameInput != null)
         {
-            _displayNameInput.Text = LanConnectConfig.PlayerDisplayName;
+            SetTrackedLineEditText(_displayNameInput, LanConnectConfig.PlayerDisplayName);
         }
         _serverPickerOpen = false;
         UpdateServerPickerBusyState();
+    }
+
+    private void SetTrackedLineEditText(LineEdit? input, string value)
+    {
+        if (input == null)
+        {
+            return;
+        }
+
+        input.Text = value;
+        if (_lengthCounterUpdaters.TryGetValue(input, out Action? updateCounter))
+        {
+            updateCounter();
+        }
     }
 
     private void UpdateServerPickerBusyState()
@@ -5519,7 +5537,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
             string playerDisplayName = LanConnectConfig.SanitizePlayerDisplayName(_displayNameInput.Text);
             if (_displayNameInput.Text != playerDisplayName)
             {
-                _displayNameInput.Text = playerDisplayName;
+                SetTrackedLineEditText(_displayNameInput, playerDisplayName);
             }
 
             LanConnectConfig.PlayerDisplayName = playerDisplayName;
@@ -5537,7 +5555,7 @@ internal sealed partial class LanConnectLobbyOverlay : Control
     {
         if (_displayNameInput != null)
         {
-            _displayNameInput.Text = LanConnectConfig.PlayerDisplayName;
+            SetTrackedLineEditText(_displayNameInput, LanConnectConfig.PlayerDisplayName);
         }
 
         if (_serverBaseUrlInput != null)

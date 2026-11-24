@@ -393,6 +393,11 @@ public sealed class LanConnectLobbyServerPanelTests
             fixture.Overlay.PersistSettingsForTests();
 
             AssertThat(name.Text).IsEqual("Corrected");
+            Label nameCounter = name.GetParent()
+                .FindChildren("*", "Label", recursive: true, owned: false)
+                .OfType<Label>()
+                .Single(label => label.Text.EndsWith($"/{LanConnectConfig.MaxPlayerDisplayNameLength}", StringComparison.Ordinal));
+            AssertThat(nameCounter.Text).IsEqual($"9/{LanConnectConfig.MaxPlayerDisplayNameLength}");
             AssertThat(LanConnectConfig.PlayerDisplayName).IsEqual("Corrected");
             AssertThat(fixture.Overlay.ServerOverrideApplyEnabledForTests).IsTrue();
             AssertThat(LanConnectConfig.LobbyServerBaseUrlOverride).IsEqual(originalServerOverride);

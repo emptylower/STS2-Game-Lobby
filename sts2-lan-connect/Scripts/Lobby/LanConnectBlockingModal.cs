@@ -1,4 +1,5 @@
 using Godot;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
 
 namespace Sts2LanConnect.Scripts;
 
@@ -13,6 +14,11 @@ internal static class LanConnectBlockingModal
     internal static bool IsAnyVisible(SceneTree tree, Node? excludedRoot = null)
     {
         ArgumentNullException.ThrowIfNull(tree);
+        if (IsNativeGameModalOpen(excludedRoot))
+        {
+            return true;
+        }
+
         foreach (Node node in tree.GetNodesInGroup(LanConnectConstants.BlockingModalGroupName))
         {
             if (!GodotObject.IsInstanceValid(node) ||
@@ -44,6 +50,47 @@ internal static class LanConnectBlockingModal
             }
         }
         return false;
+    }
+
+    private static bool IsNativeGameModalOpen(Node? excludedRoot)
+    {
+        try
+        {
+            NModalContainer? modalContainer = NModalContainer.Instance;
+            if (modalContainer == null ||
+                !GodotObject.IsInstanceValid(modalContainer) ||
+                !modalContainer.IsInsideTree() ||
+                !modalContainer.IsVisibleInTree())
+            {
+                return false;
+            }
+
+            if (modalContainer.OpenModal is not { } openModal)
+            {
+                return false;
+            }
+
+            if (openModal is Node modalNode)
+            {
+                if (!GodotObject.IsInstanceValid(modalNode) ||
+                    !modalNode.IsInsideTree() ||
+                    IsExcluded(modalNode, excludedRoot))
+                {
+                    return false;
+                }
+
+                if (modalNode is Control control)
+                {
+                    return control.IsVisibleInTree();
+                }
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool IsExcluded(Node node, Node? excludedRoot) =>
