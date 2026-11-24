@@ -1,0 +1,8 @@
+config_version=5
+[application]
+config/name="P1 Native Dispatch Regression"
+run/main_scene="res://DispatchMain.tscn"
+[dotnet]
+project/assembly_name="sts2_lan_connect.GdUnitTests"
+[rendering]
+renderer/rendering_method="gl_compatibility"

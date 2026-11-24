@@ -67,8 +67,8 @@ internal static class LanConnectLobbyCapacityPatches
         int skipped = 0;
         int failed = 0;
 
-        ConstructorInfo? lobbyCtor = AccessTools.Constructor(typeof(StartRunLobby),
-            new[] { typeof(GameMode), typeof(INetGameService), typeof(IStartRunLobbyListener), typeof(int) });
+        ConstructorInfo? lobbyCtor = LanConnectStartRunLobbyConstructorCompatibility.Resolve(
+            typeof(StartRunLobby), typeof(GameMode), typeof(INetGameService), typeof(IStartRunLobbyListener));
         TrySafePatch(harmony, lobbyCtor, "StartRunLobby.ctor",
             ref applied, ref skipped, ref failed,
             postfix: new HarmonyMethod(typeof(LanConnectLobbyCapacityPatches), nameof(StartRunLobbyCtorPostfix)));

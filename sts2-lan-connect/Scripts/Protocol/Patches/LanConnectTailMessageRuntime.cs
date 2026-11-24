@@ -210,6 +210,17 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         binding.ClearNativePeer(peerNetId);
     }
 
+    internal void ObserveHostLobbyDeparture(NetHostGameService service, ulong peerNetId)
+    {
+        Binding? binding;
+        lock (_sync)
+        {
+            _bindings.TryGetValue(GetMessageBus(service), out binding);
+        }
+
+        binding?.RecordHostLobbyDeparture(peerNetId);
+    }
+
     /// <summary>屏障超时巡检（由大厅 runtime tick 调用；入口路径亦会自巡检）。</summary>
     internal void SweepBarrierTimeouts(INetGameService service, DateTimeOffset now)
     {
@@ -578,7 +589,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     {
         Binding binding = RequireBinding(messageBus);
         ValidateBinding(binding, senderPeerId, selection);
-        return messageKind switch
+        LanConnectPreparedTailMessage prepared = messageKind switch
         {
             LanConnectSidecarMessageKind.LobbyJoinRequest or
             LanConnectSidecarMessageKind.LoadJoinRequest or
@@ -604,7 +615,7 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             LanConnectSidecarMessageKind.LoadJoinResponse => PrepareLoadJoin(
                 RequireMessage<ClientLoadJoinResponseMessage>(message),
                 selection,
-                binding),
+                binding.RequireRoster()),
             LanConnectSidecarMessageKind.RejoinResponse => PrepareRejoin(
                 RequireMessage<ClientRejoinResponseMessage>(message),
                 selection,
@@ -612,6 +623,11 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             LanConnectSidecarMessageKind.ConnectionFailed => PrepareRejection(message, selection),
             _ => throw Protocol("lan_protocol_version_mismatch", $"Unsupported Tail message kind {messageKind}.")
         };
+        if (binding.IsHost)
+        {
+            UpdateLobbyPhase(binding, messageKind);
+        }
+        return prepared;
     }
 
     /// <summary>直接入站校验入口（roster 恢复语义测试与屏障内部共用）。</summary>
@@ -670,7 +686,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
 
         bool isNative = message is LanConnectNativeBusMessage;
         bool isMatrix = TryGetIncomingMessageKind(message, out LanConnectSidecarMessageKind kind);
-        if (!isNative && !isMatrix)
+        bool isPlayerLeft = message is PlayerLeftMessage;
+        if (!isNative && !isMatrix && !isPlayerLeft)
         {
             return true;
         }
@@ -703,12 +720,50 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             return true;
         }
 
+        if (isPlayerLeft)
+        {
+            if (snapshot.Selection != binding.Selection)
+            {
+                FailPeer(binding, context.SenderPeerId, "protocol_selection_conflict",
+                    "Lobby departure differs from the frozen session binding.");
+                return false;
+            }
+            return ObserveClientLobbyDeparture(binding, (PlayerLeftMessage)message, senderId, context);
+        }
+
         if (isNative)
         {
             return HandleExtensionFrame(binding, messageBus, (LanConnectNativeBusMessage)message, context);
         }
 
         return HoldMatrixMessage(binding, message, kind, context);
+    }
+
+    private bool ObserveClientLobbyDeparture(
+        Binding binding,
+        PlayerLeftMessage message,
+        ulong senderId,
+        LanConnectTransportReceiveContext context)
+    {
+        ulong hostPeerId = GetHostPeerId(binding.Service);
+        if (binding.IsHost || context.SenderPeerId != hostPeerId || senderId != hostPeerId || context.Channel != 0
+            || message.playerId == hostPeerId)
+        {
+            FailPeer(binding, context.SenderPeerId, "lan_protocol_version_mismatch",
+                "Lobby departure did not arrive from the current host on the lobby channel.");
+            return false;
+        }
+
+        try
+        {
+            binding.RecordClientLobbyDeparture(context.SenderPeerId, message.playerId);
+        }
+        catch (InvalidDataException exception)
+        {
+            FailPeer(binding, context.SenderPeerId, "lan_protocol_version_mismatch", exception.Message);
+            return false;
+        }
+        return true;
     }
 
     private bool HandleExtensionFrame(
@@ -980,6 +1035,21 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             default:
                 throw new InvalidDataException($"Unexpected incoming Tail message kind {messageKind}.");
         }
+        UpdateLobbyPhase(binding, messageKind);
+    }
+
+    private static void UpdateLobbyPhase(Binding binding, LanConnectSidecarMessageKind kind)
+    {
+        if (kind == LanConnectSidecarMessageKind.LobbyJoinResponse)
+        {
+            binding.BeginStartLobby();
+        }
+        else if (kind is LanConnectSidecarMessageKind.LobbyBeginRun
+                 or LanConnectSidecarMessageKind.LoadJoinResponse
+                 or LanConnectSidecarMessageKind.RejoinResponse)
+        {
+            binding.EndStartLobby();
+        }
     }
 
     private static LanConnectPreparedTailMessage SessionOnly(
@@ -1046,15 +1116,32 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
                 snapshot));
     }
 
-    private static LanConnectPreparedTailMessage PrepareLoadJoin(
+    internal static LanConnectPreparedTailMessage PrepareLoadJoin(
         ClientLoadJoinResponseMessage message,
         LanConnectProtocolSelection selection,
-        Binding binding)
+        LanConnectRosterAuthorityState authority)
     {
+        List<LoadRunLobbyPlayer> connectedPlayers = message.playersAlreadyConnected
+            ?? throw new InvalidDataException("Load-join response has no connected-player roster.");
         IReadOnlyList<LanConnectRosterPlayerCarrier> carriers = BuildLoadJoinCarriers(
             message.serializableRun.Players,
-            message.playersAlreadyConnected);
-        LanConnectRosterSnapshot snapshot = binding.RequireRoster().CommitHostSnapshot(carriers);
+            connectedPlayers);
+        LanConnectRosterSnapshot snapshot = authority.CommitHostSnapshot(carriers, includeLobbyDepartures: false);
+        // The game keeps this list in join order. Only the outgoing body is
+        // canonicalized; the native lobby's shared Players list stays untouched.
+        List<LoadRunLobbyPlayer> orderedPlayers = new(connectedPlayers.Count);
+        foreach (LanConnectRosterPlayerCarrier carrier in snapshot.Players)
+        {
+            foreach (LoadRunLobbyPlayer player in connectedPlayers)
+            {
+                if (player.id == carrier.PlayerId)
+                {
+                    orderedPlayers.Add(player);
+                    break;
+                }
+            }
+        }
+        message.playersAlreadyConnected = orderedPlayers;
         return new LanConnectPreparedTailMessage(
             message,
             LanConnectTailMessagePatches.EncodeSessionMessage(
@@ -1071,7 +1158,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         IReadOnlyList<LanConnectRosterPlayerCarrier> carriers = message.serializableRun.Players
             .Select((player, index) => SerializeCarrier(player.NetId, index, player))
             .ToArray();
-        LanConnectRosterSnapshot snapshot = binding.RequireRoster().CommitHostSnapshot(carriers);
+        LanConnectRosterSnapshot snapshot = binding.RequireRoster().CommitHostSnapshot(
+            carriers, includeLobbyDepartures: false);
         return new LanConnectPreparedTailMessage(
             message,
             LanConnectTailMessagePatches.EncodeSessionMessage(
@@ -1105,8 +1193,10 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     {
         List<StartRunLobbyPlayer> projection = message.playersInLobby
             ?? throw new InvalidDataException("Join response has no vanilla roster projection.");
-        AcceptRoster(binding, snapshot, LanConnectRosterSnapshotUse.Bootstrap);
-        List<StartRunLobbyPlayer> restored = RestorePlayers(snapshot, projection);
+        LanConnectRosterAuthorityState authority = binding.RequireRoster();
+        List<StartRunLobbyPlayer> restored = RestoreAndAcceptStartPlayers(
+            snapshot, projection, authority,
+            authority.Current == null ? LanConnectRosterSnapshotUse.Bootstrap : LanConnectRosterSnapshotUse.CurrentState);
         message.playersInLobby = restored;
         SetBoxedField(boxedMessage, nameof(ClientLobbyJoinResponseMessage.playersInLobby), message.playersInLobby);
     }
@@ -1119,12 +1209,8 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
     {
         List<StartRunLobbyPlayer> projection = message.playersInLobby
             ?? throw new InvalidDataException("Begin-run has no vanilla roster projection.");
-        LanConnectRosterAuthorityState authority = binding.RequireRoster();
-        authority.Accept(
-            snapshot.AuthorityPeerId,
-            snapshot,
-            LanConnectRosterSnapshotUse.StateTransition);
-        List<StartRunLobbyPlayer> restored = RestorePlayers(snapshot, projection);
+        List<StartRunLobbyPlayer> restored = RestoreAndAcceptStartPlayers(
+            snapshot, projection, binding.RequireRoster(), LanConnectRosterSnapshotUse.StateTransition);
         message.playersInLobby = restored;
         SetBoxedField(boxedMessage, nameof(LobbyBeginRunMessage.playersInLobby), message.playersInLobby);
     }
@@ -1136,20 +1222,15 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         Binding binding)
     {
         LanConnectRosterAuthorityState authority = binding.RequireRoster();
-        HashSet<ulong> membership = authority.Current?.Players
-            .Select(static player => player.PlayerId)
-            .ToHashSet() ?? [];
-        membership.Add(message.lobbyPlayer.id);
-        authority.Accept(
-            snapshot.AuthorityPeerId,
-            snapshot,
-            LanConnectRosterSnapshotUse.MembershipMutation,
-            membership,
-            message.lobbyPlayer.id);
         StartRunLobbyPlayer restored = RestoreJoinedPlayer<StartRunLobbyPlayer>(
             snapshot.Players.Single(player => player.PlayerId == message.lobbyPlayer.id),
             snapshot,
             message.lobbyPlayer.id);
+        authority.Accept(
+            snapshot.AuthorityPeerId,
+            snapshot,
+            LanConnectRosterSnapshotUse.MembershipMutation,
+            connectedPeerId: message.lobbyPlayer.id);
         SetBoxedField(boxedMessage, nameof(PlayerJoinedMessage.lobbyPlayer), restored);
     }
 
@@ -1159,11 +1240,11 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         LanConnectRosterSnapshot snapshot,
         Binding binding)
     {
-        AcceptRoster(binding, snapshot, LanConnectRosterSnapshotUse.Bootstrap);
         List<LoadRunLobbyPlayer> restored = RestoreLoadJoinPlayers(
             snapshot,
             message.serializableRun.Players,
             message.playersAlreadyConnected);
+        AcceptRoster(binding, snapshot, LanConnectRosterSnapshotUse.Bootstrap);
         SetBoxedField(boxedMessage, nameof(ClientLoadJoinResponseMessage.playersAlreadyConnected), restored);
     }
 
@@ -1172,7 +1253,6 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         LanConnectRosterSnapshot snapshot,
         Binding binding)
     {
-        AcceptRoster(binding, snapshot, LanConnectRosterSnapshotUse.Bootstrap);
         List<SerializablePlayer> restored = snapshot.Players.Select(carrier =>
         {
             SerializablePlayer player = DeserializeCarrier<SerializablePlayer>(carrier, out uint consumed);
@@ -1187,7 +1267,20 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         {
             throw new InvalidDataException("Rejoin vanilla membership disagrees with the Tail roster.");
         }
+        AcceptRoster(binding, snapshot, LanConnectRosterSnapshotUse.Bootstrap);
         message.serializableRun.Players = restored;
+    }
+
+    internal static List<TPlayer> RestoreAndAcceptStartPlayers<TPlayer>(
+        LanConnectRosterSnapshot snapshot,
+        IReadOnlyList<TPlayer> projection,
+        LanConnectRosterAuthorityState authority,
+        LanConnectRosterSnapshotUse use)
+        where TPlayer : IPacketSerializable, new()
+    {
+        List<TPlayer> restored = RestorePlayers(snapshot, projection);
+        authority.Accept(snapshot.AuthorityPeerId, snapshot, use);
+        return restored;
     }
 
     private static List<TPlayer> RestorePlayers<TPlayer>(
@@ -1262,6 +1355,18 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
             throw new InvalidDataException("Loaded-lobby vanilla membership disagrees with the Tail roster.");
         }
 
+        for (int index = 0; index < alreadyConnected.Count; index++)
+        {
+            LanConnectRosterPlayerCarrier carrier = snapshot.Players[index];
+            LanConnectRosterPlayerCarrier body = SerializeCarrier(
+                accessors.GetId(alreadyConnected[index]), carrier.RealSlotId, alreadyConnected[index]);
+            if (body.VanillaPlayerBitLength != carrier.VanillaPlayerBitLength
+                || !body.VanillaPlayerBytes.Span.SequenceEqual(carrier.VanillaPlayerBytes.Span))
+            {
+                throw new InvalidDataException("Loaded-lobby vanilla player state disagrees with its Tail carrier.");
+            }
+        }
+
         return restored;
     }
 
@@ -1270,6 +1375,10 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         IReadOnlyList<TPlayer> connectedPlayers)
         where TPlayer : IPacketSerializable, new()
     {
+        if (savedPlayers.Select(static player => player.NetId).Distinct().Count() != savedPlayers.Count)
+        {
+            throw new InvalidDataException("Loaded-lobby save contains duplicate player IDs.");
+        }
         LanConnectTailPlayerAccessors<TPlayer> accessors = ResolvePlayerAccessors<TPlayer>();
         return connectedPlayers
             .Select(player =>
@@ -1807,11 +1916,72 @@ internal sealed class LanConnectTailMessageRuntime : ILanConnectTailMessageRunti
         private readonly ConditionalWeakTable<INetMessage, LanConnectTransportReceiveContext> _transportContexts = new();
         private LanConnectRosterAuthorityState? _roster;
         private int _terminated;
+        private int _startLobbyActive;
         private int _barrierSweepScheduled;
 
-        internal void MarkTerminated() => Interlocked.Exchange(ref _terminated, 1);
+        internal bool IsStartLobbyActive
+        {
+            get
+            {
+                lock (Sync)
+                {
+                    return Volatile.Read(ref _terminated) == 0 && _startLobbyActive != 0;
+                }
+            }
+        }
 
-        internal bool TryMarkTerminated() => Interlocked.Exchange(ref _terminated, 1) == 0;
+        internal void MarkTerminated()
+        {
+            Interlocked.Exchange(ref _terminated, 1);
+            EndStartLobby();
+        }
+
+        internal bool TryMarkTerminated()
+        {
+            if (Interlocked.Exchange(ref _terminated, 1) != 0)
+            {
+                return false;
+            }
+            EndStartLobby();
+            return true;
+        }
+
+        internal void BeginStartLobby()
+        {
+            lock (Sync)
+            {
+                _startLobbyActive = Volatile.Read(ref _terminated) == 0 ? 1 : 0;
+            }
+        }
+
+        internal void EndStartLobby()
+        {
+            lock (Sync)
+            {
+                _startLobbyActive = 0;
+                _roster?.ClearLobbyDepartureEvidence();
+            }
+        }
+
+        internal bool RecordHostLobbyDeparture(ulong peerNetId)
+        {
+            lock (Sync)
+            {
+                // Native auto-begin may precede the hosted-session callback.
+                // Its completed transition must not dirty a running roster.
+                return IsHost && IsStartLobbyActive
+                       && RequireRoster().RecordHostLobbyDeparture(peerNetId);
+            }
+        }
+
+        internal bool RecordClientLobbyDeparture(ulong senderPeerId, ulong peerNetId)
+        {
+            lock (Sync)
+            {
+                return !IsHost && IsStartLobbyActive
+                       && RequireRoster().RecordLobbyDeparture(senderPeerId, peerNetId);
+            }
+        }
 
         internal void ThrowIfTerminated()
         {

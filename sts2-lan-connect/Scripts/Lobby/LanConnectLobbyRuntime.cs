@@ -3841,6 +3841,7 @@ internal sealed partial class LanConnectLobbyRuntime :
             _kickTargets.ObserveDisconnected(_.ToString());
             if (ProtocolSelection.Profile == LanConnectProtocolProfile.TailV1)
             {
+                LanConnectTailMessageRuntime.Shared.ObserveHostLobbyDeparture(NetService, _);
                 LanConnectTailMessageRuntime.Shared.ClearNativePeer(NetService, _);
             }
             if (LanConnectLobbyRuntime.Instance != null)
