@@ -48,11 +48,11 @@ public sealed class LanConnectPackageContentTests
 
         using JsonDocument manifest = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(packageDirectory, "sts2_lan_connect.json")));
-        Assert.Equal("0.6.4", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("0.6.5-alpha.1", manifest.RootElement.GetProperty("version").GetString());
         FileVersionInfo assemblyVersion = FileVersionInfo.GetVersionInfo(
             Path.Combine(packageDirectory, "sts2_lan_connect.dll"));
-        Assert.Equal("0.6.4.0", assemblyVersion.FileVersion);
-        Assert.Equal("0.6.4", assemblyVersion.ProductVersion?.Split('+')[0]);
+        Assert.Equal("0.6.5.0", assemblyVersion.FileVersion);
+        Assert.Equal("0.6.5-alpha.1", assemblyVersion.ProductVersion?.Split('+')[0]);
 
         foreach (string packagePath in ExpectedFiles)
         {
